@@ -4142,7 +4142,7 @@ html body code,html body pre,html body kbd,html body samp{
               <div class="v24-training-head"><span>🏁</span><div><strong>RACE DETAILS</strong><small>Tell THE LAB where the race happens and your best duration estimate. A range is expected — it does not need to be exact.</small></div></div>
               <span class="v19-field-title">ENVIRONMENT</span>
               <div class="v19-choice-grid v24-two-choice" data-choice-group><input type="hidden" name="race_environment" value="" data-choice-input data-race-environment><button type="button" class="v19-choice" data-choice="INDOOR">INDOOR / VIRTUAL</button><button type="button" class="v19-choice" data-choice="OUTDOOR">OUTDOOR</button></div>
-              <span class="v19-field-title">EXPECTED DURATION · BEST ESTIMATE</span>
+              <span class="v19-field-title">TOTAL RACE DURATION · BEST ESTIMATE</span>
               <div class="v56-race-duration"><label>MINUTES · LOW<input type="number" min="10" max="1440" step="5" name="expected_duration_min" placeholder="e.g. 35"></label><label>MINUTES · HIGH<input type="number" min="10" max="1440" step="5" name="expected_duration_max" placeholder="e.g. 50"></label></div>
             </div>
             <div class="v24-training-fields" data-training-fields hidden>
@@ -4225,8 +4225,8 @@ html body code,html body pre,html body kbd,html body samp{
                   <div class="v24-training-head"><span>🏁</span><div><strong>RACE DETAILS</strong><small>Keep the range realistic; THE LAB treats it as an estimate, not a fixed finish time.</small></div></div>
                   <span class="v19-field-title">ENVIRONMENT</span>
                   <div class="v19-choice-grid v24-two-choice" data-choice-group><input type="hidden" name="race_environment" value="{{ item.training_environment or '' }}" data-choice-input data-race-environment><button type="button" class="v19-choice {% if item.training_environment == 'INDOOR' %}is-selected{% endif %}" data-choice="INDOOR">INDOOR / VIRTUAL</button><button type="button" class="v19-choice {% if item.training_environment == 'OUTDOOR' %}is-selected{% endif %}" data-choice="OUTDOOR">OUTDOOR</button></div>
-                  <span class="v19-field-title">EXPECTED DURATION · BEST ESTIMATE</span>
-                  <div class="v56-race-duration"><label>MINUTES · LOW<input type="number" min="10" max="1440" step="5" name="expected_duration_min" value="{{ item.get('expected_duration_min') if item.get('expected_duration_min') is not none else '' }}"></label><label>MINUTES · HIGH<input type="number" min="10" max="1440" step="5" name="expected_duration_max" value="{{ item.get('expected_duration_max') if item.get('expected_duration_max') is not none else '' }}"></label></div>
+                  <span class="v19-field-title">TOTAL RACE DURATION · BEST ESTIMATE</span>
+                  <div class="v56-race-duration"><label>MIN<input type="number" min="10" max="1440" step="5" name="expected_duration_min" value="{{ item.get('expected_duration_min') if item.get('expected_duration_min') is not none else '' }}"></label><label>MAX<input type="number" min="10" max="1440" step="5" name="expected_duration_max" value="{{ item.get('expected_duration_max') if item.get('expected_duration_max') is not none else '' }}"></label></div>
                 </div>
                 <div class="v24-training-fields" data-training-fields {% if item.kind != 'TRAINING' %}hidden{% endif %}>
                   <div class="v24-training-head"><span>⚡</span><div><strong>PLANNED TRAINING</strong><small>Changing this entry changes the next Snapshot; archive it if the ride is cancelled but you want to keep history.</small></div></div>
@@ -4342,7 +4342,7 @@ html body code,html body pre,html body kbd,html body samp{
           <p>Intraday reserve from personal Form/Fatigue and recovery, then real completed load, duration and intensity. Training-day context is learned from your own rhythm; session count alone is never a penalty. Nova does not choose this score.</p>
           <div class="v4-energy-gauge">
             <svg class="v4-energy-svg" viewBox="0 0 200 112" aria-label="Energy Bank gauge">
-              <path class="v4-energy-seg v4-energy-s1" d="M18 94 A82 82 0 0 1 39 39"/>
+<path class="v4-energy-seg v4-energy-s1" d="M18 94 A82 82 0 0 1 39 39              <path class="v4-energy-seg v4-energy-s1" d="M18 94 A82 82 0 0 1 39 39"/>
               <path class="v4-energy-seg v4-energy-s2" d="M48 31 A82 82 0 0 1 78 16"/>
               <path class="v4-energy-seg v4-energy-s3" d="M89 13 A82 82 0 0 1 111 13"/>
               <path class="v4-energy-seg v4-energy-s4" d="M122 16 A82 82 0 0 1 152 31"/>
