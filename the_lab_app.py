@@ -80,7 +80,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.75 WIP R90 · FIT RUNTIME + SESSION FEASIBILITY · R89 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.76 WIP R91 · GARMIN DEVICE FIT DISCOVERY · R90 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -7983,10 +7983,10 @@ def _v4831_qa_report(data, qa_kind, input_fingerprint, source_report=None, ai_ru
             "ai_model": "NONE" if python_only else (ai_runtime.get("model") or STANDARD_AI_MODEL),
             "production_last_report_affected": "NO · production Snapshot payload/timestamp remain unchanged",
             "intervals_data": intervals_mode,
-            "python_pipeline": "FULL NOVA SNAPSHOT PIPELINE · SAME HOME_PAGE · R79-R90 GUARDS · READ-ONLY · AI SKIPPED" if python_only else ("PRODUCTION SNAPSHOT PIPELINE" if kind == "LIVE" else "SAVED PRODUCTION CONTEXT + PRODUCTION AI NORMALIZERS/GUARDS"),
+            "python_pipeline": "FULL NOVA SNAPSHOT PIPELINE · SAME HOME_PAGE · R79-R91 GUARDS · READ-ONLY · AI SKIPPED" if python_only else ("PRODUCTION SNAPSHOT PIPELINE" if kind == "LIVE" else "SAVED PRODUCTION CONTEXT + PRODUCTION AI NORMALIZERS/GUARDS"),
             "decision_authority": "NOVA" if python_only else "NOVA + AI NARRATIVE",
             "snapshot_composer": "NOVA_FULL_SNAPSHOT_COMPOSER" if python_only else "AI_NARRATIVE_LAYER",
-            "regression_chain": "R79→R90" if python_only else None,
+            "regression_chain": "R79→R91" if python_only else None,
             "ai_calls": 0 if python_only else 1,
             "ai_cost_note": "€0 AI provider usage" if python_only else "provider quota/pricing applies",
             "input_fingerprint": input_fingerprint or "unknown",
@@ -12216,7 +12216,7 @@ def fetch_intervals_data():
         "icu_training_load,icu_weighted_avg_watts,icu_average_watts,average_watts,average_heartrate,max_heartrate,stream_types,"
         "icu_zone_times,icu_hr_zone_times,icu_hr_zones,icu_hrr,icu_ftp,icu_pm_ftp,icu_pm_ftp_secs,icu_pm_ftp_watts,icu_rolling_ftp,icu_rolling_ftp_delta,icu_achievements,decoupling,"
         "calories,carbs_used,carbs_ingested,trainer,icu_intensity,"
-        "icu_variability_index,joules,sub_type,source,file_type,VO2MaxGarmin"
+        "icu_variability_index,joules,sub_type,source,device_name,file_type,VO2MaxGarmin"
     )
     activities_url = (
         f"https://intervals.icu/api/v1/athlete/{runtime['athlete_id']}/activities"
@@ -12635,9 +12635,15 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         try:garmin_recent=(get_rome_now().date()-date.fromisoformat(garmin_all[-1]["date"])).days<=21
         except Exception:garmin_recent=False
     # Source provenance is strict: Garmin and generic Wellness histories are
-    # stored separately and never merged into one line. A recent cycling-specific
-    # Garmin value wins; Wellness is only the dated fallback.
-    use_garmin=bool(garmin_all and (garmin_recent or not wellness_all))
+    # stored separately and never merged into one line. R91 gives the cycling-
+    # specific Garmin contract precedence whenever it is at least as recent as
+    # the generic Wellness value. Calendar age remains visible through
+    # garmin_activity_recent/status, but equal-date Wellness may not overwrite a
+    # more specific Garmin cycling measurement.
+    garmin_latest_day=str((garmin_all[-1] or {}).get("date") or "")[:10] if garmin_all else ""
+    wellness_latest_day=str((wellness_all[-1] or {}).get("date") or "")[:10] if wellness_all else ""
+    garmin_not_older_than_wellness=bool(garmin_latest_day and wellness_latest_day and garmin_latest_day>=wellness_latest_day)
+    use_garmin=bool(garmin_all and (garmin_recent or not wellness_all or garmin_not_older_than_wellness))
     _gc=garmin_contract_summary.get("counts") or {}
     if garmin_vo2:
         garmin_contract_status="FOUND" if garmin_recent else "STALE"
@@ -13819,11 +13825,45 @@ def _v88_nova_only_regression_contract(snapshot):
     if not runtime_ok:issues.append({"code":"R90_FIT_RUNTIME_HANDOFF_FAILED","runtime_status":probe.get("runtime_resolution_status"),"attempts":attempts[:6]})
     if not diagnostics_ok:issues.append({"code":"R90_FIT_DIAGNOSTICS_INCOMPLETE","fetches":fetches,"attempts":attempts[:6]})
 
+    # R91 · Garmin-native FIT discovery must use the season source pool and
+    # device_name-aware provenance. If any explicit Garmin-device candidate is
+    # available, the bounded probe may not spend its attempts on explicit Zwift/
+    # Strava originals. A FOUND original-FIT contract must also be projected into
+    # the canonical VO2 trend rather than remaining diagnostic-only.
+    garmin_candidate_count=int(_rhythm_num(probe.get("original_fit_garmin_candidate_count")) or 0)
+    explicit_non_garmin_attempts=[
+        a for a in attempts if isinstance(a,dict)
+        and str(a.get("activity_source") or "").upper() in {"ZWIFT","STRAVA"}
+        and "GARMIN" not in str(a.get("device_name") or "").upper()
+    ]
+    candidate_priority_ok=(garmin_candidate_count==0) or not bool(explicit_non_garmin_attempts)
+    found_projection_ok=True
+    if str(probe.get("status") or "").upper()=="FOUND":
+        found_projection_ok=(
+            _vo2_number(probe.get("value")) is not None
+            and _vo2_number(vo2.get("wearable_current")) is not None
+            and abs(float(_vo2_number(probe.get("value")))-float(_vo2_number(vo2.get("wearable_current"))))<0.11
+            and str(vo2.get("wearable_source") or "").upper()=="GARMIN_ORIGINAL_FIT"
+        )
+    checks.append({
+        "name":"R91_GARMIN_DEVICE_FIT_DISCOVERY",
+        "garmin_device_candidates":garmin_candidate_count,
+        "attempts":len(attempts),
+        "explicit_non_garmin_attempts":len(explicit_non_garmin_attempts),
+        "probe_status":probe.get("status"),
+        "projection_pass":found_projection_ok,
+        "pass":bool(candidate_priority_ok and found_projection_ok),
+    })
+    if not candidate_priority_ok:
+        issues.append({"code":"R91_GARMIN_DEVICE_PRIORITY_FAILED","attempts":explicit_non_garmin_attempts[:6]})
+    if not found_projection_ok:
+        issues.append({"code":"R91_GARMIN_FIT_PROJECTION_FAILED","probe_value":probe.get("value"),"wearable_current":vo2.get("wearable_current"),"wearable_source":vo2.get("wearable_source")})
+
     return {
-        "schema":"V4.8.75-R90-1","status":"PASS" if not issues else "BLOCKED","final_pass":not bool(issues),
+        "schema":"V4.8.76-R91-1","status":"PASS" if not issues else "BLOCKED","final_pass":not bool(issues),
         "ai_calls":0,"decision_authority":"NOVA","snapshot_composer":"NOVA_FULL_SNAPSHOT_COMPOSER",
         "ui_contract":"HOME_PAGE_FULL","checks":checks,"issues":issues,
-        "rule":"Nova-only QA is valid only when the full current Snapshot payload, narrative fields and canonical sessions survive the cumulative R79-R90 authority/regression guards with zero AI-provider calls.",
+        "rule":"Nova-only QA is valid only when the full current Snapshot payload, narrative fields and canonical sessions survive the cumulative R79-R91 authority/regression guards with zero AI-provider calls.",
     }
 
 def _v84_nova_prescription_text(x):
@@ -18157,8 +18197,16 @@ def _v80_enrich_garmin_vo2_details(activities, details, max_single_fetches=6):
     """
     out={str(k):v for k,v in (details or {}).items()}
     rows=[a for a in (activities or []) if isinstance(a,dict) and a.get("id")]
+    def _v91_candidate_device_name(a):
+        aid=str((a or {}).get("id") or "")
+        detail=out.get(aid) if isinstance(out.get(aid),dict) else {}
+        return str((a or {}).get("device_name") or detail.get("device_name") or "").strip()
     rows.sort(
-        key=lambda a:(1 if "GARMIN" in str(a.get("source") or "").upper() else 0,str(a.get("start_date_local") or "")),
+        key=lambda a:(
+            1 if "GARMIN" in _v91_candidate_device_name(a).upper() else 0,
+            1 if "GARMIN" in str(a.get("source") or "").upper() else 0,
+            str(a.get("start_date_local") or ""),
+        ),
         reverse=True,
     )
     # If a canonical Garmin value is already present anywhere, do not add calls.
@@ -18333,10 +18381,12 @@ def _v89_fetch_original_fit_garmin_contract(activity, runtime=None):
     aid=str(a.get("id") or "")
     day=str(a.get("start_date_local") or a.get("date") or "")[:10] or None
     source=str(a.get("source") or "") or None
+    device_name=str(a.get("device_name") or "") or None
     file_type=str(a.get("file_type") or "") or None
     base={
         "activity_id":aid or None,"date":day,"source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_MESSAGE_140",
-        "activity_source":source,"file_type":file_type,"http_status":None,"content_type":None,"content_length":None,
+        "activity_source":source,"device_name":device_name,"file_type":file_type,
+        "http_status":None,"content_type":None,"content_length":None,
         "fetch_reason":None,"error_stage":None,
     }
     if not aid:
@@ -18389,15 +18439,48 @@ def _v89_enrich_garmin_vo2_details(activities, details, max_single_fetches=1, ma
             unknown_file_rows.append(a)
         else:
             non_fit_rows.append(a)
+
+    def _device_name(a):
+        aid=str((a or {}).get("id") or "")
+        detail=out.get(aid) if isinstance(out.get(aid),dict) else {}
+        return str((a or {}).get("device_name") or detail.get("device_name") or "").strip()
+
+    def _is_garmin_device(a):
+        return "GARMIN" in _device_name(a).upper()
+
+    def _is_garmin_source(a):
+        return "GARMIN" in str((a or {}).get("source") or "").upper()
+
+    def _explicit_non_garmin(a):
+        dev=_device_name(a).upper()
+        src=str((a or {}).get("source") or "").upper()
+        # device_name is authoritative when present. Only fall back to source
+        # when device identity is absent.
+        if dev:
+            return "GARMIN" not in dev
+        return src in {"ZWIFT","STRAVA"}
+
     def _candidate_key(a):
-        return (1 if "GARMIN" in str(a.get("source") or "").upper() else 0,
-                1 if "fit" in str(a.get("file_type") or "").lower() else 0,
-                str(a.get("start_date_local") or ""))
-    fit_rows.sort(key=_candidate_key,reverse=True)
-    unknown_file_rows.sort(key=_candidate_key,reverse=True)
-    # Prefer confirmed FIT originals. Unknown file metadata is only a bounded
-    # fallback so older/offline payloads without file_type remain testable.
-    rows=(fit_rows+unknown_file_rows)[:max(0,int(max_fit_fetches or 0))]
+        return (
+            1 if _is_garmin_device(a) else 0,
+            1 if _is_garmin_source(a) else 0,
+            1 if "fit" in str((a or {}).get("file_type") or "").lower() else 0,
+            str((a or {}).get("start_date_local") or ""),
+        )
+
+    confirmed_garmin=[a for a in fit_rows if _is_garmin_device(a) or _is_garmin_source(a)]
+    unknown_device_fit=[a for a in fit_rows if a not in confirmed_garmin and not _explicit_non_garmin(a)]
+    unknown_file_garmin=[a for a in unknown_file_rows if _is_garmin_device(a) or _is_garmin_source(a)]
+    unknown_file_other=[a for a in unknown_file_rows if a not in unknown_file_garmin and not _explicit_non_garmin(a)]
+    skipped_explicit_non_garmin=[a for a in fit_rows+unknown_file_rows if _explicit_non_garmin(a)]
+
+    for bucket in (confirmed_garmin,unknown_device_fit,unknown_file_garmin,unknown_file_other):
+        bucket.sort(key=_candidate_key,reverse=True)
+
+    # R91: spend the same bounded six-file budget on Garmin-device evidence first,
+    # then only on genuinely unknown provenance. Do not waste it on explicit Zwift
+    # originals that cannot contain Garmin native physiological message 140.
+    rows=(confirmed_garmin+unknown_file_garmin+unknown_device_fit+unknown_file_other)[:max(0,int(max_fit_fetches or 0))]
     resolved_runtime=runtime
     runtime_reason=None
     if rows and resolved_runtime is None:
@@ -18413,7 +18496,7 @@ def _v89_enrich_garmin_vo2_details(activities, details, max_single_fetches=1, ma
                     "status":"FETCH_FAILED","activity_id":str(a.get("id") or ""),
                     "date":str(a.get("start_date_local") or "")[:10] or None,
                     "source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_MESSAGE_140",
-                    "activity_source":str(a.get("source") or "") or None,"file_type":str(a.get("file_type") or "") or None,
+                    "activity_source":str(a.get("source") or "") or None,"device_name":str(a.get("device_name") or "") or None,"file_type":str(a.get("file_type") or "") or None,
                     "http_status":None,"content_type":None,"content_length":None,
                     "fetch_reason":runtime_reason or "RUNTIME_UNAVAILABLE","error_stage":"RUNTIME_RESOLUTION",
                 }
@@ -18429,7 +18512,7 @@ def _v89_enrich_garmin_vo2_details(activities, details, max_single_fetches=1, ma
                             "status":"FETCH_FAILED","activity_id":str(a.get("id") or ""),
                             "date":str(a.get("start_date_local") or "")[:10] or None,
                             "source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_MESSAGE_140",
-                            "activity_source":str(a.get("source") or "") or None,"file_type":str(a.get("file_type") or "") or None,
+                            "activity_source":str(a.get("source") or "") or None,"device_name":str(a.get("device_name") or "") or None,"file_type":str(a.get("file_type") or "") or None,
                             "http_status":None,"content_type":None,"content_length":None,
                             "fetch_reason":type(exc).__name__.upper(),"error_stage":"WORKER",
                         }
@@ -18442,6 +18525,12 @@ def _v89_enrich_garmin_vo2_details(activities, details, max_single_fetches=1, ma
             merged["garmin_vo2_contract"]=c
             merged["garmin_vo2_scope"]="ORIGINAL_FIT_MESSAGE_140"
             out[aid]=merged
+            # R91 projection: the activity summary itself is part of the canonical
+            # VO2 source population. Project the proven contract here as well so a
+            # season-window FIT hit is visible to build_vo2max_trend even when the
+            # activity is older than the recent training-block detail window.
+            a["garmin_vo2_contract"]=dict(c)
+            a["garmin_vo2_scope"]="ORIGINAL_FIT_MESSAGE_140"
             found.append(c)
     latest=max(found,key=lambda c:str(c.get("date") or "")) if found else None
     statuses={};fetch_reasons={}
@@ -18451,14 +18540,15 @@ def _v89_enrich_garmin_vo2_details(activities, details, max_single_fetches=1, ma
         fr=str(c.get("fetch_reason") or "NONE");fetch_reasons[fr]=fetch_reasons.get(fr,0)+1
         attempts.append({
             "activity_id":c.get("activity_id"),"date":c.get("date"),"activity_source":c.get("activity_source"),
-            "file_type":c.get("file_type"),"status":c.get("status"),"fetch_reason":c.get("fetch_reason"),
+            "device_name":c.get("device_name"),"file_type":c.get("file_type"),
+            "status":c.get("status"),"fetch_reason":c.get("fetch_reason"),
             "error_stage":c.get("error_stage"),"http_status":c.get("http_status"),
             "content_type":c.get("content_type"),"content_length":c.get("content_length"),
             "fit_status":c.get("fit_status"),"message_140_count":c.get("message_140_count"),
         })
     attempts.sort(key=lambda x:(str(x.get("date") or ""),str(x.get("activity_id") or "")),reverse=True)
     return out,{
-        "schema":"V4.8.75-R90-FIT-1",
+        "schema":"V4.8.76-R91-FIT-1",
         "status":"FOUND" if found else ("FETCH_FAILED" if results and statuses.get("FETCH_FAILED")==len(results) else "ABSENT"),
         "probe_used":True,
         "single_fetches":int(probe.get("single_fetches") or 0),
@@ -18476,6 +18566,11 @@ def _v89_enrich_garmin_vo2_details(activities, details, max_single_fetches=1, ma
         "original_fit_candidate_count":len(all_rows),
         "original_fit_eligible_count":len(fit_rows)+len(unknown_file_rows),
         "original_fit_confirmed_fit_count":len(fit_rows),
+        "original_fit_garmin_candidate_count":len(confirmed_garmin),
+        "original_fit_garmin_device_candidate_count":sum(1 for a in confirmed_garmin if _is_garmin_device(a)),
+        "original_fit_garmin_source_only_candidate_count":sum(1 for a in confirmed_garmin if (not _is_garmin_device(a)) and _is_garmin_source(a)),
+        "original_fit_unknown_device_candidate_count":len(unknown_device_fit)+len(unknown_file_other),
+        "original_fit_skipped_explicit_non_garmin_count":len(skipped_explicit_non_garmin),
         "original_fit_unknown_file_metadata_count":len(unknown_file_rows),
         "original_fit_skipped_non_fit_count":len(non_fit_rows),
         "original_fit_attempts":attempts[:max(0,int(max_fit_fetches or 0))],
@@ -25183,8 +25278,8 @@ def analyze():
                 _detail_seen.add(_aid);_detail_pool.append(_a)
         shared_training_details = fetch_activity_details([a.get("id") for a in _detail_pool]) if _detail_pool else {}
         shared_training_details, garmin_vo2_contract_probe = _v89_enrich_garmin_vo2_details(
-            cycling_recent_activities, shared_training_details, max_single_fetches=1, max_fit_fetches=6, user_id=user["id"]
-        ) if _detail_pool else ({}, {"status":"ABSENT","probe_used":False,"single_fetches":0,"original_fit_fetches":0})
+            cycling_season_activities, shared_training_details, max_single_fetches=1, max_fit_fetches=6, user_id=user["id"]
+        ) if cycling_season_activities else ({}, {"status":"ABSENT","probe_used":False,"single_fetches":0,"original_fit_fetches":0})
         progression_training_blocks = build_previous_training_blocks(cycling_recent_activities, 24, activity_details=shared_training_details)
         repeatability_history_blocks = build_previous_training_blocks(
             repeatability_history_activities, len(repeatability_history_activities), activity_details=shared_training_details
