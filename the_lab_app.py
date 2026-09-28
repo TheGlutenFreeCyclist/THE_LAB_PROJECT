@@ -80,7 +80,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.78 WIP R93 · VO2 AUTHORITY FRESHNESS SEPARATION · R92 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.80 WIP R95 · DYNAMIC VO2 ONLY + FULL SESSION ENVELOPE · R94 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -1004,7 +1004,7 @@ def build_advanced_physiology_metrics(season_activities, season_wellness, metric
     vo2_value = None
     vo2_delta = None
     vo2_source = None
-    if isinstance(vo2_trend.get('wearable_current'), (int, float)):
+    if bool(vo2_trend.get('wearable_current_fresh')) and isinstance(vo2_trend.get('wearable_current'), (int, float)):
         vo2_value = float(vo2_trend.get('wearable_current'))
         vo2_delta = vo2_trend.get('wearable_delta28')
         vo2_source = str(vo2_trend.get('wearable_label') or 'wearable / Intervals estimate').lower()
@@ -3665,7 +3665,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% if data.vo2_trend and data.vo2_trend.available %}
 <div class="v21-vo2-summary">
-<div class="wearable"><span>{{ data.vo2_trend.wearable_label or 'Wearable · Intervals' }}</span><strong>{% if data.vo2_trend.wearable_current is not none %}{{ data.vo2_trend.wearable_current }}{% else %}—{% endif %}</strong><small>ml/kg/min{% if data.vo2_trend.wearable_delta28 is not none %} · {{ '+' if data.vo2_trend.wearable_delta28 > 0 else '' }}{{ data.vo2_trend.wearable_delta28 }} / 28d{% endif %}{% if data.vo2_trend.wearable_last_date %} · last received {{ data.vo2_trend.wearable_last_date|ui_date }}{% endif %}{% if data.vo2_trend.wearable_fallback %} · history retained{% endif %}</small></div>
+<div class="wearable"><span>{{ data.vo2_trend.wearable_label or 'Wearable · Intervals' }}</span><strong>{% if data.vo2_trend.wearable_display_current is not none %}{{ data.vo2_trend.wearable_display_current }}{% else %}—{% endif %}</strong><small>{% if data.vo2_trend.wearable_display_current is not none %}ml/kg/min{% if data.vo2_trend.wearable_delta28 is not none %} · {{ '+' if data.vo2_trend.wearable_delta28 > 0 else '' }}{{ data.vo2_trend.wearable_delta28 }} / 28d{% endif %}{% elif data.vo2_trend.wearable_history_latest is not none %}latest history {{ data.vo2_trend.wearable_history_latest }} ml/kg/min{% endif %}{% if data.vo2_trend.wearable_last_date %} · last received {{ data.vo2_trend.wearable_last_date|ui_date }}{% endif %}{% if data.vo2_trend.wearable_fallback %} · history retained{% endif %}</small></div>
 <div class="performance"><span>Intervals · 5-min power estimate</span><strong>{% if data.vo2_trend.performance_current is not none %}{{ data.vo2_trend.performance_current }}{% else %}—{% endif %}</strong><small>ml/kg/min{% if data.vo2_trend.performance_delta28 is not none %} · {{ '+' if data.vo2_trend.performance_delta28 > 0 else '' }}{{ data.vo2_trend.performance_delta28 }} / 28d{% endif %}{% if data.vo2_trend.performance_fallback %} · history retained{% endif %}</small></div>
 <div class="repeatability"><span>Race repeatability · total</span>{% if data.race_repeatability and data.race_repeatability.available %}<div class="v21-repeat-main"><strong>{{ data.race_repeatability.value_label }}</strong><span class="v21-repeat-trend {{ data.race_repeatability.trend_class or 'grey' }}" role="img" aria-label="{{ data.race_repeatability.trend }}">{{ data.race_repeatability.trend_icon or '➡️' }}</span></div><small>{{ data.race_repeatability.ui_detail or data.race_repeatability.context }}</small>{% else %}<strong>Learning</strong><small>Needs repeated-effort evidence</small>{% endif %}</div>
 </div>
@@ -4768,7 +4768,8 @@ def _v4840_owner_coaching_contract(user_id=None):
     return {
         "active": True, "scope": "ORIGINAL_OWNER_ONLY",
         "min_session_minutes": 60, "weekday_max_minutes": 65,
-        "long_day_rule": "Saturday, Sunday and recognized Italian public holidays may exceed 65 minutes when coaching context supports it.",
+        "post_quality_cooldown_extension_minutes": 5,
+        "long_day_rule": "Saturday, Sunday and recognized Italian public holidays may exceed 65 minutes when coaching context supports it. On ordinary weekdays, a prescribed hard-session core may use the 65-minute envelope plus up to 5 minutes of mandatory very-easy cool-down rather than ending on the final work rep.",
         "posture_context": {
             "active": True,
             "source": "OWNER_REPORTED",
@@ -7034,6 +7035,7 @@ def _runtime_baseline_values(user_id=None):
         return dict(OWNER_GARMIN_BASELINES)
     values = dict(profile.get("baselines") or {})
     return {key: values.get(key) for key in _BASELINE_FIELDS}
+
 class _RuntimeProfileMapping:
     def __init__(self, resolver):
         self._resolver = resolver
@@ -10560,6 +10562,7 @@ ATHLETE_SETUP_PAGE = """
 <div class="ps-three"><label class="ps-field"><span>HRV LOW · optional</span><input name="hrv_low" type="number" step="0.1" value="{{ profile.baselines.get('hrv_low','') }}"></label><label class="ps-field"><span>HRV HIGH · optional</span><input name="hrv_high" type="number" step="0.1" value="{{ profile.baselines.get('hrv_high','') }}"></label><label class="ps-field"><span>SLEEP MINUTES · optional</span><input name="sleep_minutes" type="number" value="{{ profile.baselines.get('sleep_minutes','') }}"></label></div>
 <div class="ps-three"><label class="ps-field"><span>RESTING HR LOW · optional</span><input name="resting_hr_low" type="number" step="0.1" value="{{ profile.baselines.get('resting_hr_low','') }}"></label><label class="ps-field"><span>RESTING HR HIGH · optional</span><input name="resting_hr_high" type="number" step="0.1" value="{{ profile.baselines.get('resting_hr_high','') }}"></label><label class="ps-field"><span>SLEEP SCORE · optional</span><input name="sleep_score" type="number" value="{{ profile.baselines.get('sleep_score','') }}"></label></div>
 <div class="ps-three"><label class="ps-field"><span>SpO₂ % · optional</span><input name="spo2" type="number" step="0.1" value="{{ profile.baselines.get('spo2','') }}"></label><label class="ps-field"><span>SLEEP RESPIRATION · optional</span><input name="sleeping_respiration" type="number" step="0.1" value="{{ profile.baselines.get('sleeping_respiration','') }}"></label><label class="ps-field"><span>AWAKE RESP. LOW / HIGH · optional</span><div style="display:flex;gap:6px"><input name="awake_respiration_low" type="number" step="0.1" value="{{ profile.baselines.get('awake_respiration_low','') }}"><input name="awake_respiration_high" type="number" step="0.1" value="{{ profile.baselines.get('awake_respiration_high','') }}"></div></label></div>
+
 <div class="ps-divider"></div><div class="ps-fuel-onboard"><h3>Fueling experience</h3><p>Tell THE LAB what you can currently use in training. Enter what you have actually done, not a target you think you should reach.</p>
 <label class="ps-field"><span>DO YOU KNOW YOUR CURRENT IN-RIDE CARBOHYDRATE INTAKE? <em class="ps-required">* REQUIRED</em></span><select name="fueling_knowledge" id="fueling-knowledge" required><option value="UNKNOWN" {% if profile.fueling.fueling_knowledge != 'KNOWN' %}selected{% endif %}>Not yet / I don't track it reliably</option><option value="KNOWN" {% if profile.fueling.fueling_knowledge == 'KNOWN' %}selected{% endif %}>Yes — I know what I currently use</option></select></label>
 <div class="ps-fuel-fields" id="fueling-known-fields" {% if profile.fueling.fueling_knowledge != 'KNOWN' %}hidden{% endif %}>
@@ -12630,27 +12633,22 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
     garmin_all,garmin_fallback=_merge_vo2_series(stored_garmin,garmin_vo2,max_points=12)
     wellness_all,wellness_fallback=_merge_vo2_series(stored_wellness,wellness_vo2,max_points=12)
     performance,performance_fallback=_merge_vo2_series(stored_performance,fresh_performance,max_points=12)
+    # R95 · dynamic VO2 only. Garmin activity/custom-field/FIT evidence and
+    # Intervals Wellness remain separate source channels. No owner/admin/manual
+    # constant is allowed to masquerade as a live Garmin Connect value.
+    garmin_display=list(garmin_all)
     garmin_recent=False
     if garmin_all:
         try:garmin_recent=(get_rome_now().date()-date.fromisoformat(garmin_all[-1]["date"])).days<=21
         except Exception:garmin_recent=False
-    # Source provenance is strict: Garmin and generic Wellness histories are
-    # stored separately and never merged into one line. R91 gives the cycling-
-    # specific Garmin contract precedence whenever it is at least as recent as
-    # the generic Wellness value. Calendar age remains visible through
-    # garmin_activity_recent/status, but equal-date Wellness may not overwrite a
-    # more specific Garmin cycling measurement.
     garmin_latest_day=str((garmin_all[-1] or {}).get("date") or "")[:10] if garmin_all else ""
     wellness_latest_day=str((wellness_all[-1] or {}).get("date") or "")[:10] if wellness_all else ""
     garmin_not_older_than_wellness=bool(garmin_latest_day and wellness_latest_day and garmin_latest_day>=wellness_latest_day)
-    # R92: a Garmin cycling contract fetched live from the current season source
-    # pool is modality-specific evidence and therefore outranks generic Wellness
-    # VO2 even when its activity date is older than the latest Wellness row. The
-    # age is still exposed separately through garmin_activity_recent; source
-    # precedence must not silently replace cycling VO2 with a generic wearable
-    # value after the original FIT contract has already been proven.
+    # A live cycling-specific Garmin contract remains authoritative provenance,
+    # even when its last activity point is older than the UI freshness window.
+    # Freshness affects only whether a headline CURRENT value is displayed.
     live_garmin_contract=bool(garmin_vo2)
-    use_garmin=bool(garmin_all and (live_garmin_contract or garmin_recent or not wellness_all or garmin_not_older_than_wellness))
+    use_garmin=bool(garmin_display and (live_garmin_contract or garmin_recent or not wellness_all or garmin_not_older_than_wellness))
     _gc=garmin_contract_summary.get("counts") or {}
     if garmin_vo2:
         garmin_contract_status="FOUND"
@@ -12660,8 +12658,18 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         garmin_contract_status="INVALID"
     else:
         garmin_contract_status="ABSENT"
-    wearable=garmin_all if use_garmin else wellness_all
-    wearable_fallback=garmin_fallback if use_garmin else wellness_fallback
+    wearable=garmin_display if use_garmin else wellness_all
+    wearable_fallback=(garmin_fallback or not garmin_recent) if use_garmin else wellness_fallback
+    selected_last_day=(wearable[-1].get("date") if wearable else None)
+    selected_age_days=None
+    try:
+        selected_age_days=(get_rome_now().date()-date.fromisoformat(str(selected_last_day)[:10])).days if selected_last_day else None
+    except Exception:
+        selected_age_days=None
+    wearable_current_fresh=bool(selected_age_days is not None and selected_age_days<=21)
+    # Stale source truth remains visible as history, but is not exposed as a
+    # headline CURRENT wearable number.
+    wearable_display_current=(wearable[-1]["value"] if wearable and wearable_current_fresh else None)
     all_points = wearable + performance
     if not all_points:
         return {
@@ -12730,6 +12738,15 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
     for frac in (0.0, 0.5, 1.0):
         d = min_day + timedelta(days=round(day_span * frac))
         date_ticks.append({"x": round(x0 + frac * (x1 - x0), 1), "label": d.strftime("%d %b")})
+    if use_garmin:
+        wearable_source=((garmin_contract_summary.get("latest_found") or {}).get("source") or "GARMIN_ACTIVITY_HISTORY")
+        if not garmin_recent:
+            wearable_label="Garmin cycling · activity history"
+        else:
+            wearable_label=("Garmin cycling · Original FIT via Intervals" if str(wearable_source or "").upper()=="GARMIN_ORIGINAL_FIT" else "Garmin cycling · Intervals activity")
+    else:
+        wearable_source="INTERVALS_WELLNESS"
+        wearable_label="Wearable · Intervals Wellness"
     return {
         "available": True,
         "wearable": wearable_m,
@@ -12737,6 +12754,10 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         "wearable_path": _vo2_path(wearable_m) if wearable_m else "",
         "performance_path": _vo2_path(performance_m) if performance_m else "",
         "wearable_current": wearable[-1]["value"] if wearable else None,
+        "wearable_display_current": wearable_display_current,
+        "wearable_current_fresh": wearable_current_fresh,
+        "wearable_age_days": selected_age_days,
+        "wearable_history_latest": (wearable[-1]["value"] if wearable and not wearable_current_fresh else None),
         "performance_current": performance[-1]["value"] if performance else None,
         "wearable_delta28": wd,
         "performance_delta28": pd,
@@ -12746,11 +12767,14 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         "agreement_class": agreement_class,
         "wearable_fallback": wearable_fallback,
         "performance_fallback": performance_fallback,
-        "wearable_label": (("Garmin cycling · Original FIT via Intervals" if str(((garmin_contract_summary.get("latest_found") or {}).get("source") or "")).upper()=="GARMIN_ORIGINAL_FIT" else "Garmin cycling · Intervals activity") if use_garmin else "Wearable · Intervals Wellness"),
+        "wearable_label": wearable_label,
         "wearable_last_date": wearable[-1]["date"] if wearable else None,
-        "wearable_source": ((garmin_contract_summary.get("latest_found") or {}).get("source") or "GARMIN_ACTIVITY_HISTORY") if use_garmin else "INTERVALS_WELLNESS",
+        "wearable_source": wearable_source,
         "garmin_activity_points": len(garmin_vo2),
         "garmin_history_points": len(garmin_all),
+        "garmin_display_points": len(garmin_display),
+        "garmin_activity_latest_value": (garmin_all[-1].get("value") if garmin_all else None),
+        "garmin_activity_latest_date": (garmin_all[-1].get("date") if garmin_all else None),
         "garmin_contract_status": garmin_contract_status,
         "garmin_contract_counts": _gc,
         "garmin_contract_latest": garmin_contract_summary.get("latest_found"),
@@ -13717,21 +13741,19 @@ def _v87_cross_module_authority_guard(snapshot, repair=True):
         checks.append({"name":"RACE_REPEATABILITY","sessions":expected_sessions,"efforts":expected_efforts})
 
     # 7) External VO2 provenance and freshness are separate concerns.
-    # R93: a proven Garmin cycling source does not become provenance-invalid
-    # merely because its activity date is older than the UI freshness window.
-    # Freshness remains visible through garmin_activity_recent; authority is
-    # determined by the external-data contract and the existence of Garmin
-    # points. This aligns the guard with R92 source precedence.
+    # R95: only dynamic source truth is eligible. A proven Garmin cycling
+    # contract may be stale, but stale history is not rendered as CURRENT.
     if vo2.get("available"):
         source=str(vo2.get("wearable_source") or "").upper();contract=str(vo2.get("garmin_contract_status") or "").upper();recent=bool(vo2.get("garmin_activity_recent"));gpoints=int(_rhythm_num(vo2.get("garmin_history_points")) or 0)
         is_garmin_source=source.startswith("GARMIN_")
         live_garmin_contract=(contract=="FOUND")
         history_garmin_contract=(contract in {"FOUND_HISTORY","STALE"})
-        garmin_provenance_ok=(gpoints>0 and (live_garmin_contract or (source=="GARMIN_ACTIVITY_HISTORY" and history_garmin_contract)))
+        if source=="GARMIN_ACTIVITY_HISTORY":
+            garmin_provenance_ok=(gpoints>0 and (live_garmin_contract or history_garmin_contract))
+        else:
+            garmin_provenance_ok=(gpoints>0 and live_garmin_contract) if is_garmin_source else True
         if is_garmin_source and not garmin_provenance_ok:
-            _v87_issue(issues,"VO2_GARMIN_SOURCE_CONTRACT_MISMATCH","vo2_trend.wearable_source","PROVEN_GARMIN_CONTRACT_OR_HISTORY",{"source":source,"status":contract,"points":gpoints,"recent":recent})
-        # A live FOUND Garmin cycling contract must not be hidden by generic
-        # Wellness regardless of age. Recent stored Garmin history also wins.
+            _v87_issue(issues,"VO2_GARMIN_SOURCE_CONTRACT_MISMATCH","vo2_trend.wearable_source","PROVEN_DYNAMIC_GARMIN_CONTRACT_OR_HISTORY",{"source":source,"status":contract,"points":gpoints,"recent":recent})
         if source=="INTERVALS_WELLNESS" and gpoints>0 and (live_garmin_contract or (contract=="FOUND_HISTORY" and recent)):
             _v87_issue(issues,"VO2_WELLNESS_USED_DESPITE_AUTHORITATIVE_GARMIN","vo2_trend.wearable_source","GARMIN_CYCLING_SOURCE",{"source":source,"status":contract,"points":gpoints,"recent":recent})
         checks.append({"name":"EXTERNAL_VO2_CONTRACT","status":contract,"source":source,"recent":recent,"provenance_pass":(not is_garmin_source) or garmin_provenance_ok})
@@ -13856,10 +13878,15 @@ def _v88_nova_only_regression_contract(snapshot):
     candidate_priority_ok=(garmin_candidate_count==0) or not bool(explicit_non_garmin_attempts)
     found_projection_ok=True
     if str(probe.get("status") or "").upper()=="FOUND":
+        probe_v=_vo2_number(probe.get("value"));latest_fit=vo2.get("garmin_contract_latest") if isinstance(vo2.get("garmin_contract_latest"),dict) else {}
+        latest_fit_v=_vo2_number(latest_fit.get("value"))
         found_projection_ok=(
-            _vo2_number(probe.get("value")) is not None
+            probe_v is not None
+            and latest_fit_v is not None
+            and abs(float(probe_v)-float(latest_fit_v))<0.11
+            and str(latest_fit.get("source") or "").upper()=="GARMIN_ORIGINAL_FIT"
             and _vo2_number(vo2.get("wearable_current")) is not None
-            and abs(float(_vo2_number(probe.get("value")))-float(_vo2_number(vo2.get("wearable_current"))))<0.11
+            and abs(float(probe_v)-float(_vo2_number(vo2.get("wearable_current"))))<0.11
             and str(vo2.get("wearable_source") or "").upper()=="GARMIN_ORIGINAL_FIT"
         )
     checks.append({
@@ -13876,24 +13903,20 @@ def _v88_nova_only_regression_contract(snapshot):
     if not found_projection_ok:
         issues.append({"code":"R91_GARMIN_FIT_PROJECTION_FAILED","probe_value":probe.get("value"),"wearable_current":vo2.get("wearable_current"),"wearable_source":vo2.get("wearable_source")})
 
-    # R93 · provenance/freshness separation. A live Garmin contract may be
-    # older than the freshness window and still remain the authoritative
-    # cycling-specific source. Conversely, generic Wellness may not win while
-    # such a FOUND contract is present.
+    # R93/R95 · provenance/freshness separation with dynamic sources only.
     vo2_source=str(vo2.get("wearable_source") or "").upper()
     vo2_contract=str(vo2.get("garmin_contract_status") or "").upper()
     vo2_recent=bool(vo2.get("garmin_activity_recent"))
     vo2_gpoints=int(_rhythm_num(vo2.get("garmin_history_points")) or 0)
-    r93_authority_ok=True
-    r93_reason=None
+    r93_authority_ok=True;r93_reason=None
     if vo2_source.startswith("GARMIN_"):
         if vo2_source=="GARMIN_ACTIVITY_HISTORY":
             r93_authority_ok=(vo2_gpoints>0 and vo2_contract in {"FOUND_HISTORY","STALE","FOUND"})
         else:
             r93_authority_ok=(vo2_gpoints>0 and vo2_contract=="FOUND")
-        if not r93_authority_ok:r93_reason="GARMIN_SOURCE_WITHOUT_PROVEN_CONTRACT"
+        if not r93_authority_ok:r93_reason="GARMIN_SOURCE_WITHOUT_PROVEN_DYNAMIC_CONTRACT"
     elif vo2_source=="INTERVALS_WELLNESS" and vo2_gpoints>0 and vo2_contract=="FOUND":
-        r93_authority_ok=False;r93_reason="WELLNESS_HIDES_LIVE_GARMIN_CONTRACT"
+        r93_authority_ok=False;r93_reason="WELLNESS_HIDES_AUTHORITATIVE_GARMIN_SOURCE"
     checks.append({
         "name":"R93_VO2_AUTHORITY_FRESHNESS_SEPARATION",
         "source":vo2_source,"contract_status":vo2_contract,"recent":vo2_recent,
@@ -13902,11 +13925,38 @@ def _v88_nova_only_regression_contract(snapshot):
     if not r93_authority_ok:
         issues.append({"code":"R93_VO2_AUTHORITY_FRESHNESS_FAILED","reason":r93_reason,"source":vo2_source,"contract_status":vo2_contract,"recent":vo2_recent,"garmin_points":vo2_gpoints})
 
+    # R95 · current wearable VO2 must be dynamic. No owner/admin constant may
+    # masquerade as a live Garmin value, and stale FIT/activity history remains
+    # historical rather than being rendered as the current headline number.
+    stale_exposed=bool((not vo2.get("wearable_current_fresh")) and vo2.get("wearable_display_current") is not None)
+    legacy_manual_channel_present=any(k in vo2 for k in ("garmin_current_confirmed","garmin_current_value","garmin_current_date","garmin_current_confirmation_source"))
+    r95_dynamic_ok=not legacy_manual_channel_present and not stale_exposed
+    checks.append({"name":"R95_DYNAMIC_VO2_ONLY","legacy_manual_channel_present":legacy_manual_channel_present,"wearable_fresh":bool(vo2.get("wearable_current_fresh")),"display_current":vo2.get("wearable_display_current"),"history_latest":vo2.get("wearable_history_latest"),"pass":r95_dynamic_ok})
+    if not r95_dynamic_ok:
+        issues.append({"code":"R95_DYNAMIC_VO2_ONLY_FAILED","legacy_manual_channel_present":legacy_manual_channel_present,"stale_exposed":stale_exposed,"source":vo2_source})
+
+    # R94 · repeated hard work must reserve a post-quality cool-down inside the
+    # declared session envelope, not merely fit preload + reps + recoveries.
+    cooldown_failures=[]
+    for idx,sess in enumerate(pres.get("sessions") or []):
+        if not isinstance(sess,dict):continue
+        cls=str(sess.get("intensity_class") or "").lower();meta=sess.get("session_duration_feasibility") if isinstance(sess.get("session_duration_feasibility"),dict) else {}
+        if cls not in {"tempo","threshold","vo2"} or not meta.get("available"):continue
+        reps=int(_rhythm_num(meta.get("reps")) or 0);cool=_rhythm_num(meta.get("cooldown_min"));declared=_parse_duration_minutes(sess.get("duration"));required=_rhythm_num(meta.get("min_required"))
+        if reps>=2 and (cool is None or float(cool)<4.99):
+            cooldown_failures.append({"index":idx,"reason":"MISSING_MINIMUM_COOLDOWN","cooldown_min":cool})
+        elif required is not None and declared is not None and float(declared)+0.01<float(required):
+            cooldown_failures.append({"index":idx,"reason":"DECLARED_BELOW_FULL_SESSION_FLOOR","declared":declared,"required":required})
+        elif reps>=2 and not re.search(r"(?i)\b(?:cool[- ]?down|cooldown)\b",str(sess.get("main_set") or "")):
+            cooldown_failures.append({"index":idx,"reason":"COOLDOWN_NOT_VISIBLE_IN_PRESCRIPTION","cooldown_min":cool})
+    checks.append({"name":"R94_FULL_SESSION_ENVELOPE","pass":not bool(cooldown_failures),"failures":cooldown_failures[:6]})
+    if cooldown_failures:issues.append({"code":"R94_FULL_SESSION_ENVELOPE_FAILED","sessions":cooldown_failures[:6]})
+
     return {
-        "schema":"V4.8.78-R93-1","status":"PASS" if not issues else "BLOCKED","final_pass":not bool(issues),
+        "schema":"V4.8.80-R95-1","status":"PASS" if not issues else "BLOCKED","final_pass":not bool(issues),
         "ai_calls":0,"decision_authority":"NOVA","snapshot_composer":"NOVA_FULL_SNAPSHOT_COMPOSER",
         "ui_contract":"HOME_PAGE_FULL","checks":checks,"issues":issues,
-        "rule":"Nova-only QA is valid only when the full current Snapshot payload, narrative fields and canonical sessions survive the cumulative R79-R93 authority/regression guards with zero AI-provider calls. A blocked QA remains renderable and downloadable for diagnosis while Production Last Report stays unchanged.",
+        "rule":"Nova-only QA is valid only when the full current Snapshot payload, narrative fields and canonical sessions survive the cumulative R79-R95 authority/regression guards with zero AI-provider calls. A blocked QA remains renderable and downloadable for diagnosis while Production Last Report stays unchanged.",
     }
 
 def _v84_nova_prescription_text(x):
@@ -16550,8 +16600,10 @@ def build_data_text(recent_activities, wellness, season_stats, notes=None, feeli
             lines.append('- {}: {}W'.format(p['label'], p['watts']))
     if vo2_trend and vo2_trend.get('available'):
         lines.append('\nVO2MAX TREND (MODEL ESTIMATES ONLY - longitudinal context, NOT a measured VO2max and NOT a primary readiness signal):')
-        if vo2_trend.get('wearable_current') is not None:
+        if vo2_trend.get('wearable_current_fresh') and vo2_trend.get('wearable_current') is not None:
             lines.append('- {}: {} ml/kg/min | 28d delta {}'.format(vo2_trend.get('wearable_label') or 'Wearable / Intervals', vo2_trend.get('wearable_current'), vo2_trend.get('wearable_delta28') if vo2_trend.get('wearable_delta28') is not None else 'n/a'))
+        elif vo2_trend.get('wearable_history_latest') is not None:
+            lines.append('- {}: latest historical activity value {} ml/kg/min | last received {}'.format(vo2_trend.get('wearable_label') or 'Wearable / Intervals', vo2_trend.get('wearable_history_latest'), vo2_trend.get('wearable_last_date') or 'n/a'))
         if vo2_trend.get('performance_current') is not None:
             lines.append('- Intervals 5-min-power estimate: {} ml/kg/min | 28d delta {}'.format(vo2_trend.get('performance_current'), vo2_trend.get('performance_delta28') if vo2_trend.get('performance_delta28') is not None else 'n/a'))
         lines.append('- Trend agreement: {}. Use only as longitudinal performance context; do not let it override health, recovery, availability or recent training.'.format(vo2_trend.get('agreement', 'n/a')))
@@ -16613,7 +16665,10 @@ def _v4876_compact_ai_base_evidence(recent_activities, wellness, season_stats, n
         sections.append(t); profile["base_power_curve_chars"]=len(t)
     if vo2_trend and vo2_trend.get("available"):
         bits=[]
-        if vo2_trend.get("wearable_current") is not None: bits.append(f"wearable={vo2_trend.get('wearable_current')} Δ28={_v4876_prompt_scalar(vo2_trend.get('wearable_delta28'))}")
+        if vo2_trend.get("wearable_current_fresh") and vo2_trend.get("wearable_current") is not None:
+            bits.append(f"wearable-current={vo2_trend.get('wearable_current')} Δ28={_v4876_prompt_scalar(vo2_trend.get('wearable_delta28'))}")
+        elif vo2_trend.get("wearable_history_latest") is not None:
+            bits.append(f"wearable-history-last={vo2_trend.get('wearable_history_latest')} dated={vo2_trend.get('wearable_last_date') or 'n/a'} (not current)")
         if vo2_trend.get("performance_current") is not None: bits.append(f"5min-est={vo2_trend.get('performance_current')} Δ28={_v4876_prompt_scalar(vo2_trend.get('performance_delta28'))}")
         bits.append(f"agreement={vo2_trend.get('agreement','n/a')}")
         t="VO2MAX TREND · MODEL ESTIMATES ONLY: "+" | ".join(bits)+". Longitudinal context only; not measured VO2max."
@@ -21837,14 +21892,15 @@ def _v4878_same_slot_reference_main_set(microcycle_ledger, slot, intensity_class
             return s
     return ""
 def _v90_prescription_duration_floor(main_set):
-    """Estimate the non-compressible minutes explicitly encoded in a repeated-work prescription.
+    """Estimate the non-compressible minutes in a repeated quality prescription.
 
-    This is deliberately conservative: it only counts durations stated in the text
-    (preload/lead-in, repeated work, and between-rep recovery). It never invents a
-    warm-up or cooldown duration.
+    R94 counts explicit preload/lead-in, repeated work, between-rep recovery and
+    a minimum post-quality cool-down. A repeated hard block is not a complete
+    session envelope if it ends on the final work second. Explicit longer
+    cool-downs win; otherwise the deterministic floor is 5 min very easy.
     """
     text=re.sub(r"\s+"," ",str(main_set or "")).strip()
-    base={"available":False,"min_required":None,"preload_min":0.0,"reps":None,"work_min":None,"recovery_min":None,"recovery_count":0}
+    base={"available":False,"min_required":None,"preload_min":0.0,"reps":None,"work_min":None,"recovery_min":None,"recovery_count":0,"cooldown_min":0.0,"cooldown_source":None}
     if not text:return base
     rep_match=re.search(r"(?<!\d)(\d{1,2})\s*[×x]\s*(\d+(?:\.\d+)?)\s*(min(?:ute)?s?|m\b|['′]|s(?:ec(?:ond)?s?)?)",text,flags=re.I)
     if not rep_match:return base
@@ -21860,7 +21916,6 @@ def _v90_prescription_duration_floor(main_set):
     if preload_matches:
         try:preload=max(float(m.group(1)) for m in preload_matches)
         except Exception:preload=0.0
-    # Also accept 'after 30 min ...' as an explicit prior-load block.
     after_matches=list(re.finditer(r"\bafter\s+(\d+(?:\.\d+)?)\s*min(?:ute)?s?\b",prefix,flags=re.I))
     if after_matches:
         try:preload=max(preload,max(float(m.group(1)) for m in after_matches))
@@ -21879,17 +21934,35 @@ def _v90_prescription_duration_floor(main_set):
             except Exception:recovery=None
             if recovery is not None:break
     recovery_count=max(0,reps-1) if recovery is not None else 0
-    minimum=preload+reps*work_min+(recovery or 0.0)*recovery_count
+    cooldown=None
+    cooldown_patterns=(
+        r"\b(?:cool[- ]?down|cooldown)\s*[:\-–—]?\s*(?:for\s+)?(\d+(?:\.\d+)?)\s*min(?:ute)?s?\b",
+        r"\b(\d+(?:\.\d+)?)\s*min(?:ute)?s?[^.;]{0,40}\b(?:very\s+)?easy\s+(?:cool[- ]?down|cooldown)\b",
+        r"\bfinish\s+with\s+(\d+(?:\.\d+)?)\s*min(?:ute)?s?[^.;]{0,40}\b(?:easy|z1)\b",
+    )
+    for pat in cooldown_patterns:
+        m=re.search(pat,text,flags=re.I)
+        if m:
+            try:cooldown=float(m.group(1))
+            except Exception:cooldown=None
+            if cooldown is not None:break
+    if cooldown is None:
+        cooldown=5.0
+        cooldown_source="R94_MINIMUM_POST_QUALITY_COOLDOWN"
+    else:
+        cooldown=max(0.0,cooldown)
+        cooldown_source="EXPLICIT_PRESCRIPTION"
+    minimum=preload+reps*work_min+(recovery or 0.0)*recovery_count+cooldown
     return {
         "available":True,"min_required":round(minimum,2),"preload_min":round(preload,2),
         "reps":reps,"work_min":round(work_min,3),"recovery_min":round(recovery,2) if recovery is not None else None,
-        "recovery_count":recovery_count,
+        "recovery_count":recovery_count,"cooldown_min":round(cooldown,2),"cooldown_source":cooldown_source,
     }
 
 def _v90_session_duration_feasibility_guard(main_set, duration_display, slot=None, coaching_contract=None):
     profile=_v90_prescription_duration_floor(main_set)
     declared=_parse_duration_minutes(duration_display)
-    out={**profile,"declared_min":declared,"state":"UNASSESSED","adjusted":False,"ceiling_min":None}
+    out={**profile,"declared_min":declared,"state":"UNASSESSED","adjusted":False,"ceiling_min":None,"core_ceiling_min":None,"cooldown_extension_min":0.0}
     if not profile.get("available") or declared is None:
         return str(duration_display or ""),out,[]
     required=float(profile.get("min_required") or 0.0)
@@ -21906,7 +21979,11 @@ def _v90_session_duration_feasibility_guard(main_set, duration_display, slot=Non
         try:d=date.fromisoformat(str(slot.get("date") or "")[:10])
         except Exception:d=get_rome_now().date()
         if not _v4840_owner_long_day(d):
-            ceiling=float((coaching_contract or {}).get("weekday_max_minutes") or 65)
+            core_ceiling=float((coaching_contract or {}).get("weekday_max_minutes") or 65)
+            cooldown_extension=min(float((coaching_contract or {}).get("post_quality_cooldown_extension_minutes") or 0),float(profile.get("cooldown_min") or 0))
+            ceiling=core_ceiling+max(0.0,cooldown_extension)
+            out["core_ceiling_min"]=core_ceiling
+            out["cooldown_extension_min"]=round(max(0.0,cooldown_extension),2)
     out["ceiling_min"]=ceiling
     target=float(int(math.ceil(required/5.0)*5))
     if ceiling is None or target<=float(ceiling)+0.01:
@@ -22597,6 +22674,15 @@ def normalize_next_sessions(raw_sessions, clock, training_definitions=None, ftp_
             main_set, duration_display, slot=slot, coaching_contract=coaching_contract
         )
         coherence_reasons.extend(x for x in duration_feasibility_reasons if x not in coherence_reasons)
+        # R94 · make the duration floor visible in the actual prescription. If a
+        # repeated hard block has no explicit cool-down, the same deterministic
+        # 5-minute minimum counted by the feasibility guard is appended here.
+        if cls in ("tempo","threshold","vo2") and duration_feasibility.get("state")!="BLOCKED":
+            _cool=_rhythm_num(duration_feasibility.get("cooldown_min"))
+            if _cool is not None and _cool>0 and not re.search(r"(?i)\b(?:cool[- ]?down|cooldown)\b|\bfinish\s+with\s+\d+(?:\.\d+)?\s*min",str(main_set or "")):
+                _cool_label=f"{int(_cool)}" if abs(float(_cool)-round(float(_cool)))<0.01 else f"{float(_cool):g}"
+                main_set=(str(main_set or "").rstrip(" .")+f". Cool-down: {_cool_label} min very easy Z1 after the final rep.").strip()
+                coherence_reasons.append("R94_POST_QUALITY_COOLDOWN_ADDED")
         main_set, contingency_duration_reasons = _v4841_owner_contingency_duration_guard(main_set, slot, coaching_contract, duration_display)
         coherence_reasons.extend(x for x in contingency_duration_reasons if x not in coherence_reasons)
         final_power_low = prescribed_override[0] if prescribed_override is not None else coherence.get("prescribed_power_low")
@@ -24693,7 +24779,7 @@ def build_ai_coach_chat_context(snapshot):
     if isinstance(vo2, dict) and vo2:
         lines.append(
             "\nVO2MAX TREND (estimated, not measured): wearable {w}, performance {p}, agreement {a}.".format(
-                w=vo2.get("wearable_current", "n/a"), p=vo2.get("performance_current", "n/a"), a=vo2.get("agreement", "n/a")
+                w=(vo2.get("wearable_current") if vo2.get("wearable_current_fresh") else "stale-history"), p=vo2.get("performance_current", "n/a"), a=vo2.get("agreement", "n/a")
             )
         )
     return "\n".join(lines)
