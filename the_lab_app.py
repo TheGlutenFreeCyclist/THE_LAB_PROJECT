@@ -23,8 +23,11 @@ except ImportError:
     psycopg2 = None
 try:
     from garminconnect import Garmin as GarminConnectClient
-except ImportError:
+    GARMINCONNECT_IMPORT_ERROR = None
+except Exception as exc:
+    # Optional integration: a Garmin dependency failure must never prevent THE LAB from booting.
     GarminConnectClient = None
+    GARMINCONNECT_IMPORT_ERROR = type(exc).__name__
 from flask import Flask, session, request, redirect, url_for, render_template_string, Response, jsonify, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 try:
@@ -87,7 +90,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R99 · GARMIN CONNECT CURRENT VO2 + LEARNED QUALITY SPACING · R95 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R100 · STARTUP-SAFE GARMIN CURRENT VO2 + LEARNED QUALITY SPACING · R95 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -12510,8 +12513,10 @@ def _v99_fetch_garmin_connect_current_vo2(user_id=None, now=None):
         "retrieved_date":today,"retrieved_at":now.isoformat(timespec="seconds"),
         "source":"GARMIN_CONNECT_CURRENT","endpoint":None,"path":None,
         "owner_only":True,"dependency_available":bool(GarminConnectClient),
+        "dependency_import_error":GARMINCONNECT_IMPORT_ERROR,
         "credentials_configured":bool(GARMIN_EMAIL and GARMIN_PASSWORD),
-        "tokenstore_configured":bool(GARMIN_TOKENSTORE),"error_type":None,
+        "tokenstore_configured":bool(os.environ.get("GARMINTOKENS") or os.environ.get("THE_LAB_GARMIN_TOKENSTORE")),
+        "tokenstore_path":GARMIN_TOKENSTORE or None,"tokenstore_used":False,"error_type":None,
     }
     if not _v99_garmin_owner_allowed(user_id):
         base["status"]="OWNER_ONLY"
@@ -12524,10 +12529,43 @@ def _v99_fetch_garmin_connect_current_vo2(user_id=None, now=None):
         return base
     try:
         tokenstore=GARMIN_TOKENSTORE or "/tmp/the_lab_garminconnect"
-        if tokenstore and not str(tokenstore).lstrip().startswith("{"):
-            os.makedirs(os.path.expanduser(tokenstore),mode=0o700,exist_ok=True)
-        client=GarminConnectClient(email=GARMIN_EMAIL,password=GARMIN_PASSWORD,retry_attempts=2)
-        client.login(tokenstore)
+        tokenstore_path=None
+        tokenstore_inline=False
+        if tokenstore:
+            tokenstore_inline=str(tokenstore).lstrip().startswith("{")
+            tokenstore_path=None if tokenstore_inline else os.path.expanduser(str(tokenstore))
+
+        # Keep Garmin optional and compatible with the pinned Python>=3.10 client.
+        # Existing saved tokens are preferred; otherwise perform a credential login and
+        # persist the new token set when the client exposes Garth's dump() helper.
+        client=GarminConnectClient(email=GARMIN_EMAIL,password=GARMIN_PASSWORD)
+        token_loaded=False
+        if tokenstore_inline:
+            try:
+                client.login(tokenstore)
+                token_loaded=True
+            except Exception:
+                token_loaded=False
+        elif tokenstore_path and os.path.exists(tokenstore_path):
+            try:
+                client.login(tokenstore_path)
+                token_loaded=True
+            except Exception:
+                token_loaded=False
+
+        if not token_loaded:
+            client.login()
+            if tokenstore_path:
+                try:
+                    os.makedirs(tokenstore_path,mode=0o700,exist_ok=True)
+                    garth_client=getattr(client,"garth",None)
+                    dump_fn=getattr(garth_client,"dump",None)
+                    if callable(dump_fn):
+                        dump_fn(tokenstore_path)
+                except Exception:
+                    # Token persistence is an optimization, never a reason to fail the snapshot.
+                    pass
+        base["tokenstore_used"]=bool(token_loaded)
         probes=[]
         try:
             probes.append(("TRAINING_STATUS_MOST_RECENT_VO2",client.get_training_status(today)))

@@ -4,4 +4,4 @@ requests
 psycopg2-binary
 gunicorn
 cryptography
-garminconnect
+garminconnect==0.2.28
