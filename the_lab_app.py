@@ -45,6 +45,9 @@ ICU_ATHLETE_ID = os.environ.get("ICU_ATHLETE_ID", "")
 GARMIN_EMAIL = os.environ.get("GARMIN_EMAIL", "").strip()
 GARMIN_PASSWORD = os.environ.get("GARMIN_PASSWORD", "")
 GARMIN_TOKENSTORE = (os.environ.get("GARMINTOKENS") or os.environ.get("THE_LAB_GARMIN_TOKENSTORE") or "/tmp/the_lab_garminconnect").strip()
+WEARABLE_VO2_SOURCE_POLICY = os.environ.get("THE_LAB_WEARABLE_VO2_SOURCE_POLICY", "AUTO").strip().upper()
+if WEARABLE_VO2_SOURCE_POLICY not in {"AUTO", "INTERVALS_ONLY"}:
+    WEARABLE_VO2_SOURCE_POLICY = "AUTO"
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AI_ACCESS_MODE = os.environ.get("THE_LAB_AI_ACCESS_MODE", "BYOK").strip().upper()
 STANDARD_AI_MODEL_REQUESTED = os.environ.get("THE_LAB_STANDARD_AI_MODEL", "").strip()
@@ -90,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R100 · STARTUP-SAFE GARMIN CURRENT VO2 + LEARNED QUALITY SPACING · R95 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R101 · WEARABLE-NEUTRAL VO2 SOURCE CONTRACT · R95 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -3675,8 +3678,8 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% if data.vo2_trend and data.vo2_trend.available %}
 <div class="v21-vo2-summary">
-<div class="wearable"><span>{{ data.vo2_trend.wearable_label or 'Wearable · Intervals' }}</span><strong>{% if data.vo2_trend.wearable_display_current is not none %}{{ data.vo2_trend.wearable_display_current }}{% else %}—{% endif %}</strong><small>{% if data.vo2_trend.wearable_display_current is not none %}ml/kg/min{% if data.vo2_trend.wearable_delta28 is not none %} · {{ '+' if data.vo2_trend.wearable_delta28 > 0 else '' }}{{ data.vo2_trend.wearable_delta28 }} / 28d{% endif %}{% elif data.vo2_trend.wearable_history_latest is not none %}latest history {{ data.vo2_trend.wearable_history_latest }} ml/kg/min{% endif %}{% if data.vo2_trend.wearable_last_date %} · last received {{ data.vo2_trend.wearable_last_date|ui_date }}{% endif %}{% if data.vo2_trend.wearable_fallback %} · history retained{% endif %}</small></div>
-<div class="performance"><span>Intervals · 5-min power estimate</span><strong>{% if data.vo2_trend.performance_current is not none %}{{ data.vo2_trend.performance_current }}{% else %}—{% endif %}</strong><small>ml/kg/min{% if data.vo2_trend.performance_delta28 is not none %} · {{ '+' if data.vo2_trend.performance_delta28 > 0 else '' }}{{ data.vo2_trend.performance_delta28 }} / 28d{% endif %}{% if data.vo2_trend.performance_fallback %} · history retained{% endif %}</small></div>
+<div class="wearable"><span>{{ data.vo2_trend.wearable_label or 'Wearable VO₂' }}</span><strong>{% if data.vo2_trend.wearable_display_current is not none %}{{ data.vo2_trend.wearable_display_current }}{% else %}—{% endif %}</strong><small>{% if data.vo2_trend.wearable_display_current is not none %}ml/kg/min{% if data.vo2_trend.wearable_delta28 is not none %} · {{ '+' if data.vo2_trend.wearable_delta28 > 0 else '' }}{{ data.vo2_trend.wearable_delta28 }} / 28d{% endif %}{% elif data.vo2_trend.wearable_history_latest is not none %}latest history {{ data.vo2_trend.wearable_history_latest }} ml/kg/min{% endif %}{% if data.vo2_trend.wearable_source_detail %} · {{ data.vo2_trend.wearable_source_detail }}{% endif %}{% if data.vo2_trend.wearable_last_date %} · last received {{ data.vo2_trend.wearable_last_date|ui_date }}{% endif %}{% if data.vo2_trend.wearable_fallback %} · history retained{% endif %}</small></div>
+<div class="performance"><span>{{ data.vo2_trend.performance_label or 'Intervals VO₂ estimate' }}</span><strong>{% if data.vo2_trend.performance_current is not none %}{{ data.vo2_trend.performance_current }}{% else %}—{% endif %}</strong><small>ml/kg/min · latest performance-derived value returned by Intervals{% if data.vo2_trend.performance_delta28 is not none %} · {{ '+' if data.vo2_trend.performance_delta28 > 0 else '' }}{{ data.vo2_trend.performance_delta28 }} / 28d{% endif %}{% if data.vo2_trend.performance_fallback %} · history retained{% endif %}</small></div>
 <div class="repeatability"><span>Race repeatability · total</span>{% if data.race_repeatability and data.race_repeatability.available %}<div class="v21-repeat-main"><strong>{{ data.race_repeatability.value_label }}</strong><span class="v21-repeat-trend {{ data.race_repeatability.trend_class or 'grey' }}" role="img" aria-label="{{ data.race_repeatability.trend }}">{{ data.race_repeatability.trend_icon or '➡️' }}</span></div><small>{{ data.race_repeatability.ui_detail or data.race_repeatability.context }}</small>{% else %}<strong>Learning</strong><small>Needs repeated-effort evidence</small>{% endif %}</div>
 </div>
 <div class="v21-vo2-chart-wrap">
@@ -3689,9 +3692,9 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% for p in data.vo2_trend.performance %}<circle class="v21-vo2-dot-p" cx="{{ p.x }}" cy="{{ p.y }}" r="5"/><text class="v21-vo2-value-p" text-anchor="middle" x="{{ p.x }}" y="{{ p.label_y }}">{{ p.value_label }}</text>{% endfor %}
 </svg>
 </div>
-<div class="v21-vo2-legend"><span class="v21-vo2-key"><i class="v21-vo2-swatch"></i>{{ data.vo2_trend.wearable_label or "Wearable / Intervals" }}</span><span class="v21-vo2-key"><i class="v21-vo2-swatch performance"></i>Intervals 5-min power</span></div>
-<div class="v21-vo2-disclaimer"><strong>VO₂ values are estimated, not laboratory measurements.</strong> Garmin cycling is preferred when an activity-level Garmin value reaches Intervals; otherwise THE LAB retains the dated Wellness fallback. Race repeatability is observed power retention across repeated efforts, not a VO₂ estimate or a universal race score.</div>
-{% else %}<div class="v21-vo2-empty">No VO₂max estimate has been returned by Intervals.icu yet. THE LAB will show the trend automatically as soon as Wellness and/or power-curve data are available.</div>{% endif %}
+<div class="v21-vo2-legend"><span class="v21-vo2-key"><i class="v21-vo2-swatch"></i>Wearable VO₂</span><span class="v21-vo2-key"><i class="v21-vo2-swatch performance"></i>Intervals VO₂ estimate</span></div>
+<div class="v21-vo2-disclaimer"><strong>Wearable VO₂ and Intervals VO₂ estimate are different signals.</strong> Wearable VO₂ is the value made available by the connected device or ecosystem. When it reaches THE LAB through Intervals, availability and freshness depend on that upstream sync, so it may lag or differ from the value currently shown on the wearable. Intervals VO₂ estimate is the latest performance-derived <code>vo2max_5m</code> value returned by the Intervals API when THE LAB refreshes; it is not a wearable measurement or laboratory VO₂max. Race repeatability is observed power retention across repeated efforts, not a VO₂ estimate or a universal race score.</div>
+{% else %}<div class="v21-vo2-empty">No usable Wearable VO₂ or Intervals VO₂ estimate is available yet. THE LAB will show each signal independently as soon as the connected data sources expose it.</div>{% endif %}
 </div>
 <section class="lab-accordion v4-details" data-lab-accordion data-open="false"><div class="lab-accordion-trigger" role="button" tabindex="0" aria-expanded="false">Training Load<span class="lab-accordion-sign" aria-hidden="true">+</span></div><div class="lab-accordion-panel" hidden><p>{{ data.training_load }}</p></div></section>
 </article>
@@ -12829,7 +12832,13 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
     garmin_sources=list(activities or [])+list(activity_blocks or [])
     garmin_contract_summary=_v80_garmin_contract_summary(garmin_sources) if include_wearable else {"counts":{"FOUND":0,"INVALID":0,"ABSENT":0},"latest_found":None}
     garmin_vo2=build_garmin_activity_vo2_series(garmin_sources,max_points=10) if include_wearable else []
-    garmin_connect=_v99_fetch_garmin_connect_current_vo2(history_user_id) if include_wearable else {"status":"SKIPPED","value":None,"source":"GARMIN_CONNECT_CURRENT"}
+    # R101 source policy: public VO2 remains provider-neutral and the direct
+    # provider adapter can be disabled without code changes. This is the seam
+    # for replacing Garmin with another direct wearable provider later.
+    if include_wearable and WEARABLE_VO2_SOURCE_POLICY != "INTERVALS_ONLY":
+        garmin_connect=_v99_fetch_garmin_connect_current_vo2(history_user_id)
+    else:
+        garmin_connect={"status":"SKIPPED_BY_POLICY" if include_wearable else "SKIPPED","value":None,"source":"GARMIN_CONNECT_CURRENT"}
     garmin_current_vo2=[]
     if str(garmin_connect.get("status") or "").upper()=="FOUND" and _vo2_number(garmin_connect.get("value")) is not None:
         # Snapshot date represents "current state retrieved now". The underlying
@@ -12969,19 +12978,49 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
     for frac in (0.0, 0.5, 1.0):
         d = min_day + timedelta(days=round(day_span * frac))
         date_ticks.append({"x": round(x0 + frac * (x1 - x0), 1), "label": d.strftime("%d %b")})
+    # R101 · public VO2 semantics are wearable-neutral. Provider/channel details
+    # stay explicit in structured metadata so THE LAB can switch source later
+    # without changing the user-facing metric identity.
+    wearable_label="Wearable VO₂"
     if use_garmin:
         if garmin_connect_live:
             wearable_source="GARMIN_CONNECT_CURRENT"
-            wearable_label="Garmin Connect · current cycling VO₂"
+            wearable_transport="DIRECT_PROVIDER"
+            wearable_source_detail="Direct wearable source · current provider state"
         else:
             wearable_source=((garmin_contract_summary.get("latest_found") or {}).get("source") or "GARMIN_ACTIVITY_HISTORY")
-            if not garmin_recent:
-                wearable_label="Garmin cycling · activity history"
-            else:
-                wearable_label=("Garmin cycling · Original FIT via Intervals" if str(wearable_source or "").upper()=="GARMIN_ORIGINAL_FIT" else "Garmin cycling · Intervals activity")
+            wearable_transport="INTERVALS"
+            wearable_source_detail="Wearable data via Intervals · activity import"
     else:
         wearable_source="INTERVALS_WELLNESS"
-        wearable_label="Wearable · Intervals Wellness"
+        wearable_transport="INTERVALS"
+        wearable_source_detail="Wearable data via Intervals · wellness import"
+    wearable_source_candidates=[
+        {
+            "channel":"DIRECT_PROVIDER",
+            "provider":"GARMIN_CONNECT",
+            "status":garmin_connect.get("status"),
+            "value":garmin_connect.get("value"),
+            "measurement_date":garmin_connect.get("measurement_date"),
+            "eligible":bool(garmin_connect_live),
+        },
+        {
+            "channel":"INTERVALS_ACTIVITY_IMPORT",
+            "provider":"GARMIN" if garmin_all else None,
+            "status":garmin_contract_status,
+            "value":(garmin_all[-1].get("value") if garmin_all else None),
+            "measurement_date":(garmin_all[-1].get("date") if garmin_all else None),
+            "eligible":bool(garmin_all),
+        },
+        {
+            "channel":"INTERVALS_WELLNESS_IMPORT",
+            "provider":None,
+            "status":"FOUND" if wellness_all else "ABSENT",
+            "value":(wellness_all[-1].get("value") if wellness_all else None),
+            "measurement_date":wellness_latest_day,
+            "eligible":bool(wellness_all),
+        },
+    ]
     return {
         "available": True,
         "wearable": wearable_m,
@@ -13003,8 +13042,15 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         "wearable_fallback": wearable_fallback,
         "performance_fallback": performance_fallback,
         "wearable_label": wearable_label,
+        "wearable_source_detail": wearable_source_detail,
+        "wearable_transport": wearable_transport,
+        "wearable_source_switchable": True,
+        "wearable_source_policy": WEARABLE_VO2_SOURCE_POLICY,
+        "wearable_source_candidates": wearable_source_candidates,
         "wearable_last_date": wearable[-1]["date"] if wearable else None,
         "wearable_source": wearable_source,
+        "performance_label": "Intervals VO₂ estimate",
+        "performance_source_detail": "Intervals API · performance-derived vo2max_5m",
         "garmin_activity_points": len(garmin_vo2),
         "garmin_activity_history_points": len(garmin_all),
         "garmin_current_points": len(garmin_current_vo2),
