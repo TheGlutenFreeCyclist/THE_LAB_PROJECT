@@ -21,6 +21,10 @@ try:
     import psycopg2
 except ImportError:
     psycopg2 = None
+try:
+    from garminconnect import Garmin as GarminConnectClient
+except ImportError:
+    GarminConnectClient = None
 from flask import Flask, session, request, redirect, url_for, render_template_string, Response, jsonify, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 try:
@@ -35,6 +39,9 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-key")
 CREDENTIAL_ENCRYPTION_KEY = os.environ.get("CREDENTIAL_ENCRYPTION_KEY", "").strip()
 ICU_API_KEY = os.environ.get("ICU_API_KEY", "")
 ICU_ATHLETE_ID = os.environ.get("ICU_ATHLETE_ID", "")
+GARMIN_EMAIL = os.environ.get("GARMIN_EMAIL", "").strip()
+GARMIN_PASSWORD = os.environ.get("GARMIN_PASSWORD", "")
+GARMIN_TOKENSTORE = (os.environ.get("GARMINTOKENS") or os.environ.get("THE_LAB_GARMIN_TOKENSTORE") or "/tmp/the_lab_garminconnect").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AI_ACCESS_MODE = os.environ.get("THE_LAB_AI_ACCESS_MODE", "BYOK").strip().upper()
 STANDARD_AI_MODEL_REQUESTED = os.environ.get("THE_LAB_STANDARD_AI_MODEL", "").strip()
@@ -80,7 +87,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R98 · GARMIN CYCLING MAX-MET VO2 AUTHORITY · R95 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R99 · GARMIN CONNECT CURRENT VO2 + LEARNED QUALITY SPACING · R95 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -12428,8 +12435,147 @@ _VO2_HISTORY_KEYS = {
     "wearable": ("VO2_WELLNESS", "INTERVALS_WELLNESS"),  # compatibility alias
     "wellness": ("VO2_WELLNESS", "INTERVALS_WELLNESS"),
     "garmin": ("VO2_GARMIN_ACTIVITY", "GARMIN_ACTIVITY_CUSTOM_FIELD"),
+    "garmin_current": ("VO2_GARMIN_CURRENT", "GARMIN_CONNECT_CURRENT"),
     "performance": ("VO2_POWER_5M", "INTERVALS_POWER_CURVE_42D"),
 }
+def _v99_garmin_owner_allowed(user_id=None):
+    """Direct Garmin account credentials are owner-only server credentials."""
+    try:
+        return bool(user_id and _v4840_is_original_owner(user_id))
+    except Exception:
+        return False
+
+
+def _v99_garmin_vo2_candidates(payload):
+    """Return cycling VO2 candidates from Garmin Connect response shapes.
+
+    Garmin Connect exposes the current state primarily under
+    mostRecentVO2Max.cycling and daily MaxMET rows under cycling. We walk the
+    response conservatively and only accept dictionaries that carry Garmin's
+    explicit cycling VO2 keys.
+    """
+    found=[]
+    def walk(node,path=(),depth=0):
+        if depth>8:
+            return
+        if isinstance(node,dict):
+            cyc=node.get("cycling")
+            if isinstance(cyc,dict):
+                raw=cyc.get("vo2MaxPreciseValue")
+                if raw is None:
+                    raw=cyc.get("vo2MaxValue")
+                value=_vo2_number(raw)
+                if value is not None and 20.0 <= value <= 100.0:
+                    day=str(cyc.get("calendarDate") or node.get("calendarDate") or "")[:10] or None
+                    try:
+                        if day:
+                            date.fromisoformat(day)
+                    except Exception:
+                        day=None
+                    rank=0 if "mostRecentVO2Max" in path else 1
+                    found.append({"value":round(value,1),"measurement_date":day,"path":".".join(path+("cycling",)),"rank":rank})
+            for k,v in node.items():
+                if isinstance(v,(dict,list,tuple)):
+                    walk(v,path+(str(k),),depth+1)
+        elif isinstance(node,(list,tuple)):
+            for i,v in enumerate(node):
+                if isinstance(v,(dict,list,tuple)):
+                    walk(v,path+(str(i),),depth+1)
+    walk(payload)
+    found.sort(key=lambda x:(int(x.get("rank") or 0), str(x.get("measurement_date") or "")), reverse=False)
+    return found
+
+
+def _v99_extract_garmin_cycling_vo2(payload):
+    rows=_v99_garmin_vo2_candidates(payload)
+    if not rows:
+        return None
+    best_rank=min(int(x.get("rank") or 0) for x in rows)
+    ranked=[x for x in rows if int(x.get("rank") or 0)==best_rank]
+    ranked.sort(key=lambda x:str(x.get("measurement_date") or ""), reverse=True)
+    return dict(ranked[0])
+
+
+def _v99_fetch_garmin_connect_current_vo2(user_id=None, now=None):
+    """Fetch the owner Garmin Connect *current cycling VO2 state*.
+
+    This is deliberately separate from Intervals Original FIT activity fields.
+    `get_training_status()` carries Garmin's mostRecentVO2Max state even when the
+    underlying qualifying measurement is older than today. Daily MaxMET is a
+    fallback only. No value is hard-coded or inferred from power.
+    """
+    now=now or get_rome_now();today=now.date().isoformat()
+    base={
+        "status":"NOT_CONFIGURED","value":None,"measurement_date":None,
+        "retrieved_date":today,"retrieved_at":now.isoformat(timespec="seconds"),
+        "source":"GARMIN_CONNECT_CURRENT","endpoint":None,"path":None,
+        "owner_only":True,"dependency_available":bool(GarminConnectClient),
+        "credentials_configured":bool(GARMIN_EMAIL and GARMIN_PASSWORD),
+        "tokenstore_configured":bool(GARMIN_TOKENSTORE),"error_type":None,
+    }
+    if not _v99_garmin_owner_allowed(user_id):
+        base["status"]="OWNER_ONLY"
+        return base
+    if GarminConnectClient is None:
+        base["status"]="DEPENDENCY_MISSING"
+        return base
+    if not GARMIN_EMAIL or not GARMIN_PASSWORD:
+        base["status"]="NOT_CONFIGURED"
+        return base
+    try:
+        tokenstore=GARMIN_TOKENSTORE or "/tmp/the_lab_garminconnect"
+        if tokenstore and not str(tokenstore).lstrip().startswith("{"):
+            os.makedirs(os.path.expanduser(tokenstore),mode=0o700,exist_ok=True)
+        client=GarminConnectClient(email=GARMIN_EMAIL,password=GARMIN_PASSWORD,retry_attempts=2)
+        client.login(tokenstore)
+        probes=[]
+        try:
+            probes.append(("TRAINING_STATUS_MOST_RECENT_VO2",client.get_training_status(today)))
+        except Exception as exc:
+            base["training_status_error_type"]=type(exc).__name__
+        try:
+            probes.append(("MAX_METRICS_DAILY",client.get_max_metrics(today)))
+        except Exception as exc:
+            base["max_metrics_error_type"]=type(exc).__name__
+        for endpoint,payload in probes:
+            hit=_v99_extract_garmin_cycling_vo2(payload)
+            if hit:
+                base.update({
+                    "status":"FOUND","value":hit.get("value"),
+                    "measurement_date":hit.get("measurement_date"),
+                    "endpoint":endpoint,"path":hit.get("path"),"error_type":None,
+                })
+                return base
+        base["status"]="NO_CYCLING_VO2"
+        return base
+    except Exception as exc:
+        name=type(exc).__name__
+        low=name.lower()+" "+str(exc).lower()
+        if "mfa" in low or "multifactor" in low or "twofactor" in low:
+            base["status"]="MFA_REQUIRED"
+        elif "auth" in low or "login" in low or "credential" in low:
+            base["status"]="AUTH_FAILED"
+        elif "429" in low or "toomany" in low or "rate" in low:
+            base["status"]="RATE_LIMITED"
+        else:
+            base["status"]="ERROR"
+        base["error_type"]=name
+        return base
+
+
+def _v99_merge_garmin_current_history(activity_series,current_series,max_points=12):
+    """Overlay direct Garmin current-state checkpoints on activity history."""
+    by_day={}
+    for row in list(activity_series or []):
+        if isinstance(row,dict) and row.get("date") and _vo2_number(row.get("value")) is not None:
+            by_day[str(row.get("date"))[:10]]={"date":str(row.get("date"))[:10],"value":round(float(row.get("value")),1),"channel":"ACTIVITY"}
+    for row in list(current_series or []):
+        if isinstance(row,dict) and row.get("date") and _vo2_number(row.get("value")) is not None:
+            by_day[str(row.get("date"))[:10]]={"date":str(row.get("date"))[:10],"value":round(float(row.get("value")),1),"channel":"GARMIN_CONNECT_CURRENT"}
+    rows=[by_day[k] for k in sorted(by_day)]
+    return _sample_vo2_points(rows,max_points=max_points) if max_points and len(rows)>max_points else rows
+
+
 def _vo2_history_key(kind):
     try:
         return _VO2_HISTORY_KEYS[str(kind).strip().lower()]
@@ -12645,22 +12791,31 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
     garmin_sources=list(activities or [])+list(activity_blocks or [])
     garmin_contract_summary=_v80_garmin_contract_summary(garmin_sources) if include_wearable else {"counts":{"FOUND":0,"INVALID":0,"ABSENT":0},"latest_found":None}
     garmin_vo2=build_garmin_activity_vo2_series(garmin_sources,max_points=10) if include_wearable else []
+    garmin_connect=_v99_fetch_garmin_connect_current_vo2(history_user_id) if include_wearable else {"status":"SKIPPED","value":None,"source":"GARMIN_CONNECT_CURRENT"}
+    garmin_current_vo2=[]
+    if str(garmin_connect.get("status") or "").upper()=="FOUND" and _vo2_number(garmin_connect.get("value")) is not None:
+        # Snapshot date represents "current state retrieved now". The underlying
+        # Garmin measurement date remains separately exposed for provenance.
+        garmin_current_vo2=[{"date":get_rome_now().date().isoformat(),"value":round(float(garmin_connect.get("value")),1)}]
     fresh_performance = build_performance_vo2_series(
         points=8, step_days=7, current_payload=current_power_payload, current_day=current_power_day
     )
-    stored_garmin=[];stored_wellness=[];stored_performance=[]
+    stored_garmin=[];stored_garmin_current=[];stored_wellness=[];stored_performance=[]
     if persist_history:
         try:
             if include_wearable:
                 if garmin_vo2:_persist_vo2_series("garmin",garmin_vo2,user_id=history_user_id)
+                if garmin_current_vo2:_persist_vo2_series("garmin_current",garmin_current_vo2,user_id=history_user_id)
                 if wellness_vo2:_persist_vo2_series("wellness",wellness_vo2,user_id=history_user_id)
                 stored_garmin=_stored_vo2_series("garmin",user_id=history_user_id)
+                stored_garmin_current=_stored_vo2_series("garmin_current",user_id=history_user_id)
                 stored_wellness=_stored_vo2_series("wellness",user_id=history_user_id)
             _persist_vo2_series("performance",fresh_performance,user_id=history_user_id)
             stored_performance=_stored_vo2_series("performance",user_id=history_user_id)
         except Exception:
-            stored_garmin=[];stored_wellness=[];stored_performance=[]
+            stored_garmin=[];stored_garmin_current=[];stored_wellness=[];stored_performance=[]
     garmin_all,garmin_fallback=_merge_vo2_series(stored_garmin,garmin_vo2,max_points=12)
+    garmin_current_all,garmin_current_fallback=_merge_vo2_series(stored_garmin_current,garmin_current_vo2,max_points=12)
     wellness_all,wellness_fallback=_merge_vo2_series(stored_wellness,wellness_vo2,max_points=12)
     performance,performance_fallback=_merge_vo2_series(stored_performance,fresh_performance,max_points=12)
     # R96 · restore the older Intervals VO2 recency contract. Garmin
@@ -12668,17 +12823,22 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
     # channels, but successful re-reading of an old FIT does NOT make that old
     # observation newer than a later Wellness observation. No static/manual
     # current Garmin value is allowed.
-    garmin_display=list(garmin_all)
+    garmin_display=_v99_merge_garmin_current_history(garmin_all,garmin_current_all,max_points=12)
     garmin_recent=False
     if garmin_all:
         try:garmin_recent=(get_rome_now().date()-date.fromisoformat(garmin_all[-1]["date"])).days<=21
         except Exception:garmin_recent=False
-    source_choice,source_selection_reason,garmin_latest_dt,wellness_latest_dt=_v96_select_wearable_vo2_source(garmin_display,wellness_all)
+    garmin_connect_live=str(garmin_connect.get("status") or "").upper()=="FOUND" and bool(garmin_current_vo2)
+    if garmin_connect_live:
+        source_choice="GARMIN_CONNECT";source_selection_reason="GARMIN_CONNECT_CURRENT_AUTHORITY"
+        garmin_latest_dt=get_rome_now().date();wellness_latest_dt=_v96_vo2_latest_day(wellness_all)
+    else:
+        source_choice,source_selection_reason,garmin_latest_dt,wellness_latest_dt=_v96_select_wearable_vo2_source(garmin_all,wellness_all)
     garmin_latest_day=garmin_latest_dt.isoformat() if garmin_latest_dt else None
     wellness_latest_day=wellness_latest_dt.isoformat() if wellness_latest_dt else None
     garmin_not_older_than_wellness=bool(garmin_latest_dt and (wellness_latest_dt is None or garmin_latest_dt>=wellness_latest_dt))
     live_garmin_contract=bool(garmin_vo2)
-    use_garmin=(source_choice=="GARMIN")
+    use_garmin=(source_choice in {"GARMIN","GARMIN_CONNECT"})
     _gc=garmin_contract_summary.get("counts") or {}
     if garmin_vo2:
         garmin_contract_status="FOUND"
@@ -12689,17 +12849,20 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
     else:
         garmin_contract_status="ABSENT"
     wearable=garmin_display if use_garmin else wellness_all
-    wearable_fallback=(garmin_fallback or not garmin_recent) if use_garmin else wellness_fallback
+    wearable_fallback=(False if garmin_connect_live else (garmin_fallback or not garmin_recent)) if use_garmin else wellness_fallback
     selected_last_day=(wearable[-1].get("date") if wearable else None)
     selected_age_days=None
     try:
         selected_age_days=(get_rome_now().date()-date.fromisoformat(str(selected_last_day)[:10])).days if selected_last_day else None
     except Exception:
         selected_age_days=None
-    wearable_current_fresh=bool(selected_age_days is not None and selected_age_days<=21)
-    # Stale source truth remains visible as history, but is not exposed as a
-    # headline CURRENT wearable number.
-    wearable_display_current=(wearable[-1]["value"] if wearable and wearable_current_fresh else None)
+    wearable_current_fresh=bool(garmin_connect_live or (selected_age_days is not None and selected_age_days<=21))
+    # A successful Garmin Connect query is fresh retrieval of Garmin's current
+    # cycling state even when its underlying measurement date is older. FIT and
+    # Wellness history still obey the 21-day stale-headline rule.
+    wearable_display_current=(float(garmin_connect.get("value")) if garmin_connect_live else (wearable[-1]["value"] if wearable and wearable_current_fresh else None))
+    if garmin_connect_live:
+        selected_age_days=0
     all_points = wearable + performance
     if not all_points:
         return {
@@ -12769,11 +12932,15 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         d = min_day + timedelta(days=round(day_span * frac))
         date_ticks.append({"x": round(x0 + frac * (x1 - x0), 1), "label": d.strftime("%d %b")})
     if use_garmin:
-        wearable_source=((garmin_contract_summary.get("latest_found") or {}).get("source") or "GARMIN_ACTIVITY_HISTORY")
-        if not garmin_recent:
-            wearable_label="Garmin cycling · activity history"
+        if garmin_connect_live:
+            wearable_source="GARMIN_CONNECT_CURRENT"
+            wearable_label="Garmin Connect · current cycling VO₂"
         else:
-            wearable_label=("Garmin cycling · Original FIT via Intervals" if str(wearable_source or "").upper()=="GARMIN_ORIGINAL_FIT" else "Garmin cycling · Intervals activity")
+            wearable_source=((garmin_contract_summary.get("latest_found") or {}).get("source") or "GARMIN_ACTIVITY_HISTORY")
+            if not garmin_recent:
+                wearable_label="Garmin cycling · activity history"
+            else:
+                wearable_label=("Garmin cycling · Original FIT via Intervals" if str(wearable_source or "").upper()=="GARMIN_ORIGINAL_FIT" else "Garmin cycling · Intervals activity")
     else:
         wearable_source="INTERVALS_WELLNESS"
         wearable_label="Wearable · Intervals Wellness"
@@ -12801,14 +12968,27 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         "wearable_last_date": wearable[-1]["date"] if wearable else None,
         "wearable_source": wearable_source,
         "garmin_activity_points": len(garmin_vo2),
-        "garmin_history_points": len(garmin_all),
+        "garmin_activity_history_points": len(garmin_all),
+        "garmin_current_points": len(garmin_current_vo2),
+        "garmin_current_history_points": len(garmin_current_all),
+        "garmin_history_points": len(garmin_display),
         "garmin_display_points": len(garmin_display),
         "garmin_activity_latest_value": (garmin_all[-1].get("value") if garmin_all else None),
         "garmin_activity_latest_date": (garmin_all[-1].get("date") if garmin_all else None),
         "garmin_contract_status": garmin_contract_status,
         "garmin_contract_counts": _gc,
         "garmin_contract_latest": garmin_contract_summary.get("latest_found"),
-        "garmin_fallback_reason": None if use_garmin else garmin_contract_status,
+        "garmin_connect_status": garmin_connect.get("status"),
+        "garmin_connect_current_value": garmin_connect.get("value"),
+        "garmin_connect_measurement_date": garmin_connect.get("measurement_date"),
+        "garmin_connect_retrieved_date": garmin_connect.get("retrieved_date"),
+        "garmin_connect_retrieved_at": garmin_connect.get("retrieved_at"),
+        "garmin_connect_endpoint": garmin_connect.get("endpoint"),
+        "garmin_connect_path": garmin_connect.get("path"),
+        "garmin_connect_dependency_available": garmin_connect.get("dependency_available"),
+        "garmin_connect_credentials_configured": garmin_connect.get("credentials_configured"),
+        "garmin_connect_error_type": garmin_connect.get("error_type"),
+        "garmin_fallback_reason": None if use_garmin else (garmin_connect.get("status") or garmin_contract_status),
         "wellness_points": len(wellness_vo2),
         "wellness_history_points": len(wellness_all),
         "wellness_latest_value": (wellness_all[-1].get("value") if wellness_all else None),
@@ -13330,6 +13510,11 @@ def _v84_quality_slot_index(clock, adaptive_roadmap=None):
     for target in preferred:
         for i,slot in enumerate(slots):
             if str((slot or {}).get("label") or "").strip()==target and not (slot or {}).get("is_race") and str((slot or {}).get("restriction") or "NONE").upper()=="NONE":return i
+    # R99: an explicit roadmap target that is not yet represented in the short
+    # Coach Clock horizon must NOT silently become slot 0. Wait until the exact
+    # quality-window slot is actually available.
+    if preferred:
+        return None
     for i,slot in enumerate(slots):
         if (slot or {}).get("is_race"):continue
         if str((slot or {}).get("restriction") or "NONE").upper()!="NONE":continue
@@ -13783,7 +13968,9 @@ def _v87_cross_module_authority_guard(snapshot, repair=True):
         is_garmin_source=source.startswith("GARMIN_")
         live_garmin_contract=(contract=="FOUND")
         history_garmin_contract=(contract in {"FOUND_HISTORY","STALE"})
-        if source=="GARMIN_ACTIVITY_HISTORY":
+        if source=="GARMIN_CONNECT_CURRENT":
+            garmin_provenance_ok=(gpoints>0 and str(vo2.get("garmin_connect_status") or "").upper()=="FOUND" and _vo2_number(vo2.get("garmin_connect_current_value")) is not None)
+        elif source=="GARMIN_ACTIVITY_HISTORY":
             garmin_provenance_ok=(gpoints>0 and (live_garmin_contract or history_garmin_contract))
         else:
             garmin_provenance_ok=(gpoints>0 and live_garmin_contract) if is_garmin_source else True
@@ -13948,7 +14135,9 @@ def _v88_nova_only_regression_contract(snapshot):
     vo2_gpoints=int(_rhythm_num(vo2.get("garmin_history_points")) or 0)
     r93_authority_ok=True;r93_reason=None
     if vo2_source.startswith("GARMIN_"):
-        if vo2_source=="GARMIN_ACTIVITY_HISTORY":
+        if vo2_source=="GARMIN_CONNECT_CURRENT":
+            r93_authority_ok=(vo2_gpoints>0 and str(vo2.get("garmin_connect_status") or "").upper()=="FOUND" and _vo2_number(vo2.get("garmin_connect_current_value")) is not None)
+        elif vo2_source=="GARMIN_ACTIVITY_HISTORY":
             r93_authority_ok=(vo2_gpoints>0 and vo2_contract in {"FOUND_HISTORY","STALE","FOUND"})
         else:
             r93_authority_ok=(vo2_gpoints>0 and vo2_contract=="FOUND")
@@ -15262,10 +15451,16 @@ def build_adaptive_roadmap(training_direction, training_rhythm, activities, coac
         if explicit:earliest_dt=preferred_dt=explicit[0]
         elif valid:
             if spread_second:
-                distributed=[dt for dt in valid if (dt-last_end).total_seconds()/3600.0>=72.0+extra_delay]
-                earliest_dt=distributed[0] if distributed else valid[0]
-                band=[dt for dt in distributed if (dt-last_end).total_seconds()/3600.0<=96.0+extra_delay]
-                preferred_dt=min(band,key=lambda dt:abs((dt-last_end).total_seconds()/3600.0-(84.0+extra_delay))) if band else earliest_dt
+                # R99: SECOND_HARD_CONDITIONAL is not a fixed 72–96 h lockout.
+                # Earliest remains the first rhythm slot that clears the athlete's
+                # learned lower spacing bound. Preferred is conservative at the
+                # athlete's observed median (plus recovery delay), not an invented
+                # 84 h target. This keeps the second quality dose conditional and
+                # personalized instead of automatically pushing it to Friday.
+                earliest_dt=valid[0]
+                learned_median=float(spacing.get("median_hours") or spacing.get("preferred_hours") or 48.0)
+                second_preferred_after=last_end+timedelta(hours=max(float(spacing.get("preferred_hours") or 48.0),learned_median)+extra_delay)
+                preferred_dt=next((dt for dt in valid if dt>=second_preferred_after),earliest_dt)
             else:
                 earliest_dt=valid[0];preferred_dt=next((dt for dt in valid if dt>=preferred_after),earliest_dt)
     elif last_end is None and not health and not recovery_hold and not race_close_hold and not taper_priority:
@@ -15434,8 +15629,13 @@ def build_adaptive_roadmap(training_direction, training_rhythm, activities, coac
             "earliest_iso": earliest_dt.isoformat(timespec="minutes") if earliest_dt else None,
             "preferred_iso": preferred_dt.isoformat(timespec="minutes") if preferred_dt else None,
             "headline": window_headline,
+            "spacing_policy": "LEARNED_PERSONAL_SPACING" if spread_second else "LEARNED_PERSONAL_SPACING_BASE",
+            "fixed_second_hard_band_removed": bool(spread_second),
             "spacing_samples": spacing.get("samples"),
             "median_spacing_hours": spacing.get("median_hours"),
+            "q25_spacing_hours": spacing.get("q25_hours"),
+            "learned_earliest_hours": spacing.get("earliest_hours"),
+            "learned_preferred_hours": spacing.get("preferred_hours"),
             "earliest_spacing_hours": round((earliest_dt - spacing.get("last_hard_end")).total_seconds() / 3600.0, 1) if earliest_dt and spacing.get("last_hard_end") else None,
             "preferred_spacing_hours": round((preferred_dt - spacing.get("last_hard_end")).total_seconds() / 3600.0, 1) if preferred_dt and spacing.get("last_hard_end") else None,
             "last_hard_end": spacing.get("last_hard_end").isoformat(timespec="minutes") if spacing.get("last_hard_end") else None,
