@@ -93,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R102 · ADMIN CONTROL CENTER FAIL-SAFE · R101 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R103 · ADMIN POSTGRES LIKE FIX · R102 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -8898,10 +8898,13 @@ def _admin_report_metadata_map():
     )
     return {str(row.get("user_id")): row for row in rows if row.get("user_id")}
 def _admin_last_snapshot_ai_map():
+    # Postgres/psycopg2 treats literal % characters as parameter-format markers
+    # when execute() receives a params tuple, even an empty one. Keep LIKE data
+    # in the bound parameter so /admin cannot crash with "tuple index out of range".
     rows = _db_execute(
         "SELECT user_id, created_at_utc, status, error_type, call_type FROM ai_usage_events "
-        "WHERE UPPER(call_type) LIKE '%SNAPSHOT%' ORDER BY created_at_utc DESC LIMIT 500",
-        fetch=True,
+        "WHERE UPPER(call_type) LIKE ? ORDER BY created_at_utc DESC LIMIT 500",
+        ("%SNAPSHOT%",), fetch=True,
     )
     out = {}
     for row in rows:
@@ -10992,8 +10995,12 @@ def admin_control_center():
     admin = require_admin()
     if not admin:
         return redirect(url_for("login"))
-    users, hidden_users, codes, audits = admin_dashboard_data()
     admin_error = session.pop("admin_error", None)
+    try:
+        users, hidden_users, codes, audits = admin_dashboard_data()
+    except Exception as exc:
+        app.logger.exception("Admin dashboard data failed")
+        raise
     try:
         ai_usage = admin_ai_usage_data()
     except Exception as exc:
