@@ -93,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R101 · WEARABLE-NEUTRAL VO2 SOURCE CONTRACT · R95 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R102 · ADMIN CONTROL CENTER FAIL-SAFE · R101 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -7674,32 +7674,84 @@ def _v4876_base_evidence_cost_profile_rows(raw_profile):
         })
     rows.sort(key=lambda row: row["chars"], reverse=True)
     return rows
+def _r102_empty_admin_ai_usage(error_type=None):
+    return {
+        "mode": AI_ACCESS_MODE,
+        "managed_daily_limit": MANAGED_AI_DAILY_CALL_LIMIT,
+        "standard_daily_limit": STANDARD_AI_DAILY_CALL_LIMIT,
+        "standard_provider": None,
+        "standard_model": None,
+        "standard_configured": False,
+        "platform_provider": None,
+        "platform_model": None,
+        "platform_configured": False,
+        "today_api_calls": 0,
+        "today_quota_calls": 0,
+        "today_owner_funded_calls": 0,
+        "today_tokens": 0,
+        "athletes": [],
+        "recent": [],
+        "monitor_error": str(error_type or "")[:120] or None,
+    }
+
 def admin_ai_usage_data():
     all_user_rows = _db_execute("SELECT id, username, role, admin_hidden FROM users ORDER BY created_at_utc DESC", fetch=True)
     per_user = []
     total_api_calls = total_quota_calls = total_owner_funded_calls = total_tokens = 0
-    for row in all_user_rows:
-        usage = get_ai_usage_today(row["id"])
-        total_api_calls += usage["api_calls"]
-        total_quota_calls += usage["quota_calls"]
-        total_owner_funded_calls += usage.get("funded_calls", 0)
-        total_tokens += usage["total_tokens"]
+    for raw_row in all_user_rows:
+        row = dict(raw_row or {})
+        try:
+            usage = get_ai_usage_today(row.get("id"))
+        except Exception as exc:
+            app.logger.exception("Admin AI daily-usage row failed")
+            usage = {
+                "local_date": _ai_usage_local_date(row.get("id")),
+                "quota_label": "UNAVAILABLE",
+                "remaining_label": "—",
+                "remaining_class": "",
+                "limit_source": "ERROR",
+                "limit": None,
+                "api_calls": 0,
+                "quota_calls": 0,
+                "funded_calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "monitor_error": type(exc).__name__,
+            }
+        total_api_calls += int(usage.get("api_calls") or 0)
+        total_quota_calls += int(usage.get("quota_calls") or 0)
+        total_owner_funded_calls += int(usage.get("funded_calls") or 0)
+        total_tokens += int(usage.get("total_tokens") or 0)
         if row.get("role") != "admin":
             per_user.append({**row, **usage})
-    recent = _db_execute(
+    recent_raw = _db_execute(
         "SELECT e.created_at_utc, e.local_date, e.call_type, e.provider, e.model, e.credential_source, e.counts_toward_limit, e.status, e.input_tokens, e.output_tokens, e.total_tokens, e.prompt_chars, e.prompt_profile_json, e.http_status, e.error_type, u.username "
         "FROM ai_usage_events e LEFT JOIN users u ON u.id=e.user_id ORDER BY e.created_at_utc DESC LIMIT 80",
         fetch=True,
     )
-    for event in recent:
-        rows = _v4874_prompt_cost_profile_rows(event.get("prompt_profile_json"))
-        event["prompt_profile_rows"] = rows
-        event["prompt_profile_top"] = rows[:6]
-        event["evidence_profile_rows"] = _v4875_evidence_cost_profile_rows(event.get("prompt_profile_json"))
-        event["base_evidence_profile_rows"] = _v4876_base_evidence_cost_profile_rows(event.get("prompt_profile_json"))
-        event["estimated_cost"] = _estimate_ai_call_cost(
-            event.get("provider"), event.get("model"), event.get("input_tokens"), event.get("output_tokens")
-        )
+    recent = []
+    for raw_event in recent_raw:
+        event = dict(raw_event or {})
+        try:
+            rows = _v4874_prompt_cost_profile_rows(event.get("prompt_profile_json"))
+            event["prompt_profile_rows"] = rows
+            event["prompt_profile_top"] = rows[:6]
+            event["evidence_profile_rows"] = _v4875_evidence_cost_profile_rows(event.get("prompt_profile_json"))
+            event["base_evidence_profile_rows"] = _v4876_base_evidence_cost_profile_rows(event.get("prompt_profile_json"))
+            event["estimated_cost"] = _estimate_ai_call_cost(
+                event.get("provider"), event.get("model"), event.get("input_tokens"), event.get("output_tokens")
+            )
+        except Exception as exc:
+            # Cost telemetry must never be able to take the Control Center down.
+            app.logger.exception("Admin AI usage event enrichment failed")
+            event["prompt_profile_rows"] = []
+            event["prompt_profile_top"] = []
+            event["evidence_profile_rows"] = []
+            event["base_evidence_profile_rows"] = []
+            event["estimated_cost"] = None
+            event["monitor_error"] = type(exc).__name__
+        recent.append(event)
     standard = _standard_ai_runtime_config()
     platform = _platform_ai_runtime_config()
     return {
@@ -7718,6 +7770,7 @@ def admin_ai_usage_data():
         "today_tokens": total_tokens,
         "athletes": per_user,
         "recent": recent,
+        "monitor_error": None,
     }
 def _call_ai_provider(provider, api_key, model, prompt, max_tokens=1200, *, usage_kind="AI", user_id=None, credential_source=None, counts_toward_limit=True, enforce_limit=True, prompt_profile=None, return_event_id=False):
     call_kind=str(usage_kind or "AI").strip().upper(); prompt_chars=len(str(prompt or ""))
@@ -10940,18 +10993,38 @@ def admin_control_center():
     if not admin:
         return redirect(url_for("login"))
     users, hidden_users, codes, audits = admin_dashboard_data()
-    ai_usage = admin_ai_usage_data()
+    admin_error = session.pop("admin_error", None)
+    try:
+        ai_usage = admin_ai_usage_data()
+    except Exception as exc:
+        # The Control Center is operationally more important than its telemetry.
+        # Never return HTTP 500 because the AI-cost monitor has one bad row/query.
+        app.logger.exception("Admin AI usage monitor failed; rendering fail-safe Control Center")
+        ai_usage = _r102_empty_admin_ai_usage(type(exc).__name__)
+        monitor_note = "AI usage monitor temporarily unavailable · " + type(exc).__name__
+        admin_error = (str(admin_error).strip() + " · " if admin_error else "") + monitor_note
     usage_by_user = {str(x.get("id")): x for x in (ai_usage.get("athletes") or [])}
     for row in list(users) + list(hidden_users):
         row["ai_usage_today"] = usage_by_user.get(str(row.get("id")), {})
     athlete_count = sum(1 for row in users if row.get("role") != "admin")
-    return render_template_string(
-        ADMIN_PAGE, product_css=PRODUCT_SIMPLE_CSS, users=users, hidden_users=hidden_users, codes=codes, audits=audits, ai_usage=ai_usage, athlete_count=athlete_count,
+    render_args = dict(
+        product_css=PRODUCT_SIMPLE_CSS, users=users, hidden_users=hidden_users, codes=codes, audits=audits, ai_usage=ai_usage, athlete_count=athlete_count,
         storage=get_storage_metrics(global_view=True), new_code=session.pop("new_access_code", None),
         reset_credential=session.pop("password_reset_credential", None),
-        notice=session.pop("admin_notice", None), error=session.pop("admin_error", None),
+        notice=session.pop("admin_notice", None), error=admin_error,
         today_iso=get_rome_now().date().isoformat(),
     )
+    try:
+        return render_template_string(ADMIN_PAGE, **render_args)
+    except Exception:
+        # A malformed historical telemetry row must not lock the owner out.
+        app.logger.exception("Admin page render failed; retrying without recent AI telemetry")
+        safe_usage = dict(ai_usage or _r102_empty_admin_ai_usage("RENDER"))
+        safe_usage["recent"] = []
+        safe_usage["monitor_error"] = safe_usage.get("monitor_error") or "RENDER_FAILSAFE"
+        render_args["ai_usage"] = safe_usage
+        render_args["error"] = ((str(render_args.get("error") or "").strip() + " · ") if render_args.get("error") else "") + "Recent AI-call detail hidden by fail-safe; Control Center remains available."
+        return render_template_string(ADMIN_PAGE, **render_args)
 @app.route("/admin/access-codes/create", methods=["POST"])
 def admin_create_code():
     admin = require_admin()
