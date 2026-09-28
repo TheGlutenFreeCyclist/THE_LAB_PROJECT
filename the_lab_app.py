@@ -80,7 +80,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R96 · RESTORED WELLNESS RECENCY AUTHORITY · R95 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R98 · GARMIN CYCLING MAX-MET VO2 AUTHORITY · R95 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -18409,19 +18409,20 @@ def _v89_fit_unwrap_original(content):
     return raw
 
 def _v89_fit_garmin_vo2_contract(content, fallback_date=None):
-    """Extract Garmin cycling VO2 from the two native FIT VO2 carriers.
+    """Extract Garmin cycling VO2 from native FIT carriers.
 
-    Garmin FIT files expose two related undocumented values:
-      * message 79 / field 0: user-profile ``metmax`` (scale 1024 MET), the
-        Garmin-profile/display-side value carried into the activity;
-      * message 140 / field 7: post-activity physiological ``metmax`` (scale
-        65536 MET), the precise activity calculation used by Intervals' custom
-        VO2MaxGarmin field.
+    Authority order for Garmin's *display/current* cycling VO2:
+      1) message 229 (max_met_data) / field 2 (vo2_max, scale 10), restricted
+         to sport=cycling (FIT sport enum 2). This is the FIT SDK's explicit
+         VO2-max state record and is not tied to one workout estimate.
+      2) message 79 / field 0 profile metmax (scale 1024 MET), retained as a
+         profile-side fallback/diagnostic.
+      3) message 140 / field 7 post-activity metmax (scale 65536 MET), retained
+         as the activity-estimate fallback/diagnostic.
 
-    R97 restores message 79/0 as the primary Garmin *display* VO2 contract and
-    retains 140/7 as an explicit post-activity diagnostic/fallback.  This avoids
-    silently treating the precise 140/7 value as identical to the rounded/
-    adjusted Garmin profile value when the two differ.
+    R98 fixes the R97 mistake of treating message 79/0 as the current Garmin
+    cycling VO2 authority.  R97 QA proved 79/0 follows activity-level values
+    (e.g. 80 -> 77 -> 79) even when the user's Garmin cycling VO2 remains 80.
     """
     raw=_v89_fit_unwrap_original(content)
     base={
@@ -18429,14 +18430,24 @@ def _v89_fit_garmin_vo2_contract(content, fallback_date=None):
         "source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_VO2",
         "path":None,"encoding":None,
         "raw_type":"uint","candidate_count":0,
-        "message_79_count":0,"message_140_count":0,
+        "message_79_count":0,"message_140_count":0,"message_229_count":0,
         "garmin_display_value":None,"garmin_display_raw_value":None,
+        "max_met_value":None,"max_met_raw_value":None,"max_met_sport":None,
+        "max_met_sub_sport":None,"max_met_update_time_raw":None,
+        "profile_metmax_value":None,"profile_metmax_raw_value":None,
         "post_activity_value":None,"post_activity_raw_value":None,
-        "value_policy":"GARMIN_DISPLAY_79_0_FIRST",
+        "value_policy":"CYCLING_MAX_MET_229_2_FIRST",
     }
     try:
         if len(raw)<12:return {**base,"fit_status":"EMPTY_OR_NOT_FIT"}
-        offset=0;profile_candidates=[];post_candidates=[];message_79_count=0;message_140_count=0;parsed_files=0
+        offset=0
+        profile_candidates=[]
+        post_candidates=[]
+        maxmet_candidates=[]
+        message_79_count=0
+        message_140_count=0
+        message_229_count=0
+        parsed_files=0
         while offset+12<=len(raw):
             header_size=raw[offset]
             if header_size<12 or offset+header_size>len(raw) or raw[offset+8:offset+12]!=b".FIT":
@@ -18453,22 +18464,28 @@ def _v89_fit_garmin_vo2_contract(content, fallback_date=None):
                     definition=defs.get(local)
                     if not definition:return {**base,"fit_status":"MISSING_DEFINITION"}
                     fields=definition["fields"];byteorder=definition["byteorder"];global_num=definition["global_num"]
+                    record_fields={}
                     for field_num,size,_base_type in fields:
                         if field_num==253:
+                            # compressed timestamp is encoded in the record header
                             continue
                         if pos+size>end:return {**base,"fit_status":"TRUNCATED_RECORD"}
                         chunk=raw[pos:pos+size];pos+=size
-                        if global_num==79 and field_num==0:
-                            value=int.from_bytes(chunk[:min(len(chunk),8)],byteorder,signed=False) if chunk else None
-                            if value is not None:profile_candidates.append(value)
-                        elif global_num==140 and field_num==7:
-                            value=int.from_bytes(chunk[:min(len(chunk),8)],byteorder,signed=False) if chunk else None
-                            if value is not None:post_candidates.append(value)
+                        value=int.from_bytes(chunk[:min(len(chunk),8)],byteorder,signed=False) if chunk else None
+                        if global_num==79 and field_num==0 and value is not None:
+                            profile_candidates.append(value)
+                        elif global_num==140 and field_num==7 and value is not None:
+                            post_candidates.append(value)
+                        elif global_num==229 and field_num in {0,2,5,6} and value is not None:
+                            record_fields[field_num]=value
                     for size in definition["dev_sizes"]:
                         if pos+size>end:return {**base,"fit_status":"TRUNCATED_DEV_RECORD"}
                         pos+=size
                     if global_num==79:message_79_count+=1
                     if global_num==140:message_140_count+=1
+                    if global_num==229:
+                        message_229_count+=1
+                        if 2 in record_fields:maxmet_candidates.append(record_fields)
                     continue
                 is_definition=bool(rec_header & 0x40)
                 local=rec_header & 0x0F
@@ -18497,21 +18514,45 @@ def _v89_fit_garmin_vo2_contract(content, fallback_date=None):
                 definition=defs.get(local)
                 if not definition:return {**base,"fit_status":"MISSING_DEFINITION"}
                 global_num=definition["global_num"];byteorder=definition["byteorder"]
+                record_fields={}
                 for field_num,size,_base_type in definition["fields"]:
                     if pos+size>end:return {**base,"fit_status":"TRUNCATED_RECORD"}
                     chunk=raw[pos:pos+size];pos+=size
-                    if global_num==79 and field_num==0:
-                        value=int.from_bytes(chunk[:min(len(chunk),8)],byteorder,signed=False) if chunk else None
-                        if value is not None:profile_candidates.append(value)
-                    elif global_num==140 and field_num==7:
-                        value=int.from_bytes(chunk[:min(len(chunk),8)],byteorder,signed=False) if chunk else None
-                        if value is not None:post_candidates.append(value)
+                    value=int.from_bytes(chunk[:min(len(chunk),8)],byteorder,signed=False) if chunk else None
+                    if global_num==79 and field_num==0 and value is not None:
+                        profile_candidates.append(value)
+                    elif global_num==140 and field_num==7 and value is not None:
+                        post_candidates.append(value)
+                    elif global_num==229 and field_num in {0,2,5,6} and value is not None:
+                        record_fields[field_num]=value
                 for size in definition["dev_sizes"]:
                     if pos+size>end:return {**base,"fit_status":"TRUNCATED_DEV_RECORD"}
                     pos+=size
                 if global_num==79:message_79_count+=1
                 if global_num==140:message_140_count+=1
+                if global_num==229:
+                    message_229_count+=1
+                    if 2 in record_fields:maxmet_candidates.append(record_fields)
             offset=end+2 if end+2<=len(raw) else end
+
+        maxmet_decoded=[]
+        for row in maxmet_candidates:
+            raw_value=row.get(2)
+            try:
+                decoded=_vo2_number(float(raw_value)/10.0)
+            except Exception:
+                decoded=None
+            if decoded is not None:
+                maxmet_decoded.append({
+                    "raw":raw_value,"value":round(decoded,2),
+                    "update_time":row.get(0),"sport":row.get(5),"sub_sport":row.get(6),
+                })
+        cycling_maxmet=[r for r in maxmet_decoded if r.get("sport")==2]
+        if cycling_maxmet:
+            # Prefer the newest state if more than one cycling max-met record exists.
+            maxmet_choice=max(cycling_maxmet,key=lambda r:(r.get("update_time") is not None,r.get("update_time") or 0))
+        else:
+            maxmet_choice=None
 
         profile_decoded=[]
         for raw_value in profile_candidates:
@@ -18526,17 +18567,36 @@ def _v89_fit_garmin_vo2_contract(content, fallback_date=None):
             d=_v80_decode_garmin_vo2(raw_value)
             if d.get("valid"):post_decoded.append((raw_value,d.get("value")))
 
+        maxmet_raw=maxmet_choice.get("raw") if maxmet_choice else None
+        maxmet_value=maxmet_choice.get("value") if maxmet_choice else None
         profile_raw,profile_value=(profile_decoded[-1] if profile_decoded else (None,None))
         post_raw,post_value=(post_decoded[-1] if post_decoded else (None,None))
-        chosen_value=profile_value if profile_value is not None else post_value
-        chosen_raw=profile_raw if profile_value is not None else post_raw
-        chosen_path="$.fit.message_79.field_0" if profile_value is not None else ("$.fit.message_140.field_7" if post_value is not None else None)
-        chosen_encoding="GARMIN_FIT_79_0" if profile_value is not None else ("GARMIN_FIT_140_7" if post_value is not None else None)
+
+        if maxmet_value is not None:
+            chosen_value=maxmet_value;chosen_raw=maxmet_raw
+            chosen_path="$.fit.message_229.field_2"
+            chosen_encoding="GARMIN_FIT_229_2_VO2MAX"
+        elif profile_value is not None:
+            chosen_value=profile_value;chosen_raw=profile_raw
+            chosen_path="$.fit.message_79.field_0"
+            chosen_encoding="GARMIN_FIT_79_0"
+        else:
+            chosen_value=post_value;chosen_raw=post_raw
+            chosen_path="$.fit.message_140.field_7" if post_value is not None else None
+            chosen_encoding="GARMIN_FIT_140_7" if post_value is not None else None
+
         common={
             **base,
             "message_79_count":message_79_count,"message_140_count":message_140_count,
-            "candidate_count":len(profile_candidates)+len(post_candidates),
-            "garmin_display_value":profile_value,"garmin_display_raw_value":profile_raw,
+            "message_229_count":message_229_count,
+            "candidate_count":len(profile_candidates)+len(post_candidates)+len(maxmet_candidates),
+            "garmin_display_value":maxmet_value if maxmet_value is not None else profile_value,
+            "garmin_display_raw_value":maxmet_raw if maxmet_value is not None else profile_raw,
+            "max_met_value":maxmet_value,"max_met_raw_value":maxmet_raw,
+            "max_met_sport":maxmet_choice.get("sport") if maxmet_choice else None,
+            "max_met_sub_sport":maxmet_choice.get("sub_sport") if maxmet_choice else None,
+            "max_met_update_time_raw":maxmet_choice.get("update_time") if maxmet_choice else None,
+            "profile_metmax_value":profile_value,"profile_metmax_raw_value":profile_raw,
             "post_activity_value":post_value,"post_activity_raw_value":post_raw,
             "parsed_fit_files":parsed_files,
         }
@@ -18545,7 +18605,7 @@ def _v89_fit_garmin_vo2_contract(content, fallback_date=None):
                 **common,"status":"FOUND","value":chosen_value,"raw_value":chosen_raw,
                 "path":chosen_path,"encoding":chosen_encoding,"fit_status":"PARSED",
             }
-        if profile_candidates or post_candidates:
+        if maxmet_candidates or profile_candidates or post_candidates:
             return {
                 **common,"status":"INVALID","raw_value":chosen_raw,
                 "path":chosen_path,"encoding":chosen_encoding,"fit_status":"PARSED",
@@ -18569,7 +18629,7 @@ def _v89_fetch_original_fit_garmin_contract(activity, runtime=None):
     device_name=str(a.get("device_name") or "") or None
     file_type=str(a.get("file_type") or "") or None
     base={
-        "activity_id":aid or None,"date":day,"source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_MESSAGE_140",
+        "activity_id":aid or None,"date":day,"source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_VO2",
         "activity_source":source,"device_name":device_name,"file_type":file_type,
         "http_status":None,"content_type":None,"content_length":None,
         "fetch_reason":None,"error_stage":None,
@@ -18593,7 +18653,7 @@ def _v89_fetch_original_fit_garmin_contract(activity, runtime=None):
         c.update({k:v for k,v in diag.items() if k not in {"source","scope"}})
         c["activity_id"]=aid
         c["source"]="GARMIN_ORIGINAL_FIT"
-        c["scope"]="ORIGINAL_FIT_MESSAGE_140"
+        c["scope"]="ORIGINAL_FIT_VO2"
         c["fetch_reason"]="HTTP_OK"
         c["error_stage"]=None
         return c
@@ -18680,7 +18740,7 @@ def _v89_enrich_garmin_vo2_details(activities, details, max_single_fetches=1, ma
                 c={
                     "status":"FETCH_FAILED","activity_id":str(a.get("id") or ""),
                     "date":str(a.get("start_date_local") or "")[:10] or None,
-                    "source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_MESSAGE_140",
+                    "source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_VO2",
                     "activity_source":str(a.get("source") or "") or None,"device_name":str(a.get("device_name") or "") or None,"file_type":str(a.get("file_type") or "") or None,
                     "http_status":None,"content_type":None,"content_length":None,
                     "fetch_reason":runtime_reason or "RUNTIME_UNAVAILABLE","error_stage":"RUNTIME_RESOLUTION",
@@ -18696,7 +18756,7 @@ def _v89_enrich_garmin_vo2_details(activities, details, max_single_fetches=1, ma
                         c={
                             "status":"FETCH_FAILED","activity_id":str(a.get("id") or ""),
                             "date":str(a.get("start_date_local") or "")[:10] or None,
-                            "source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_MESSAGE_140",
+                            "source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_VO2",
                             "activity_source":str(a.get("source") or "") or None,"device_name":str(a.get("device_name") or "") or None,"file_type":str(a.get("file_type") or "") or None,
                             "http_status":None,"content_type":None,"content_length":None,
                             "fetch_reason":type(exc).__name__.upper(),"error_stage":"WORKER",
@@ -18708,14 +18768,14 @@ def _v89_enrich_garmin_vo2_details(activities, details, max_single_fetches=1, ma
         if c.get("status")=="FOUND":
             merged=dict(out.get(aid) or {})
             merged["garmin_vo2_contract"]=c
-            merged["garmin_vo2_scope"]="ORIGINAL_FIT_MESSAGE_140"
+            merged["garmin_vo2_scope"]="ORIGINAL_FIT_VO2"
             out[aid]=merged
             # R91 projection: the activity summary itself is part of the canonical
             # VO2 source population. Project the proven contract here as well so a
             # season-window FIT hit is visible to build_vo2max_trend even when the
             # activity is older than the recent training-block detail window.
             a["garmin_vo2_contract"]=dict(c)
-            a["garmin_vo2_scope"]="ORIGINAL_FIT_MESSAGE_140"
+            a["garmin_vo2_scope"]="ORIGINAL_FIT_VO2"
             found.append(c)
     latest=max(found,key=lambda c:str(c.get("date") or "")) if found else None
     statuses={};fetch_reasons={}
