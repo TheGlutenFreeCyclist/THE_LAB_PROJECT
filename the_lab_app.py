@@ -80,7 +80,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.77 WIP R92 · GARMIN VO2 PRECEDENCE + QA OBSERVABILITY · R91 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.78 WIP R93 · VO2 AUTHORITY FRESHNESS SEPARATION · R92 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -7983,7 +7983,7 @@ def _v4831_qa_report(data, qa_kind, input_fingerprint, source_report=None, ai_ru
             "ai_model": "NONE" if python_only else (ai_runtime.get("model") or STANDARD_AI_MODEL),
             "production_last_report_affected": "NO · production Snapshot payload/timestamp remain unchanged",
             "intervals_data": intervals_mode,
-            "python_pipeline": "FULL NOVA SNAPSHOT PIPELINE · SAME HOME_PAGE · R79-R92 GUARDS · READ-ONLY · AI SKIPPED" if python_only else ("PRODUCTION SNAPSHOT PIPELINE" if kind == "LIVE" else "SAVED PRODUCTION CONTEXT + PRODUCTION AI NORMALIZERS/GUARDS"),
+            "python_pipeline": "FULL NOVA SNAPSHOT PIPELINE · SAME HOME_PAGE · R79-R93 GUARDS · READ-ONLY · AI SKIPPED" if python_only else ("PRODUCTION SNAPSHOT PIPELINE" if kind == "LIVE" else "SAVED PRODUCTION CONTEXT + PRODUCTION AI NORMALIZERS/GUARDS"),
             "decision_authority": "NOVA" if python_only else "NOVA + AI NARRATIVE",
             "snapshot_composer": "NOVA_FULL_SNAPSHOT_COMPOSER" if python_only else "AI_NARRATIVE_LAYER",
             "regression_chain": "R79→R91" if python_only else None,
@@ -13716,15 +13716,25 @@ def _v87_cross_module_authority_guard(snapshot, repair=True):
             _v87_issue(issues,"RACE_REPEATABILITY_LEDGER_MISMATCH","race_repeatability",{"sessions":expected_sessions,"efforts":expected_efforts,"value":expected_value},{"sessions":rr.get("sessions"),"efforts":rr.get("efforts"),"value":rr.get("value")})
         checks.append({"name":"RACE_REPEATABILITY","sessions":expected_sessions,"efforts":expected_efforts})
 
-    # 7) External VO2 source provenance must agree with the R80 contract.
+    # 7) External VO2 provenance and freshness are separate concerns.
+    # R93: a proven Garmin cycling source does not become provenance-invalid
+    # merely because its activity date is older than the UI freshness window.
+    # Freshness remains visible through garmin_activity_recent; authority is
+    # determined by the external-data contract and the existence of Garmin
+    # points. This aligns the guard with R92 source precedence.
     if vo2.get("available"):
         source=str(vo2.get("wearable_source") or "").upper();contract=str(vo2.get("garmin_contract_status") or "").upper();recent=bool(vo2.get("garmin_activity_recent"));gpoints=int(_rhythm_num(vo2.get("garmin_history_points")) or 0)
         is_garmin_source=source.startswith("GARMIN_")
-        if is_garmin_source and (gpoints<=0 or contract not in {"FOUND","FOUND_HISTORY"} or not recent):
-            _v87_issue(issues,"VO2_GARMIN_SOURCE_CONTRACT_MISMATCH","vo2_trend.wearable_source","RECENT_FOUND_GARMIN_CONTRACT",{"source":source,"status":contract,"points":gpoints,"recent":recent})
-        if source=="INTERVALS_WELLNESS" and recent and contract in {"FOUND","FOUND_HISTORY"}:
-            _v87_issue(issues,"VO2_WELLNESS_USED_DESPITE_RECENT_GARMIN","vo2_trend.wearable_source","GARMIN_CYCLING_SOURCE",source)
-        checks.append({"name":"EXTERNAL_VO2_CONTRACT","status":contract,"source":source})
+        live_garmin_contract=(contract=="FOUND")
+        history_garmin_contract=(contract in {"FOUND_HISTORY","STALE"})
+        garmin_provenance_ok=(gpoints>0 and (live_garmin_contract or (source=="GARMIN_ACTIVITY_HISTORY" and history_garmin_contract)))
+        if is_garmin_source and not garmin_provenance_ok:
+            _v87_issue(issues,"VO2_GARMIN_SOURCE_CONTRACT_MISMATCH","vo2_trend.wearable_source","PROVEN_GARMIN_CONTRACT_OR_HISTORY",{"source":source,"status":contract,"points":gpoints,"recent":recent})
+        # A live FOUND Garmin cycling contract must not be hidden by generic
+        # Wellness regardless of age. Recent stored Garmin history also wins.
+        if source=="INTERVALS_WELLNESS" and gpoints>0 and (live_garmin_contract or (contract=="FOUND_HISTORY" and recent)):
+            _v87_issue(issues,"VO2_WELLNESS_USED_DESPITE_AUTHORITATIVE_GARMIN","vo2_trend.wearable_source","GARMIN_CYCLING_SOURCE",{"source":source,"status":contract,"points":gpoints,"recent":recent})
+        checks.append({"name":"EXTERNAL_VO2_CONTRACT","status":contract,"source":source,"recent":recent,"provenance_pass":(not is_garmin_source) or garmin_provenance_ok})
 
     audit={
         "schema":"V4.8.74-R87-1","status":"PASS" if not issues else "BLOCKED",
@@ -13866,11 +13876,37 @@ def _v88_nova_only_regression_contract(snapshot):
     if not found_projection_ok:
         issues.append({"code":"R91_GARMIN_FIT_PROJECTION_FAILED","probe_value":probe.get("value"),"wearable_current":vo2.get("wearable_current"),"wearable_source":vo2.get("wearable_source")})
 
+    # R93 · provenance/freshness separation. A live Garmin contract may be
+    # older than the freshness window and still remain the authoritative
+    # cycling-specific source. Conversely, generic Wellness may not win while
+    # such a FOUND contract is present.
+    vo2_source=str(vo2.get("wearable_source") or "").upper()
+    vo2_contract=str(vo2.get("garmin_contract_status") or "").upper()
+    vo2_recent=bool(vo2.get("garmin_activity_recent"))
+    vo2_gpoints=int(_rhythm_num(vo2.get("garmin_history_points")) or 0)
+    r93_authority_ok=True
+    r93_reason=None
+    if vo2_source.startswith("GARMIN_"):
+        if vo2_source=="GARMIN_ACTIVITY_HISTORY":
+            r93_authority_ok=(vo2_gpoints>0 and vo2_contract in {"FOUND_HISTORY","STALE","FOUND"})
+        else:
+            r93_authority_ok=(vo2_gpoints>0 and vo2_contract=="FOUND")
+        if not r93_authority_ok:r93_reason="GARMIN_SOURCE_WITHOUT_PROVEN_CONTRACT"
+    elif vo2_source=="INTERVALS_WELLNESS" and vo2_gpoints>0 and vo2_contract=="FOUND":
+        r93_authority_ok=False;r93_reason="WELLNESS_HIDES_LIVE_GARMIN_CONTRACT"
+    checks.append({
+        "name":"R93_VO2_AUTHORITY_FRESHNESS_SEPARATION",
+        "source":vo2_source,"contract_status":vo2_contract,"recent":vo2_recent,
+        "garmin_points":vo2_gpoints,"pass":bool(r93_authority_ok),"reason":r93_reason,
+    })
+    if not r93_authority_ok:
+        issues.append({"code":"R93_VO2_AUTHORITY_FRESHNESS_FAILED","reason":r93_reason,"source":vo2_source,"contract_status":vo2_contract,"recent":vo2_recent,"garmin_points":vo2_gpoints})
+
     return {
-        "schema":"V4.8.77-R92-1","status":"PASS" if not issues else "BLOCKED","final_pass":not bool(issues),
+        "schema":"V4.8.78-R93-1","status":"PASS" if not issues else "BLOCKED","final_pass":not bool(issues),
         "ai_calls":0,"decision_authority":"NOVA","snapshot_composer":"NOVA_FULL_SNAPSHOT_COMPOSER",
         "ui_contract":"HOME_PAGE_FULL","checks":checks,"issues":issues,
-        "rule":"Nova-only QA is valid only when the full current Snapshot payload, narrative fields and canonical sessions survive the cumulative R79-R92 authority/regression guards with zero AI-provider calls. A blocked QA remains renderable and downloadable for diagnosis while Production Last Report stays unchanged.",
+        "rule":"Nova-only QA is valid only when the full current Snapshot payload, narrative fields and canonical sessions survive the cumulative R79-R93 authority/regression guards with zero AI-provider calls. A blocked QA remains renderable and downloadable for diagnosis while Production Last Report stays unchanged.",
     }
 
 def _v84_nova_prescription_text(x):
