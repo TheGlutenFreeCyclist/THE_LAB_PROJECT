@@ -80,7 +80,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.74 WIP R78 · SNAPSHOT INPUT GUIDE · R77 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.74 WIP R88 · FULL NOVA-ONLY REGRESSION · STEP 8"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -3020,7 +3020,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% elif qa_mode %}
 <div class="v4-top-actions v27-report-actions no-print">
-<span class="v45-view-pill stored">QA TEST · {{ qa_meta.qa_kind if qa_meta else 'GEMINI' }}</span>
+<span class="v45-view-pill stored">QA TEST · {{ 'NOVA' if qa_meta and qa_meta.ai_calls == 0 else (qa_meta.qa_kind if qa_meta else 'GEMINI') }}</span>
 <a class="v27-report-link" href="{{ url_for('home') }}">Back to dashboard</a>
 <button class="v27-report-link" type="button" id="qa-audit-download-btn">Content Audit · MD</button>
 <button class="v4-btn v4-btn-cyan" type="button" id="report-print-btn">Print / Save PDF</button>
@@ -3048,8 +3048,8 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% if session.get('role') == 'admin' %}<div class="v4832-modal qa" id="qa-actions-modal" role="dialog" aria-modal="true" aria-labelledby="qa-actions-title" hidden>
 <div class="v4832-modal-backdrop" data-v4832-close></div><div class="v4832-modal-panel" tabindex="-1"><div class="v4832-modal-head"><div class="v4832-modal-title"><strong id="qa-actions-title">Admin QA</strong><span>Test THE LAB without replacing the Production Last Report.</span></div><button class="v4832-modal-close" type="button" data-v4832-close aria-label="Close QA actions">×</button></div><div class="v4832-modal-actions">
-<form class="v4834-qa-run-form" method="post" action="{{ url_for('analyze') }}" data-v4834-qa-run="PYTHON"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="qa_mode" value="PYTHON"><button type="submit" data-v4834-qa-button data-idle-label="⚙ Run Python-only QA · €0 AI" data-running-label="Running Python-only QA…">⚙ Run Python-only QA · €0 AI</button></form>
-<span class="v4832-menu-note">Live Intervals.icu + production deterministic pipeline in read-only mode. Zero Gemini/OpenAI calls, zero AI quota usage, and Production Last Report is not replaced.</span>
+<form class="v4834-qa-run-form" method="post" action="{{ url_for('analyze') }}" data-v4834-qa-run="PYTHON"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="qa_mode" value="PYTHON"><button type="submit" data-v4834-qa-button data-idle-label="⚙ Run Nova-only QA · €0 AI" data-running-label="Running Nova-only QA…">⚙ Run Nova-only QA · €0 AI</button></form>
+<span class="v4832-menu-note">Live Intervals.icu + full Nova coaching/composer pipeline in read-only mode. Same Snapshot UI, zero AI-provider calls, zero AI quota usage, and Production Last Report is not replaced.</span>
 <div class="v4832-menu-sep"></div>
 <form class="v4834-qa-run-form" method="post" action="{{ url_for('analyze') }}" data-v4834-qa-run="LIVE"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="qa_mode" value="LIVE"><button type="submit" data-v4834-qa-button data-idle-label="▶ Run Live QA Test" data-running-label="Generating Live QA…">▶ Run Live QA Test</button></form>
 <span class="v4832-menu-note">Live Intervals.icu + production Python pipeline + forced THE LAB Standard · Gemini. Production Last Report is not replaced; provider quota/pricing still applies.</span>
@@ -3068,10 +3068,10 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <section class="v4-card v4-hero">
 <img class="v4-logo" src="data:image/png;base64,{{ logo }}" alt="The Gluten Free Cyclist Lab">
 <h1 class="v4-title">Health Snapshot</h1>
-<div class="v4-kicker">{% if is_preview %}DEMO SNAPSHOT · SAMPLE DATA · READ ONLY{% elif qa_mode %}ADMIN QA TEST · GEMINI · PRODUCTION REPORT UNCHANGED{% elif report_mode %}STORED SNAPSHOT · COMPLETE · READ ONLY{% else %}YOUR DAILY CYCLING DESK{% endif %}</div>
+<div class="v4-kicker">{% if is_preview %}DEMO SNAPSHOT · SAMPLE DATA · READ ONLY{% elif qa_mode %}ADMIN QA TEST · {{ 'NOVA ONLY · €0 AI' if qa_meta and qa_meta.ai_calls == 0 else 'GEMINI' }} · PRODUCTION REPORT UNCHANGED{% elif report_mode %}STORED SNAPSHOT · COMPLETE · READ ONLY{% else %}YOUR DAILY CYCLING DESK{% endif %}</div>
 <p class="v4-subtitle">{% if is_preview %}Full interface preview · sample athlete{% elif qa_mode and qa_meta %}{{ qa_meta.intervals_data }} · {{ qa_meta.ai_provider }} · input {{ qa_meta.input_fingerprint }}{% elif report_mode and report_meta %}Generated {{ report_meta.generated_at_local_display }} · stored snapshot{% else %}Last {{ days }} days for recovery · {{ season_days }} days for cycling context · personalized analysis{% endif %}</p>
 </section>
-{% if qa_mode and qa_meta %}<div class="v4831-qa-banner no-print"><div><strong>{{ qa_meta.qa_kind }} QA · {{ qa_meta.ai_provider }}</strong><span>{{ qa_meta.intervals_data }} · {{ qa_meta.python_pipeline }} · Production Last Report unchanged. Input fingerprint {{ qa_meta.input_fingerprint }}.</span></div><b>ADMIN ONLY</b></div>{% endif %}
+{% if qa_mode and qa_meta %}<div class="v4831-qa-banner no-print"><div><strong>{{ 'NOVA-ONLY' if qa_meta.ai_calls == 0 else qa_meta.qa_kind }} QA · {{ qa_meta.ai_provider }}</strong><span>{{ qa_meta.intervals_data }} · {{ qa_meta.python_pipeline }} · Production Last Report unchanged. Input fingerprint {{ qa_meta.input_fingerprint }}.</span></div><b>ADMIN ONLY</b></div>{% endif %}
 {% if not report_mode %}
 {% if data and not is_preview and not qa_mode %}
 <div class="v4862-input-toggle-wrap no-print" id="v4862-input-toggle-wrap">
@@ -5963,6 +5963,7 @@ def _v4891_prepare_snapshot_for_ui(data):
         if raw_goal and raw_goal in micro and goal_key in _V4891_GOAL_MICRO_UI:
             micro = micro.replace(raw_goal, _V4891_GOAL_MICRO_UI[goal_key])
         td["microcycle_direction"] = _v4891_direct_user_prose(micro)
+    ui = _v87_cross_module_authority_guard(ui, repair=True)
     ar = ui.get("adaptive_roadmap")
     if isinstance(ar, dict):
         if ar.get("north_star") is not None:
@@ -6637,7 +6638,10 @@ def _v4883_quality_architecture_guard(title, intensity, main_set, why, cls, ledg
     validation_due=bool(proposed.get("role")=="VALIDATE" and test_state in ("TEST SOON","WINDOW OPEN") and int((adaptive_roadmap or {}).get("stage_index") or 0)>=2)
     ambiguous_choices=bool(re.search(r"\bOR\b",str(title or ""),flags=re.I) or re.search(r"\bchoose\s*:",str(main_set or ""),flags=re.I))
     state=str(sl.get("decision_state") or "OPEN_WITH_PURPOSE")
-    if ambiguous_choices:
+    decision_violations=[] if explicit_hard else _v83_decision_architecture_violations(proposed,title,main_set,adaptive_roadmap)
+    if decision_violations:
+        relation={**relation,"state":"NOVA_DECISION_MISMATCH","allowed":False,"decision_violations":decision_violations}; reasons.extend("NOVA_DECISION_"+x for x in decision_violations)
+    elif ambiguous_choices:
         relation={**relation,"state":"AMBIGUOUS_HARD_CHOICES","allowed":False}; reasons.append("STIMULUS_LEDGER_AMBIGUOUS_HARD_CHOICES_REJECTED")
     elif state=="VALIDATE_OR_ABSORB" and validation_due:
         relation={**relation,"state":"VALIDATION_REPLACES_MORE_TRAINING","allowed":True}; reasons.append("STIMULUS_LEDGER_VALIDATION_ALLOWED")
@@ -7975,11 +7979,14 @@ def _v4831_qa_report(data, qa_kind, input_fingerprint, source_report=None, ai_ru
         "qa_meta": {
             "report_mode": "QA TEST",
             "qa_kind": kind,
-            "ai_provider": "NONE · Python-only · 0 AI calls" if python_only else "THE LAB Standard · Gemini",
+            "ai_provider": "NONE · Nova-only · 0 AI calls" if python_only else "THE LAB Standard · Gemini",
             "ai_model": "NONE" if python_only else (ai_runtime.get("model") or STANDARD_AI_MODEL),
             "production_last_report_affected": "NO · production Snapshot payload/timestamp remain unchanged",
             "intervals_data": intervals_mode,
-            "python_pipeline": "PRODUCTION DETERMINISTIC PIPELINE · READ-ONLY · AI SKIPPED" if python_only else ("PRODUCTION SNAPSHOT PIPELINE" if kind == "LIVE" else "SAVED PRODUCTION CONTEXT + PRODUCTION AI NORMALIZERS/GUARDS"),
+            "python_pipeline": "FULL NOVA SNAPSHOT PIPELINE · SAME HOME_PAGE · R79-R88 GUARDS · READ-ONLY · AI SKIPPED" if python_only else ("PRODUCTION SNAPSHOT PIPELINE" if kind == "LIVE" else "SAVED PRODUCTION CONTEXT + PRODUCTION AI NORMALIZERS/GUARDS"),
+            "decision_authority": "NOVA" if python_only else "NOVA + AI NARRATIVE",
+            "snapshot_composer": "NOVA_FULL_SNAPSHOT_COMPOSER" if python_only else "AI_NARRATIVE_LAYER",
+            "regression_chain": "R79→R88" if python_only else None,
             "ai_calls": 0 if python_only else 1,
             "ai_cost_note": "€0 AI provider usage" if python_only else "provider quota/pricing applies",
             "input_fingerprint": input_fingerprint or "unknown",
@@ -9454,7 +9461,10 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
     now = now or get_rome_now()
     generated_at_local = now.isoformat(timespec="seconds")
     generated_at_utc = now.astimezone(ZoneInfo("UTC")).isoformat(timespec="seconds")
-    report_data = dict(data or {})
+    report_data = copy.deepcopy(data or {})
+    report_data = _v87_cross_module_authority_guard(report_data, repair=False)
+    if not (report_data.get("cross_module_authority_audit") or {}).get("final_pass"):
+        raise RuntimeError("Cross-module authority guard blocked report persistence")
     report_data.pop("best_watts_debug", None)
     report_data.pop("report_save_warning", None)
     if qa_replay_bundle:
@@ -10900,11 +10910,13 @@ def admin_intervals_wbal_probe(activity_id):
     detail = fetch_activity_detail(activity_id)
     if not isinstance(detail, dict):
         return jsonify({"ok": False, "activity_id": activity_id, "error": "Intervals activity detail unavailable", "ai_calls": 0}), 502
-    summary = _v4884_native_wbal_summary(detail)
+    interval_truth = _v79_activity_interval_truth(detail)
+    summary = _v4884_native_wbal_summary(detail, interval_truth)
     return jsonify({
         "ok": True, "activity_id": activity_id, "name": detail.get("name"),
         "icu_ftp": detail.get("icu_ftp"), "icu_w_prime": detail.get("icu_w_prime"),
-        "wbal": summary, "ai_calls": 0, "note": "Read-only Intervals diagnostic; no AI provider call."
+        "activity_truth": _v79_activity_truth_summary(interval_truth),
+        "wbal": summary, "ai_calls": 0, "note": "Read-only Intervals + Activity Truth diagnostic; no AI provider call."
     })
 @app.route("/admin")
 def admin_control_center():
@@ -12204,7 +12216,7 @@ def fetch_intervals_data():
         "icu_training_load,icu_weighted_avg_watts,icu_average_watts,average_watts,average_heartrate,max_heartrate,stream_types,"
         "icu_zone_times,icu_hr_zone_times,icu_hr_zones,icu_hrr,icu_ftp,icu_pm_ftp,icu_pm_ftp_secs,icu_pm_ftp_watts,icu_rolling_ftp,icu_rolling_ftp_delta,icu_achievements,decoupling,"
         "calories,carbs_used,carbs_ingested,trainer,icu_intensity,"
-        "icu_variability_index,joules,sub_type,VO2MaxGarmin"
+        "icu_variability_index,joules,sub_type,source,VO2MaxGarmin"
     )
     activities_url = (
         f"https://intervals.icu/api/v1/athlete/{runtime['athlete_id']}/activities"
@@ -12301,51 +12313,114 @@ def build_wearable_vo2_series(wellness, max_points=10):
         else:
             raw.append(item)
     return _sample_vo2_points(raw, max_points=max_points)
-def _garmin_activity_vo2_value(activity):
-    """Return Garmin activity-level VO2max in ml/kg/min.
+def _v80_decode_garmin_vo2(value):
+    """Decode one Garmin VO2 candidate without guessing provenance."""
+    try:
+        raw=float(value)
+    except (TypeError,ValueError):
+        return {"valid":False,"value":None,"encoding":None,"raw_value":value}
+    direct=_vo2_number(raw)
+    if direct is not None:
+        return {"valid":True,"value":round(direct,2),"encoding":"DIRECT_ML_KG_MIN","raw_value":raw}
+    if 1000 < raw < 5000000:
+        decoded=_vo2_number(raw*3.5/65536.0)
+        if decoded is not None:
+            return {"valid":True,"value":round(decoded,2),"encoding":"GARMIN_FIT_140_7","raw_value":raw}
+    return {"valid":False,"value":None,"encoding":"OUT_OF_RANGE","raw_value":raw}
 
-    Intervals custom fields can expose VO2MaxGarmin either already decoded or
-    as the raw Garmin FIT 140.7 value. The raw field uses a 3.5/65536 scale.
+def _v80_garmin_vo2_contract(activity, source_scope="ACTIVITY", fallback_date=None):
+    """Canonical contract for Garmin cycling VO2 found in one Intervals payload.
+
+    Status is explicit: FOUND, INVALID or ABSENT. The contract records where the
+    value was found so downstream code never needs to walk external payloads again.
     """
-    def decode(value):
-        try:v=float(value)
-        except (TypeError,ValueError):return None
-        direct=_vo2_number(v)
-        if direct is not None:return direct
-        if 1000 < v < 5000000:
-            return _vo2_number(v*3.5/65536.0)
-        return None
-    found=[]
-    def walk(node):
+    a=activity if isinstance(activity,dict) else {}
+    aliases={"vo2maxgarmin","garminvo2max","cyclingvo2maxgarmin"}
+    candidates=[]
+    def walk(node,path="$"):
         if isinstance(node,dict):
             for key,value in node.items():
-                norm=re.sub(r"[^a-z0-9]","",str(key or "").lower())
-                if norm in {"vo2maxgarmin","garminvo2max","cyclingvo2maxgarmin"}:
-                    v=decode(value)
-                    if v is not None:found.append(v)
-                elif isinstance(value,(dict,list)):walk(value)
+                key_text=str(key or "")
+                norm=re.sub(r"[^a-z0-9]","",key_text.lower())
+                child=f"{path}.{key_text}"
+                if norm in aliases:
+                    candidates.append((child,value,_v80_decode_garmin_vo2(value)))
+                if isinstance(value,(dict,list)):
+                    walk(value,child)
         elif isinstance(node,list):
-            for item in node:walk(item)
-    v=decode((activity or {}).get("VO2MaxGarmin"))
-    if v is not None:return round(v,2)
-    walk(activity or {})
-    return round(found[0],2) if found else None
+            for idx,item in enumerate(node):
+                if isinstance(item,(dict,list)):
+                    walk(item,f"{path}[{idx}]")
+    walk(a)
+    day=str(a.get("start_date_local") or a.get("date") or fallback_date or "")[:10]
+    try:date.fromisoformat(day)
+    except Exception:day=None
+    valid=[row for row in candidates if row[2].get("valid")]
+    if valid:
+        path,raw,dec=valid[0]
+        return {
+            "status":"FOUND","value":dec.get("value"),"date":day,
+            "source":"GARMIN_ACTIVITY_CUSTOM_FIELD","scope":str(source_scope or "ACTIVITY"),
+            "path":path,"encoding":dec.get("encoding"),"raw_type":type(raw).__name__,
+            "candidate_count":len(candidates),
+        }
+    if candidates:
+        path,raw,dec=candidates[0]
+        return {
+            "status":"INVALID","value":None,"date":day,
+            "source":"GARMIN_ACTIVITY_CUSTOM_FIELD","scope":str(source_scope or "ACTIVITY"),
+            "path":path,"encoding":dec.get("encoding"),"raw_type":type(raw).__name__,
+            "candidate_count":len(candidates),
+        }
+    return {
+        "status":"ABSENT","value":None,"date":day,
+        "source":"GARMIN_ACTIVITY_CUSTOM_FIELD","scope":str(source_scope or "ACTIVITY"),
+        "path":None,"encoding":None,"raw_type":None,"candidate_count":0,
+    }
+
+def _garmin_activity_vo2_value(activity):
+    """Compatibility scalar backed by the canonical R80 data contract."""
+    c=_v80_garmin_vo2_contract(activity)
+    return c.get("value") if c.get("status")=="FOUND" else None
+
+def _v80_garmin_contract_summary(activities):
+    counts={"FOUND":0,"INVALID":0,"ABSENT":0}
+    latest=None
+    for a in activities or []:
+        if not isinstance(a,dict):continue
+        c=a.get("garmin_vo2_contract") if isinstance(a.get("garmin_vo2_contract"),dict) else None
+        if not c:c=_v80_garmin_vo2_contract(a,str(a.get("garmin_vo2_scope") or "ACTIVITY"))
+        status=str(c.get("status") or "ABSENT").upper()
+        if status not in counts:status="ABSENT"
+        counts[status]+=1
+        if status=="FOUND":
+            day=str(c.get("date") or a.get("start_date_local") or a.get("date") or "")[:10]
+            row={**c,"date":day or None}
+            if latest is None or str(row.get("date") or "")>str(latest.get("date") or ""):
+                latest=row
+    return {"counts":counts,"latest_found":latest}
+
 def build_garmin_activity_vo2_series(activities, max_points=10):
-    # Activity summaries do not always expose custom FIT fields. Accept both raw
-    # Intervals activities and already-decoded activity-detail blocks so the
-    # Garmin cycling value can survive the same detail fetch used for laps.
+    """Build dated Garmin series only from canonical FOUND contracts."""
     by_day={}
     for a in sorted(activities or [],key=lambda x:str((x or {}).get("start_date_local") or (x or {}).get("date") or "")):
         if not isinstance(a,dict):continue
-        v=_vo2_number(a.get("garmin_vo2"))
-        if v is None:v=_garmin_activity_vo2_value(a)
-        day=str(a.get("start_date_local") or a.get("date") or "")[:10]
+        contract=a.get("garmin_vo2_contract") if isinstance(a.get("garmin_vo2_contract"),dict) else None
+        if not contract:
+            contract=_v80_garmin_vo2_contract(a,source_scope=str(a.get("garmin_vo2_scope") or "ACTIVITY"))
+        if contract.get("status")!="FOUND":continue
+        v=_vo2_number(contract.get("value"));day=str(contract.get("date") or a.get("start_date_local") or a.get("date") or "")[:10]
         try:date.fromisoformat(day)
         except Exception:continue
         if v is None:continue
-        by_day[day]={"date":day,"value":round(v,1)}
+        by_day[day]={
+            "date":day,"value":round(v,1),
+            "source":contract.get("source"),"scope":contract.get("scope"),
+            "path":contract.get("path"),"encoding":contract.get("encoding"),
+        }
     raw=[by_day[k] for k in sorted(by_day)]
     return _sample_vo2_points(raw,max_points=max_points)
+
 _VO2_HISTORY_KEYS = {
     "wearable": ("VO2_WELLNESS", "INTERVALS_WELLNESS"),  # compatibility alias
     "wellness": ("VO2_WELLNESS", "INTERVALS_WELLNESS"),
@@ -12535,6 +12610,7 @@ def _vo2_path(points):
 def build_vo2max_trend(season_wellness, current_power_payload=None, current_power_day=None, history_user_id=None, persist_history=True, include_wearable=True, activities=None, activity_blocks=None, include_wellness=True):
     wellness_vo2=build_wearable_vo2_series(season_wellness,max_points=10) if include_wearable and include_wellness else []
     garmin_sources=list(activities or [])+list(activity_blocks or [])
+    garmin_contract_summary=_v80_garmin_contract_summary(garmin_sources) if include_wearable else {"counts":{"FOUND":0,"INVALID":0,"ABSENT":0},"latest_found":None}
     garmin_vo2=build_garmin_activity_vo2_series(garmin_sources,max_points=10) if include_wearable else []
     fresh_performance = build_performance_vo2_series(
         points=8, step_days=7, current_payload=current_power_payload, current_day=current_power_day
@@ -12562,6 +12638,15 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
     # stored separately and never merged into one line. A recent cycling-specific
     # Garmin value wins; Wellness is only the dated fallback.
     use_garmin=bool(garmin_all and (garmin_recent or not wellness_all))
+    _gc=garmin_contract_summary.get("counts") or {}
+    if garmin_vo2:
+        garmin_contract_status="FOUND" if garmin_recent else "STALE"
+    elif garmin_all:
+        garmin_contract_status="FOUND_HISTORY" if garmin_recent else "STALE"
+    elif int(_gc.get("INVALID") or 0)>0:
+        garmin_contract_status="INVALID"
+    else:
+        garmin_contract_status="ABSENT"
     wearable=garmin_all if use_garmin else wellness_all
     wearable_fallback=garmin_fallback if use_garmin else wellness_fallback
     all_points = wearable + performance
@@ -12653,6 +12738,10 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         "wearable_source": "GARMIN_ACTIVITY_CUSTOM_FIELD" if use_garmin else "INTERVALS_WELLNESS",
         "garmin_activity_points": len(garmin_vo2),
         "garmin_history_points": len(garmin_all),
+        "garmin_contract_status": garmin_contract_status,
+        "garmin_contract_counts": _gc,
+        "garmin_contract_latest": garmin_contract_summary.get("latest_found"),
+        "garmin_fallback_reason": None if use_garmin else garmin_contract_status,
         "wellness_points": len(wellness_vo2),
         "wellness_history_points": len(wellness_all),
         "garmin_activity_recent": garmin_recent,
@@ -12686,19 +12775,1040 @@ def _race_repeatability_from_block(block):
     cv=statistics.pstdev(watts)/avg*100 if len(watts)>1 and avg else 0
     decay=max(0,(watts[0]-watts[-1])/watts[0]*100) if watts[0] else 0
     return {"reps":len(watts),"interval_secs":bucket,"interval_label":format_duration_label(bucket),"recovery_secs":None,"recovery_avg_watts":None,"watts":watts,"retention_pct":round(late/early*100,1) if early else None,"cv_pct":round(cv,1),"decay_pct":round(decay,1)}
-def build_race_repeatability(previous_training_blocks, session_progression=None):
-    # Cumulative observed repeatability across every eligible quality session
+def _v81_evidence_block_key(block):
+    b=block or {};aid=str(b.get("activity_id") or "").strip()
+    if aid:return "ID:"+aid
+    return "FALLBACK:"+"|".join((str(b.get("date") or "")[:10],str(b.get("time") or ""),str(b.get("name") or "").strip().lower()))
+
+def _v81_evidence_tags(block):
+    b=block or {};tags=[];dur=_rhythm_num(b.get("duration_min"));quality=bool(b.get("quality_relevant"))
+    intervals=" ".join(str(x) for x in (b.get("intervals") or []))
+    text=(str(b.get("name") or "")+" "+intervals+" "+str(b.get("consideration") or "")).lower()
+    if dur is not None and dur>=150:tags.append("LONG_SESSION")
+    if quality:
+        if re.search(r"over[- ]?under|variable[- ]?load",text,re.I):tags.extend(["OVER_UNDER","VARIABLE_LOAD"])
+        if re.search(r"pre[- ]?load|under fatigue|after .*endurance|fatigue resistance|durability",text,re.I):tags.append("PRELOADED_QUALITY")
+        if re.search(r"late[- ]session|final hour|last hour|after \d+.*(?:min|h|hour|kj)",text,re.I):tags.append("LATE_QUALITY")
+        if re.search(r"race[- ]?like|race transfer|attack|surge|lead[- ]?in|mixed prior",text,re.I):tags.append("RACE_TRANSFER")
+    return list(dict.fromkeys(tags))
+
+def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_key=None, scope_start=None):
+    """Build one canonical evidence ledger from Activity Truth-backed training blocks.
+
+    R81 contract: downstream modules consume this ledger instead of independently
+    recounting the same sessions. Repeated-effort evidence fails closed when the
+    Activity Truth layer is conflicted or unresolved.
+    """
+    base=[b for b in (previous_training_blocks or []) if isinstance(b,dict)]
+    overlay=[b for b in (overlay_blocks or []) if isinstance(b,dict)]
+    by_key={};order=[]
+    for b in base:
+        k=_v81_evidence_block_key(b)
+        if k not in by_key:order.append(k)
+        by_key[k]=b
+    # Overlay newer/richer versions of the same activity (for example execution
+    # quality attached after Microcycle Ledger reconciliation), while also adding
+    # in-scope activities absent from the history list.
+    for b in overlay:
+        k=_v81_evidence_block_key(b)
+        if k not in by_key:order.append(k)
+        by_key[k]=b
+    start=str(scope_start or "")[:10]
+    blocks=[]
+    for k in order:
+        b=by_key[k];day=str(b.get("date") or "")[:10]
+        if start and day and day<start:continue
+        blocks.append(b)
+    # Keep newest-first deterministically. Date is sufficient for evidence-window
+    # ordering; stable input order resolves same-day ties without inventing time.
+    blocks=sorted(enumerate(blocks),key=lambda x:(str((x[1] or {}).get("date") or "")[:10],-x[0]),reverse=True)
+    blocks=[b for _,b in blocks]
+    events=[];rep_events=[];rejected=[]
+    for b in blocks:
+        truth=b.get("activity_truth") if isinstance(b.get("activity_truth"),dict) else {}
+        truth_status=str(truth.get("status") or "LEGACY_UNSPECIFIED").upper()
+        tags=_v81_evidence_tags(b);quality=bool(b.get("quality_relevant"));rep=None
+        reject_reason=None
+        if quality:
+            if truth_status in {"CONFLICT","UNRESOLVED","RAW_FALLBACK"}:
+                reject_reason="ACTIVITY_TRUTH_"+truth_status
+            else:
+                rep=_race_repeatability_from_block(b)
+        if reject_reason and (b.get("repeatability") or b.get("work_interval_evidence")):
+            rejected.append({"activity_id":b.get("activity_id"),"date":b.get("date"),"name":b.get("name"),"reason":reject_reason})
+        event={"activity_id":b.get("activity_id"),"date":b.get("date"),"name":b.get("name"),"family":b.get("family"),"quality_relevant":quality,"activity_truth_status":truth_status,"activity_truth_source":truth.get("source") or b.get("interval_structure_source"),"duration_min":b.get("duration_min"),"tags":tags}
+        if rep:
+            ret=_num(rep.get("retention_pct"));ftp=_num(b.get("ftp"));recw=_num(rep.get("recovery_avg_watts"));ratio=(recw/ftp) if ftp and recw is not None else None
+            decay=_num(rep.get("decay_pct"));cv=_num(rep.get("cv_pct"));execution=b.get("execution_quality") or {};deg=execution.get("degradation") or {};badges=b.get("progression_badges") or []
+            strong=bool((decay is not None and decay<=3.0) or str(deg.get("label") or "").upper() in {"EXCELLENT","GOOD","STABLE"} or any(str((x or {}).get("type") or "").upper() in {"REPEATABILITY","LATE_REP","REPEATABLE_POWER"} for x in badges if isinstance(x,dict)))
+            watts=[float(x) for x in (rep.get("watts") or []) if _num(x) is not None]
+            avg_w=statistics.mean(watts) if watts else _num((b.get("repeatability") or {}).get("avg_watts"));min_w=min(watts) if watts else _num((b.get("repeatability") or {}).get("min_watts"));max_w=max(watts) if watts else _num((b.get("repeatability") or {}).get("max_watts"))
+            rep_event={"activity_id":b.get("activity_id"),"date":b.get("date"),"name":b.get("name"),"reps":int(_num(rep.get("reps")) or 0),"interval_secs":_num(rep.get("interval_secs")),"interval_label":rep.get("interval_label"),"recovery_secs":_num(rep.get("recovery_secs")),"recovery_avg_watts":recw,"ftp":ftp,"recovery_ratio":round(ratio,3) if ratio is not None else None,"avg_watts":round(avg_w,1) if avg_w is not None else None,"min_watts":round(min_w,1) if min_w is not None else None,"max_watts":round(max_w,1) if max_w is not None else None,"retention_raw_pct":round(ret,1) if ret is not None else None,"retention_capped_pct":round(max(0.0,min(100.0,ret)),1) if ret is not None else None,"decay_pct":round(decay,1) if decay is not None else None,"cv_pct":round(cv,1) if cv is not None else None,"strong":strong,"source":str((b.get("repeatability") or {}).get("source") or b.get("interval_structure_source") or "OBSERVED"),"activity_truth_source":truth.get("source") or b.get("interval_structure_source"),"tags":tags}
+            rep_events.append(rep_event);event["repeatability"]=rep_event
+        else:event["repeatability"]=None
+        events.append(event)
+    quality_events=[e for e in events if e.get("quality_relevant")]
+    strong_events=[e for e in rep_events if e.get("strong")]
+    retentions=[_num(e.get("retention_capped_pct")) for e in rep_events if _num(e.get("retention_capped_pct")) is not None]
+    fades=[max(_num(e.get("decay_pct")) or 0,_num(e.get("cv_pct")) or 0) for e in rep_events]
+    ratios=[_num(e.get("recovery_ratio")) for e in rep_events if _num(e.get("recovery_ratio")) is not None]
+    loaded=[e for e in rep_events if _num(e.get("recovery_ratio")) is not None and float(e.get("recovery_ratio"))>=0.45]
+    loaded_success=[e for e in loaded if e.get("strong")]
+    tags={t for e in events for t in (e.get("tags") or [])}
+    science={"quality_sessions":len(quality_events),"repeatability_sessions":len(rep_events),"repeatability_strong_sessions":len(strong_events),"active_load_recovery":bool(len(loaded_success)>=2 or any(float(e.get("recovery_ratio") or 0)>=0.58 for e in loaded_success)),"preloaded_quality":"PRELOADED_QUALITY" in tags,"long_session":"LONG_SESSION" in tags,"late_quality":"LATE_QUALITY" in tags,"race_transfer":"RACE_TRANSFER" in tags,"over_under":"OVER_UNDER" in tags,"variable_load":"VARIABLE_LOAD" in tags,"recovery_under_load_exposures":len(loaded),"recovery_under_load_successes":len(loaded_success),"max_recovery_ratio":round(max(ratios),3) if ratios else None,"max_successful_recovery_ratio":round(max([float(e.get("recovery_ratio")) for e in loaded_success] or []),3) if loaded_success else None,"latest_repeatability":None}
+    if rep_events:
+        e=rep_events[0];science["latest_repeatability"]={"date":e.get("date"),"reps":e.get("reps"),"interval_secs":e.get("interval_secs"),"recovery_secs":e.get("recovery_secs"),"avg_watts":e.get("avg_watts"),"min_watts":e.get("min_watts"),"max_watts":e.get("max_watts"),"recovery_avg_watts":e.get("recovery_avg_watts"),"ftp":e.get("ftp"),"recovery_ratio":e.get("recovery_ratio"),"strong":bool(e.get("strong"))}
+    return {"schema":"V4.8.74-R81-1","available":bool(events),"scope":"ACTIVE_TRAINING_BLOCK","scope_start":start or None,"goal_key":str(goal_key or "").upper() or None,"counts":{"observed_sessions":len(events),"quality_sessions":len(quality_events),"repeatability_sessions":len(rep_events),"repeatability_strong_sessions":len(strong_events),"repeatability_efforts":sum(int(e.get("reps") or 0) for e in rep_events),"rejected_repeatability_sessions":len(rejected)},"repeatability":{"sessions":len(rep_events),"strong_sessions":len(strong_events),"efforts":sum(int(e.get("reps") or 0) for e in rep_events),"mean_retention_pct":round(statistics.mean(retentions),1) if retentions else None,"mean_stability_cost_pct":round(statistics.mean(fades),1) if fades else None,"events":rep_events},"science_features":science,"events":events,"rejections":rejected,"method_note":"Canonical athlete evidence derived once from Activity Truth-backed blocks. Race Repeatability and Scientific Progression consume this same ledger; conflicted/unresolved interval structures fail closed instead of becoming coaching evidence."}
+
+def _v82_question_record(state, exit_satisfied, evidence_count=0, last_evidence_date=None, reason=None, source="EVIDENCE_LEDGER"):
+    state=str(state or "UNPROVEN").upper()
+    return {
+        "state":state,
+        "exit_satisfied":bool(exit_satisfied),
+        "evidence_count":int(evidence_count or 0),
+        "last_evidence_date":last_evidence_date,
+        "reason":reason,
+        "source":source,
+    }
+
+def _v82_event_tag_count(evidence_ledger, *wanted):
+    wanted={str(x or "").upper() for x in wanted if x}
+    return sum(1 for e in ((evidence_ledger or {}).get("events") or []) if wanted.intersection({str(t or "").upper() for t in ((e or {}).get("tags") or [])}))
+
+def build_question_state(goal_key, evidence_ledger=None, performance_evidence=None, roadmap=None, microcycle_ledger=None, aerobic_metabolic_range=None, now=None):
+    """Canonical lifecycle for coaching questions.
+
+    R82 contract: Evidence establishes a question state before Scientific Progression
+    ranks what to train next. A satisfied exit criterion cannot be silently reopened
+    inside the same active training block. Revalidation is a separate question.
+
+    States are evidence semantics, not physiological diagnoses:
+      UNPROVEN -> BUILDING -> SUPPORTED -> CONSOLIDATED; STALE requires revalidation.
+    `exit_satisfied` is explicit because one positive observation may support a
+    capacity without being enough to close that coaching question.
+    """
+    now=now or get_rome_now(); goal=str(goal_key or "ENDURANCE_BASE").upper()
+    ev=evidence_ledger or {}; feat=(ev.get("science_features") or {}) if isinstance(ev,dict) else {}
+    pe=performance_evidence or {}; road=roadmap or {}; led=microcycle_ledger or {}
+    dims={}
+
+    # Fresh anchor: preserve the existing 21-day validity contract. An older
+    # formal validation is remembered as STALE rather than treated as never seen.
+    formal=pe.get("latest_formal_validation") if isinstance(pe.get("latest_formal_validation"),dict) else {}
+    fd=None
+    try: fd=date.fromisoformat(str(formal.get("date") or "")[:10])
+    except Exception: fd=None
+    formal_valid=bool(fd and str(formal.get("validation_mode") or "MAXIMAL").upper()=="MAXIMAL")
+    age=(now.date()-fd).days if formal_valid else None
+    if formal_valid and age is not None and 0<=age<=21:
+        dims["FRESH_CAPACITY"]=_v82_question_record("SUPPORTED",True,1,fd.isoformat(),"A current formal primary-capacity anchor is available.","PERFORMANCE_EVIDENCE")
+    elif formal_valid:
+        dims["FRESH_CAPACITY"]=_v82_question_record("STALE",False,1,fd.isoformat(),"A prior formal anchor exists but is outside the current freshness window; revalidation is a separate question.","PERFORMANCE_EVIDENCE")
+    else:
+        dims["FRESH_CAPACITY"]=_v82_question_record("UNPROVEN",False,0,None,"No current formal primary-capacity anchor is available.","PERFORMANCE_EVIDENCE")
+
+    # Dose progression reuses the existing comparable-window rules rather than
+    # inventing a second threshold system.
+    dose=(led.get("dose_context") or {}) if isinstance(led,dict) else {}; cur=dose.get("current") or {}; prev=dose.get("previous_comparable") or {}
+    hi=_rhythm_num(cur.get("high_minutes"));phi=_rhythm_num(prev.get("high_minutes"));mod=_rhythm_num(cur.get("moderate_minutes"));pmod=_rhythm_num(prev.get("moderate_minutes"))
+    high_progressed=bool(hi is not None and phi is not None and hi>=phi+max(3.0,0.10*max(phi,1.0)))
+    moderate_progressed=bool(mod is not None and pmod is not None and mod>=pmod+max(5.0,0.10*max(pmod,1.0)))
+    has_high_compare=hi is not None and phi is not None;has_mod_compare=mod is not None and pmod is not None
+    if goal in {"POWER_5","VO2MAX","POWER_1","SPRINTER"}:
+        dims["SPECIFIC_DOSE"]=_v82_question_record("SUPPORTED" if high_progressed else ("BUILDING" if has_high_compare else "UNPROVEN"),high_progressed,2 if has_high_compare else 0,None,"Comparable-window high-intensity dose has progressed." if high_progressed else ("Comparable high-intensity dose exists but has not yet progressed." if has_high_compare else "No comparable high-intensity dose window is available yet."),"MICROCYCLE_DOSE_CONTEXT")
+    elif goal in {"POWER_20","TIME_TRIAL"}:
+        dims["TIME_AT_PRESSURE"]=_v82_question_record("SUPPORTED" if moderate_progressed else ("BUILDING" if has_mod_compare else "UNPROVEN"),moderate_progressed,2 if has_mod_compare else 0,None,"Comparable sustained/moderate dose has progressed." if moderate_progressed else ("Comparable sustained dose exists but has not yet progressed." if has_mod_compare else "No comparable sustained-dose window is available yet."),"MICROCYCLE_DOSE_CONTEXT")
+
+    rep_sessions=int(feat.get("repeatability_sessions") or 0); strong_sessions=int(feat.get("repeatability_strong_sessions") or 0)
+    rep_events=((ev.get("repeatability") or {}).get("events") or []) if isinstance(ev,dict) else []
+    latest_rep_date=next((str((e or {}).get("date") or "")[:10] for e in rep_events if (e or {}).get("date")),None)
+    recent_rep=rep_events[:2];repeatability_contradicted=bool(strong_sessions>=2 and len(recent_rep)>=2 and all(not bool((e or {}).get("strong")) for e in recent_rep))
+    if rep_sessions<=0:
+        rep_rec=_v82_question_record("UNPROVEN",False,0,None,"No canonical repeated-effort evidence is available in the active block.")
+    elif strong_sessions<=0:
+        rep_rec=_v82_question_record("BUILDING",False,rep_sessions,latest_rep_date,"Repeated-effort evidence exists, but stable reproduction has not yet been demonstrated.")
+    elif repeatability_contradicted:
+        rep_rec=_v82_question_record("SUPPORTED",False,rep_sessions,latest_rep_date,"Repeatability was previously consolidated, but the two latest canonical repeated-effort exposures no longer support that state; reopen for purposeful confirmation rather than forgetting the prior evidence.")
+    elif strong_sessions==1:
+        rep_rec=_v82_question_record("SUPPORTED",False,rep_sessions,latest_rep_date,"One strong repeated-effort session supports repeatability, but the active-block exit criterion requires a second independent strong exposure.")
+    else:
+        rep_rec=_v82_question_record("CONSOLIDATED",True,rep_sessions,latest_rep_date,"Repeatability has at least two independent strong canonical exposures in the active block; simple repeatability is closed unless later evidence contradicts it.")
+    dims["REPEATABILITY"]=rep_rec
+
+    rul_exp=int(feat.get("recovery_under_load_exposures") or 0);rul_ok=int(feat.get("recovery_under_load_successes") or 0);rul_est=bool(feat.get("active_load_recovery"))
+    max_ok=_rhythm_num(feat.get("max_successful_recovery_ratio"))
+    loaded_events=[e for e in rep_events if _rhythm_num((e or {}).get("recovery_ratio")) is not None and float((e or {}).get("recovery_ratio"))>=0.45]
+    rul_contradicted=bool(rul_est and len(loaded_events)>=2 and all(not bool((e or {}).get("strong")) for e in loaded_events[:2]))
+    if rul_exp<=0:
+        rul=_v82_question_record("UNPROVEN",False,0,None,"No qualifying recovery-under-load exposure is present.")
+    elif rul_ok<=0:
+        rul=_v82_question_record("BUILDING",False,rul_exp,latest_rep_date,"Recovery load has been attempted but not yet preserved successfully.")
+    elif rul_contradicted:
+        rul=_v82_question_record("SUPPORTED",False,rul_ok,latest_rep_date,"Recovery-under-load was previously consolidated, but the two latest loaded-recovery exposures no longer preserve quality; reopen the question without erasing prior success.")
+    elif rul_est:
+        rul=_v82_question_record("CONSOLIDATED",True,rul_ok,latest_rep_date,"Recovery-under-load meets the existing establishment rule: repeated successful exposures or one clearly loaded successful exposure.")
+    else:
+        rul=_v82_question_record("SUPPORTED",False,rul_ok,latest_rep_date,f"One successful recovery-under-load exposure is present{f' (max {max_ok*100:.0f}% FTP)' if max_ok is not None else ''}; another independent success is needed unless one exposure reaches the established-load criterion.")
+    dims["RECOVERY_UNDER_LOAD"]=rul
+
+    durability_count=_v82_event_tag_count(ev,"PRELOADED_QUALITY","LATE_QUALITY")
+    race_count=_v82_event_tag_count(ev,"RACE_TRANSFER")
+    variable_count=_v82_event_tag_count(ev,"OVER_UNDER","VARIABLE_LOAD")
+    long_count=_v82_event_tag_count(ev,"LONG_SESSION")
+    late_count=_v82_event_tag_count(ev,"LATE_QUALITY")
+    dims["DURABILITY"]=_v82_question_record("CONSOLIDATED" if durability_count>=2 else ("SUPPORTED" if durability_count==1 else "UNPROVEN"),durability_count>=2,durability_count,None,"Meaningful prior-load/late-session quality evidence is repeated across independent sessions." if durability_count>=2 else ("One direct prior-load/late-session quality exposure supports durability but does not yet close it." if durability_count==1 else "No canonical quality exposure after meaningful prior work is present."))
+    dims["RACE_TRANSFER"]=_v82_question_record("CONSOLIDATED" if race_count>=2 else ("SUPPORTED" if race_count==1 else "UNPROVEN"),race_count>=2,race_count,None,"Race-like transfer evidence is repeated across independent sessions." if race_count>=2 else ("One direct race-transfer exposure supports the question but does not yet close it." if race_count==1 else "No canonical race-transfer exposure is present."))
+    dims["VARIABLE_LOAD"]=_v82_question_record("CONSOLIDATED" if variable_count>=2 else ("SUPPORTED" if variable_count==1 else "UNPROVEN"),variable_count>=2,variable_count,None,"Controlled variable-load evidence is repeated across independent sessions." if variable_count>=2 else ("One variable-load exposure is supportive but not consolidated." if variable_count==1 else "No canonical variable-load exposure is present."))
+    dims["AEROBIC_VOLUME"]=_v82_question_record("CONSOLIDATED" if long_count>=2 else ("SUPPORTED" if long_count==1 else "UNPROVEN"),long_count>=2,long_count,None,"Meaningful long-duration aerobic exposure is repeated across independent sessions." if long_count>=2 else ("One long-duration exposure is supportive but not consolidated." if long_count==1 else "Long-duration aerobic exposure is not yet represented."))
+    dims["LATE_SESSION_STABILITY"]=_v82_question_record("CONSOLIDATED" if late_count>=2 else ("SUPPORTED" if late_count==1 else "UNPROVEN"),late_count>=2,late_count,None,"Late-session stability has repeated direct canonical evidence." if late_count>=2 else ("One late-session exposure is supportive but not consolidated." if late_count==1 else "Late-session stability has not yet been directly observed."))
+    amr=aerobic_metabolic_range or {}; established=str(amr.get("confidence") or amr.get("state") or "").upper() in {"ESTABLISHED","HIGH"}
+    metabolic_state="CONSOLIDATED" if established and long_count>=2 else ("SUPPORTED" if established and long_count==1 else ("BUILDING" if established else "UNPROVEN"))
+    dims["METABOLIC_STABILITY"]=_v82_question_record(metabolic_state,bool(established and long_count>=2),long_count,None,"An established aerobic metabolic range has repeated meaningful-duration evidence." if established and long_count>=2 else ("The aerobic metabolic range is established with one meaningful-duration exposure; evidence is supportive but not consolidated." if established and long_count==1 else ("The aerobic metabolic range is established but still lacks meaningful duration evidence." if established else "The aerobic metabolic range is not established enough for this question.")),"AEROBIC_METABOLIC_RANGE")
+
+    seq=list(((_V503_GOAL_GRAPH.get(goal) or _V503_GOAL_GRAPH["ENDURANCE_BASE"]).get("sequence") or ()))
+    # Validation/revalidation are actions, not capacities already learned. They
+    # remain outside the close/reopen lifecycle and are triggered by roadmap timing.
+    open_dims=[d for d in seq if d not in {"REVALIDATION","EXTENSION_OR_REVALIDATION"} and not bool((dims.get(d) or {}).get("exit_satisfied"))]
+    closed_dims=[d for d in seq if bool((dims.get(d) or {}).get("exit_satisfied"))]
+    return {"schema":"V4.8.74-R82-1","available":True,"goal_key":goal,"scope":(ev or {}).get("scope") if isinstance(ev,dict) else None,"scope_start":(ev or {}).get("scope_start") if isinstance(ev,dict) else None,"dimensions":dims,"open_dimensions":open_dims,"closed_dimensions":closed_dims,"method_note":"Question lifecycle is derived from canonical Evidence Ledger and existing product thresholds. SUPPORTED can be positive evidence without closing a question; exit_satisfied is the authority for closure. Closed questions are not silently reopened inside the active block; revalidation is separate."}
+
+def _v82_question_state_text(x):
+    x=x or {}; dims=x.get("dimensions") or {}
+    if not x.get("available"):return "QUESTION STATE: unavailable."
+    closed=", ".join(f"{d}={dims[d].get('state')}" for d in (x.get("closed_dimensions") or []) if d in dims) or "none"
+    opened=", ".join(f"{d}={dims[d].get('state')}" for d in (x.get("open_dimensions") or []) if d in dims) or "none"
+    return f"QUESTION STATE (deterministic): closed [{closed}] | unresolved [{opened}]. A closed question must not be presented as unproven; revalidation is a separate action."
+
+def _v82_question_exit_satisfied(question_state, dimension):
+    return bool((((question_state or {}).get("dimensions") or {}).get(str(dimension or "").upper()) or {}).get("exit_satisfied"))
+
+_V83_DIMENSION_STAGE = {
+    "FRESH_CAPACITY":"BUILD", "SPECIFIC_DOSE":"BUILD", "TIME_AT_PRESSURE":"EXTEND",
+    "REPEATABILITY":"REPEAT", "RECOVERY_UNDER_LOAD":"REPEAT", "VARIABLE_LOAD":"EXTEND",
+    "AEROBIC_VOLUME":"BUILD", "METABOLIC_STABILITY":"EXTEND",
+    "DURABILITY":"TRANSFER", "LATE_SESSION_STABILITY":"TRANSFER", "RACE_TRANSFER":"TRANSFER",
+    "REVALIDATION":"VALIDATE", "EXTENSION_OR_REVALIDATION":"VALIDATE",
+}
+
+def build_nova_decision(goal_key, question_state=None, scientific_progression=None, adaptive_roadmap=None, training_state=None, planning_context=None):
+    """R83 canonical coaching decision.
+
+    Question State determines which adaptation questions are eligible. Scientific
+    Progression may rank those eligible questions and provide dose/architecture
+    evidence, but it is not a second authority. Roadmap timing decides whether the
+    selected purpose is executable; it does not invent a different purpose.
+    """
+    goal=str(goal_key or "ENDURANCE_BASE").upper(); qs=question_state or {}; sci=scientific_progression or {}; road=adaptive_roadmap or {}
+    dims=(qs.get("dimensions") or {}) if isinstance(qs,dict) else {}; open_dims=list(qs.get("open_dimensions") or []) if isinstance(qs,dict) else []
+    graph=_V503_GOAL_GRAPH.get(goal) or _V503_GOAL_GRAPH["ENDURANCE_BASE"]; architectures=graph.get("architectures") or {}
+    proposed=str(sci.get("dimension") or "NONE").upper(); corrections=[]
+    special={"REVALIDATION","EXTENSION_OR_REVALIDATION"}
+    if proposed not in special and proposed!="NONE":
+        rec=dims.get(proposed) or {}
+        if rec.get("exit_satisfied") or (open_dims and proposed not in open_dims):
+            replacement=next((d for d in open_dims if d in architectures),None)
+            corrections.append(f"INELIGIBLE_{proposed}_TO_{replacement or 'NONE'}")
+            proposed=replacement or "NONE"
+    if proposed=="NONE" and open_dims:
+        replacement=next((d for d in open_dims if d in architectures),None)
+        if replacement:
+            proposed=replacement; corrections.append("NONE_TO_FIRST_ELIGIBLE_OPEN_QUESTION")
+    qstate=str(((road.get("quality_window") or {}).get("state") or "")).upper(); tstate=str((training_state or {}).get("state") or "").upper()
+    hold=qstate in {"ON HOLD","RECOVERY HOLD"} or tstate in {"HEALTH HOLD","RECOVERY"}
+    race_priority=qstate=="RACE PRIORITY"
+    if hold: action="HOLD"
+    elif race_priority: action="RACE_PRIORITY"
+    elif proposed in special: action="VALIDATE"
+    elif proposed=="NONE": action="MAINTAIN"
+    else: action="TRAIN"
+    window_eligible=qstate in {"OPEN","WATCH","RACE WATCH"}
+    hard_allowed=bool(action in {"TRAIN","VALIDATE"} and window_eligible and not hold and not race_priority)
+    rec=dims.get(proposed) or {}
+    reason=sci.get("open_question") if str(sci.get("dimension") or "").upper()==proposed else rec.get("reason")
+    if proposed=="NONE": reason="No unresolved active-block adaptation question remains."
+    stage_code=_V83_DIMENSION_STAGE.get(proposed)
+    arch=list((sci.get("candidate_architectures") or []) if str(sci.get("dimension") or "").upper()==proposed else (architectures.get(proposed) or []))
+    decision={
+        "schema":"V4.8.74-R83-1","available":True,"authority":"NOVA_DECISION_ENGINE","goal_key":goal,
+        "action":action,"dimension":proposed,"question_state":rec.get("state") if rec else None,
+        "question_exit_satisfied":bool(rec.get("exit_satisfied")) if rec else None,"reason":reason,
+        "stage_code":stage_code,"candidate_architectures":arch,"selected_architecture":arch[0] if arch else None,
+        "dose_contract":dict(sci.get("dose_contract") or {}) if str(sci.get("dimension") or "").upper()==proposed else {"available":False,"reason":"NOT_SELECTED_DIMENSION"},
+        "quality_window_state":qstate or None,"quality_window_eligible":window_eligible,"hard_session_allowed":hard_allowed,
+        "closed_dimensions":list(qs.get("closed_dimensions") or []),"open_dimensions":open_dims,
+        "evidence_ledger_schema":((sci.get("signals") or {}).get("evidence_ledger_schema")),
+        "question_state_schema":qs.get("schema") if isinstance(qs,dict) else None,"corrections":corrections,
+        "rule":"Question State controls eligibility; Nova owns the coaching decision; timing/recovery controls executability only. Closed questions cannot be recycled to manufacture another hard session.",
+    }
+    return decision
+
+def _v83_nova_decision_text(x):
+    x=x or {}
+    if not x.get("available"): return "NOVA DECISION: unavailable."
+    arch="; ".join(x.get("candidate_architectures") or []) or "none"
+    return (f"NOVA DECISION (deterministic authority): action={x.get('action')} | dimension={x.get('dimension')} | "
+            f"quality_window={x.get('quality_window_state')} | hard_allowed={bool(x.get('hard_session_allowed'))}. "
+            f"Reason: {x.get('reason')} Candidate architecture: {arch}. "
+            "This decision is authoritative; AI wording must not reopen a closed question or substitute a different training purpose.")
+
+def _v83_apply_nova_decision_to_roadmap(roadmap, decision):
+    road=dict(roadmap or {}); dec=dict(decision or {}); road["nova_decision"]=dec
+    if not dec.get("available"): return road
+    stage_code=dec.get("stage_code"); steps=[dict(x) for x in (road.get("steps") or []) if isinstance(x,dict)]
+    idx=next((i for i,x in enumerate(steps) if str(x.get("code") or "").upper()==str(stage_code or "").upper()),None)
+    if idx is not None:
+        for i,row in enumerate(steps): row["state"]="BUILT" if i<idx else ("NOW" if i==idx else "NEXT")
+        road["steps"]=steps;road["stage_index"]=idx;road["stage"]=steps[idx]
+    road["decision_dimension"]=dec.get("dimension");road["decision_action"]=dec.get("action")
+    if dec.get("dimension") not in {None,"NONE"}: road["current_focus"]=str(dec.get("dimension")).replace("_"," ").title()
+    q=dict(road.get("quality_window") or {});q["decision_action"]=dec.get("action");q["decision_dimension"]=dec.get("dimension");q["hard_session_allowed"]=bool(dec.get("hard_session_allowed"));road["quality_window"]=q
+    return road
+
+def _v83_decision_architecture_violations(proposed, title, main_set, adaptive_roadmap=None):
+    dec=(adaptive_roadmap or {}).get("nova_decision") or {}
+    if not dec.get("available"): return []
+    action=str(dec.get("action") or "").upper();dim=str(dec.get("dimension") or "NONE").upper();p=proposed or {};blob=(str(title or "")+" "+str(main_set or "")).lower();pat=str(p.get("architecture_pattern") or "GENERIC").upper()
+    if action in {"HOLD","MAINTAIN","RACE_PRIORITY"} or not dec.get("hard_session_allowed"):
+        return ["HARD_SESSION_NOT_AUTHORIZED_BY_NOVA_DECISION"]
+    if dim in {"REVALIDATION","EXTENSION_OR_REVALIDATION"}:
+        return [] if str(p.get("role") or "").upper()=="VALIDATE" else ["VALIDATION_DECISION_REQUIRES_VALIDATION_ROLE"]
+    if str(p.get("role") or "").upper()=="VALIDATE": return ["UNSCHEDULED_VALIDATION_NOT_SELECTED"]
+    if dim=="REPEATABILITY":
+        if (_rhythm_num(p.get("reps")) or 0)<3: return ["REPEATABILITY_REQUIRES_REPEATED_EFFORTS"]
+        if pat=="LOAD_BRIDGED": return ["RECOVERY_LOAD_BELONGS_TO_RECOVERY_UNDER_LOAD"]
+    elif dim=="RECOVERY_UNDER_LOAD":
+        if pat!="LOAD_BRIDGED": return ["RECOVERY_UNDER_LOAD_REQUIRES_ACTIVE_RECOVERY_LOAD"]
+    elif dim=="DURABILITY":
+        if pat!="PRELOADED" and not re.search(r"pre[- ]?load|under fatigue|late[- ]session|after .*?(?:endurance|z2|kj|hour|min)",blob,re.I): return ["DURABILITY_REQUIRES_PRIOR_LOAD_CONTEXT"]
+    elif dim=="RACE_TRANSFER":
+        if not re.search(r"race[- ]?like|attack|surge|mixed prior|lead[- ]?in|race transfer",blob,re.I): return ["RACE_TRANSFER_REQUIRES_RACE_CONTEXT"]
+    elif dim=="VARIABLE_LOAD" and pat!="OVER_UNDER": return ["VARIABLE_LOAD_REQUIRES_VARIABLE_LOAD_ARCHITECTURE"]
+    return []
+
+def _v84_duration_label(seconds):
+    sec=_rhythm_num(seconds)
+    if sec is None or sec<=0:return None
+    if sec>=60 and abs(sec/60.0-round(sec/60.0))<1e-6:return f"{int(round(sec/60.0))} min"
+    return f"{int(round(sec))} s"
+
+def _v84_observed_repeatability_prescription(evidence_ledger, dimension):
+    """Build a deterministic hard block only from already-observed canonical work.
+
+    R84 deliberately refuses to invent a new watt target. For progression dimensions
+    that can be introduced by changing context around a proven repeated-work block,
+    the observed reps/work duration/work-power envelope stays fixed and only the
+    selected contextual lever changes.
+    """
+    events=list((((evidence_ledger or {}).get("repeatability") or {}).get("events") or []))
+    ref=next((e for e in events if (e or {}).get("strong") and int(_rhythm_num((e or {}).get("reps")) or 0)>=3),None)
+    if not ref:return None
+    reps=int(_rhythm_num(ref.get("reps")) or 0);secs=_rhythm_num(ref.get("interval_secs"));rec_secs=_rhythm_num(ref.get("recovery_secs"))
+    lo=_rhythm_num(ref.get("min_watts"));hi=_rhythm_num(ref.get("max_watts"));avg=_rhythm_num(ref.get("avg_watts"))
+    if reps<3 or secs is None or secs<=0:return None
+    if lo is None or hi is None:
+        if avg is None:return None
+        lo=hi=avg
+    work_label=_v84_duration_label(secs); rec_label=_v84_duration_label(rec_secs) or "easy self-selected recovery"
+    watts=(f"{lo:.0f}–{hi:.0f} W" if abs(float(hi)-float(lo))>=1 else f"about {avg or lo:.0f} W")
+    base=f"{reps}×{work_label} at the already-observed successful work envelope {watts}"
+    if dimension=="REPEATABILITY":
+        title=f"Repeatability {reps}×{work_label}"
+        main=f"{base}; {rec_label} very easy Z1 between reps. Keep the first rep controlled and reproduce the work with minimal fade. No finisher and no extra rep."
+        why="Nova is testing reproduction of an already-observed successful repeated-work structure; work dose is not increased and recovery remains easy."
+    elif dimension=="DURABILITY":
+        title=f"Durability · {reps}×{work_label} after preload"
+        main=f"30 min low Z2 aerobic preload, then {base}; {rec_label} very easy Z1 between reps. Preserve the proven work block; the only new lever is prior aerobic load. Stop the quality block if the proven work envelope cannot be reproduced."
+        why="Repeatability is already established; Nova changes only the prior-load context to test whether the same proven work survives modest aerobic preload."
+    elif dimension=="RACE_TRANSFER":
+        title=f"Race transfer · {reps}×{work_label}"
+        main=f"20 min progressive aerobic lead-in with three brief controlled surges separated by easy riding, then {base}; use {rec_label} easy recovery between the main reps. Keep the main work inside the proven envelope; the new lever is race-like prior variability, not higher work power."
+        why="Simpler repeatability/recovery questions are closed; Nova keeps the proven work dose and changes only the lead-in context toward race transfer."
+    else:return None
+    return {"title":title,"duration":"Nova-selected duration","intensity":"HARD","main_set":main,"why":why,"_tl_nova_deterministic":True,"_tl_nova_dimension":dimension,"_tl_evidence_activity_id":ref.get("activity_id"),"_tl_evidence_date":ref.get("date")}
+
+def _v85_reference_context(power_model, minutes=None, ftp_anchor=None):
+    """Return observation-backed pacing context without converting it into a target."""
+    ref=None
+    if minutes is not None:
+        try:ref=_v4836_observed_power_reference(power_model or {},float(minutes))
+        except Exception:ref=None
+    if ref is not None:
+        return f"Recent same-duration field reference: {ref:.0f} W. Use it only as pacing/ceiling context; it is not a minimum, cap or mandatory target."
+    fa=ftp_anchor or {};ftp=_rhythm_num(fa.get("prescription_watts") if fa.get("prescription_watts") is not None else fa.get("anchor_watts"))
+    if ftp is not None and 80<=ftp<=600:
+        return f"Validated FTP context: {ftp:.0f} W. Use it only to orient the effort domain; no exact training wattage is inferred from it here."
+    return "No precise watt target is justified from current evidence; use free/resistance mode and preserve the prescribed structure and purpose."
+
+def _v85_raw(title, intensity, main_set, why, dimension, contract_id, source_ref=None):
+    return {
+        "title":title,"duration":"Nova-selected duration","intensity":intensity,"main_set":main_set,"why":why,
+        "_tl_nova_deterministic":True,"_tl_nova_dimension":dimension,"_tl_nova_contract_id":contract_id,
+        "_tl_nova_reference":source_ref,
+    }
+
+def _v85_capacity_or_dose_contract(goal, dimension, power_model=None, ftp_anchor=None):
+    """Conservative deterministic mechanics for capacity/specific-dose questions.
+
+    These are explicit product contracts, not physiological laws. Structure is fixed;
+    power is not fabricated. When a same-duration field reference exists it is pacing
+    context only, never a minimum/cap. The first work bout is used to establish the
+    sustainable training power for the remaining bouts.
+    """
+    goal=str(goal or "").upper();dim=str(dimension or "").upper()
+    cfg={
+        ("POWER_5","FRESH_CAPACITY"):(4,3,4,"VO₂ / 3–6 min capacity"),
+        ("POWER_5","SPECIFIC_DOSE"):(4,4,4,"VO₂ / 3–6 min specific dose"),
+        ("VO2MAX","FRESH_CAPACITY"):(4,4,4,"VO₂max capacity"),
+        ("VO2MAX","SPECIFIC_DOSE"):(5,3,3,"VO₂max specific dose"),
+        ("POWER_1","FRESH_CAPACITY"):(4,1,5,"1-min capacity"),
+        ("POWER_1","SPECIFIC_DOSE"):(5,1,5,"1-min specific dose"),
+        ("SPRINTER","FRESH_CAPACITY"):(6,10/60.0,3,"Sprint capacity"),
+        ("SPRINTER","SPECIFIC_DOSE"):(8,10/60.0,3,"Sprint specific dose"),
+        ("POWER_20","FRESH_CAPACITY"):(3,8,4,"Sustained-power capacity"),
+        ("TIME_TRIAL","FRESH_CAPACITY"):(2,12,5,"TT sustained capacity"),
+    }
+    row=cfg.get((goal,dim))
+    if not row:return None
+    reps,mins,rec,label=row;sec=int(round(mins*60));dur=_v84_duration_label(sec);ref=_v85_reference_context(power_model,mins if sec>=30 else None,ftp_anchor)
+    if goal=="SPRINTER":
+        main=(f"{reps}×{dur} maximal-quality free sprints with {rec} min very easy recovery. Each sprint starts fully controlled and technically clean; stop the set if peak acceleration clearly deteriorates. "
+              "Do not shorten recovery or add a finisher. No exact watt target is inferred for a sprint exposure.")
+    else:
+        main=(f"{reps}×{dur} in free/resistance mode with {rec} min very easy Z1 recovery. Use rep 1 to establish today's sustainable quality power, then reproduce that work rather than chasing a first-rep peak. "
+              f"{ref} Stop the quality set if the prescribed structure cannot be maintained cleanly.")
+    why=("Nova is opening the current goal-specific capacity question with a conservative fixed structure; the dose is deterministic while wattage remains evidence-led rather than invented." if dim=="FRESH_CAPACITY" else
+         "Nova is adding a bounded amount of goal-specific work without changing multiple stress variables at once; the structure is fixed and same-duration field power is context only.")
+    return _v85_raw(label,("HARD · THRESHOLD" if goal in {"POWER_20","TIME_TRIAL"} else ("HARD · ANAEROBIC" if goal=="SPRINTER" else "HARD")),main,why,dim,f"{goal}_{dim}_V1",source_ref="POWER_CURVE_CONTEXT")
+
+def _v85_sustained_contract(goal, dimension, power_model=None, ftp_anchor=None):
+    goal=str(goal or "").upper();dim=str(dimension or "").upper()
+    if goal not in {"POWER_20","TIME_TRIAL"}:return None
+    if dim=="TIME_AT_PRESSURE":
+        reps,mins,rec=(3,10,5) if goal=="POWER_20" else (2,15,6)
+        ref=_v85_reference_context(power_model,mins,ftp_anchor)
+        title="Threshold · time at pressure" if goal=="POWER_20" else "TT · time at pressure"
+        main=(f"{reps}×{mins} min steady sustained work in free/resistance mode with {rec} min easy Z1 recovery. Establish a repeatable sustainable power in the first block and hold pacing stable across the complete set. {ref} "
+              "Do not turn the final block into a test; accumulated controlled time is the progression lever.")
+        return _v85_raw(title,"HARD · THRESHOLD",main,"Nova is extending accumulated sustained-domain time while keeping intensity and recovery architecture simple enough to interpret.",dim,f"{goal}_TIME_AT_PRESSURE_V1","POWER_CURVE_CONTEXT")
+    if dim=="VARIABLE_LOAD":
+        reps,mins,rec=(3,12,5) if goal=="POWER_20" else (2,18,6)
+        ref=_v85_reference_context(power_model,mins,ftp_anchor)
+        main=(f"{reps}×{mins} min controlled variable-load blocks with {rec} min easy Z1 recovery. In each block establish a sustainable base for the opening 3 min, then alternate 2 min at that base with 1 min at a small controlled lift of about 5% above that same in-session base. Return to base after every lift; the lift must not become a VO₂ surge. {ref} "
+              "The only new lever is controlled load variation; total work should remain reproducible.")
+        title="Over-Under · controlled variable load" if goal=="POWER_20" else "TT · controlled variable load"
+        return _v85_raw(title,"HARD · THRESHOLD",main,"Nova is introducing variable load only after the sustained-domain question has progressed; the relative lift is defined from today's own stable base rather than an invented absolute watt target.",dim,f"{goal}_VARIABLE_LOAD_V1","IN_SESSION_BASE")
+    return None
+
+def _v85_endurance_contract(dimension, slot=None, aerobic_metabolic_range=None):
+    dim=str(dimension or "").upper();slot=slot or {};amr=aerobic_metabolic_range or {};duration=slot.get("duration_hint_label") or "the full available endurance slot"
+    band=(f" Keep the steady aerobic work mainly around the current estimated {amr.get('display')} range; start in the lower half and do not force the upper edge late." if amr.get("available") and amr.get("display") else " Keep the work comfortably inside normal Z2; no precise metabolic watt range is currently justified.")
+    if dim=="AEROBIC_VOLUME":
+        return _v85_raw("Endurance · aerobic volume","ENDURANCE",f"Use {duration} for continuous Z1–Z2 aerobic riding with no intentional moderate/high-intensity surges.{band} The progression lever is useful aerobic duration inside the athlete's available slot, not added intensity.","Nova is building the endurance goal through schedule-compatible aerobic volume; the learned slot controls duration and no hidden hard stimulus is added.",dim,"ENDURANCE_AEROBIC_VOLUME_V1","AEROBIC_RANGE_OR_Z2")
+    if dim=="METABOLIC_STABILITY":
+        return _v85_raw("Endurance · metabolic stability","ENDURANCE",f"Use {duration} as steady aerobic work. Hold power and cadence as even as practical and avoid surges.{band} Compare late-session HR/decoupling and perceived cost with the opening steady portion rather than chasing speed or watts.","Nova is testing whether a stable aerobic cost can be reproduced over meaningful duration; this is an endurance observation, not a hard interval session.",dim,"ENDURANCE_METABOLIC_STABILITY_V1","AEROBIC_RANGE_OR_Z2")
+    if dim=="DURABILITY":
+        return _v85_raw("Endurance · durability","ENDURANCE",f"Use {duration} predominantly in Z2.{band} Keep the final 20 min at the same steady power range used earlier in the ride instead of lifting intensity; success is preserving output with controlled HR drift and form late in the session.","The aerobic base questions are established; Nova now changes only accumulated duration/fatigue context and asks whether the same aerobic output survives late.",dim,"ENDURANCE_DURABILITY_V1","LATE_SESSION_COMPARISON")
+    if dim=="LATE_SESSION_STABILITY":
+        return _v85_raw("Endurance · late-session stability","ENDURANCE",f"Ride {duration} steadily in Z1–Z2.{band} In the final 15–20 min reproduce the same aerobic power/cadence pattern used in the middle of the ride; do not increase intensity. Record whether HR drift, cadence or perceived cost rises materially.","Nova is isolating late-session stability without adding a harder training domain; the comparison is within the same ride.",dim,"ENDURANCE_LATE_STABILITY_V1","LATE_SESSION_COMPARISON")
+    return None
+
+def _v85_goal_transfer_contract(goal, dimension, evidence_ledger=None, power_model=None, ftp_anchor=None):
+    goal=str(goal or "").upper();dim=str(dimension or "").upper()
+    # Multi-minute/short-power goals keep a proven canonical repeated-work block when possible.
+    if goal in {"POWER_5","VO2MAX","POWER_1","SPRINTER"}:
+        q=_v84_observed_repeatability_prescription(evidence_ledger,dim)
+        if q:return q
+        # If no repeated-work envelope exists, use the goal-specific capacity mechanics
+        # and change only the requested context.
+        base=_v85_capacity_or_dose_contract(goal,"FRESH_CAPACITY",power_model,ftp_anchor)
+        if not base:return None
+        if dim=="DURABILITY":
+            base["title"]="Durability · "+str(base.get("title") or "goal-specific work")
+            base["main_set"]="30 min low Z2 aerobic preload, then "+str(base.get("main_set") or "")
+            base["why"]="Nova is testing the goal-specific work after modest aerobic preload; prior load is the only new lever."
+        elif dim=="RACE_TRANSFER":
+            base["title"]="Race transfer · "+str(base.get("title") or "goal-specific work")
+            base["main_set"]="20 min progressive aerobic lead-in with three brief controlled surges separated by easy riding, then "+str(base.get("main_set") or "")
+            base["why"]="Nova is moving established goal-specific mechanics into a race-like lead-in without raising the work target."
+        else:return None
+        base["_tl_nova_dimension"]=dim;base["_tl_nova_contract_id"]=f"{goal}_{dim}_FALLBACK_V1";return base
+    if goal in {"POWER_20","TIME_TRIAL"} and dim in {"DURABILITY","RACE_TRANSFER"}:
+        mins=10 if goal=="POWER_20" else 12;ref=_v85_reference_context(power_model,mins,ftp_anchor)
+        lead=("35 min low Z2 aerobic preload" if dim=="DURABILITY" else "25 min mixed aerobic lead-in with three brief controlled surges separated by easy riding")
+        title=("Threshold durability" if goal=="POWER_20" else "TT durability") if dim=="DURABILITY" else ("Threshold race transfer" if goal=="POWER_20" else "TT race transfer")
+        main=f"{lead}, then 2×{mins} min steady sustained work with 5 min very easy recovery. {ref} Keep both work blocks controlled and comparable; the new lever is the prior-load context, not higher work power."
+        return _v85_raw(title,"HARD · THRESHOLD",main,"Nova preserves a simple sustained-work structure and changes only the prior-load context required by the selected question.",dim,f"{goal}_{dim}_V1","POWER_CURVE_CONTEXT")
+    return None
+
+def _v84_easy_raw(slot, decision, reason=None):
+    slot=slot or {};action=str((decision or {}).get("action") or "MAINTAIN").upper();dim=str((decision or {}).get("dimension") or "NONE").upper()
+    return {
+        "title":"Aerobic endurance · absorb" if action not in {"HOLD","RACE_PRIORITY"} else "Recovery / restriction-aware aerobic",
+        "duration":slot.get("duration_hint_label") or "Nova-selected duration",
+        "intensity":"EASY",
+        "main_set":"Keep this opportunity Z1–Z2 and conversational. Do not add an unplanned hard block.",
+        "why":reason or ("Nova has no authorized hard prescription for this opportunity." if dim=="NONE" else f"Nova's current decision is {action}; this opportunity remains easy so it does not create a second coaching purpose."),
+        "_tl_nova_deterministic":True,"_tl_nova_dimension":dim,
+    }
+
+def _v84_quality_slot_index(clock, adaptive_roadmap=None):
+    slots=list((clock or {}).get("next_slots") or []);q=(adaptive_roadmap or {}).get("quality_window") or {}
+    preferred=[str(q.get("preferred") or "").strip(),str(q.get("earliest") or "").strip()]
+    preferred=[x for x in preferred if x]
+    for target in preferred:
+        for i,slot in enumerate(slots):
+            if str((slot or {}).get("label") or "").strip()==target and not (slot or {}).get("is_race") and str((slot or {}).get("restriction") or "NONE").upper()=="NONE":return i
+    for i,slot in enumerate(slots):
+        if (slot or {}).get("is_race"):continue
+        if str((slot or {}).get("restriction") or "NONE").upper()!="NONE":continue
+        return i
+    return None
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None):
+    """R85 deterministic prescription authority with explicit contract coverage.
+
+    Every active Question-State dimension has a deterministic contract family.
+    Contracts may use observation-backed references as context, but they do not
+    fabricate an absolute watt target when athlete evidence does not justify one.
+    AI remains explanation-only.
+    """
+    dec=dict(nova_decision or {});clock=coach_clock or {};road=adaptive_roadmap or {};slots=list(clock.get("next_slots") or [])
+    raw=[_v84_easy_raw(slot,dec) for slot in slots];action=str(dec.get("action") or "MAINTAIN").upper();dim=str(dec.get("dimension") or "NONE").upper();goal=str(dec.get("goal_key") or road.get("goal_key") or "ENDURANCE_BASE").upper();idx=_v84_quality_slot_index(clock,road)
+    status="EASY_ONLY";source="NOVA_DECISION";fail_reason=None;quality=None
+    if action=="VALIDATE" and idx is not None:
+        contract=_v4893_validation_contract(road);quality=_v4893_validation_prescription(contract)
+        if quality:
+            quality={**quality,"_tl_deterministic_validation":True,"_tl_validation_contract":contract,"_tl_nova_deterministic":True,"_tl_nova_dimension":dim,"_tl_nova_contract_id":"VALIDATION_CONTRACT_V1"};status="PRESCRIBED";source="VALIDATION_CONTRACT"
+        else:fail_reason="VALIDATION_CONTRACT_UNAVAILABLE"
+    elif action=="TRAIN" and dec.get("hard_session_allowed") and idx is not None:
+        if dim=="RECOVERY_UNDER_LOAD":
+            repair=_v503_scientific_hard_repair(microcycle_ledger or {},road,power_model or {},ftp_anchor=ftp_anchor)
+            if repair:
+                title,intensity,main,why,_arch=repair;quality={"title":title,"duration":"Nova-selected duration","intensity":intensity,"main_set":main,"why":why,"_tl_nova_deterministic":True,"_tl_nova_dimension":dim,"_tl_nova_contract_id":"RECOVERY_UNDER_LOAD_EVIDENCE_DOSE_V1"};status="PRESCRIBED";source="EVIDENCE_DOSE_CONTRACT"
+            else:fail_reason="RECOVERY_UNDER_LOAD_CONTRACT_UNAVAILABLE"
+        elif goal=="ENDURANCE_BASE" and dim in {"AEROBIC_VOLUME","METABOLIC_STABILITY","DURABILITY","LATE_SESSION_STABILITY"}:
+            quality=_v85_endurance_contract(dim,slots[idx] if idx<len(slots) else None,aerobic_metabolic_range)
+            if quality:status="PRESCRIBED";source="ENDURANCE_CONTRACT"
+            else:fail_reason="ENDURANCE_CONTRACT_UNAVAILABLE"
+        elif dim in {"FRESH_CAPACITY","SPECIFIC_DOSE"}:
+            quality=_v85_capacity_or_dose_contract(goal,dim,power_model,ftp_anchor)
+            if quality:status="PRESCRIBED";source="GOAL_CAPACITY_CONTRACT"
+            else:fail_reason="GOAL_CAPACITY_CONTRACT_UNAVAILABLE"
+        elif dim in {"TIME_AT_PRESSURE","VARIABLE_LOAD"}:
+            quality=_v85_sustained_contract(goal,dim,power_model,ftp_anchor)
+            if quality:status="PRESCRIBED";source="SUSTAINED_DOMAIN_CONTRACT"
+            else:fail_reason="SUSTAINED_DOMAIN_CONTRACT_UNAVAILABLE"
+        elif dim=="REPEATABILITY":
+            quality=_v84_observed_repeatability_prescription(evidence_ledger,dim)
+            if quality:
+                quality["_tl_nova_contract_id"]=f"{goal}_REPEATABILITY_OBSERVED_V1"
+                status="PRESCRIBED";source="CANONICAL_OBSERVED_WORK"
+            else:
+                quality=_v85_capacity_or_dose_contract(goal,"FRESH_CAPACITY",power_model,ftp_anchor)
+                if quality:
+                    quality["title"]="Repeatability · "+str(quality.get("title") or "goal-specific work");quality["_tl_nova_dimension"]=dim;quality["_tl_nova_contract_id"]=f"{goal}_REPEATABILITY_STARTER_V1"
+                    quality["why"]="No canonical repeated-work envelope exists yet, so Nova uses the conservative goal-specific starter structure to create the first interpretable repeatability evidence without inventing a watt target.";status="PRESCRIBED";source="GOAL_REPEATABILITY_STARTER"
+                else:fail_reason="REPEATABILITY_CONTRACT_UNAVAILABLE"
+        elif dim in {"DURABILITY","RACE_TRANSFER"}:
+            quality=_v85_goal_transfer_contract(goal,dim,evidence_ledger,power_model,ftp_anchor)
+            if quality:
+                if not quality.get("_tl_nova_contract_id"):quality["_tl_nova_contract_id"]=f"{goal}_{dim}_OBSERVED_V1"
+                status="PRESCRIBED";source="GOAL_TRANSFER_CONTRACT"
+            else:fail_reason="GOAL_TRANSFER_CONTRACT_UNAVAILABLE"
+        else:
+            fail_reason="UNSUPPORTED_ACTIVE_DIMENSION"
+    elif action=="TRAIN" and not dec.get("hard_session_allowed"):
+        # Endurance-base questions are not hard sessions and remain executable in a
+        # normal unrestricted slot even when Quality Window correctly says no hard.
+        if goal=="ENDURANCE_BASE" and idx is not None and dim in {"AEROBIC_VOLUME","METABOLIC_STABILITY","DURABILITY","LATE_SESSION_STABILITY"}:
+            quality=_v85_endurance_contract(dim,slots[idx] if idx<len(slots) else None,aerobic_metabolic_range)
+            if quality:status="PRESCRIBED";source="ENDURANCE_CONTRACT"
+            else:fail_reason="ENDURANCE_CONTRACT_UNAVAILABLE"
+        else:fail_reason="QUALITY_WINDOW_NOT_EXECUTABLE"
+    elif action in {"HOLD","MAINTAIN","RACE_PRIORITY"}:
+        fail_reason=f"ACTION_{action}"
+    if quality is not None and idx is not None:raw[idx]=quality
+    return {
+        "schema":"V4.8.74-R85-1","available":True,"authority":"NOVA_PRESCRIPTION_ENGINE","action":action,"dimension":dim,"goal_key":goal,
+        "status":status,"source":source,"selected_slot_index":idx if quality is not None else None,"raw_sessions":raw,
+        "hard_prescription_available":bool(quality is not None and str(quality.get("intensity") or "").upper().startswith("HARD")),
+        "fail_closed_reason":fail_reason,"ai_authority":"EXPLANATION_ONLY","contract_id":(quality or {}).get("_tl_nova_contract_id") if isinstance(quality,dict) else None,
+        "rule":"Workout mechanics are deterministic and dimension-covered. Observation-backed references may orient pacing but do not become invented absolute targets. The language model may explain the plan but cannot create, replace or modify its structure, dose or purpose.",
+    }
+
+def _v86_sentence_join(parts, limit=None):
+    rows=[]
+    for part in parts or []:
+        text=str(part or "").strip()
+        if not text:continue
+        for sentence in _v4844_sentence_list(text):
+            sentence=_v4844_phrase_cleanup(sentence)
+            if sentence and sentence not in rows:rows.append(sentence)
+    if limit is not None:rows=rows[:int(limit)]
+    return " ".join(rows).strip()
+
+def _v86_metric_status(metrics, key):
+    pb=(metrics or {}).get("personal_baselines") or {}
+    row=pb.get(key) if isinstance(pb,dict) else None
+    return str((row or {}).get("status") or "").strip() if isinstance(row,dict) else ""
+
+def _v86_first_session_summary(sessions):
+    first=next((x for x in (sessions or []) if isinstance(x,dict)),None)
+    if not first:return None
+    title=str(first.get("title") or "next session").strip();dur=str(first.get("duration") or "").strip();main=str(first.get("main_set") or "").strip()
+    lead=f"Your next session is {title}"+(f" ({dur})" if dur else "")+"."
+    return _v86_sentence_join([lead,main],limit=3)
+
+def compose_nova_snapshot(metrics=None, season_stats=None, training_state=None, training_direction=None, question_state=None, nova_decision=None, nova_prescription=None, adaptive_roadmap=None, microcycle_ledger=None, feeling_trend=None, planning_context=None, race_repeatability=None, vo2_trend=None, metabolic_context=None, performance_evidence=None, power_achievements=None, snapshot_question=None, strength_pattern=None, session_progression=None):
+    """R86 deterministic full-Snapshot prose composer.
+
+    This renderer owns no coaching decisions. It converts canonical metrics,
+    Question State, Nova Decision and Nova Prescription into the same narrative
+    fields used by the normal Snapshot UI. The language model is optional.
+    """
+    metrics=metrics or {};season_stats=season_stats or {};training_state=training_state or {};training_direction=training_direction or {};question_state=question_state or {};nova_decision=nova_decision or {};nova_prescription=nova_prescription or {};road=adaptive_roadmap or {};planning_context=planning_context or {};race_repeatability=race_repeatability or {};vo2_trend=vo2_trend or {};metabolic_context=metabolic_context or {};performance_evidence=performance_evidence or {}
+    sessions=[dict(x) for x in (nova_prescription.get("sessions") or nova_prescription.get("raw_sessions") or []) if isinstance(x,dict)]
+    truth=_v4897_truth_packet(snapshot={"next_sessions":sessions},adaptive_roadmap=road,microcycle_ledger=microcycle_ledger,sessions=sessions,power_achievements=power_achievements)
+    canonical_reco,canonical_outlook=_v4897_canonical_training_copy(truth)
+
+    # Training load: report only deterministic load/state facts already computed upstream.
+    ctl=_rhythm_num(metrics.get("ctl"));atl=_rhythm_num(metrics.get("atl"));tsb=_rhythm_num(metrics.get("tsb"))
+    load_bits=[]
+    if ctl is not None and atl is not None and tsb is not None:load_bits.append(f"CTL is {ctl:.0f}, ATL {atl:.0f} and TSB {tsb:+.1f}.")
+    state=str(training_state.get("state") or "").replace("_"," ").strip();headline=str(training_state.get("headline") or "").strip()
+    if state:load_bits.append(f"Training state: {state.title()}.")
+    if headline:load_bits.append(headline)
+    training_load=_v86_sentence_join(load_bits,limit=3) or "Training load is available from the current deterministic Snapshot metrics."
+
+    # Distribution: preserve the existing 90-day TIZ semantics and declared model.
+    low=_rhythm_num(season_stats.get("zone_low_pct"));mod=_rhythm_num(season_stats.get("zone_mod_pct"));high=_rhythm_num(season_stats.get("zone_high_pct"))
+    dist_bits=[]
+    if low is not None and mod is not None and high is not None:dist_bits.append(f"Rolling intensity distribution is {low:.0f}% low, {mod:.0f}% moderate and {high:.0f}% high.")
+    declared=str(training_direction.get("distribution_label") or "").strip();observed=str(training_direction.get("observed_zone_model") or "").strip();adh=str(training_direction.get("adherence_label") or "").strip()
+    if declared and observed:dist_bits.append(f"Declared model: {declared}; observed pattern: {observed}.")
+    elif declared:dist_bits.append(f"Declared model: {declared}.")
+    if adh:dist_bits.append(f"Alignment: {adh}.")
+    season_distribution=_v86_sentence_join(dist_bits,limit=3) or "The current training-distribution model is loaded and available to Nova."
+
+    # Fatigue/recovery: describe statuses instead of inventing causal interpretation.
+    fatigue_bits=[]
+    rhr=_rhythm_num(metrics.get("latest_rhr"));hrv=_rhythm_num(metrics.get("latest_hrv"));sleep=str(metrics.get("latest_sleep_duration") or metrics.get("avg_sleep") or "").strip();sleep_score=_rhythm_num(metrics.get("latest_sleep_score"));spo2=_rhythm_num(metrics.get("latest_spo2"))
+    rhr_status=_v86_metric_status(metrics,"rhr");hrv_status=_v86_metric_status(metrics,"hrv");sleep_status=_v86_metric_status(metrics,"sleep")
+    status_parts=[]
+    if hrv is not None:status_parts.append(f"HRV {hrv:.0f} ms"+(f" ({hrv_status.lower()})" if hrv_status else ""))
+    if rhr is not None:status_parts.append(f"resting HR {rhr:.0f} bpm"+(f" ({rhr_status.lower()})" if rhr_status else ""))
+    if status_parts:fatigue_bits.append("Current recovery markers: "+", ".join(status_parts)+".")
+    sleep_parts=[]
+    if sleep:sleep_parts.append(sleep)
+    if sleep_score is not None:sleep_parts.append(f"score {sleep_score:.0f}")
+    if sleep_status:sleep_parts.append(sleep_status.lower())
+    if sleep_parts:fatigue_bits.append("Sleep: "+" · ".join(sleep_parts)+".")
+    if spo2 is not None:fatigue_bits.append(f"SpO₂ is {spo2:.0f}%.")
+    health=(planning_context.get("health_override") if isinstance(planning_context,dict) else None)
+    if health:fatigue_bits.append("An active health/recovery restriction is present and remains authoritative for training execution.")
+    latest=(feeling_trend or {}).get("latest") if isinstance(feeling_trend,dict) else None
+    if isinstance(latest,dict) and latest.get("feeling") is not None:fatigue_bits.append(f"Latest subjective feeling is {latest.get('feeling')}/10"+(f" ({str(latest.get('status')).lower()})" if latest.get("status") else "")+".")
+    fatigue_signals=_v86_sentence_join(fatigue_bits,limit=4) or "No additional deterministic recovery warning is available beyond the current Snapshot metrics and restrictions."
+
+    # Outlook: Question State and Nova Decision are the authority; cumulative metrics are context only.
+    outlook_bits=[]
+    dim=str(nova_decision.get("dimension") or "NONE").upper();action=str(nova_decision.get("action") or "MAINTAIN").upper();dims=(question_state.get("dimensions") or {}) if isinstance(question_state,dict) else {};rec=dims.get(dim) if isinstance(dims,dict) else None
+    closed=list(question_state.get("closed_dimensions") or []) if isinstance(question_state,dict) else []
+    if closed:outlook_bits.append("Established in the current block: "+", ".join(str(x).replace("_"," ").title() for x in closed)+".")
+    if dim not in {"","NONE"}:
+        if isinstance(rec,dict) and rec.get("state"):outlook_bits.append(f"The current unresolved coaching question is {dim.replace('_',' ').title()} ({str(rec.get('state')).lower()}).")
+        else:outlook_bits.append(f"The current coaching question is {dim.replace('_',' ').title()}.")
+    elif action=="MAINTAIN":outlook_bits.append("No unresolved active-block adaptation question currently requires another hard session.")
+    reason=str(nova_decision.get("reason") or "").strip()
+    if reason:outlook_bits.append(reason)
+    if dim in {"REPEATABILITY","RECOVERY_UNDER_LOAD","RACE_TRANSFER"} and race_repeatability.get("available") and _rhythm_num(race_repeatability.get("value")) is not None:
+        _rs=int(_rhythm_num(race_repeatability.get("sessions")) or 0);_rlabel="session" if _rs==1 else "sessions"
+        outlook_bits.append(f"Observed cumulative repeatability is {float(race_repeatability.get('value')):.1f}% across {_rs} {_rlabel}, with trend {str(race_repeatability.get('trend') or 'BASELINE').replace('_',' ').lower()}.")
+    outlook_bits.extend(canonical_outlook)
+    season_outlook=_v86_sentence_join(outlook_bits,limit=4) or "Nova is maintaining the current block until a new canonical coaching question opens."
+
+    # Recommendation: mechanics come only from Nova Prescription.
+    reco_bits=[]
+    if action=="HOLD":reco_bits.append("Keep training conservative until the active recovery or health restriction clears.")
+    elif action=="RACE_PRIORITY":reco_bits.append("Race priority is active; preserve freshness and follow the race-specific Calendar constraints.")
+    elif action=="MAINTAIN":reco_bits.append("No additional hard stimulus is required from the current evidence; follow the listed easy/aerobic sessions and reassess after new data arrive.")
+    reco_bits.extend(canonical_reco)
+    if not canonical_reco:
+        first_summary=_v86_first_session_summary(sessions)
+        if first_summary:reco_bits.append(first_summary)
+    recommendation=_v86_sentence_join(reco_bits,limit=6) or "Follow the deterministic Nova prescription shown below; no language-model workout generation is required."
+
+    # Strength remains optional; R86 does not invent a new gym prescription merely to fill UI.
+    strength_suggestion=None
+    parsed={
+        "training_load":training_load,"season_distribution":season_distribution,"season_outlook":season_outlook,
+        "fatigue_signals":fatigue_signals,"recommendation":recommendation,"strength_suggestion":strength_suggestion,
+        "next_sessions":sessions,"science_sources":[],
+        "nova_composer":{"schema":"V4.8.74-R86-1","source":"NOVA_FULL_SNAPSHOT_COMPOSER","ai_calls":0,"decision_dimension":dim,"decision_action":action,"session_count":len(sessions)},
+    }
+    parsed=_v4844_user_facing_contract(parsed,snapshot_question=snapshot_question,provider_trace={"source":"NOVA_FULL_SNAPSHOT_COMPOSER","ai_calls":0},feeling_trend=feeling_trend)
+    parsed=_v4897_semantic_compile_snapshot(parsed,adaptive_roadmap=road,microcycle_ledger=microcycle_ledger,power_achievements=power_achievements,record_audit=True,snapshot_question=snapshot_question)
+    parsed=_v4891_finalize_ai_copy(parsed)
+    parsed=_v4900_final_output_integrity_guard(parsed,adaptive_roadmap=road,microcycle_ledger=microcycle_ledger,power_achievements=power_achievements,snapshot_question=snapshot_question,session_progression=session_progression)
+    return parsed
+
+# R87 · Cross-Module Authority Guard.
+# Structured truth wins over prose. This guard does not invent coaching; it
+# verifies that every downstream consumer still agrees with the canonical
+# Activity Truth -> Evidence Ledger -> Question State -> Nova Decision ->
+# Nova Prescription chain before a Snapshot can be persisted.
+_V87_SESSION_SIGNATURE_KEYS = (
+    "slot", "date", "title", "duration", "intensity", "main_set",
+    "intensity_class", "stimulus_domain", "stimulus_role", "quality_relevance",
+    "restriction", "provisional_quality", "hard_spacing_relevant",
+    "nova_prescription_dimension",
+)
+
+def _v87_session_signature(row):
+    r=row or {}
+    out={}
+    for key in _V87_SESSION_SIGNATURE_KEYS:
+        value=r.get(key)
+        if isinstance(value,float): value=round(value,4)
+        elif isinstance(value,str): value=re.sub(r"\s+"," ",value).strip()
+        out[key]=value
+    return out
+
+def _v87_issue(issues, code, path, expected=None, actual=None, detail=None):
+    row={"code":str(code),"path":str(path),"severity":"BLOCK"}
+    if expected is not None: row["expected"]=expected
+    if actual is not None: row["actual"]=actual
+    if detail: row["detail"]=str(detail)
+    issues.append(row)
+
+_V87_DIMENSION_TEXT_PATTERNS = {
+    "REPEATABILITY": r"\brepeatability\b|\brepeated[- ]effort|\bminimal decay\b|\breproduce[^.!?]{0,80}\b(?:reps?|efforts?)\b",
+    "RECOVERY_UNDER_LOAD": r"\brecovery under load\b|\bloaded recovery\b|\brecovery demand\b",
+    "DURABILITY": r"\bdurability\b|\bunder fatigue\b|\bprior[- ]load\b|\blate[- ]session\b",
+    "RACE_TRANSFER": r"\brace transfer\b|\brace[- ]like\b",
+    "FRESH_CAPACITY": r"\bfresh capacity\b|\bfresh ceiling\b",
+    "SPECIFIC_DOSE": r"\bspecific dose\b",
+    "TIME_AT_PRESSURE": r"\btime at pressure\b",
+    "VARIABLE_LOAD": r"\bvariable load\b|\bover[- ]under\b",
+    "AEROBIC_VOLUME": r"\baerobic volume\b",
+    "METABOLIC_STABILITY": r"\bmetabolic stability\b",
+    "LATE_SESSION_STABILITY": r"\blate[- ]session stability\b",
+}
+
+def _v87_narrative_purpose_claim(sentence):
+    text=str(sentence or "").strip();low=text.lower()
+    if not text:return None
+    authority_frame=bool(
+        re.search(r"\b(?:current|next|open|unresolved|primary|block)\b[^.!?]{0,45}\b(?:question|focus|priority|purpose|adaptation)\b",low,re.I)
+        or re.search(r"\b(?:this|tonight(?:'s)?|today(?:'s)?|next)\b[^.!?]{0,35}\b(?:session|workout|quality anchor|hard session)\b[^.!?]{0,35}\b(?:target|targets|test|tests|address|addresses|build|confirm|prove)\b",low,re.I)
+        or re.search(r"\bcan you reproduce[^.!?]{0,120}\b(?:reps?|efforts?|minimal decay)\b",low,re.I)
+    )
+    if not authority_frame:return None
+    for dim,pattern in _V87_DIMENSION_TEXT_PATTERNS.items():
+        if re.search(pattern,low,re.I):return dim
+    return None
+
+def _v87_repair_narrative_authority(out, decision, question_state, issues, repairs, repair):
+    dim=str((decision or {}).get("dimension") or "NONE").upper();closed=set((question_state or {}).get("closed_dimensions") or [])
+    for field in ("season_outlook","recommendation"):
+        raw=str(out.get(field) or "").strip()
+        if not raw:continue
+        kept=[];removed=[]
+        for sentence in _v4844_sentence_list(raw):
+            claim=_v87_narrative_purpose_claim(sentence)
+            if claim and claim!=dim:
+                removed.append({"claim":claim,"sentence":sentence[:280],"closed":claim in closed})
+            else:kept.append(sentence)
+        if not removed:continue
+        if repair:
+            if field=="season_outlook":
+                lead=(f"The current unresolved coaching question is {dim.replace('_',' ').title()}." if dim not in {"","NONE"} else "No unresolved active-block adaptation question currently requires another hard session.")
+            else:
+                truth=_v4897_truth_packet(snapshot=out,adaptive_roadmap=out.get("adaptive_roadmap"),microcycle_ledger=out.get("microcycle_ledger"),sessions=out.get("next_sessions"),power_achievements=out.get("power_achievements"))
+                canonical,_=_v4897_canonical_training_copy(truth)
+                lead=" ".join(canonical).strip() or (f"Follow the Nova prescription for {dim.replace('_',' ').title()}." if dim not in {"","NONE"} else "Follow the listed Nova prescription; no additional hard purpose is open.")
+            out[field]=" ".join(_v4844_dedupe_sentences([lead]+kept))[:1500 if field=="recommendation" else 1400].strip()
+            repairs.append({"code":"NARRATIVE_PURPOSE_REALIGNED_TO_NOVA_DECISION","path":field,"removed_claims":[x["claim"] for x in removed]})
+        else:
+            for row in removed:_v87_issue(issues,"NARRATIVE_COACHING_PURPOSE_MISMATCH",field,dim,row.get("claim"),row.get("sentence"))
+
+def _v87_cross_module_authority_guard(snapshot, repair=True):
+    if not isinstance(snapshot,dict):
+        return snapshot
+    out=snapshot
+    issues=[];repairs=[];checks=[]
+    blocks=[b for b in (out.get("previous_training_blocks") or []) if isinstance(b,dict)]
+    ledger=out.get("evidence_ledger") if isinstance(out.get("evidence_ledger"),dict) else {}
+    qs=out.get("question_state") if isinstance(out.get("question_state"),dict) else {}
+    dec=out.get("nova_decision") if isinstance(out.get("nova_decision"),dict) else {}
+    pres=out.get("nova_prescription") if isinstance(out.get("nova_prescription"),dict) else {}
+    road=out.get("adaptive_roadmap") if isinstance(out.get("adaptive_roadmap"),dict) else {}
+    rr=out.get("race_repeatability") if isinstance(out.get("race_repeatability"),dict) else {}
+    vo2=out.get("vo2_trend") if isinstance(out.get("vo2_trend"),dict) else {}
+
+    # 1) Activity Truth must be the single structural truth.
+    activity_checked=0
+    for idx,b in enumerate(blocks):
+        truth=b.get("activity_truth") if isinstance(b.get("activity_truth"),dict) else {}
+        status=str(truth.get("status") or "LEGACY_UNSPECIFIED").upper()
+        conflict=truth.get("downstream_conflict")
+        if conflict or status=="CONFLICT":
+            _v87_issue(issues,"ACTIVITY_TRUTH_DOWNSTREAM_CONFLICT",f"previous_training_blocks[{idx}].activity_truth","RESOLVED_OR_NON_EVIDENCE",conflict or status)
+        if status!="RESOLVED":
+            continue
+        canonical=_rhythm_num(truth.get("repeated_work_count")); nominal=_rhythm_num(truth.get("nominal_work_secs"))
+        rep=b.get("repeatability") if isinstance(b.get("repeatability"),dict) else None
+        if rep and canonical is not None:
+            activity_checked+=1
+            reps=int(_rhythm_num(rep.get("reps")) or 0)
+            if reps!=int(round(canonical)):
+                _v87_issue(issues,"ACTIVITY_TRUTH_REP_COUNT_MISMATCH",f"previous_training_blocks[{idx}].repeatability.reps",int(round(canonical)),reps)
+            rsec=_rhythm_num(rep.get("interval_secs"))
+            if nominal is not None and rsec is not None and abs(float(nominal)-float(rsec))>1.0:
+                _v87_issue(issues,"ACTIVITY_TRUTH_DURATION_MISMATCH",f"previous_training_blocks[{idx}].repeatability.interval_secs",round(float(nominal),1),round(float(rsec),1))
+    checks.append({"name":"ACTIVITY_TRUTH","checked":activity_checked})
+
+    # 2) Evidence Ledger must be internally self-consistent and remain linked to Activity Truth.
+    if ledger:
+        events=[e for e in (ledger.get("events") or []) if isinstance(e,dict)]
+        reps=[e for e in (((ledger.get("repeatability") or {}).get("events")) or []) if isinstance(e,dict)]
+        rejections=[e for e in (ledger.get("rejections") or []) if isinstance(e,dict)]
+        counts=ledger.get("counts") or {}
+        expected_counts={
+            "observed_sessions":len(events),
+            "quality_sessions":sum(1 for e in events if e.get("quality_relevant")),
+            "repeatability_sessions":len(reps),
+            "repeatability_strong_sessions":sum(1 for e in reps if e.get("strong")),
+            "repeatability_efforts":sum(int(_rhythm_num(e.get("reps")) or 0) for e in reps),
+            "rejected_repeatability_sessions":len(rejections),
+        }
+        for key,expected in expected_counts.items():
+            actual=int(_rhythm_num(counts.get(key)) or 0)
+            if actual!=expected:
+                _v87_issue(issues,"EVIDENCE_LEDGER_COUNT_MISMATCH",f"evidence_ledger.counts.{key}",expected,actual)
+        rep_summary=ledger.get("repeatability") or {}
+        for key,expected in (("sessions",expected_counts["repeatability_sessions"]),("strong_sessions",expected_counts["repeatability_strong_sessions"]),("efforts",expected_counts["repeatability_efforts"])):
+            actual=int(_rhythm_num(rep_summary.get(key)) or 0)
+            if actual!=expected:
+                _v87_issue(issues,"EVIDENCE_LEDGER_REPEATABILITY_MISMATCH",f"evidence_ledger.repeatability.{key}",expected,actual)
+        for i,e in enumerate(events):
+            if e.get("repeatability") and str(e.get("activity_truth_status") or "").upper() in {"CONFLICT","UNRESOLVED","RAW_FALLBACK"}:
+                _v87_issue(issues,"UNRESOLVED_ACTIVITY_ENTERED_EVIDENCE",f"evidence_ledger.events[{i}].activity_truth_status","RESOLVED_OR_LEGACY_VERIFIED",e.get("activity_truth_status"))
+        checks.append({"name":"EVIDENCE_LEDGER","events":len(events),"repeatability_events":len(reps)})
+
+    # 3) Question State must be a faithful lifecycle view of that same Ledger.
+    if qs:
+        goal=str(qs.get("goal_key") or (out.get("training_direction") or {}).get("primary_goal") or "ENDURANCE_BASE").upper()
+        graph=_V503_GOAL_GRAPH.get(goal) or _V503_GOAL_GRAPH["ENDURANCE_BASE"]
+        seq=list(graph.get("sequence") or ())
+        dims=qs.get("dimensions") or {};special={"REVALIDATION","EXTENSION_OR_REVALIDATION"}
+        expected_open=[d for d in seq if d not in special and not bool((dims.get(d) or {}).get("exit_satisfied"))]
+        expected_closed=[d for d in seq if bool((dims.get(d) or {}).get("exit_satisfied"))]
+        actual_open=list(qs.get("open_dimensions") or []);actual_closed=list(qs.get("closed_dimensions") or [])
+        if actual_open!=expected_open:
+            _v87_issue(issues,"QUESTION_STATE_OPEN_SET_MISMATCH","question_state.open_dimensions",expected_open,actual_open)
+        if actual_closed!=expected_closed:
+            _v87_issue(issues,"QUESTION_STATE_CLOSED_SET_MISMATCH","question_state.closed_dimensions",expected_closed,actual_closed)
+        if ledger and qs.get("scope")!=ledger.get("scope"):
+            _v87_issue(issues,"QUESTION_STATE_SCOPE_MISMATCH","question_state.scope",ledger.get("scope"),qs.get("scope"))
+        rep_rec=dims.get("REPEATABILITY") if isinstance(dims,dict) else None
+        if isinstance(rep_rec,dict) and ledger:
+            expected=int(_rhythm_num(((ledger.get("science_features") or {}).get("repeatability_sessions"))) or 0)
+            actual=int(_rhythm_num(rep_rec.get("evidence_count")) or 0)
+            if actual!=expected:
+                _v87_issue(issues,"QUESTION_STATE_EVIDENCE_COUNT_MISMATCH","question_state.dimensions.REPEATABILITY.evidence_count",expected,actual)
+        checks.append({"name":"QUESTION_STATE","open":len(actual_open),"closed":len(actual_closed)})
+
+    # 4) Nova Decision is the only coaching-purpose authority.
+    if dec.get("available"):
+        dim=str(dec.get("dimension") or "NONE").upper();action=str(dec.get("action") or "MAINTAIN").upper();goal=str(dec.get("goal_key") or "").upper()
+        td_goal=str(((out.get("training_direction") or {}).get("primary_goal") or qs.get("goal_key") or "")).upper()
+        if td_goal and goal and goal!=td_goal:
+            _v87_issue(issues,"NOVA_DECISION_GOAL_MISMATCH","nova_decision.goal_key",td_goal,goal)
+        rec=((qs.get("dimensions") or {}).get(dim) or {}) if qs else {}
+        if dim not in {"NONE","REVALIDATION","EXTENSION_OR_REVALIDATION"}:
+            if rec.get("exit_satisfied"):
+                _v87_issue(issues,"NOVA_DECISION_REOPENED_CLOSED_QUESTION","nova_decision.dimension","OPEN_DIMENSION",dim)
+            elif qs.get("open_dimensions") and dim not in (qs.get("open_dimensions") or []):
+                _v87_issue(issues,"NOVA_DECISION_SELECTED_INELIGIBLE_QUESTION","nova_decision.dimension",list(qs.get("open_dimensions") or []),dim)
+        if qs and dec.get("question_state_schema") not in {None,qs.get("schema")} :
+            _v87_issue(issues,"NOVA_DECISION_QUESTION_SCHEMA_MISMATCH","nova_decision.question_state_schema",qs.get("schema"),dec.get("question_state_schema"))
+        if ledger and dec.get("evidence_ledger_schema") not in {None,ledger.get("schema")} :
+            _v87_issue(issues,"NOVA_DECISION_LEDGER_SCHEMA_MISMATCH","nova_decision.evidence_ledger_schema",ledger.get("schema"),dec.get("evidence_ledger_schema"))
+        checks.append({"name":"NOVA_DECISION","action":action,"dimension":dim})
+
+        # Roadmap is a consumer/mirror, never a second decision source.
+        road_dim=str(road.get("decision_dimension") or "NONE").upper();road_action=str(road.get("decision_action") or "").upper()
+        embedded=road.get("nova_decision") if isinstance(road.get("nova_decision"),dict) else {}
+        qwin=road.get("quality_window") if isinstance(road.get("quality_window"),dict) else {}
+        roadmap_bad=bool(road_dim!=dim or road_action!=action or str(embedded.get("dimension") or "NONE").upper()!=dim or str(embedded.get("action") or "").upper()!=action or str(qwin.get("decision_dimension") or "NONE").upper()!=dim or str(qwin.get("decision_action") or "").upper()!=action)
+        if roadmap_bad and repair:
+            out["adaptive_roadmap"]=_v83_apply_nova_decision_to_roadmap(road,dec);road=out["adaptive_roadmap"]
+            repairs.append({"code":"ROADMAP_REALIGNED_TO_NOVA_DECISION","path":"adaptive_roadmap"})
+        elif roadmap_bad:
+            _v87_issue(issues,"ROADMAP_NOVA_DECISION_MISMATCH","adaptive_roadmap.decision","NOVA_DECISION",{"action":road_action,"dimension":road_dim})
+
+    # Narrative is a projection of Nova Decision, never a second coaching authority.
+    if dec.get("available"):
+        _v87_repair_narrative_authority(out,dec,qs,issues,repairs,repair)
+
+    # 5) Nova Prescription mechanics must survive every downstream step unchanged.
+    if pres.get("available"):
+        pdim=str(pres.get("dimension") or "NONE").upper();paction=str(pres.get("action") or "").upper();pgoal=str(pres.get("goal_key") or "").upper()
+        if dec.get("available"):
+            if pdim!=str(dec.get("dimension") or "NONE").upper(): _v87_issue(issues,"NOVA_PRESCRIPTION_DIMENSION_MISMATCH","nova_prescription.dimension",dec.get("dimension"),pres.get("dimension"))
+            if paction!=str(dec.get("action") or "").upper(): _v87_issue(issues,"NOVA_PRESCRIPTION_ACTION_MISMATCH","nova_prescription.action",dec.get("action"),pres.get("action"))
+            if pgoal and str(dec.get("goal_key") or "").upper() and pgoal!=str(dec.get("goal_key") or "").upper(): _v87_issue(issues,"NOVA_PRESCRIPTION_GOAL_MISMATCH","nova_prescription.goal_key",dec.get("goal_key"),pres.get("goal_key"))
+        if not pres.get("compiled"):
+            _v87_issue(issues,"NOVA_PRESCRIPTION_NOT_COMPILED","nova_prescription.compiled",True,pres.get("compiled"))
+        if str(pres.get("ai_authority") or "").upper()!="EXPLANATION_ONLY":
+            _v87_issue(issues,"AI_AUTHORITY_ESCALATION","nova_prescription.ai_authority","EXPLANATION_ONLY",pres.get("ai_authority"))
+        if str(pres.get("status") or "").upper()=="PRESCRIBED" and pres.get("selected_slot_index") is not None and not pres.get("contract_id"):
+            _v87_issue(issues,"NOVA_PRESCRIPTION_MISSING_CONTRACT","nova_prescription.contract_id","DETERMINISTIC_CONTRACT_ID",None)
+        canonical=[_v87_session_signature(x) for x in (pres.get("sessions") or []) if isinstance(x,dict)]
+        final=[_v87_session_signature(x) for x in (out.get("next_sessions") or []) if isinstance(x,dict)]
+        if canonical!=final:
+            if repair and pres.get("sessions") is not None:
+                out["next_sessions"]=[copy.deepcopy(x) for x in (pres.get("sessions") or []) if isinstance(x,dict)]
+                if isinstance(out.get("metabolic_context"),dict):
+                    try: out["nutrition_plan"]=build_nutrition_plan(out.get("next_sessions"),out.get("metabolic_context") or {})
+                    except Exception: pass
+                repairs.append({"code":"FINAL_SESSIONS_RESTORED_FROM_NOVA_PRESCRIPTION","path":"next_sessions"})
+            else:
+                _v87_issue(issues,"FINAL_SESSION_PRESCRIPTION_MISMATCH","next_sessions",canonical,final)
+        checks.append({"name":"NOVA_PRESCRIPTION","sessions":len(pres.get("sessions") or []),"status":pres.get("status")})
+
+    # 6) Race Repeatability is a view of the Ledger, not an independent dataset.
+    if ledger:
+        expected_sessions=int(_rhythm_num(((ledger.get("counts") or {}).get("repeatability_sessions"))) or 0)
+        expected_efforts=int(_rhythm_num(((ledger.get("counts") or {}).get("repeatability_efforts"))) or 0)
+        expected_value=_rhythm_num(((ledger.get("repeatability") or {}).get("mean_retention_pct")))
+        rr_bad=False
+        if expected_sessions<=0:
+            rr_bad=bool(rr.get("available"))
+        else:
+            rr_bad=(not rr.get("available") or int(_rhythm_num(rr.get("sessions")) or 0)!=expected_sessions or int(_rhythm_num(rr.get("efforts")) or 0)!=expected_efforts or (expected_value is not None and (_rhythm_num(rr.get("value")) is None or abs(float(rr.get("value"))-float(expected_value))>0.11)) or rr.get("evidence_ledger_schema") not in {None,ledger.get("schema")})
+        if rr_bad and repair:
+            out["race_repeatability"]=build_race_repeatability(blocks,out.get("session_progression"),evidence_ledger=ledger);rr=out["race_repeatability"]
+            repairs.append({"code":"RACE_REPEATABILITY_REBUILT_FROM_EVIDENCE_LEDGER","path":"race_repeatability"})
+        elif rr_bad:
+            _v87_issue(issues,"RACE_REPEATABILITY_LEDGER_MISMATCH","race_repeatability",{"sessions":expected_sessions,"efforts":expected_efforts,"value":expected_value},{"sessions":rr.get("sessions"),"efforts":rr.get("efforts"),"value":rr.get("value")})
+        checks.append({"name":"RACE_REPEATABILITY","sessions":expected_sessions,"efforts":expected_efforts})
+
+    # 7) External VO2 source provenance must agree with the R80 contract.
+    if vo2.get("available"):
+        source=str(vo2.get("wearable_source") or "").upper();contract=str(vo2.get("garmin_contract_status") or "").upper();recent=bool(vo2.get("garmin_activity_recent"));gpoints=int(_rhythm_num(vo2.get("garmin_history_points")) or 0)
+        if source=="GARMIN_ACTIVITY_CUSTOM_FIELD" and (gpoints<=0 or contract not in {"FOUND","FOUND_HISTORY"} or not recent):
+            _v87_issue(issues,"VO2_GARMIN_SOURCE_CONTRACT_MISMATCH","vo2_trend.wearable_source","RECENT_FOUND_GARMIN_CONTRACT",{"source":source,"status":contract,"points":gpoints,"recent":recent})
+        if source=="INTERVALS_WELLNESS" and recent and contract in {"FOUND","FOUND_HISTORY"}:
+            _v87_issue(issues,"VO2_WELLNESS_USED_DESPITE_RECENT_GARMIN","vo2_trend.wearable_source","GARMIN_ACTIVITY_CUSTOM_FIELD",source)
+        checks.append({"name":"EXTERNAL_VO2_CONTRACT","status":contract,"source":source})
+
+    audit={
+        "schema":"V4.8.74-R87-1","status":"PASS" if not issues else "BLOCKED",
+        "final_pass":not bool(issues),"checks":checks,"repairs":repairs,"issues":issues,
+        "rule":"A persisted Snapshot may have only one structural/evidence/coaching truth. Repair is allowed only when it is a lossless projection from an existing canonical object; unresolved authority conflicts fail closed.",
+    }
+    out["cross_module_authority_audit"]=audit
+    semantic=out.get("semantic_authority_audit") if isinstance(out.get("semantic_authority_audit"),dict) else {}
+    semantic["cross_module_authority_pass"]=audit["final_pass"]
+    semantic["cross_module_authority_schema"]=audit["schema"]
+    if issues:
+        final_issues=semantic.get("final_issues") if isinstance(semantic.get("final_issues"),dict) else {}
+        final_issues["cross_module_authority"]=[{"reason":x.get("code"),"sentence":str(x.get("path") or "")[:280]} for x in issues]
+        semantic["final_issues"]=final_issues;semantic["final_pass"]=False;semantic["pass"]=False
+    out["semantic_authority_audit"]=semantic
+    out["authority_final_pass"]=bool(audit["final_pass"] and semantic.get("final_pass",True))
+    return out
+
+# R88 · Full Nova-only regression contract.
+# This is a validation layer only: it does not select training, alter dose or
+# create prose. It certifies that the existing full Snapshot can be rendered
+# from Nova without an AI-provider decision or hidden fallback.
+def _v88_nova_only_regression_contract(snapshot):
+    s=snapshot if isinstance(snapshot,dict) else {}
+    checks=[];issues=[]
+    required_narrative=("training_load","season_distribution","season_outlook","fatigue_signals","recommendation")
+    missing=[k for k in required_narrative if not str(s.get(k) or "").strip()]
+    checks.append({"name":"FULL_NARRATIVE_FIELDS","required":len(required_narrative),"present":len(required_narrative)-len(missing)})
+    if missing:issues.append({"code":"NOVA_COMPOSER_MISSING_NARRATIVE","fields":missing})
+
+    composer=s.get("nova_composer") if isinstance(s.get("nova_composer"),dict) else {}
+    composer_ok=(str(composer.get("source") or "").upper()=="NOVA_FULL_SNAPSHOT_COMPOSER" and int(_rhythm_num(composer.get("ai_calls")) or 0)==0)
+    checks.append({"name":"NOVA_COMPOSER","source":composer.get("source"),"ai_calls":composer.get("ai_calls"),"pass":composer_ok})
+    if not composer_ok:issues.append({"code":"NOVA_COMPOSER_AUTHORITY_MISMATCH","source":composer.get("source"),"ai_calls":composer.get("ai_calls")})
+
+    authority=s.get("cross_module_authority_audit") if isinstance(s.get("cross_module_authority_audit"),dict) else {}
+    authority_ok=bool(authority.get("final_pass"))
+    checks.append({"name":"CROSS_MODULE_AUTHORITY","schema":authority.get("schema"),"pass":authority_ok})
+    if not authority_ok:issues.append({"code":"CROSS_MODULE_AUTHORITY_FAILED","issues":list(authority.get("issues") or [])[:8]})
+
+    semantic=s.get("semantic_authority_audit") if isinstance(s.get("semantic_authority_audit"),dict) else {}
+    semantic_ok=bool(semantic and semantic.get("final_pass"))
+    checks.append({"name":"SEMANTIC_AUTHORITY","pass":semantic_ok})
+    if not semantic_ok:issues.append({"code":"SEMANTIC_AUTHORITY_FAILED"})
+
+    pres=s.get("nova_prescription") if isinstance(s.get("nova_prescription"),dict) else {}
+    decision=s.get("nova_decision") if isinstance(s.get("nova_decision"),dict) else {}
+    pres_ok=bool(pres.get("available") and pres.get("compiled") and str(pres.get("ai_authority") or "").upper()=="EXPLANATION_ONLY")
+    decision_ok=bool(decision.get("available") and str(decision.get("authority") or "").upper()=="NOVA_DECISION_ENGINE")
+    checks.append({"name":"NOVA_DECISION_PRESCRIPTION","decision_pass":decision_ok,"prescription_pass":pres_ok,"dimension":decision.get("dimension")})
+    if not decision_ok:issues.append({"code":"NOVA_DECISION_NOT_CANONICAL"})
+    if not pres_ok:issues.append({"code":"NOVA_PRESCRIPTION_NOT_CANONICAL"})
+
+    canonical=[_v87_session_signature(x) for x in (pres.get("sessions") or []) if isinstance(x,dict)]
+    final=[_v87_session_signature(x) for x in (s.get("next_sessions") or []) if isinstance(x,dict)]
+    sessions_ok=(canonical==final)
+    checks.append({"name":"SESSION_IDENTITY","canonical_sessions":len(canonical),"final_sessions":len(final),"pass":sessions_ok})
+    if not sessions_ok:issues.append({"code":"NOVA_ONLY_SESSION_IDENTITY_FAILED"})
+
+    placeholders=("ai narrative interpretation is intentionally disabled","no ai commentary is added","python-only placeholder")
+    placeholder_hits=[]
+    for field in required_narrative:
+        low=str(s.get(field) or "").lower()
+        for phrase in placeholders:
+            if phrase in low:placeholder_hits.append({"field":field,"phrase":phrase})
+    checks.append({"name":"NO_TRUNCATED_QA_PLACEHOLDERS","pass":not bool(placeholder_hits)})
+    if placeholder_hits:issues.append({"code":"LEGACY_NOVA_ONLY_PLACEHOLDER_PRESENT","hits":placeholder_hits})
+
+    core=("evidence_ledger","question_state","nova_decision","nova_prescription","adaptive_roadmap","vo2_trend","race_repeatability")
+    core_missing=[k for k in core if not isinstance(s.get(k),dict)]
+    checks.append({"name":"FULL_UI_CORE_PAYLOAD","required":len(core),"present":len(core)-len(core_missing)})
+    if core_missing:issues.append({"code":"NOVA_ONLY_CORE_PAYLOAD_MISSING","fields":core_missing})
+
+    return {
+        "schema":"V4.8.74-R88-1","status":"PASS" if not issues else "BLOCKED","final_pass":not bool(issues),
+        "ai_calls":0,"decision_authority":"NOVA","snapshot_composer":"NOVA_FULL_SNAPSHOT_COMPOSER",
+        "ui_contract":"HOME_PAGE_FULL","checks":checks,"issues":issues,
+        "rule":"Nova-only QA is valid only when the full current Snapshot payload, narrative fields and canonical sessions survive all R79-R87 authority guards with zero AI-provider calls.",
+    }
+
+def _v84_nova_prescription_text(x):
+    x=x or {};rows=x.get("sessions") or x.get("raw_sessions") or []
+    bits=[]
+    for i,s in enumerate(rows):
+        if not isinstance(s,dict):continue
+        bits.append(f"{i+1}) {s.get('title')} | {s.get('intensity')} | {s.get('main_set')}")
+    return (f"NOVA PRESCRIPTION (deterministic authority): status={x.get('status')} | dimension={x.get('dimension')} | source={x.get('source')} | fail_closed={x.get('fail_closed_reason') or 'none'}. "
+            +(" Sessions: "+" || ".join(bits) if bits else " No training opportunities.")
+            +" AI is explanation-only and must not alter title, duration, intensity, work/recovery structure, watts, reps or physiological purpose.")
+
+def _v81_repeatability_rows(evidence_ledger):
+    rows=[]
+    for e in (((evidence_ledger or {}).get("repeatability") or {}).get("events") or []):
+        if _num((e or {}).get("retention_capped_pct")) is None:continue
+        b={"activity_id":e.get("activity_id"),"date":e.get("date"),"name":e.get("name"),"ftp":e.get("ftp")}
+        r={"reps":e.get("reps"),"interval_secs":e.get("interval_secs"),"interval_label":e.get("interval_label"),"recovery_secs":e.get("recovery_secs"),"recovery_avg_watts":e.get("recovery_avg_watts"),"retention_pct":e.get("retention_raw_pct"),"retention_raw_pct":e.get("retention_raw_pct"),"retention_capped_pct":e.get("retention_capped_pct"),"cv_pct":e.get("cv_pct"),"decay_pct":e.get("decay_pct")}
+        rows.append((b,r))
+    return rows
+
+def build_race_repeatability(previous_training_blocks, session_progression=None, evidence_ledger=None):
+    # Cumulative observed repeatability across the canonical R81 Evidence Ledger.
     # supplied to this Snapshot. The visible percentage is a direct average of
     # per-session late-rep retention, capped at 100% because retention describes
     # performance preserved, while over-performance is represented by trend.
-    rows=[]
-    for b in previous_training_blocks or []:
-        if not isinstance(b,dict) or not b.get("quality_relevant"):continue
-        rep=_race_repeatability_from_block(b)
-        ret=_num((rep or {}).get("retention_pct"))
-        if not rep or ret is None:continue
-        rep=dict(rep);rep["retention_raw_pct"]=round(ret,1);rep["retention_capped_pct"]=round(max(0.0,min(100.0,ret)),1)
-        rows.append((b,rep))
+    evidence_ledger=evidence_ledger or build_evidence_ledger(previous_training_blocks)
+    rows=_v81_repeatability_rows(evidence_ledger)
     if not rows:
         return {"available":False,"state":"LEARNING","state_class":"grey","value":None,"value_label":"Learning","headline":"Repeatable-effort evidence is still building.","confidence":"LOW","method_note":"Uses observed repeated-work retention, not a proprietary fitness score."}
 
@@ -12758,8 +13868,9 @@ def build_race_repeatability(previous_training_blocks, session_progression=None)
         "value":round(total_ret,1),"value_label":f"{total_ret:.1f}%","metric_label":"cumulative retention","context":context,"ui_detail":ui_detail,
         "headline":headline,"confidence":confidence,"date":cur_block.get("date"),"sessions":total_sessions,"efforts":total_efforts,
         "latest_session_retention_raw_pct":cur.get("retention_raw_pct"),"latest_recovery_load_pct_ftp":round(ratio*100,1) if ratio is not None else None,
-        "mean_stability_cost_pct":round(total_fade,1) if total_fade is not None else None,"source":"CUMULATIVE_OBSERVED_REPEATABILITY",
-        "method_note":"Equal-session mean of observed late-rep retention across all eligible quality repeated-effort sessions supplied from the active training block. Each session is capped at 100% for the retention metric; over-performance and harder-recovery adaptation remain in the trend. No proprietary 0–100 score."
+        "mean_stability_cost_pct":round(total_fade,1) if total_fade is not None else None,"source":"EVIDENCE_LEDGER_REPEATABILITY",
+        "evidence_ledger_schema":evidence_ledger.get("schema"),"evidence_scope":evidence_ledger.get("scope"),
+        "method_note":"Equal-session mean of canonical repeated-effort evidence from the shared Evidence Ledger. Each session is capped at 100% for the retention metric; over-performance and harder-recovery adaptation remain in the trend. No proprietary 0–100 score."
     }
 def race_repeatability_text(x):
     x=x or {}
@@ -14138,9 +15249,11 @@ def adaptive_roadmap_text(roadmap):
     stage = r.get("stage") or {}
     q = r.get("quality_window") or {}
     t = r.get("test") or {}
+    dec=r.get("nova_decision") or {}
     lines = [
         "ATHLETE PROGRESSION ROADMAP (deterministic direction; adaptive timing):",
         f"- North star: {r.get('north_star')}",
+        f"- Canonical coaching purpose: {dec.get('action')} · {dec.get('dimension')} · {dec.get('reason')}" if dec.get("available") else "- Canonical coaching purpose: not yet resolved.",
         f"- Current stage: {stage.get('code')} · {stage.get('label')} · {stage.get('detail')}",
         f"- Next quality window: {q.get('headline')}",
         f"- Test decision: {t.get('state')} · {t.get('label')} ({t.get('duration')}) · {t.get('when')} · {t.get('reason')}",
@@ -16991,6 +18104,51 @@ def fetch_activity_details(activity_ids):
             if isinstance(detail, dict):
                 found[str(activity_id)] = detail
     return found
+def _v80_enrich_garmin_vo2_details(activities, details, max_single_fetches=6):
+    """Fill the Garmin VO2 contract from single-activity detail only when needed.
+
+    Intervals' batch detail endpoint is kept as the primary path. If neither the
+    activity summary nor batch detail exposes VO2MaxGarmin, probe a small number
+    of newest activities through the single-activity endpoint, which is known to
+    expose custom activity fields. This is bounded and stops at the first FOUND.
+    """
+    out={str(k):v for k,v in (details or {}).items()}
+    rows=[a for a in (activities or []) if isinstance(a,dict) and a.get("id")]
+    rows.sort(
+        key=lambda a:(1 if "GARMIN" in str(a.get("source") or "").upper() else 0,str(a.get("start_date_local") or "")),
+        reverse=True,
+    )
+    # If a canonical Garmin value is already present anywhere, do not add calls.
+    for a in rows:
+        aid=str(a.get("id"))
+        for payload,scope in ((a,"ACTIVITY_SUMMARY"),(out.get(aid),"BATCH_ACTIVITY_DETAIL")):
+            if isinstance(payload,dict) and _v80_garmin_vo2_contract(payload,scope).get("status")=="FOUND":
+                return out,{"status":"FOUND","probe_used":False,"single_fetches":0,"activity_id":aid,"scope":scope}
+    fetched=0
+    last_status="ABSENT"
+    for a in rows:
+        if fetched>=max(0,int(max_single_fetches or 0)):break
+        aid=str(a.get("id"))
+        # Prefer activities that plausibly came from Garmin, but do not require
+        # source metadata because older list payloads may omit it.
+        single=fetch_activity_detail(aid)
+        fetched+=1
+        if not isinstance(single,dict):
+            last_status="FETCH_FAILED"
+            continue
+        merged=dict(out.get(aid) or {})
+        merged.update(single)
+        out[aid]=merged
+        contract=_v80_garmin_vo2_contract(merged,"SINGLE_ACTIVITY_DETAIL")
+        last_status=contract.get("status") or "ABSENT"
+        if last_status=="FOUND":
+            return out,{
+                "status":"FOUND","probe_used":True,"single_fetches":fetched,
+                "activity_id":aid,"scope":"SINGLE_ACTIVITY_DETAIL",
+                "path":contract.get("path"),"encoding":contract.get("encoding"),
+            }
+    return out,{"status":last_status,"probe_used":bool(fetched),"single_fetches":fetched,"activity_id":None,"scope":None}
+
 def _interval_line(interval):
     secs = int(interval.get("moving_time") or interval.get("elapsed_time") or 0)
     if secs < 45:
@@ -17021,50 +18179,246 @@ def _zone_summary(zone_secs):
     return " · ".join(parts[:7])
 def _is_heat_name(name):
     return bool(re.search(r"\bHEAT\b", str(name or ""), flags=re.IGNORECASE))
-def _v4879_lap_work_sequence(detail):
-    """Prefer device/source laps when they form a coherent repeated hard-work pattern.
+def _v79_normalize_interval_row(row, pos):
+    if not isinstance(row, dict):
+        return None
+    sec = _num(row.get("moving_time") or row.get("elapsed_time") or row.get("duration") or row.get("duration_sec"))
+    watts = _num(row.get("average_watts") or row.get("avg_watts") or row.get("power"))
+    if sec is None or watts is None or sec <= 0 or watts <= 0:
+        return None
+    out = dict(row)
+    out["_truth_pos"] = int(pos)
+    out["moving_time"] = int(round(sec))
+    out["average_watts"] = float(watts)
+    return out
 
-    Intervals.icu auto-detected icu_intervals can trim interval boundaries. Laps preserve the
-    athlete/device workout structure when available. Return a synthetic WORK/RECOVERY sequence
-    only when the lap pattern is strong enough; otherwise leave the native interval path alone.
+def _v79_lap_candidates(detail):
+    """Find device/source lap arrays without assuming one Intervals payload path."""
+    found = []
+    seen = set()
+    allowed = {"laps", "lap", "devicelaps", "activitylaps", "fitlaps", "sourcelaps", "lapintervals"}
+    def walk(node, path=(), depth=0):
+        if depth > 4:
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                norm = re.sub(r"[^a-z0-9]", "", str(key or "").lower())
+                if isinstance(value, list) and (norm in allowed or norm.endswith("laps")):
+                    rows = [_v79_normalize_interval_row(x, i) for i, x in enumerate(value)]
+                    rows = [x for x in rows if x]
+                    if len(rows) >= 3:
+                        sig = tuple((x.get("moving_time"), round(float(x.get("average_watts") or 0), 1)) for x in rows)
+                        if sig not in seen:
+                            seen.add(sig)
+                            found.append({"path": ".".join(path + (str(key),)), "rows": rows})
+                if isinstance(value, (dict, list)):
+                    walk(value, path + (str(key),), depth + 1)
+        elif isinstance(node, list):
+            for i, value in enumerate(node[:24]):
+                if isinstance(value, (dict, list)):
+                    walk(value, path + (str(i),), depth + 1)
+    walk(detail or {})
+    found.sort(key=lambda x: len(x["rows"]), reverse=True)
+    return found
+
+def _v79_repeated_work_pattern(raw_rows, ftp=None, source="UNKNOWN", infer_work=False, allow_trimmed=False):
+    """Resolve one coherent repeated-work block from ordered interval/lap rows.
+
+    Full-duration repetitions establish the nominal work duration. ICU auto-intervals may contain
+    one clipped repetition boundary; such a row is admitted only when power, alternation and
+    recovery structure all support the same repeated block. This is deliberately fail-closed.
     """
-    d=detail or {}; raw=list(d.get("laps") or [])
-    if len(raw)<5: return None
-    ftp=_num(d.get("icu_ftp") or d.get("ftp")); laps=[]
-    for idx,lap in enumerate(raw):
-        if not isinstance(lap,dict): continue
-        sec=int(lap.get("moving_time") or lap.get("elapsed_time") or 0); w=_num(lap.get("average_watts"))
-        if sec<45 or w is None or w<=0: continue
-        row=dict(lap); row["_lap_pos"]=idx; row["moving_time"]=sec; row["average_watts"]=float(w); laps.append(row)
-    if len(laps)<5: return None
-    groups={}
-    for row in laps:
-        sec=int(row.get("moving_time") or 0); w=float(row.get("average_watts") or 0)
-        if sec<55: continue
-        if ftp and ftp>0 and w<0.88*ftp: continue
-        bucket=int(round(sec/15.0)*15); groups.setdefault(bucket,[]).append(row)
-    candidates=[]
-    for bucket,rows in groups.items():
-        if len(rows)<3: continue
-        rows=sorted(rows,key=lambda x:x["_lap_pos"]); recoveries=[]; rec_w=[]; coherent=True
-        for a,z in zip(rows,rows[1:]):
-            between=[x for x in laps if a["_lap_pos"]<x["_lap_pos"]<z["_lap_pos"]]
-            t=sum(int(x.get("moving_time") or 0) for x in between)
-            if t<=0: coherent=False; break
-            recoveries.append(t); rec_w.append(sum(int(x.get("moving_time") or 0)*float(x.get("average_watts") or 0) for x in between)/t)
-        if not coherent or not recoveries: continue
-        med=statistics.median(recoveries); spread=max(recoveries)-min(recoveries); work_med=statistics.median(float(x.get("average_watts") or 0) for x in rows); rec_med=statistics.median(rec_w)
-        if spread>max(75,0.30*med): continue
-        if rec_med>0 and work_med<max(rec_med+20,1.08*rec_med): continue
-        candidates.append((len(rows),work_med,bucket,rows,recoveries,rec_w))
-    if not candidates: return None
-    _,_,bucket,work_rows,recoveries,rec_w=max(candidates,key=lambda x:(x[0],x[1],x[2]))
-    selected={x["_lap_pos"] for x in work_rows}; first=min(selected); last=max(selected); seq=[]
-    for row in laps:
-        pos=row["_lap_pos"]
-        if pos<first or pos>last: continue
-        q=dict(row); q["type"]="WORK" if pos in selected else "RECOVERY"; seq.append(q)
-    return {"sequence":seq,"work_rows":work_rows,"interval_secs":bucket,"source":"DEVICE_LAPS"}
+    rows = []
+    for i, raw in enumerate(raw_rows or []):
+        row = _v79_normalize_interval_row(raw, i)
+        if row:
+            rows.append(row)
+    if len(rows) < 3:
+        return None
+    ftp = _num(ftp)
+    work_candidates = []
+    for row in rows:
+        typ = str(row.get("type") or "").upper()
+        watts = float(row.get("average_watts") or 0)
+        secs = int(row.get("moving_time") or 0)
+        if secs < 55:
+            continue
+        if infer_work:
+            if ftp and ftp > 0:
+                is_work = watts >= 0.88 * ftp
+            else:
+                is_work = False
+        else:
+            is_work = typ == "WORK"
+        if is_work:
+            work_candidates.append(row)
+    if len(work_candidates) < 3:
+        return None
+    groups = {}
+    for row in work_candidates:
+        bucket = max(15, int(round(int(row["moving_time"]) / 15.0) * 15))
+        groups.setdefault(bucket, []).append(row)
+    base_groups = [(bucket, group) for bucket, group in groups.items() if len(group) >= 3]
+    if not base_groups:
+        return None
+    candidates = []
+    for nominal, full in base_groups:
+        nominal = int(nominal)
+        duration_tol = max(6, int(round(0.04 * nominal)))
+        full = [r for r in work_candidates if abs(int(r["moving_time"]) - nominal) <= duration_tol]
+        if len(full) < 3:
+            continue
+        work_med = statistics.median(float(r["average_watts"]) for r in full)
+        selected = list(full)
+        corrected = []
+        if allow_trimmed:
+            clipped = []
+            for row in work_candidates:
+                if row in selected:
+                    continue
+                secs = int(row["moving_time"]); watts = float(row["average_watts"])
+                if not (0.65 * nominal <= secs < nominal - duration_tol):
+                    continue
+                if work_med <= 0 or abs(watts - work_med) / work_med > 0.15:
+                    continue
+                if ftp and ftp > 0 and watts < 0.88 * ftp:
+                    continue
+                clipped.append(row)
+            # Auto-detection boundary damage should be exceptional, not a new duration tolerance.
+            max_clipped = max(1, len(full) // 4)
+            clipped = sorted(clipped, key=lambda r: r["_truth_pos"])
+            if len(clipped) <= max_clipped:
+                selected.extend(clipped)
+                corrected = clipped
+        selected = sorted(selected, key=lambda r: r["_truth_pos"])
+        if len(selected) < 3:
+            continue
+        recoveries = []
+        recovery_watts = []
+        coherent = True
+        selected_positions = {r["_truth_pos"] for r in selected}
+        for left, right in zip(selected, selected[1:]):
+            between = [r for r in rows if left["_truth_pos"] < r["_truth_pos"] < right["_truth_pos"]]
+            if not between:
+                coherent = False; break
+            if not infer_work and any(str(r.get("type") or "").upper() == "WORK" and r["_truth_pos"] not in selected_positions for r in between):
+                coherent = False; break
+            t = sum(int(r.get("moving_time") or 0) for r in between)
+            if t <= 0:
+                coherent = False; break
+            rw = sum(int(r.get("moving_time") or 0) * float(r.get("average_watts") or 0) for r in between) / t
+            recoveries.append(t); recovery_watts.append(rw)
+        if not coherent or not recoveries:
+            continue
+        rec_med = statistics.median(recoveries)
+        rec_spread = max(recoveries) - min(recoveries)
+        rec_power_med = statistics.median(recovery_watts)
+        selected_work_med = statistics.median(float(r["average_watts"]) for r in selected)
+        if rec_spread > max(75, 0.30 * rec_med):
+            continue
+        if rec_power_med > 0:
+            if ftp and ftp > 0:
+                if selected_work_med < max(0.88 * ftp, rec_power_med + 20, 1.08 * rec_power_med):
+                    continue
+            elif selected_work_med < max(rec_power_med + 35, 1.25 * rec_power_med):
+                continue
+        first = selected[0]["_truth_pos"]; last = selected[-1]["_truth_pos"]
+        seq = []
+        correction_rows = []
+        for row in rows:
+            pos = row["_truth_pos"]
+            if pos < first or pos > last:
+                continue
+            q = dict(row)
+            if pos in selected_positions:
+                q["type"] = "WORK"
+                if row in corrected:
+                    observed = int(q.get("moving_time") or 0)
+                    q["_observed_moving_time"] = observed
+                    q["_canonical_duration_adjusted"] = True
+                    q["moving_time"] = nominal
+                    correction_rows.append({"position": pos, "observed_secs": observed, "canonical_secs": nominal, "watts": round(float(q.get("average_watts") or 0), 1)})
+            else:
+                q["type"] = "RECOVERY"
+            seq.append(q)
+        candidates.append({
+            "sequence": seq,
+            "work_rows": [r for r in seq if str(r.get("type") or "").upper() == "WORK"],
+            "interval_secs": nominal,
+            "repeated_work_count": len(selected),
+            "source": source,
+            "corrections": correction_rows,
+            "recovery_median_secs": int(round(rec_med)),
+            "confidence": "HIGH" if not correction_rows else "MODERATE",
+        })
+    if not candidates:
+        return None
+    return max(candidates, key=lambda x: (x["repeated_work_count"], x["confidence"] == "HIGH", x["interval_secs"]))
+
+def _v4879_lap_work_sequence(detail):
+    """Compatibility wrapper: resolve a coherent repeated block from device/source laps."""
+    d = detail or {}
+    ftp = _num(d.get("icu_ftp") or d.get("ftp"))
+    for candidate in _v79_lap_candidates(d):
+        pattern = _v79_repeated_work_pattern(candidate.get("rows"), ftp=ftp, source="DEVICE_LAPS", infer_work=True, allow_trimmed=False)
+        if pattern:
+            pattern["lap_path"] = candidate.get("path")
+            return pattern
+    return None
+
+def _v79_activity_interval_truth(detail):
+    """Canonical interval structure consumed by every downstream training-block analyser."""
+    d = detail or {}
+    ftp = _num(d.get("icu_ftp") or d.get("ftp"))
+    lap_candidates = _v79_lap_candidates(d)
+    for candidate in lap_candidates:
+        pattern = _v79_repeated_work_pattern(candidate.get("rows"), ftp=ftp, source="DEVICE_LAPS", infer_work=True, allow_trimmed=False)
+        if pattern:
+            return {
+                **pattern,
+                "status": "RESOLVED",
+                "lap_path": candidate.get("path"),
+                "lap_candidates_seen": len(lap_candidates),
+                "raw_icu_work_count": sum(1 for x in (d.get("icu_intervals") or []) if isinstance(x, dict) and str(x.get("type") or "WORK").upper() == "WORK"),
+            }
+    native = [x for x in (d.get("icu_intervals") or []) if isinstance(x, dict)]
+    pattern = _v79_repeated_work_pattern(native, ftp=ftp, source="ICU_INTERVALS_CANONICAL", infer_work=False, allow_trimmed=True)
+    if pattern:
+        return {
+            **pattern,
+            "status": "RESOLVED",
+            "lap_path": None,
+            "lap_candidates_seen": len(lap_candidates),
+            "raw_icu_work_count": sum(1 for x in native if str(x.get("type") or "WORK").upper() == "WORK"),
+        }
+    return {
+        "sequence": native,
+        "work_rows": [x for x in native if str((x or {}).get("type") or "WORK").upper() == "WORK"],
+        "interval_secs": None,
+        "repeated_work_count": None,
+        "source": "ICU_INTERVALS",
+        "status": "RAW_FALLBACK" if native else "UNRESOLVED",
+        "confidence": "LOW" if native else "NONE",
+        "corrections": [],
+        "lap_path": None,
+        "lap_candidates_seen": len(lap_candidates),
+        "raw_icu_work_count": sum(1 for x in native if str(x.get("type") or "WORK").upper() == "WORK"),
+    }
+
+def _v79_activity_truth_summary(truth):
+    t = truth or {}
+    return {
+        "status": t.get("status"),
+        "source": t.get("source"),
+        "confidence": t.get("confidence"),
+        "repeated_work_count": t.get("repeated_work_count"),
+        "nominal_work_secs": t.get("interval_secs"),
+        "corrections": list(t.get("corrections") or []),
+        "lap_path": t.get("lap_path"),
+        "lap_candidates_seen": t.get("lap_candidates_seen"),
+        "raw_icu_work_count": t.get("raw_icu_work_count"),
+        "downstream_conflict": t.get("downstream_conflict"),
+    }
 
 def _v4879_repeatability_stats(intervals, source=None):
     groups={}; seq=list(intervals or [])
@@ -17085,6 +18439,7 @@ def _v4879_repeatability_stats(intervals, source=None):
     first,last=watts[0],watts[-1]; ch=(last-first)/first*100 if first else None; avg=statistics.mean(watts); early=statistics.mean(watts[:2]); late=statistics.mean(watts[-2:]); cv=statistics.pstdev(watts)/avg*100 if len(watts)>1 and avg else 0
     rsec=int(round(statistics.median(rec))) if rec else None; rw=round(statistics.median(recw),1) if recw else None
     return {"reps":len(watts),"interval_secs":b,"interval_label":f"{round(b/60):g} min","recovery_secs":rsec,"recovery_avg_watts":rw,"recovery_label":format_duration_label(rsec) if rsec else None,"watts":[int(round(x)) for x in watts],"avg_watts":round(avg,1),"min_watts":int(round(min(watts))),"max_watts":int(round(max(watts))),"spread_watts":int(round(max(watts)-min(watts))),"first_watts":int(round(first)),"last_watts":int(round(last)),"first_to_last_delta_watts":int(round(last-first)),"first_to_last_change_pct":round(ch,1) if ch is not None else None,"first_to_last_decay_pct":round(max(0,-ch),1) if ch is not None else None,"cv_pct":round(cv,1),"early_rep_avg_watts":round(early,1),"late_rep_avg_watts":round(late,1),"late_rep_retention_pct":round(late/early*100,1) if early else None,"source":source or "ICU_INTERVALS"}
+
 def _v491_session_progression(blocks):
     rows=[b for b in (blocks or []) if (b or {}).get("repeatability")]; out={"available":False,"badges":[],"comparison":None}
     if not rows: return out
@@ -17151,7 +18506,7 @@ def _v492_attach_execution_quality(blocks,ledger=None):
         q=_v492_execution_quality(b,ledger);b["execution_quality"]=q
         if (q.get("degradation") or {}).get("label")=="EXCELLENT":b["progression_badges"]=[{"icon":"🏅","label":"Excellent repeatability","detail":f"Output degradation {(q.get('degradation') or {}).get('index_pct')}%"}]
     return blocks
-def _v4930_performance_narrative_state(roadmap,ledger,previous_blocks,training_direction=None,performance_evidence=None,now=None):
+def _v4930_performance_narrative_state(roadmap,ledger,previous_blocks,training_direction=None,performance_evidence=None,now=None,evidence_ledger=None,question_state=None):
     now=now or get_rome_now();road=roadmap or {};td=training_direction or {};pe=performance_evidence or {};latest=None
     for b in previous_blocks or []:
         if (b or {}).get("quality_relevant") and (((b or {}).get("execution_quality") or {}).get("available") or (b or {}).get("repeatability")):latest=b;break
@@ -17161,7 +18516,11 @@ def _v4930_performance_narrative_state(roadmap,ledger,previous_blocks,training_d
     try:cs=date.fromisoformat(str((ledger or {}).get("cycle_start") or "")[:10])
     except Exception:pass
     in_cycle=bool(ld and (not cs or ld>=cs));score=_rhythm_num(adh.get("score"))
-    strong=bool(in_cycle and eq.get("available") and idx is not None and idx<=3 and (not adh.get("available") or score is None or score>=85))
+    legacy_strong=bool(in_cycle and eq.get("available") and idx is not None and idx<=3 and (not adh.get("available") or score is None or score>=85))
+    shared_feat=(evidence_ledger or {}).get("science_features") if isinstance(evidence_ledger,dict) else None
+    qs_dims=(question_state or {}).get("dimensions") if isinstance(question_state,dict) else {}
+    rep_q=(qs_dims or {}).get("REPEATABILITY") or {}
+    strong=bool(rep_q.get("exit_satisfied")) if rep_q else (bool(int((shared_feat or {}).get("repeatability_strong_sessions") or 0)>=2) if isinstance(shared_feat,dict) else legacy_strong)
     formal=pe.get("latest_formal_validation") if isinstance(pe.get("latest_formal_validation"),dict) else {};fw=_rhythm_num(formal.get("watts"));fd=None
     try:fd=date.fromisoformat(str(formal.get("date") or "")[:10])
     except Exception:pass
@@ -17170,13 +18529,38 @@ def _v4930_performance_narrative_state(roadmap,ledger,previous_blocks,training_d
     try:end_label=date.fromisoformat(str(end)).strftime("%d %b") if end else None
     except Exception:pass
     if goal=="POWER_5" and fresh and strong:
-        current="Race-useful repeatability · aerobic floor protected";nxt="Vary the next hard structure and keep repeated targets below the fresh ceiling; then move toward fatigue/race transfer.";story=f"Fresh 5-minute ceiling{f' {fw:.0f} W' if fw else ''} is established and the latest repeated work was stable. Do not retest the same structure now; confirm repeatability through a different race-relevant format.";open_q="VARIED_REPEATABILITY_THEN_TRANSFER"
+        rul_closed=bool(((qs_dims or {}).get("RECOVERY_UNDER_LOAD") or {}).get("exit_satisfied"));dur_closed=bool(((qs_dims or {}).get("DURABILITY") or {}).get("exit_satisfied"));race_closed=bool(((qs_dims or {}).get("RACE_TRANSFER") or {}).get("exit_satisfied"))
+        current="Repeatability established · aerobic floor protected"
+        if not rul_closed:
+            nxt="Progress recovery demand without reopening simple repeatability."
+            story=f"Fresh 5-minute ceiling{f' {fw:.0f} W' if fw else ''} is established and repeatability has met its active-block exit criterion. The next unresolved question is whether that output remains stable as recovery demand increases."
+            open_q="RECOVERY_UNDER_LOAD"
+        elif not dur_closed:
+            nxt="Test whether the established repeated power survives meaningful prior aerobic load."
+            story=f"Fresh 5-minute ceiling{f' {fw:.0f} W' if fw else ''} and simple repeatability are established. Recovery-under-load is no longer the main gap; the next unresolved question is durability under prior work."
+            open_q="DURABILITY"
+        elif not race_closed:
+            nxt="Transfer the established capacity into a race-like mixed-load context."
+            story=f"Fresh capacity, repeatability and simpler fatigue/recovery questions are supported. The next unresolved question is race-context transfer, not another proof of basic repeatability."
+            open_q="RACE_TRANSFER"
+        else:
+            nxt="Preserve the established capacities until the roadmap opens a distinct validation or extension question."
+            story=f"Fresh 5-minute ceiling{f' {fw:.0f} W' if fw else ''} and the current active-block progression questions are already supported. Do not reopen them without new contradictory evidence or a separate revalidation trigger."
+            open_q="NO_OPEN_REPEATABILITY_QUESTION"
     elif goal=="POWER_5" and fresh:
-        current="Repeatability below the fresh ceiling · aerobic floor protected";nxt="Build repeatability with varied 3–6 minute structures; the fresh benchmark is a ceiling reference, not a target for every rep.";story=f"Fresh 5-minute ceiling{f' {fw:.0f} W' if fw else ''} is established. The next question is repeatability below that ceiling, not another immediate maximal retest.";open_q="BUILD_REPEATABILITY"
+        rep_state=str(rep_q.get("state") or "BUILDING").upper()
+        current="Repeatability evidence building · aerobic floor protected"
+        if rep_state=="SUPPORTED":
+            nxt="Use one independent repeated-effort exposure to determine whether repeatability is consolidated; do not keep demanding the same proof after the exit criterion is met."
+            story=f"Fresh 5-minute ceiling{f' {fw:.0f} W' if fw else ''} is established and one strong repeatability exposure is already on record. Repeatability is supported but not yet consolidated under the active-block exit criterion."
+        else:
+            nxt="Build repeatability with a purposeful 3–6 minute structure below the fresh ceiling."
+            story=f"Fresh 5-minute ceiling{f' {fw:.0f} W' if fw else ''} is established. Repeatability remains an unresolved active-block question rather than another maximal-ceiling test."
+        open_q="BUILD_REPEATABILITY"
     else:
         current=str((road.get("stage") or {}).get("label") or td.get("mesocycle_focus") or "Current performance block");nxt=str(td.get("microcycle_direction") or road.get("next_microcycle") or "Progress the block while preserving aerobic support.");story=str(road.get("north_star") or nxt);open_q="STAGE_PURPOSE"
     if end_label:story+=f" Target checkpoint window: by {end_label}, unless race or recovery changes the plan."
-    return {"fresh_ceiling_recent":fresh,"fresh_ceiling_watts":round(fw,1) if fw is not None else None,"repeatability_strong":strong,"open_question":open_q,"current_focus":current,"next_adaptation":nxt,"story":story}
+    return {"fresh_ceiling_recent":fresh,"fresh_ceiling_watts":round(fw,1) if fw is not None else None,"repeatability_strong":strong,"repeatability_evidence_sessions":int((shared_feat or {}).get("repeatability_sessions") or 0) if isinstance(shared_feat,dict) else None,"repeatability_strong_sessions":int((shared_feat or {}).get("repeatability_strong_sessions") or 0) if isinstance(shared_feat,dict) else None,"evidence_ledger_schema":(evidence_ledger or {}).get("schema") if isinstance(evidence_ledger,dict) else None,"question_state_schema":(question_state or {}).get("schema") if isinstance(question_state,dict) else None,"open_question":open_q,"current_focus":current,"next_adaptation":nxt,"story":story}
 # R72 · scientific coaching memory + evidence-dose contract. The evidence summaries are intentionally compact:
 # they guide which physiological question to ask next; they are not athlete-facing claims of causation.
 _V503_SCIENCE_EVIDENCE = {
@@ -17290,7 +18674,9 @@ _V503_GOAL_GRAPH = {
         },
     },
 }
-def _v503_block_science_features(blocks):
+def _v503_block_science_features(blocks, evidence_ledger=None):
+    shared=(evidence_ledger or {}).get("science_features") if isinstance(evidence_ledger,dict) else None
+    if isinstance(shared,dict):return dict(shared)
     out={"quality_sessions":0,"repeatability_sessions":0,"repeatability_strong_sessions":0,"active_load_recovery":False,"preloaded_quality":False,"long_session":False,"late_quality":False,"race_transfer":False,"over_under":False,"variable_load":False,"recovery_under_load_exposures":0,"recovery_under_load_successes":0,"max_recovery_ratio":None,"max_successful_recovery_ratio":None,"latest_repeatability":None}
     for b in blocks or []:
         if not isinstance(b,dict): continue
@@ -17340,20 +18726,27 @@ def _v504_scientific_dose_contract(goal, dimension, features):
     rec_lo=r5(ftp*lo);rec_hi=r5(ftp*hi);rec_hi=max(rec_hi,rec_lo+5)
     return {"available":True,"schema":"V4.8.74-R72-1","stage":stage,"dominant_lever":"RECOVERY_INTENSITY_ONLY","reference":{"date":ref.get("date"),"reps":int(round(reps)),"interval_secs":round(work_s),"recovery_secs":round(rec_s),"work_avg_watts":round(work,1),"recovery_avg_watts":round(rec,1),"ftp":round(ftp,1),"recovery_ratio":round(base,3)},"prescription":{"reps":int(round(reps)),"interval_secs":round(work_s),"recovery_secs":round(rec_s),"work_watts_low":work_lo,"work_watts_high":work_hi,"recovery_watts_low":rec_lo,"recovery_watts_high":rec_hi,"recovery_ratio_low":round(rec_lo/ftp,3),"recovery_ratio_high":round(rec_hi/ftp,3)},"rule":"Change one dominant variable at a time. For a novel recovery-under-load exposure, preserve work-bout duration, rep count and recovery duration; raise only recovery load from the athlete's proven baseline. Do not jump directly to Z3/Z4. If output fades materially, step back rather than adding another lever.","evidence_basis":"Athlete-specific successful repeatability + trained-cyclist 5x3 recovery-intensity evidence; exact watts are a conservative product dosing heuristic, not a universal physiological threshold."}
 
-def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None, previous_blocks=None, performance_narrative=None, performance_evidence=None, aerobic_metabolic_range=None):
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None, previous_blocks=None, performance_narrative=None, performance_evidence=None, aerobic_metabolic_range=None, evidence_ledger=None, question_state=None):
     goal=str(goal_key or "ENDURANCE_BASE").upper(); graph=_V503_GOAL_GRAPH.get(goal) or _V503_GOAL_GRAPH["ENDURANCE_BASE"]
     road=roadmap or {}; stage_idx=int(road.get("stage_index") or 0); test=road.get("test") or {}; role=str(test.get("checkpoint_role") or "PRIMARY").upper(); tstate=str(test.get("state") or "").upper()
-    feat=_v503_block_science_features(previous_blocks); narr=performance_narrative or {}; prog=session_progression or {}; pe=performance_evidence or {}; led=ledger or {}; sl=led.get("stimulus_ledger") or {}; dose=led.get("dose_context") or {}; cur=dose.get("current") or {}; prev=dose.get("previous_comparable") or {}
+    feat=_v503_block_science_features(previous_blocks,evidence_ledger=evidence_ledger); narr=performance_narrative or {}; prog=session_progression or {}; pe=performance_evidence or {}; led=ledger or {}; sl=led.get("stimulus_ledger") or {}; dose=led.get("dose_context") or {}; cur=dose.get("current") or {}; prev=dose.get("previous_comparable") or {}
     badge_repeat=any(str(x.get("type") or "").upper() in {"REPEATABILITY","LATE_REP","REPEATABLE_POWER"} for x in (prog.get("badges") or []) if isinstance(x,dict))
-    repeat_strong=bool(narr.get("repeatability_strong") or badge_repeat or feat["repeatability_strong_sessions"]>=2)
+    qs_dims=(question_state or {}).get("dimensions") if isinstance(question_state,dict) else {}
+    rep_q=(qs_dims or {}).get("REPEATABILITY") or {};fresh_q=(qs_dims or {}).get("FRESH_CAPACITY") or {}
+    repeat_strong=bool(rep_q.get("exit_satisfied")) if rep_q else bool(narr.get("repeatability_strong") or badge_repeat or feat["repeatability_strong_sessions"]>=2)
     formal=pe.get("latest_formal_validation") if isinstance(pe.get("latest_formal_validation"),dict) else None
-    fresh_anchor=bool(narr.get("fresh_ceiling_recent") or formal)
+    fresh_anchor=bool(fresh_q.get("exit_satisfied")) if fresh_q else bool(narr.get("fresh_ceiling_recent") or formal)
     validation_due=tstate in {"TEST SOON","WINDOW OPEN"}; extension_due=bool(validation_due and role=="EXTENSION")
     hi=_rhythm_num(cur.get("high_minutes")); phi=_rhythm_num(prev.get("high_minutes")); mod=_rhythm_num(cur.get("moderate_minutes")); pmod=_rhythm_num(prev.get("moderate_minutes"))
     high_progressed=bool(hi is not None and phi is not None and hi>=phi+max(3.0,0.10*max(phi,1.0)))
     moderate_progressed=bool(mod is not None and pmod is not None and mod>=pmod+max(5.0,0.10*max(pmod,1.0)))
     scores={}; reasons={}
     def add(dim,score,reason):
+        # R82: an adaptation question whose explicit exit criterion is satisfied
+        # cannot be silently reopened by the legacy score ranking. Validation and
+        # extension are separate roadmap actions and remain eligible when due.
+        if dim not in {"REVALIDATION","EXTENSION_OR_REVALIDATION"} and _v82_question_exit_satisfied(question_state,dim):
+            return
         if dim in (graph.get("architectures") or {}):
             if dim not in scores or score>scores[dim]: scores[dim]=float(score); reasons[dim]=reason
     # Checkpoints outrank more training when the block has explicitly earned them.
@@ -17389,7 +18782,11 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
         if validation_due: add("REVALIDATION",97,"Refresh the endurance/durability benchmark instead of adding gratuitous intensity.")
     # Avoid pretending a product threshold is a scientific law: scores rank evidence gaps; they do not certify physiology.
     if not scores:
-        dim=(graph.get("sequence") or ("FRESH_CAPACITY",))[0]; scores[dim]=50.0; reasons[dim]="Insufficient evidence to rank a more specific adaptation question."
+        if isinstance(question_state,dict) and not (question_state.get("open_dimensions") or []):
+            scores["NONE"]=0.0; reasons["NONE"]="No unresolved active-block adaptation question remains; preserve established capacities until a distinct revalidation, extension or new-goal trigger opens."
+        else:
+            open_seq=[d for d in (graph.get("sequence") or ()) if not _v82_question_exit_satisfied(question_state,d)]
+            dim=(open_seq or list(graph.get("sequence") or ("FRESH_CAPACITY",)))[0]; scores[dim]=50.0; reasons[dim]="Insufficient evidence to rank a more specific unresolved adaptation question."
     ranked=sorted(scores,key=lambda k:(-scores[k],(graph.get("sequence") or ()).index(k) if k in (graph.get("sequence") or ()) else 999))
     dim=ranked[0]; arch=list((graph.get("architectures") or {}).get(dim) or ())
     evidence=["TID_ELITE","CYCLIST_TRAINING_DISTRIBUTION","LONG_TERM_DEVELOPMENT"]
@@ -17403,17 +18800,19 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
     evidence=list(dict.fromkeys(evidence))[:6]
     ranked_questions=[{"dimension":k,"score":round(scores[k],1),"reason":reasons.get(k),"architectures":list((graph.get("architectures") or {}).get(k) or ())} for k in ranked[:3]]
     margin=(scores[ranked[0]]-scores[ranked[1]]) if len(ranked)>1 else 30
-    confidence="HIGH" if scores[dim]>=85 and margin>=12 else ("MEDIUM" if scores[dim]>=70 else "LOW")
+    confidence="HIGH" if dim=="NONE" else ("HIGH" if scores[dim]>=85 and margin>=12 else ("MEDIUM" if scores[dim]>=70 else "LOW"))
     dose_contract=_v504_scientific_dose_contract(goal,dim,feat)
-    return {"schema":"V4.8.74-R72-1","available":True,"goal_key":goal,"primary_anchor":graph.get("anchor"),"dimension":dim,"open_question":reasons.get(dim),"candidate_architectures":arch,"ranked_questions":ranked_questions,"confidence":confidence,"evidence_ids":evidence,"evidence":[{"id":k,**_V503_SCIENCE_EVIDENCE[k]} for k in evidence if k in _V503_SCIENCE_EVIDENCE],"dose_contract":dose_contract,"signals":{"fresh_anchor":fresh_anchor,"repeatability_strong":repeat_strong,"quality_sessions":feat["quality_sessions"],"active_load_recovery_seen":feat["active_load_recovery"],"recovery_under_load_exposures":feat.get("recovery_under_load_exposures"),"recovery_under_load_successes":feat.get("recovery_under_load_successes"),"max_successful_recovery_ratio":feat.get("max_successful_recovery_ratio"),"preloaded_quality_seen":feat["preloaded_quality"],"long_session_seen":feat["long_session"],"race_transfer_seen":feat["race_transfer"],"high_dose_progressed":high_progressed,"moderate_dose_progressed":moderate_progressed,"validation_due":validation_due,"checkpoint_role":role},"guardrail":"Specificity first: science selects the adaptation question; athlete data doses the progression. Change one dominant stress variable at a time when an architecture is novel. Recovery/spacing decides executability, not adaptation purpose. Product score thresholds and dose ramps are conservative heuristics, not physiological laws."}
+    return {"schema":"V4.8.74-R72-1","available":True,"goal_key":goal,"primary_anchor":graph.get("anchor"),"dimension":dim,"open_question":reasons.get(dim),"candidate_architectures":arch,"ranked_questions":ranked_questions,"confidence":confidence,"evidence_ids":evidence,"evidence":[{"id":k,**_V503_SCIENCE_EVIDENCE[k]} for k in evidence if k in _V503_SCIENCE_EVIDENCE],"dose_contract":dose_contract,"signals":{"fresh_anchor":fresh_anchor,"repeatability_strong":repeat_strong,"quality_sessions":feat["quality_sessions"],"repeatability_sessions":feat.get("repeatability_sessions"),"repeatability_strong_sessions":feat.get("repeatability_strong_sessions"),"repeatability_efforts":((evidence_ledger or {}).get("counts") or {}).get("repeatability_efforts") if isinstance(evidence_ledger,dict) else None,"evidence_ledger_schema":(evidence_ledger or {}).get("schema") if isinstance(evidence_ledger,dict) else None,"question_state_schema":(question_state or {}).get("schema") if isinstance(question_state,dict) else None,"closed_questions":list((question_state or {}).get("closed_dimensions") or []) if isinstance(question_state,dict) else [],"evidence_scope":(evidence_ledger or {}).get("scope") if isinstance(evidence_ledger,dict) else None,"active_load_recovery_seen":feat["active_load_recovery"],"recovery_under_load_exposures":feat.get("recovery_under_load_exposures"),"recovery_under_load_successes":feat.get("recovery_under_load_successes"),"max_successful_recovery_ratio":feat.get("max_successful_recovery_ratio"),"preloaded_quality_seen":feat["preloaded_quality"],"long_session_seen":feat["long_session"],"race_transfer_seen":feat["race_transfer"],"high_dose_progressed":high_progressed,"moderate_dose_progressed":moderate_progressed,"validation_due":validation_due,"checkpoint_role":role},"guardrail":"Specificity first: science selects the adaptation question; athlete data doses the progression. Change one dominant stress variable at a time when an architecture is novel. Recovery/spacing decides executability, not adaptation purpose. Product score thresholds and dose ramps are conservative heuristics, not physiological laws."}
 def _v503_scientific_progression_text(x):
     if not (x or {}).get("available"): return "SCIENTIFIC COACH MEMORY: unavailable."
+    if str((x or {}).get("dimension") or "").upper()=="NONE":
+        return "SCIENTIFIC COACH MEMORY: no unresolved active-block adaptation question remains. Preserve established capacities until a distinct revalidation, extension, new-goal or contradictory-evidence trigger opens a new question; do not recycle a closed question simply to create another hard workout."
     ev="; ".join(f"{e.get('id')} PMID {e.get('pmid')}" for e in (x.get("evidence") or [])); arch="; ".join(x.get("candidate_architectures") or []) or "no specific architecture"
     alt="; ".join(f"{r.get('dimension')} {r.get('score'):g}" for r in (x.get("ranked_questions") or [])[1:3]) or "none"; dc=(x.get("dose_contract") or {});dose_line=""
     if dc.get("available"):
         p=dc.get("prescription") or {};r=dc.get("reference") or {};unit=(f"{p.get('interval_secs')/60:g} min" if _rhythm_num(p.get("interval_secs")) and p.get("interval_secs")>=60 else f"{p.get('interval_secs')} s")
         dose_line=f"\n- Dose contract: {dc.get('stage')} · preserve {p.get('reps')}×{unit} and {p.get('recovery_secs')/60:g}-min recovery duration; work {p.get('work_watts_low')}–{p.get('work_watts_high')} W; recovery {p.get('recovery_watts_low')}–{p.get('recovery_watts_high')} W versus observed {r.get('recovery_avg_watts')} W. Dominant lever: {dc.get('dominant_lever')}."
-    return (f"SCIENTIFIC COACH MEMORY (peer-reviewed principles + athlete-data gap ranking):\n- Primary anchor: {x.get('primary_anchor')} ({x.get('goal_key')}).\n- Highest-value open question: {x.get('dimension')} · {x.get('open_question')} Confidence {x.get('confidence')}.\n- Candidate session architectures: {arch}.{dose_line}\n- Next-best unanswered questions: {alt}.\n- Evidence map: {ev}.\n- Rule: {x.get('guardrail')} Do not expose internal evidence ids, scores or state labels to the athlete; explain only the practical training reason when useful.")
+    return (f"SCIENTIFIC COACH MEMORY (advisory evidence ranking; Nova Decision owns the final coaching purpose):\n- Primary anchor: {x.get('primary_anchor')} ({x.get('goal_key')}).\n- Evidence-ranked eligible question: {x.get('dimension')} · {x.get('open_question')} Confidence {x.get('confidence')}.\n- Candidate session architectures: {arch}.{dose_line}\n- Next-best unanswered questions: {alt}.\n- Evidence map: {ev}.\n- Rule: {x.get('guardrail')} This layer cannot override the canonical NOVA DECISION. Do not expose internal evidence ids, scores or state labels to the athlete; explain only the practical training reason when useful.")
 def _v4930_ai_narrative_text(x):
     x=x or {}
     if not x:return "PERFORMANCE FLOW: unavailable."
@@ -17764,7 +19163,7 @@ def _v4880_report_substance_guard(parsed, completed_quality_review=None, adaptiv
         "season_outlook_sentences": len(_v4844_sentence_list(season_outlook)),
     }
     return parsed
-def _v4884_native_wbal_summary(detail):
+def _v4884_native_wbal_summary(detail, activity_truth=None):
     detail = detail or {}
     intervals = detail.get("icu_intervals") or []
     w_prime = _num(detail.get("icu_w_prime"))
@@ -17814,6 +19213,8 @@ def _v4884_native_wbal_summary(detail):
         "w_prime_kj": round(w_prime / 1000.0, 1) if w_prime is not None else None,
         "interval_count": len(rows),
         "work_interval_count": len(work_rows),
+        "canonical_repeated_work_count": (activity_truth or {}).get("repeated_work_count"),
+        "canonical_structure_source": (activity_truth or {}).get("source"),
         "recovery_interval_count": len(recovery_rows),
         "min_wbal_j": min_j,
         "min_wbal_kj": round(min_j / 1000.0, 2) if min_j is not None else None,
@@ -18037,11 +19438,19 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
         detail = details.get(str(summary.get("id"))) or summary
         name = detail.get("name") or summary.get("name") or "Activity"
         is_heat = _is_heat_name(name)
-        intervals = detail.get("icu_intervals") or []
-        lap_seq = _v4879_lap_work_sequence(detail)
-        analysis_intervals = (lap_seq or {}).get("sequence") or intervals
-        repeatability = _v4879_repeatability_stats(analysis_intervals,(lap_seq or {}).get("source"))
-        native_wbal = _v4884_native_wbal_summary(detail)
+        interval_truth = _v79_activity_interval_truth(detail)
+        analysis_intervals = interval_truth.get("sequence") or []
+        repeatability = _v4879_repeatability_stats(analysis_intervals, interval_truth.get("source"))
+        truth_reps = interval_truth.get("repeated_work_count")
+        repeatability_conflict = bool(truth_reps and repeatability and int(repeatability.get("reps") or 0) != int(truth_reps))
+        if repeatability_conflict:
+            interval_truth = {**interval_truth, "status": "CONFLICT", "confidence": "NONE", "downstream_conflict": "REPEATABILITY_REP_COUNT"}
+            repeatability = None
+        else:
+            interval_truth = {**interval_truth, "downstream_conflict": None}
+        native_wbal = _v4884_native_wbal_summary(detail, interval_truth)
+        analysis_detail = dict(detail)
+        analysis_detail["icu_intervals"] = analysis_intervals
         work = []
         for it in analysis_intervals:
             if str(it.get("type") or "WORK").upper() != "WORK":
@@ -18067,8 +19476,8 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
         pz = _zone_secs(detail.get("icu_zone_times") or summary.get("icu_zone_times"))
         hz = _zone_secs(detail.get("icu_hr_zone_times") or summary.get("icu_hr_zone_times"))
         dec = _num(detail.get("decoupling") if detail.get("decoupling") is not None else summary.get("decoupling"))
-        family = classify_training_family(detail)
-        quality_truth = _v4895_activity_quality_truth(detail, family)
+        family = classify_training_family(analysis_detail)
+        quality_truth = _v4895_activity_quality_truth(analysis_detail, family)
         avg_w = _num(detail.get("average_watts") or summary.get("average_watts"))
         avg_hr = _num(detail.get("average_heartrate") or summary.get("average_heartrate"))
         ftp = detail.get("icu_ftp") or summary.get("icu_ftp")
@@ -18086,6 +19495,7 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
         blocks.append({
             "activity_id": str(detail.get("id") or summary.get("id") or "") or None,
             "date": dt.date().isoformat(), "time": dt.strftime("%I:%M %p"), "name": name,
+            "garmin_vo2_contract": _v80_garmin_vo2_contract(detail,"ACTIVITY_DETAIL",dt.date().isoformat()),
             "garmin_vo2": _garmin_activity_vo2_value(detail),
             "heat": is_heat, "family": family,
             "quality_relevant": bool(quality_truth.get("quality_relevant")), "quality_basis": quality_truth.get("basis"),
@@ -18097,7 +19507,9 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
             "ftp": ftp, "power_zones": pz, "hr_zones": hz,
             "power_zone_summary": pz_text, "hr_zone_summary": hz_text,
             "intervals": work, "work_interval_evidence": work_interval_evidence,
-            "repeatability": repeatability, "interval_structure_source": (lap_seq or {}).get("source") or "ICU_INTERVALS", "wbal": native_wbal, "metabolic_profile": _v4894_session_metabolic_profile(detail, native_wbal), "consideration": consideration,
+            "repeatability": repeatability, "interval_structure_source": interval_truth.get("source") or "UNRESOLVED",
+            "activity_truth": _v79_activity_truth_summary(interval_truth),
+            "wbal": native_wbal, "metabolic_profile": _v4894_session_metabolic_profile(detail, native_wbal), "consideration": consideration,
         })
     return blocks
 def _v4884_execution_label(value, kind):
@@ -18209,7 +19621,10 @@ def build_athlete_execution_model(daily_logs, subjective_activity_context, train
             "activity_id": b.get("activity_id"), "date": b.get("date"), "time": b.get("time"), "name": b.get("name"), "family": b.get("family"),
             "w_prime_kj": wb.get("w_prime_kj"), "min_wbal_kj": wb.get("min_wbal_kj"),
             "min_wbal_pct": wb.get("min_wbal_pct"), "max_depletion_pct": wb.get("max_depletion_pct"),
-            "work_interval_count": wb.get("work_interval_count"), "recovery_interval_count": wb.get("recovery_interval_count"),
+            "work_interval_count": wb.get("canonical_repeated_work_count") or wb.get("work_interval_count"),
+            "native_work_interval_count": wb.get("work_interval_count"),
+            "interval_structure_source": wb.get("canonical_structure_source"),
+            "recovery_interval_count": wb.get("recovery_interval_count"),
             "median_recovery_end_pct": wb.get("median_recovery_end_pct"), "median_recovery_gain_pct": wb.get("median_recovery_gain_pct"),
             "min_work_end_pct": wb.get("min_work_end_pct"), "source": wb.get("source"),
         }
@@ -20488,8 +21903,11 @@ def normalize_next_sessions(raw_sessions, clock, training_definitions=None, ftp_
             })
             coherence_reasons.append("DETERMINISTIC_VALIDATION_CONTRACT_APPLIED")
         if stimulus_architecture.get("allowed") is False:
-            scientific_repair=_v503_scientific_hard_repair(microcycle_ledger,adaptive_roadmap,power_model,ftp_anchor=ftp_anchor) if stimulus_architecture.get("state") in {"SAME_MICROCYCLE_STRUCTURE_REPEAT","REPEATED_DOMAIN_WITHOUT_MATERIAL_PROGRESSION","SCIENTIFIC_DOSE_CONTRACT_VIOLATION"} else None
-            repair=scientific_repair or (_v4931_repair_hard(microcycle_ledger,adaptive_roadmap,power_model) if stimulus_architecture.get("state")=="SAME_MICROCYCLE_STRUCTURE_REPEAT" else None)
+            _arch_state=stimulus_architecture.get("state")
+            _decision_dim=str((((adaptive_roadmap or {}).get("nova_decision") or {}).get("dimension") or "")).upper()
+            scientific_repair=_v503_scientific_hard_repair(microcycle_ledger,adaptive_roadmap,power_model,ftp_anchor=ftp_anchor) if _arch_state in {"SAME_MICROCYCLE_STRUCTURE_REPEAT","REPEATED_DOMAIN_WITHOUT_MATERIAL_PROGRESSION","SCIENTIFIC_DOSE_CONTRACT_VIOLATION","NOVA_DECISION_MISMATCH"} else None
+            repeatability_repair=(_v4931_repair_hard(microcycle_ledger,adaptive_roadmap,power_model) if (_arch_state=="SAME_MICROCYCLE_STRUCTURE_REPEAT" or (_arch_state=="NOVA_DECISION_MISMATCH" and _decision_dim=="REPEATABILITY")) else None)
+            repair=scientific_repair or repeatability_repair
             if repair:
                 title,intensity,main_set,why,stimulus_architecture=repair;cls=str((stimulus_architecture or {}).get("intensity_class") or "vo2").lower();quality_relevance="MEANINGFUL";hard_spacing_relevant=True
                 coherence_reasons.append("SCIENTIFIC_PROGRESSION_REPAIRED_HARD_INTENT" if scientific_repair else "QUALITY_DIVERSITY_REPAIRED_HARD_INTENT");coherence=_v4827_session_coherence(title,intensity,main_set,why,ftp_anchor=ftp_anchor,training_definitions=training_definitions);prescribed_override=(coherence.get("prescribed_power_low"),coherence.get("prescribed_power_high"));power_band_override=coherence.get("power_band")
@@ -20699,7 +22117,9 @@ def normalize_next_sessions(raw_sessions, clock, training_definitions=None, ftp_
             "execution_terrain_context": (execution_profile.get("terrain") or {}).get("value"),
             "execution_terrain_confidence": (execution_profile.get("terrain") or {}).get("confidence"),
             "native_wbal_context_available": bool(((execution_model or {}).get("native_wbal") or {}).get("available")),
-            "session_envelope_source": "TRAINING_RHYTHM" if "LEARNED_SESSION_ENVELOPE_APPLIED" in coherence_reasons else ("OWNER_CONTRACT" if (coaching_contract or {}).get("active") else ("AI_WITHIN_LEARNED_RANGE" if _v4895_rhythm_duration_reliable(training_rhythm) else "AI_PROVISIONAL_NO_LEARNED_RANGE")),
+            "session_envelope_source": "TRAINING_RHYTHM" if "LEARNED_SESSION_ENVELOPE_APPLIED" in coherence_reasons else ("OWNER_CONTRACT" if (coaching_contract or {}).get("active") else (("NOVA_WITHIN_LEARNED_RANGE" if _v4895_rhythm_duration_reliable(training_rhythm) else "NOVA_PROVISIONAL_NO_LEARNED_RANGE") if raw.get("_tl_nova_deterministic") else ("AI_WITHIN_LEARNED_RANGE" if _v4895_rhythm_duration_reliable(training_rhythm) else "AI_PROVISIONAL_NO_LEARNED_RANGE"))),
+            "nova_prescription_authority": bool(raw.get("_tl_nova_deterministic")),
+            "nova_prescription_dimension": raw.get("_tl_nova_dimension"),
             "secondary_stimulus_state": "REQUIRES_EXPLICIT_PURPOSE" if stimulus_architecture.get("state") == "VALIDATION_REPLACES_MORE_TRAINING" else "NOT_APPLICABLE",
             "session_composition": session_composition,
             "aerobic_fill_state": "PLANNED_LOW_Z2" if session_composition and (session_composition.get("aerobic_fill_min_high") or 0) >= 5 else ("NOT_REQUIRED" if session_composition else "NOT_APPLICABLE"),
@@ -20714,6 +22134,36 @@ def normalize_next_sessions(raw_sessions, clock, training_definitions=None, ftp_
             dur_min = _parse_duration_minutes(duration_display) or slot.get("duration_hint_min") or 0
             previous_hard_end = slot_dt + timedelta(minutes=max(0, float(dur_min or 0)))
     return normalized
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, microcycle_ledger=None, coaching_contract=None, adaptive_roadmap=None, strength_pattern=None, training_rhythm=None, execution_model=None):
+    """Compile R84 raw Nova mechanics through the same deterministic session guards used by Live."""
+    p=dict(prescription or {})
+    raw=list(p.get("raw_sessions") or [])
+    sessions=normalize_next_sessions(
+        raw, coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+        recent_activities=recent_activities, undefined_training_intent=undefined_training_intent, power_model=power_model,
+        microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
+        strength_pattern=strength_pattern, training_rhythm=training_rhythm, execution_model=execution_model,
+    )
+    sessions,reasons=_v4897_compile_sessions(sessions,adaptive_roadmap)
+    for sess in sessions:
+        if isinstance(sess,dict):
+            sess["nova_prescription_authority"]=True
+            sess["nova_prescription_dimension"]=p.get("dimension")
+    p["sessions"]=sessions
+    p["compile_reasons"]=list(reasons or [])
+    p["compiled"]=True
+    p["hard_session_count"]=sum(1 for x in sessions if isinstance(x,dict) and str(x.get("intensity_class") or "").lower() in {"tempo","threshold","vo2"})
+    return p
+
+def _v84_force_canonical_sessions(parsed, nova_prescription):
+    out=dict(parsed or {});p=nova_prescription or {}
+    sessions=[dict(x) for x in (p.get("sessions") or []) if isinstance(x,dict)]
+    if p.get("available"):
+        out["next_sessions"]=sessions
+        out["nova_prescription_enforced"]=True
+    return out
+
 def _nutrition_number(value):
     try:
         value = float(value)
@@ -22350,12 +23800,13 @@ def _v4897_semantic_compile_chat(answer, snapshot):
                 safe.append(sentence)
         return " ".join(_v4844_dedupe_sentences(canonical+safe[:3])).strip()
     return cleaned or "I can explain the stored Snapshot, but I do not have enough consistent evidence here to make that claim."
-def ask_ai_analysis(data_text, metrics, coach_clock, week_memory, planning_context=None, feeling_trend=None, metabolic_context=None, snapshot_question=None, science_context=None, subjective_activity_context=None, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, power_achievements=None, adaptive_roadmap=None, microcycle_ledger=None, coaching_contract=None, strength_pattern=None, completed_quality_review=None, training_rhythm=None, execution_model=None, session_progression=None, performance_narrative=None, data_text_profile=None, ai_runtime_override=None, usage_kind="SNAPSHOT", athlete_context_override=None):
+def ask_ai_analysis(data_text, metrics, coach_clock, week_memory, planning_context=None, feeling_trend=None, metabolic_context=None, snapshot_question=None, science_context=None, subjective_activity_context=None, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, power_achievements=None, adaptive_roadmap=None, microcycle_ledger=None, coaching_contract=None, strength_pattern=None, completed_quality_review=None, training_rhythm=None, execution_model=None, session_progression=None, performance_narrative=None, nova_prescription=None, data_text_profile=None, ai_runtime_override=None, usage_kind="SNAPSHOT", athlete_context_override=None):
     planning_context = planning_context or build_planning_context()
     feeling_trend = feeling_trend or compute_feeling_trend()
     metabolic_context = metabolic_context or {}
     power_achievements = power_achievements or {}
     adaptive_roadmap = adaptive_roadmap or {}
+    nova_prescription = nova_prescription or {}
     microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger or {}, adaptive_roadmap)
     slot_lines = "\n".join(
         f'{i+1}. {slot["label"]} | date {slot.get("date") or "not inferred"} | source {slot.get("source") or "n/a"} | timing confidence {slot.get("timing_confidence") or "n/a"} | restriction {slot.get("restriction", "NONE")}'
@@ -22380,6 +23831,7 @@ def ask_ai_analysis(data_text, metrics, coach_clock, week_memory, planning_conte
         "microcycle_ledger": _v4877_ai_microcycle_text(microcycle_ledger),
         "stimulus_ledger": _v4883_stimulus_ledger_text(microcycle_ledger),
         "coaching_contract": _v4877_ai_contract_text(coaching_contract),
+        "nova_prescription": _v84_nova_prescription_text(nova_prescription),
         "slot_lines": slot_lines or "(none)",
         "snapshot_question": (snapshot_question or "NONE"),
         "data_text": data_text,
@@ -22403,6 +23855,7 @@ def ask_ai_analysis(data_text, metrics, coach_clock, week_memory, planning_conte
         "{microcycle_ledger}\n\n"
         "{stimulus_ledger}\n\n"
         "{coaching_contract}\n\n"
+        "{nova_prescription}\n\n"
         "Current metrics: Fitness (CTL) {ctl} [{fitness_zone}], Fatigue (ATL) {atl} [{fatigue_zone}], Form (TSB) {tsb} [{form_zone}]. "
         "Health/restriction state is more important than those training-load metrics. If illness or injury explains reduced training, NEVER call the resulting freshness tapering, peaking, race readiness, or improved form. "
         "Instead prioritize health metrics, athlete-reported status and the active restriction. For HRV, resting HR, Sleep Score and SpO2 use personal manual/dynamic baselines plus recent trend, not population thresholds. "
@@ -22442,7 +23895,9 @@ def ask_ai_analysis(data_text, metrics, coach_clock, week_memory, planning_conte
         "EVENT RULE: an upcoming registered race changes the purpose and spacing of sessions as race day approaches. Respect days-to-race and do not schedule gratuitous fatigue close to the event. ATHLETE-PLANNED TRAINING RULE: use active Calendar TRAINING entries to shape the days around them and never silently switch their structured environment. "
         "RESTRICTION RULE: temporary restrictions have exact dates. A 12-day no-intensity block means no intentional intensity on any one of those dates, even when CTL/ATL/TSB would otherwise encourage it.\n\n"
         "STIMULUS ARCHITECTURE RULE: Training Direction sets adaptation priorities; it does not directly dictate interval duration. Before prescribing HARD work, identify the physiological stimulus and its role in the current block, compare it with completed quality this microcycle, and state what new adaptation/progression/validation purpose it adds. Recovery and spacing only decide whether a purposeful session can be executed; freshness alone never creates a reason for intensity. Do not return A/B or OR choices for HARD sessions: choose one coherent purpose. If the deterministic Stimulus Ledger says training is saturated, only a due validation/checkpoint may occupy a hard slot; otherwise prescribe absorption/easy aerobic work.\n\n"
-        "SCIENTIFIC COACH MEMORY RULE: when Python supplies SCIENTIFIC COACH MEMORY, treat its highest-value open adaptation question as the preferred next physiological problem for the athlete-selected goal. It is selected by ranking athlete-specific evidence gaps against peer-reviewed principles, not by blindly advancing a fixed sequence. Compose the workout from one of its candidate architectures when recovery/Calendar permits. If you prescribe a hard session, its actual main set must structurally instantiate the selected architecture; merely describing the intended adaptation while prescribing another generic repeat is invalid. Respect the ranked alternatives when the first choice is not executable. The athlete-selected goal remains the anchor throughout; do not expose evidence IDs, scores or internal states to the athlete.\n\n"
+        "NOVA DECISION AUTHORITY RULE: when Python supplies NOVA DECISION, it is the authoritative coaching purpose. Do not select a different physiological question, reopen a closed Question State, or create hard work when Nova says HOLD, MAINTAIN, RACE_PRIORITY or hard_allowed=false. SCIENTIFIC COACH MEMORY is supporting evidence/ranking only; it cannot override NOVA DECISION. Recovery, Calendar and spacing decide executability, not a substitute adaptation purpose.\n\n"
+        "NOVA PRESCRIPTION AUTHORITY RULE: Python has already authored the executable sessions in NOVA PRESCRIPTION. You are explanation-only. Do not invent, replace, optimize or restate different workout mechanics, watts, reps, work duration, recovery duration, preload or physiological purpose. Explain why the deterministic prescription fits the athlete and answer the athlete's question. The next_sessions objects are injected by Python after your response and are not yours to generate.\n\n"
+        "SCIENTIFIC COACH MEMORY RULE: use SCIENTIFIC COACH MEMORY to explain the evidence and candidate architecture behind the NOVA DECISION, not to make an independent coaching choice. Do not expose evidence IDs, scores or internal states to the athlete.\n\n"
         "WEEK-MEMORY RULE: use completed hard work plus the athlete-specific spacing evidence in the roadmap before repeating Threshold/TTE, VO2max, Over-Under or sprint/neuromuscular work. There is no universal 72-hour lockout: repeat quality when the learned rhythm, measured spacing, recovery and progression purpose support it, and hold it when they do not. "
         "HEAT-RESPONSE RULE: activities whose name contains HEAT are deliberate high thermal-strain sessions. Use PREVIOUS TRAINING BLOCKS to inspect their actual interval power, HR response, zones and decoupling instead of judging them from average watts alone. Use the Python PERSONAL HEAT RESPONSE association to contextualize next-morning HRV, but never claim causation and never dismiss low HRV when resting HR, sleep, subjective status or performance also worsen. "
         "SNAPSHOT QUESTION RULE: if SNAPSHOT ATHLETE QUESTION below is not NONE, answer that question explicitly inside the recommendation field during THIS SAME Snapshot AI call. Do not require the athlete to send it again in AI Coach Chat. Put the direct answer first, then continue with the normal coaching recommendation. If it is NONE, behave exactly as usual. "
@@ -22458,8 +23913,7 @@ def ask_ai_analysis(data_text, metrics, coach_clock, week_memory, planning_conte
         '- "fatigue_signals": string\n'
         '- "recommendation": string\n'
         '- "strength_suggestion": string or null; only a tiny optional non-prescriptive gym-support note when no established strength pattern exists and gym work could materially support the declared cycling goal. Never use it to create or replace a training opportunity.\n'
-        '- "science_sources": array of zero to 3 exact The Cyclist\'s Science chunk ids supplied above; include an id only if that excerpt materially influenced recommendation or a session rationale.\n'
-        '- "next_sessions": array of exactly {opportunity_count} object(s), SAME ORDER as VALID NEXT TRAINING OPPORTUNITIES. Each object contains "title", "duration", "intensity", "main_set", "why". Python owns whether/date/timing/source and will enforce restrictions. If timing is not inferred, do not invent a date/time in your prose.\n\n'
+        '- "science_sources": array of zero to 3 exact The Cyclist\'s Science chunk ids supplied above; include an id only if that excerpt materially influenced recommendation or a session rationale.\n\n'
         "VALID NEXT TRAINING OPPORTUNITIES:\n{slot_lines}\n\n"
         "SNAPSHOT ATHLETE QUESTION (from today's most recent Daily Note; answer in recommendation if present):\n{snapshot_question}\n\n"
         "DATA:\n{data_text}"
@@ -22505,16 +23959,20 @@ def ask_ai_analysis(data_text, metrics, coach_clock, week_memory, planning_conte
         "strength_suggestion": parsed.get("strength_suggestion"),
         "session_whys": [str((x or {}).get("why") or "") for x in (parsed.get("next_sessions") or []) if isinstance(x, dict)],
     }
-    parsed["next_sessions"] = _v4893_align_due_validation_to_window(
-        parsed.get("next_sessions"), coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger
-    )
-    parsed["next_sessions"] = normalize_next_sessions(
-        parsed.get("next_sessions"), coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
-        recent_activities=recent_activities, undefined_training_intent=undefined_training_intent, power_model=power_model,
-        microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap, strength_pattern=strength_pattern,
-        training_rhythm=training_rhythm, execution_model=execution_model,
-    )
-    parsed["next_sessions"], _v4897_session_compile_reasons = _v4897_compile_sessions(parsed.get("next_sessions"), adaptive_roadmap)
+    if nova_prescription.get("available") and nova_prescription.get("compiled"):
+        parsed = _v84_force_canonical_sessions(parsed, nova_prescription)
+        _v4897_session_compile_reasons = list(nova_prescription.get("compile_reasons") or [])
+    else:
+        parsed["next_sessions"] = _v4893_align_due_validation_to_window(
+            parsed.get("next_sessions"), coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger
+        )
+        parsed["next_sessions"] = normalize_next_sessions(
+            parsed.get("next_sessions"), coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+            recent_activities=recent_activities, undefined_training_intent=undefined_training_intent, power_model=power_model,
+            microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap, strength_pattern=strength_pattern,
+            training_rhythm=training_rhythm, execution_model=execution_model,
+        )
+        parsed["next_sessions"], _v4897_session_compile_reasons = _v4897_compile_sessions(parsed.get("next_sessions"), adaptive_roadmap)
     for sess in parsed["next_sessions"]:
         if isinstance(sess, dict):
             sess["why"] = _v4852_anchor_scope_language_guard(sess.get("why"), parsed["next_sessions"], microcycle_ledger)
@@ -22632,6 +24090,9 @@ def build_ai_coach_chat_context(snapshot):
         _chat_context_section("TRAINING STATE", training_state_text, snapshot.get("training_state")),
         _chat_context_section("TRAINING DIRECTION", training_direction_text, snapshot.get("training_direction")),
         _chat_context_section("ATHLETE PROGRESSION ROADMAP", adaptive_roadmap_text, snapshot.get("adaptive_roadmap")),
+        _chat_context_section("QUESTION STATE", _v82_question_state_text, snapshot.get("question_state")),
+        _chat_context_section("NOVA DECISION", _v83_nova_decision_text, snapshot.get("nova_decision")),
+        _chat_context_section("NOVA PRESCRIPTION", _v84_nova_prescription_text, snapshot.get("nova_prescription")),
         _chat_context_section("SCIENTIFIC COACH MEMORY", _v503_scientific_progression_text, snapshot.get("scientific_progression")),
         _chat_context_section("DERIVED POWER MILESTONES", power_achievement_text, snapshot.get("power_achievements")),
         _chat_context_section("MICROCYCLE LEDGER", microcycle_ledger_text, snapshot.get("microcycle_ledger")),
@@ -22712,7 +24173,8 @@ def ask_ai_coach_chat(question, snapshot, history=None, report_meta=None):
         "- Treat the stored Microcycle Ledger as strategic continuity memory: preserve hard-slot purpose and completed hard work, but do not treat prior exact reps/watts as immutable if athlete-owned definitions/history support a better prescription. Use that continuity silently unless the athlete explicitly asks about the planning system; do not say 'the Ledger says/committed'.\n"
         "- Never infer a one-hard/session cap from natural-language Training Direction wording. Follow the stored structured hard-policy. CONTEXTUAL and SECOND_HARD_CONDITIONAL leave additional quality to recovery, completed training, measured spacing, learned rhythm and the active progression stage. A completed anchor is evidence, not an automatic seven-day lockout. Keep internal policy names silent unless the athlete explicitly asks about planning mechanics.\n"
         "- Treat the Athlete Progression Roadmap as the medium-term direction: explain the current stage, the next quality decision window, and why/when a field or coach-supervised test would be useful. A test replaces a quality session; do not stack it on top.\n"
-        "- Treat the stored Scientific Coach Memory as the evidence-based adaptation map behind the Roadmap. Use its open question and candidate architectures when discussing what should come next, while keeping its internal labels/citations silent unless the athlete explicitly asks for the scientific basis.\n"
+        "- Treat NOVA DECISION and NOVA PRESCRIPTION in the stored Snapshot as authoritative for coaching purpose and executable workout mechanics. You may explain them and discuss hypothetical alternatives if the athlete explicitly asks, but never present a different workout as THE LAB's current prescription and never imply the stored plan was changed.\n"
+        "- Treat the stored Scientific Coach Memory as supporting evidence behind Nova's decision, not an independent decision-maker. Use it to explain why the current direction makes sense while keeping its internal labels/citations silent unless the athlete explicitly asks for the scientific basis.\n"
         "- Treat the stored Aerobic Metabolic Range as an estimated long-endurance power reference, not measured FatMax/crossover. Power anchors the range; HR is contextual, and separate road/TT ranges require explicit setup evidence.\n"
         "- Derived Power Milestones from explicit Intervals power curves are valid progress evidence even when Intervals did not emit a ribbon. Acknowledge meaningful progress without overclaiming physiology.\n"
         "- When proposing an executable workout, use exact interval durations and exact watt targets or narrow primary-work ranges (maximum 10 W); never answer with a broad 3–6 min or 310–350 W prescription. Respect any owner-only duration contract present in the stored Snapshot.\n"
@@ -22836,6 +24298,9 @@ def build_preview_data():
             demo_fuel['post_cho'] = '~70 g CHO'
     preview_previous_blocks = [{'date': (today - timedelta(days=1)).isoformat(), 'time': '05:40 PM', 'name': 'TTE 4x4', 'heat': False, 'family': 'TTE', 'duration_min': 60, 'load': 88, 'avg_watts': 222, 'avg_hr': 151, 'decoupling': 3.8, 'ftp': 290, 'power_zones': [2400, 600, 600], 'hr_zones': [1500, 1200, 900], 'power_zone_summary': 'LOW 40m · MOD 10m · HIGH 10m', 'hr_zone_summary': 'LOW 25m · MOD 20m · HIGH 15m', 'intervals': ['4m · 350 W · HR 164', '4m · 347 W · HR 169', '4m · 344 W · HR 172', '4m · 341 W · HR 174'], 'repeatability': {'reps': 4, 'interval_secs': 240, 'interval_label': '4 min', 'recovery_secs': 300, 'recovery_avg_watts': 135.0, 'recovery_label': '5min', 'watts': [350,347,344,341], 'avg_watts': 345.5, 'first_to_last_decay_pct': 2.6, 'cv_pct': 1.0, 'late_rep_retention_pct': 98.3}, 'wbal': {'available': True, 'max_depletion_pct': 47.0, 'median_recovery_end_pct': 94.0}, 'consideration': '⚡ Quality stimulus · include this in hard-session spacing before prescribing the next intensity block.'}, {'date': (today - timedelta(days=2)).isoformat(), 'time': '06:15 AM', 'name': 'Z2 Endurance', 'heat': False, 'family': 'Endurance / Z2', 'duration_min': 60, 'load': 40, 'avg_watts': 190, 'avg_hr': 132, 'decoupling': 2.1, 'ftp': 290, 'power_zones': [3420, 180, 0], 'hr_zones': [3300, 300, 0], 'power_zone_summary': 'LOW 57m · MOD 3m · HIGH 0m', 'hr_zone_summary': 'LOW 55m · MOD 5m · HIGH 0m', 'intervals': ['50m · 192 W · HR 132 · Z2'], 'repeatability': None, 'wbal': {'available': False}, 'consideration': '🫀 Aerobic context · use zone distribution and HR response, not average power alone, when judging recovery cost.'}, {'date': (today - timedelta(days=3)).isoformat(), 'time': '05:45 PM', 'name': 'HEAT · Progressive Z2', 'heat': True, 'family': 'Endurance / Z2', 'duration_min': 60, 'load': 52, 'avg_watts': 202, 'avg_hr': 147, 'decoupling': 6.8, 'ftp': 290, 'power_zones': [3300, 300, 0], 'hr_zones': [2400, 900, 300], 'power_zone_summary': 'LOW 55m · MOD 5m · HIGH 0m', 'hr_zone_summary': 'LOW 40m · MOD 15m · HIGH 5m', 'intervals': ['15m · 225 W · HR 140 · Z2', '15m · 235 W · HR 151 · Z2'], 'repeatability': None, 'wbal': {'available': False}, 'consideration': '🔥 HEAT signature · meaningful cardiovascular drift. Treat the mechanical load and thermal/autonomic strain as separate stressors.'}]
     for demo_block in preview_previous_blocks:
+        demo_block['quality_relevant'] = bool(demo_block.get('repeatability'))
+        demo_block['quality_basis'] = 'PREVIEW_REPEATABILITY' if demo_block.get('repeatability') else 'NOT_HARD'
+        demo_block['activity_truth'] = {'status': 'RESOLVED', 'source': 'PREVIEW_CANONICAL', 'confidence': 'HIGH'} if demo_block.get('repeatability') else {'status': 'UNRESOLVED', 'source': 'PREVIEW', 'confidence': 'NONE'}
         demo_activity = {'type': 'Ride', 'name': demo_block.get('name'), 'moving_time': int(demo_block.get('duration_min') or 0) * 60, 'average_watts': demo_block.get('avg_watts'), 'icu_ftp': demo_block.get('ftp'), 'icu_zone_times': [{'secs': int(x or 0)} for x in demo_block.get('power_zones') or []]}
         demo_block['metabolic_profile'] = _v4894_session_metabolic_profile(demo_activity, demo_block.get('wbal') if isinstance(demo_block.get('wbal'), dict) else None)
     preview_heat_pattern = {'available': True, 'confidence': 'HIGH', 'confidence_class': 'high', 'samples': 9, 'negative_count': 6, 'consistency_pct': 67, 'median_delta_pct': -7.2, 'control_delta_pct': -1.9, 'control_samples': 6, 'control_mode': 'LOAD-MATCHED', 'headline': 'Median next-morning HRV is -7.2% versus its preceding 7-day baseline after HEAT.', 'acute_headline': 'Median next-morning HRV is -7.2% versus its preceding 7-day baseline after HEAT.', 'comparator': 'Load-Matched non-HEAT comparator: -1.9% median next-morning HRV deviation (6 days).', 'specificity_state': 'HEAT-SPECIFIC HRV PENALTY', 'specificity_confidence': 'HIGH', 'specificity_class': 'high', 'specificity_gap_pp': -5.3, 'specificity_headline': 'Post-HEAT HRV is 5.3 pp more suppressed than the load-matched non-HEAT comparator.', 'adaptation_state': 'IMPROVING', 'adaptation_confidence': 'MODERATE', 'adaptation_class': 'improving', 'adaptation_headline': 'Recent HEAT exposures show lower physiological cost on 4 tracked signals versus the early part of this HEAT season.', 'adaptation_signals': [{'label': 'Next-morning HRV vs baseline', 'early': '-10.8%', 'recent': '-4.1%', 'change': '+6.7 pp', 'state': 'IMPROVING', 'state_class': 'improving'}, {'label': 'Next-morning resting HR', 'early': '+3.5 bpm', 'recent': '+1.0 bpm', 'change': '-2.5 bpm', 'state': 'IMPROVING', 'state_class': 'improving'}, {'label': 'HEAT decoupling', 'early': '7.4%', 'recent': '5.5%', 'change': '-1.9 pp', 'state': 'IMPROVING', 'state_class': 'improving'}, {'label': 'HR cost at similar HEAT power', 'early': '235 W / 151 bpm', 'recent': '238 W / 146 bpm', 'change': 'HR -5.0 bpm · power +1.3%', 'state': 'IMPROVING', 'state_class': 'improving'}], 'adaptation_samples': 9, 'adaptation_early_samples': 3, 'adaptation_recent_samples': 3, 'season_start': (today - timedelta(days=34)).isoformat(), 'season_end': (today - timedelta(days=1)).isoformat(), 'season_exposures': 10, 'season_definition': 'latest contiguous HEAT block; a >28-day gap starts a new thermal season', 'interpretation': 'A repeatable HEAT-specific autonomic cost is present in the current thermal season; adaptation is evaluated separately so a lower recent cost can emerge even when the acute effect remains real.', 'comparability_note': 'Early and recent HEAT protocol load/duration are broadly comparable, strengthening the longitudinal read.', 'method_note': 'Season-aware observational model only: without ambient/core temperature, sweat rate or plasma-volume measurements, THE LAB can identify tolerance patterns but cannot claim a measured heat-acclimation mechanism.', 'current_relevance': True, 'current_note': 'The latest below-baseline HRV was recorded the morning after a named HEAT exposure. Treat it as current thermal-load context and interpret it alongside resting HR, sleep, subjective status and performance.'}
@@ -22849,7 +24314,8 @@ def build_preview_data():
     preview_physiological_state = {'systems': [{'label': 'AUTONOMIC', 'icon': '❤️', 'status': 'BALANCED', 'status_class': 'green', 'reason': 'HRV and resting HR are both inside your established range.'}, {'label': 'RECOVERY', 'icon': '😴', 'status': 'NORMAL', 'status_class': 'green', 'reason': 'Sleep opportunity/quality and subjective context do not show a major recovery warning.'}, {'label': 'TRAINING LOAD', 'icon': '⚡', 'status': 'CONTROLLED', 'status_class': 'cyan', 'reason': 'Acute and chronic load are in a broadly controlled relationship for you.'}, {'label': 'AEROBIC', 'icon': '🫁', 'status': 'IMPROVING', 'status_class': 'green', 'reason': 'At comparable steady Z2, recent power per heartbeat is +2.6% above the prior baseline.'}, {'label': 'ENERGY', 'icon': '🍚', 'status': 'MODERATE', 'status_class': 'cyan', 'reason': 'Recent exercise creates meaningful but manageable glycogen/replenishment demand.'}], 'note': 'Training/recovery interpretation only · not a medical diagnosis. THE LAB keeps the systems separate instead of hiding them inside one opaque score.'}
     preview_power_model = {'available': True, 'equation': 'P = CP + W′ / t', 'weight_kg': 72.0, 'cp_wkg': 3.9, 'season_cp_wkg': 3.94, 'long_term_label': f'{today.year} YTD', 'recent': {'available': True, 'cp': 281, 'w_prime_kj': 19.4, 'r2': 0.991, 'mean_error_pct': 1.4, 'confidence': 'HIGH', 'confidence_class': 'high'}, 'season': {'available': True, 'cp': 284, 'w_prime_kj': 19.9, 'r2': 0.989, 'mean_error_pct': 1.6, 'confidence': 'HIGH', 'confidence_class': 'high'}, 'cp_gap_w': -3, 'cp_proximity_pct': 98.9, 'status': f'NEAR {today.year} YTD PEAK', 'status_class': 'green', 'explanation': f'The 42-day CP field model is 3 W below the {today.year} YTD model (98.9% proximity). This compares recent best-power capacity with the explicit year-to-date curve; it is not a readiness score.', 'curve_comparison': [{'label': '3min', 'recent': 354, 'season': 354}, {'label': '5min', 'recent': 330, 'season': 334}, {'label': '20min', 'recent': 290, 'season': 293}, {'label': '1h', 'recent': 255, 'season': 258}], 'disclaimer': 'Field estimate from Intervals.icu best-power curves; not a laboratory CP/W′ test.'}
     preview_vo2_trend = build_vo2max_trend_preview(today)
-    preview_race_repeatability = build_race_repeatability(preview_previous_blocks, _v491_session_progression(preview_previous_blocks))
+    preview_evidence_ledger = build_evidence_ledger(preview_previous_blocks, goal_key=preview_training_direction.get('primary_goal'), scope_start=preview_training_direction.get('started_on'))
+    preview_race_repeatability = build_race_repeatability(preview_previous_blocks, _v491_session_progression(preview_previous_blocks), evidence_ledger=preview_evidence_ledger)
     preview_performance_breakthrough = {'available': True, 'window_days': 7, 'headline': '2 Intervals power PBs · FTP +5 W', 'pb_count': 2, 'ftp_detected': True, 'ftp_achievement_count': 1, 'latest': {'activity_id': 'demo-race', 'activity_name': 'Priority Race', 'date': today.isoformat(), 'date_display': today.strftime('%d %b'), 'pb_count': 2, 'ftp_up_count': 1, 'rolling_ftp': 298, 'rolling_ftp_delta': 5, 'pm_ftp': 299, 'pm_ftp_secs': 1200, 'pm_ftp_duration': '20min', 'pm_ftp_watts': 312, 'activity_ftp': 293, 'achievements': [{'id': 'pb-1', 'type': 'BEST_POWER', 'label': 'Power PB', 'secs': 300, 'duration': '5min', 'watts': 352, 'value': None, 'message': 'New 5-minute power best'}, {'id': 'pb-2', 'type': 'BEST_POWER', 'label': 'Power PB', 'secs': 1200, 'duration': '20min', 'watts': 312, 'value': None, 'message': 'New 20-minute power best'}, {'id': 'ftp-1', 'type': 'FTP_UP', 'label': 'FTP increase', 'secs': 1200, 'duration': '20min', 'watts': 312, 'value': 298, 'message': 'Intervals estimated FTP increased'}]}, 'activities': [], 'method_note': 'Intervals-native achievements and FTP fields only · THE LAB does not invent a PB or independently raise FTP.'}
     preview_performance_breakthrough['activities'] = [preview_performance_breakthrough['latest']]
     preview_power_achievements = {'available': True, 'scope_label': f'{today.year} YTD', 'reference_start': date(today.year, 1, 1).isoformat(), 'reference_end': today.isoformat(), 'events': [{'type': 'YTD_BEST_POWER', 'icon': '🏆', 'duration': '3min', 'secs': 180, 'watts': 354, 'previous_watts': 348, 'delta_w': 6, 'delta_pct': 1.7, 'date': today.isoformat(), 'date_display': today.strftime('%d %b'), 'scope_label': f'{today.year} YTD BEST', 'reference_source': 'INTERVALS_YTD_PRIOR_DAY'}], 'all_current': [], 'method_note': 'THE LAB compares explicit Intervals.icu Jan-1→today best-power curves with Jan-1→previous-day curves. Derived milestone preview; no FTP is changed.'}
@@ -22858,8 +24324,29 @@ def build_preview_data():
     preview_performance_breakthrough = _v4873_reconcile_native_breakthrough(preview_performance_breakthrough, preview_power_achievements)
     preview_performance_evidence = {'schema': 'V4.8.74-R42-1', 'available': True, 'goal_key': 'POWER_20', 'effective_cycle_start': today.isoformat(), 'events': [{'id': 'preview-goal-pb', 'kind': 'PB', 'source': 'PREVIEW', 'date': today.isoformat(), 'secs': 1200, 'watts': 290, 'previous_watts': 284, 'delta_w': 6, 'tier': 2, 'tier_code': 'GOAL_ALIGNED_QUALITY_PB', 'goal_relevant': True, 'activity_linked': True, 'quality_linked': True, 'progression_signal': True, 'formal_validation': False}], 'current_cycle_events': [{'id': 'preview-goal-pb', 'kind': 'PB', 'date': today.isoformat(), 'secs': 1200, 'watts': 290, 'tier': 2, 'tier_code': 'GOAL_ALIGNED_QUALITY_PB', 'progression_signal': True}], 'strongest_current': {'id': 'preview-goal-pb', 'tier': 2, 'tier_code': 'GOAL_ALIGNED_QUALITY_PB', 'date': today.isoformat(), 'secs': 1200, 'watts': 290, 'progression_signal': True}, 'latest_formal_validation': {'date': (today - timedelta(days=1)).isoformat(), 'secs': 1200, 'watts': 290, 'outcome': 'VALIDATED_GAIN', 'formal_validation': True}, 'display_event': {'id': 'preview-goal-pb', 'tier': 2}, 'summary': 'Previous formal checkpoint · 20 min 290 W · new cycle from established level', 'progression_signal': True, 'goal_aligned_quality_signal': True, 'method_note': 'Preview synthetic evidence uses the same athlete-facing tier semantics as Live.'}
     preview_adaptive_roadmap = build_adaptive_roadmap(preview_training_direction, preview_rhythm, preview_prior_activities + sample_activities, coach_clock=clock, metrics={'race_readiness_zone': 'green'}, planning_context=preview_plan_context, power_achievements=preview_power_achievements, power_model=preview_power_model, ftp_anchor=None, training_state=preview_training_state, performance_evidence=preview_performance_evidence, now=now)
-    preview_scientific_progression = _v503_scientific_progression(preview_training_direction.get("primary_goal"), preview_adaptive_roadmap, preview_microcycle_ledger, _v491_session_progression(preview_previous_blocks), preview_previous_blocks, (preview_adaptive_roadmap.get("performance_narrative") or {}), preview_performance_evidence, preview_aerobic_metabolic_range)
+    preview_question_state = build_question_state(preview_training_direction.get("primary_goal"), preview_evidence_ledger, preview_performance_evidence, preview_adaptive_roadmap, preview_microcycle_ledger, preview_aerobic_metabolic_range, now=now)
+    preview_scientific_progression = _v503_scientific_progression(preview_training_direction.get("primary_goal"), preview_adaptive_roadmap, preview_microcycle_ledger, _v491_session_progression(preview_previous_blocks), preview_previous_blocks, (preview_adaptive_roadmap.get("performance_narrative") or {}), preview_performance_evidence, preview_aerobic_metabolic_range, evidence_ledger=preview_evidence_ledger, question_state=preview_question_state)
+    preview_nova_decision = build_nova_decision(preview_training_direction.get("primary_goal"), preview_question_state, preview_scientific_progression, preview_adaptive_roadmap, preview_training_state, preview_plan_context)
+    preview_adaptive_roadmap = _v83_apply_nova_decision_to_roadmap(preview_adaptive_roadmap, preview_nova_decision)
     preview_adaptive_roadmap["scientific_progression"] = preview_scientific_progression
+    preview_nova_prescription = build_nova_prescription(
+        preview_nova_decision, clock, adaptive_roadmap=preview_adaptive_roadmap, microcycle_ledger=preview_microcycle_ledger,
+        evidence_ledger=preview_evidence_ledger, power_model=preview_power_model, ftp_anchor=None, aerobic_metabolic_range=preview_aerobic_metabolic_range,
+    )
+    preview_nova_prescription = compile_nova_prescription(
+        preview_nova_prescription, clock, training_definitions={}, ftp_anchor=None, recent_activities=sample_activities,
+        undefined_training_intent=None, power_model=preview_power_model, microcycle_ledger=preview_microcycle_ledger,
+        coaching_contract={'active':False,'scope':'DEMO'}, adaptive_roadmap=preview_adaptive_roadmap,
+        strength_pattern=preview_strength_pattern, training_rhythm=preview_rhythm, execution_model=None,
+    )
+    preview_adaptive_roadmap["nova_prescription"]={k:v for k,v in preview_nova_prescription.items() if k not in {"raw_sessions","sessions"}}
+    preview_next_sessions = _v4940_apply_aerobic_metabolic_range([dict(x) for x in (preview_nova_prescription.get("sessions") or [])], preview_aerobic_metabolic_range)
+    preview_nova_prescription["sessions"] = [dict(x) for x in preview_next_sessions if isinstance(x,dict)]
+    preview_nova_prescription["finalized"] = True
+    preview_nutrition_plan = build_nutrition_plan(preview_next_sessions, preview_metabolic_context, now)
+    _preview_truth = _v4897_truth_packet(adaptive_roadmap=preview_adaptive_roadmap, microcycle_ledger=preview_microcycle_ledger, sessions=preview_next_sessions, power_achievements=preview_power_achievements)
+    _preview_reco, _preview_outlook = _v4897_canonical_training_copy(_preview_truth)
+    preview_recommendation = " ".join(_preview_reco).strip() or "Follow the deterministic Nova prescription shown below; no AI workout generation is used in Preview."
     preview_metrics_for_learning = {'latest_rhr': 48, 'latest_hrv': 68, 'latest_spo2': 97.0, 'sleep_quality': 2, 'personal_baselines': pb, 'adaptive_sleep': preview_adaptive_sleep}
     preview_wellness_learning = []
     for i in range(35):
@@ -22874,7 +24361,7 @@ def build_preview_data():
     preview_advanced_physiology = build_advanced_physiology_metrics(sample_activities, preview_wellness_learning, preview_metrics_for_learning, preview_training_state, preview_vo2_trend, feeling_trend={'latest': {'feeling': 7}, 'avg28': 6.9}, planning_context={'health_override': None}, now=now)
     preview_science = build_science_snapshot_context(training_state=preview_training_state, physiological_state=preview_physiological_state, adaptive_sleep=preview_adaptive_sleep, aerobic_efficiency=preview_aerobic_efficiency, metabolic_context=preview_metabolic_context, heat_pattern=preview_heat_pattern, planning_context={'health_override': None, 'blackout_dates': [], 'no_intensity_dates': [], 'race_by_date': {}, 'training_by_date': {}, 'next_race': None, 'next_training': None, 'active_today': [], 'upcoming_items': [], 'summary': 'Training as planned'})
     preview_science_used = preview_science[:1]
-    return {**energy, 'coach_clock': clock, 'training_rhythm': preview_rhythm, 'strength_pattern': preview_strength_pattern, 'subjective_activity_context': {'items': [], 'rule': 'preview'}, 'week_memory': week, 'previous_training_blocks': preview_previous_blocks, 'session_progression': _v491_session_progression(preview_previous_blocks), 'scientific_progression': preview_scientific_progression, 'heat_pattern': preview_heat_pattern, 'training_state': preview_training_state, 'training_direction': preview_training_direction, 'competitive_direction': _v491_competitive_direction(preview_training_direction.get('primary_goal'), preview_adaptive_roadmap, _v491_session_progression(preview_previous_blocks), preview_power_achievements, preview_power_model), 'adaptive_roadmap': preview_adaptive_roadmap, 'microcycle_ledger': preview_microcycle_ledger, 'coaching_contract': {'active': False, 'scope': 'DEMO'}, 'physiological_state': preview_physiological_state, 'adaptive_sleep': preview_adaptive_sleep, 'aerobic_efficiency': preview_aerobic_efficiency, 'aerobic_metabolic_range': preview_aerobic_metabolic_range, 'power_model': preview_power_model, 'advanced_physiology': preview_advanced_physiology, 'planning_context': {'health_override': None, 'blackout_dates': [], 'no_intensity_dates': [], 'race_by_date': {}, 'training_by_date': {}, 'next_race': None, 'next_training': None, 'active_today': [], 'upcoming_items': [], 'summary': 'Training as planned'}, 'feeling_trend': {'latest': {'feeling': 7, 'phase': 'POST-TRAINING · 1 SESSION', 'local_time': '12:42', 'status': 'NORMAL', 'session_count': 1}, 'avg7': 7.2, 'avg28': 6.9, 'delta': 0.3, 'label': 'STABLE', 'pre_avg': 7.5, 'post_avg': 6.8, 'points': []}, 'ctl': 106.3, 'atl': 98.4, 'tsb': 7.9, 'fitness_zone': 'grey', 'fatigue_zone': 'grey', 'form_zone': 'green', 'latest_rhr': 48, 'latest_rhr_note': None, 'latest_rhr_carried_forward': False, 'latest_hrv': 68, 'avg_sleep': '7.5h', 'avg_sleep_hours': 7.5, 'latest_sleep_hours': 7.42, 'latest_weight': '72.0kg', 'latest_weight_note': None, 'latest_weight_carried_forward': False, 'latest_readiness': 84, 'latest_spo2': 97.0, 'sleep_quality_label': 'Q2', 'sleep_quality_text': 'Good', 'sleep_quality_class': 'q2', 'sleep_quality': 2, 'latest_sleep_score': 87, 'latest_sleep_duration': '7h 25m', 'latest_sleeping_hr': 48, 'sleep_delta_min': 5, 'sleep_reference_delta_min': -5, 'sleep_score_delta': -1, 'spo2_delta': 0.0, 'personal_baselines': pb, 'race_readiness_score': 84, 'race_readiness_label': 'Ready to Train', 'race_readiness_zone': 'green', 'race_readiness_css_color': 'green', 'race_readiness_reason': 'Recovery signals are broadly stable.', 'health_rings': {'rhr': {'pct': 100, 'color': 'green', 'status': 'Within baseline'}, 'hrv': {'pct': 100, 'color': 'green', 'status': 'Within baseline'}, 'sleep': {'pct': 100, 'color': 'green', 'status': 'WITHIN HABITUAL'}}, 'trend_arrows': {'rhr': {'arrow': '▼', 'color': 'green'}, 'hrv': {'arrow': '▲', 'color': 'green'}, 'sleep': {'arrow': '▲', 'color': 'green'}, 'weight': None}, 'recent_trend': [{'weekday': 'Thu', 'tsb': -4, 'delta': -2, 'zone': 'red'}, {'weekday': 'Fri', 'tsb': 0, 'delta': 0, 'zone': 'grey'}, {'weekday': 'Sat', 'tsb': 3, 'delta': 2, 'zone': 'green'}, {'weekday': 'Sun', 'tsb': 1, 'delta': 0, 'zone': 'grey'}, {'weekday': 'Mon', 'tsb': 8, 'delta': 7, 'zone': 'green'}], 'avg_daily_calories': 1488, 'training_load': 'Load is high but stable relative to your current fitness. Today looks suitable for aerobic work while preserving room for the next quality stimulus.', 'fatigue_signals': 'Garmin personal baselines and the recent 14-day trend agree: HRV and resting HR are normal, sleep is supportive and SpO2 is at baseline.', 'recommendation': 'Keep the next session easy and aerobic. The week already contains a threshold/TTE stimulus, so the next quality session should be complementary rather than another threshold repeat. If recovery remains stable tomorrow, progress with controlled sweet spot or VO₂ work depending on how the legs respond.', 'next_sessions': preview_next_sessions, 'metabolic_context': preview_metabolic_context, 'nutrition_plan': preview_nutrition_plan, 'nutrition_reference': NUTRITION_REFERENCE, 'race_carb_reference': RACE_CARB_REFERENCE, 'training_legend': TRAINING_METRIC_LEGEND, 'science_insights': preview_science, 'science_sources': preview_science_used, 'science_kb_version': SCIENCE_KB.get('version', 1), 'best_watts': [{'label': '5s', 'watts': 900, 'pct': 100}, {'label': '15s', 'watts': 690, 'pct': 77}, {'label': '1min', 'watts': 430, 'pct': 48}, {'label': '3min', 'watts': 354, 'pct': 39}, {'label': '5min', 'watts': 330, 'pct': 37}, {'label': '20min', 'watts': 290, 'pct': 32}, {'label': '1h', 'watts': 255, 'pct': 28}], 'best_watts_debug': None, 'power_achievements': preview_power_achievements, 'performance_evidence': preview_performance_evidence, 'performance_breakthrough': preview_performance_breakthrough, 'vo2_trend': preview_vo2_trend, 'race_repeatability': preview_race_repeatability, 'season_hours': 142.6, 'season_total_load': 7350, 'zone_low_pct': 84, 'zone_mod_pct': 8, 'zone_high_pct': 8, 'season_distribution': 'The last 90 days are strongly low-intensity dominant with small, deliberate doses of moderate and high intensity. The overall shape is close to polarized.', 'season_outlook': 'The distribution supports endurance development while leaving room for race-specific quality. Keep the hard work purposeful and avoid adding threshold volume simply because freshness is high.'}
+    return _v87_cross_module_authority_guard({**energy, 'coach_clock': clock, 'training_rhythm': preview_rhythm, 'strength_pattern': preview_strength_pattern, 'subjective_activity_context': {'items': [], 'rule': 'preview'}, 'week_memory': week, 'previous_training_blocks': preview_previous_blocks, 'evidence_ledger': preview_evidence_ledger, 'question_state': preview_question_state, 'nova_decision': preview_nova_decision, 'nova_prescription': preview_nova_prescription, 'session_progression': _v491_session_progression(preview_previous_blocks), 'scientific_progression': preview_scientific_progression, 'heat_pattern': preview_heat_pattern, 'training_state': preview_training_state, 'training_direction': preview_training_direction, 'competitive_direction': _v491_competitive_direction(preview_training_direction.get('primary_goal'), preview_adaptive_roadmap, _v491_session_progression(preview_previous_blocks), preview_power_achievements, preview_power_model), 'adaptive_roadmap': preview_adaptive_roadmap, 'microcycle_ledger': preview_microcycle_ledger, 'coaching_contract': {'active': False, 'scope': 'DEMO'}, 'physiological_state': preview_physiological_state, 'adaptive_sleep': preview_adaptive_sleep, 'aerobic_efficiency': preview_aerobic_efficiency, 'aerobic_metabolic_range': preview_aerobic_metabolic_range, 'power_model': preview_power_model, 'advanced_physiology': preview_advanced_physiology, 'planning_context': {'health_override': None, 'blackout_dates': [], 'no_intensity_dates': [], 'race_by_date': {}, 'training_by_date': {}, 'next_race': None, 'next_training': None, 'active_today': [], 'upcoming_items': [], 'summary': 'Training as planned'}, 'feeling_trend': {'latest': {'feeling': 7, 'phase': 'POST-TRAINING · 1 SESSION', 'local_time': '12:42', 'status': 'NORMAL', 'session_count': 1}, 'avg7': 7.2, 'avg28': 6.9, 'delta': 0.3, 'label': 'STABLE', 'pre_avg': 7.5, 'post_avg': 6.8, 'points': []}, 'ctl': 106.3, 'atl': 98.4, 'tsb': 7.9, 'fitness_zone': 'grey', 'fatigue_zone': 'grey', 'form_zone': 'green', 'latest_rhr': 48, 'latest_rhr_note': None, 'latest_rhr_carried_forward': False, 'latest_hrv': 68, 'avg_sleep': '7.5h', 'avg_sleep_hours': 7.5, 'latest_sleep_hours': 7.42, 'latest_weight': '72.0kg', 'latest_weight_note': None, 'latest_weight_carried_forward': False, 'latest_readiness': 84, 'latest_spo2': 97.0, 'sleep_quality_label': 'Q2', 'sleep_quality_text': 'Good', 'sleep_quality_class': 'q2', 'sleep_quality': 2, 'latest_sleep_score': 87, 'latest_sleep_duration': '7h 25m', 'latest_sleeping_hr': 48, 'sleep_delta_min': 5, 'sleep_reference_delta_min': -5, 'sleep_score_delta': -1, 'spo2_delta': 0.0, 'personal_baselines': pb, 'race_readiness_score': 84, 'race_readiness_label': 'Ready to Train', 'race_readiness_zone': 'green', 'race_readiness_css_color': 'green', 'race_readiness_reason': 'Recovery signals are broadly stable.', 'health_rings': {'rhr': {'pct': 100, 'color': 'green', 'status': 'Within baseline'}, 'hrv': {'pct': 100, 'color': 'green', 'status': 'Within baseline'}, 'sleep': {'pct': 100, 'color': 'green', 'status': 'WITHIN HABITUAL'}}, 'trend_arrows': {'rhr': {'arrow': '▼', 'color': 'green'}, 'hrv': {'arrow': '▲', 'color': 'green'}, 'sleep': {'arrow': '▲', 'color': 'green'}, 'weight': None}, 'recent_trend': [{'weekday': 'Thu', 'tsb': -4, 'delta': -2, 'zone': 'red'}, {'weekday': 'Fri', 'tsb': 0, 'delta': 0, 'zone': 'grey'}, {'weekday': 'Sat', 'tsb': 3, 'delta': 2, 'zone': 'green'}, {'weekday': 'Sun', 'tsb': 1, 'delta': 0, 'zone': 'grey'}, {'weekday': 'Mon', 'tsb': 8, 'delta': 7, 'zone': 'green'}], 'avg_daily_calories': 1488, 'training_load': 'Load is high but stable relative to your current fitness. Today looks suitable for aerobic work while preserving room for the next quality stimulus.', 'fatigue_signals': 'Garmin personal baselines and the recent 14-day trend agree: HRV and resting HR are normal, sleep is supportive and SpO2 is at baseline.', 'recommendation': preview_recommendation, 'next_sessions': preview_next_sessions, 'metabolic_context': preview_metabolic_context, 'nutrition_plan': preview_nutrition_plan, 'nutrition_reference': NUTRITION_REFERENCE, 'race_carb_reference': RACE_CARB_REFERENCE, 'training_legend': TRAINING_METRIC_LEGEND, 'science_insights': preview_science, 'science_sources': preview_science_used, 'science_kb_version': SCIENCE_KB.get('version', 1), 'best_watts': [{'label': '5s', 'watts': 900, 'pct': 100}, {'label': '15s', 'watts': 690, 'pct': 77}, {'label': '1min', 'watts': 430, 'pct': 48}, {'label': '3min', 'watts': 354, 'pct': 39}, {'label': '5min', 'watts': 330, 'pct': 37}, {'label': '20min', 'watts': 290, 'pct': 32}, {'label': '1h', 'watts': 255, 'pct': 28}], 'best_watts_debug': None, 'power_achievements': preview_power_achievements, 'performance_evidence': preview_performance_evidence, 'performance_breakthrough': preview_performance_breakthrough, 'vo2_trend': preview_vo2_trend, 'race_repeatability': preview_race_repeatability, 'season_hours': 142.6, 'season_total_load': 7350, 'zone_low_pct': 84, 'zone_mod_pct': 8, 'zone_high_pct': 8, 'season_distribution': 'The last 90 days are strongly low-intensity dominant with small, deliberate doses of moderate and high intensity. The overall shape is close to polarized.', 'season_outlook': 'The distribution supports endurance development while leaving room for race-specific quality. Keep the hard work purposeful and avoid adding threshold volume simply because freshness is high.'}, repair=True)
 _CONTENT_AUDIT_SENSITIVE_KEY_RE = re.compile(
     r"(^|_)(?:api_?key|password|secret|token|authorization|cookie|credential|private_?key|license_?code|reset_?code)(?:_|$)",
     re.I,
@@ -23240,9 +24727,10 @@ def analyze():
         coach_clock = build_coach_clock(cycling_season_activities, planning_context=planning_context, training_rhythm=training_rhythm)
         subjective_activity_context = build_subjective_activity_context(daily_logs_full, cycling_season_activities)
         week_memory = build_week_memory(cycling_recent_activities)
-        # R77: one shared activity-detail fetch serves recent blocks, cumulative
-        # repeatability history and Garmin activity-level VO2. This avoids adding
-        # a second Intervals detail request solely for the new metrics.
+        # R80: the batch detail fetch remains the shared primary path for recent
+        # blocks and repeatability. Garmin VO2 uses the same payload first; only
+        # when its canonical contract is still unsatisfied may a bounded single-
+        # activity detail probe enrich the newest rides.
         repeatability_history_activities = _repeatability_history_candidates(
             cycling_history_activities, (strategy_plan or {}).get("started_on")
         )
@@ -23261,6 +24749,9 @@ def analyze():
             if _aid and _aid not in _detail_seen:
                 _detail_seen.add(_aid);_detail_pool.append(_a)
         shared_training_details = fetch_activity_details([a.get("id") for a in _detail_pool]) if _detail_pool else {}
+        shared_training_details, garmin_vo2_contract_probe = _v80_enrich_garmin_vo2_details(
+            cycling_recent_activities, shared_training_details, max_single_fetches=6
+        ) if _detail_pool else ({}, {"status":"ABSENT","probe_used":False,"single_fetches":0})
         progression_training_blocks = build_previous_training_blocks(cycling_recent_activities, 24, activity_details=shared_training_details)
         repeatability_history_blocks = build_previous_training_blocks(
             repeatability_history_activities, len(repeatability_history_activities), activity_details=shared_training_details
@@ -23272,6 +24763,8 @@ def analyze():
             activity_blocks=(progression_training_blocks + repeatability_history_blocks),
             include_wellness=not bool(cross_modal_context.get("available")),
         )
+        if isinstance(vo2_trend,dict):
+            vo2_trend["garmin_contract_probe"] = garmin_vo2_contract_probe
         execution_model = build_athlete_execution_model(daily_logs_full, subjective_activity_context, training_rhythm, previous_training_blocks)
         completed_quality_review = _v4879_completed_quality_review(previous_training_blocks, subjective_activity_context)
         heat_pattern = build_heat_response_pattern(cycling_season_activities, season_wellness)
@@ -23287,7 +24780,11 @@ def analyze():
         microcycle_ledger = load_microcycle_ledger(strategy_plan, training_direction, cycling_season_activities, user_id=user["id"], read_only=qa_requested)
         microcycle_ledger = _v4932_attach_dose_context(microcycle_ledger, cycling_history_activities, now=get_rome_now())
         progression_training_blocks=_v492_attach_execution_quality(progression_training_blocks,microcycle_ledger);previous_training_blocks=progression_training_blocks[:8];session_progression=_v491_session_progression(progression_training_blocks)
-        race_repeatability=build_race_repeatability(repeatability_history_blocks or progression_training_blocks,session_progression)
+        evidence_ledger=build_evidence_ledger(
+            repeatability_history_blocks or progression_training_blocks, overlay_blocks=progression_training_blocks,
+            goal_key=training_direction.get("primary_goal"), scope_start=training_direction.get("started_on") or (strategy_plan or {}).get("started_on"),
+        )
+        race_repeatability=build_race_repeatability(repeatability_history_blocks or progression_training_blocks,session_progression,evidence_ledger=evidence_ledger)
         if completed_quality_review and previous_training_blocks and completed_quality_review.get("name")==previous_training_blocks[0].get("name"):completed_quality_review["execution_quality"]=previous_training_blocks[0].get("execution_quality")
         stored_performance_evidence = _v4896_plan_performance_evidence(strategy_plan)
         performance_evidence = _v4896_build_performance_evidence(
@@ -23311,10 +24808,25 @@ def analyze():
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
         adaptive_roadmap = _v4893_reconcile_roadmap_validation(adaptive_roadmap, microcycle_ledger)
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
-        performance_narrative = _v4930_performance_narrative_state(adaptive_roadmap, microcycle_ledger, previous_training_blocks, training_direction=training_direction, performance_evidence=performance_evidence, now=get_rome_now())
+        question_state = build_question_state(training_direction.get("primary_goal"), evidence_ledger, performance_evidence, adaptive_roadmap, microcycle_ledger, aerobic_metabolic_range, now=get_rome_now())
+        performance_narrative = _v4930_performance_narrative_state(adaptive_roadmap, microcycle_ledger, previous_training_blocks, training_direction=training_direction, performance_evidence=performance_evidence, now=get_rome_now(), evidence_ledger=evidence_ledger, question_state=question_state)
         adaptive_roadmap["performance_narrative"] = performance_narrative
-        scientific_progression = _v503_scientific_progression(training_direction.get("primary_goal"), adaptive_roadmap, microcycle_ledger, session_progression, previous_training_blocks, performance_narrative, performance_evidence, aerobic_metabolic_range)
+        scientific_progression = _v503_scientific_progression(training_direction.get("primary_goal"), adaptive_roadmap, microcycle_ledger, session_progression, previous_training_blocks, performance_narrative, performance_evidence, aerobic_metabolic_range, evidence_ledger=evidence_ledger, question_state=question_state)
+        nova_decision = build_nova_decision(training_direction.get("primary_goal"), question_state, scientific_progression, adaptive_roadmap, training_state, planning_context)
+        adaptive_roadmap = _v83_apply_nova_decision_to_roadmap(adaptive_roadmap, nova_decision)
         adaptive_roadmap["scientific_progression"] = scientific_progression
+        microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
+        nova_prescription = build_nova_prescription(
+            nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+            evidence_ledger=evidence_ledger, power_model=power_model, ftp_anchor=ftp_anchor, aerobic_metabolic_range=aerobic_metabolic_range,
+        )
+        nova_prescription = compile_nova_prescription(
+            nova_prescription, coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+            recent_activities=cycling_recent_activities, undefined_training_intent=undefined_training_intent, power_model=power_model,
+            microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
+            strength_pattern=strength_pattern, training_rhythm=training_rhythm, execution_model=execution_model,
+        )
+        adaptive_roadmap["nova_prescription"]={k:v for k,v in nova_prescription.items() if k not in {"raw_sessions","sessions"}}
         competitive_direction = _v491_competitive_direction(training_direction.get("primary_goal"), adaptive_roadmap, session_progression, power_achievements, power_model)
         athlete_age_context = build_athlete_age_context(user["id"], on_date=get_rome_now().date())
         physiological_state = build_physiological_state(metrics, training_state, aerobic_efficiency, metabolic_context, heat_pattern, feeling_trend_live)
@@ -23348,6 +24860,9 @@ def analyze():
             ("data_power_model_chars", power_model_text(power_model)),
             ("data_session_progression_chars", _v491_progression_text(session_progression)),
             ("data_race_repeatability_chars", race_repeatability_text(race_repeatability)),
+            ("data_question_state_chars", _v82_question_state_text(question_state)),
+            ("data_nova_decision_chars", _v83_nova_decision_text(nova_decision)),
+            ("data_nova_prescription_chars", _v84_nova_prescription_text(nova_prescription)),
             ("data_scientific_progression_chars", _v503_scientific_progression_text(scientific_progression)),
             ("data_competitive_direction_chars", _v491_competitive_text(competitive_direction)),
             ("data_ftp_anchor_chars", ftp_anchor_text(ftp_anchor)),
@@ -23381,38 +24896,20 @@ def analyze():
             "training_rhythm": training_rhythm, "execution_model": execution_model,
             "session_progression": session_progression,
             "performance_narrative": performance_narrative,
+            "nova_prescription": nova_prescription,
             "athlete_context_override": provider_athlete_context,
         }
         analysis_args = _v4890_provider_safe_analysis_args(analysis_args, cross_modal_context, legacy_metabolic=False)
         replay_bundle = _v4831_build_replay_bundle(analysis_args)
         if python_qa:
-            qa_raw = _v4893_align_due_validation_to_window([], coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger)
-            qa_full = normalize_next_sessions(
-                qa_raw, coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
-                recent_activities=cycling_recent_activities, undefined_training_intent=undefined_training_intent, power_model=power_model,
-                microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
-                strength_pattern=strength_pattern, training_rhythm=training_rhythm, execution_model=execution_model,
+            analysis = compose_nova_snapshot(
+                metrics=metrics, season_stats=season_stats, training_state=training_state, training_direction=training_direction,
+                question_state=question_state, nova_decision=nova_decision, nova_prescription=nova_prescription,
+                adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger, feeling_trend=feeling_trend_live,
+                planning_context=planning_context, race_repeatability=race_repeatability, vo2_trend=vo2_trend,
+                metabolic_context=metabolic_context, performance_evidence=performance_evidence, power_achievements=power_achievements,
+                snapshot_question=snapshot_question, strength_pattern=strength_pattern, session_progression=session_progression,
             )
-            qa_slots = list((coach_clock or {}).get("next_slots") or [])
-            qa_sessions = [x for i,x in enumerate(qa_full) if i < len(qa_slots) and (i < len(qa_raw) and bool(qa_raw[i]) or qa_slots[i].get("is_race") or str(qa_slots[i].get("restriction") or "NONE").upper() != "NONE")]
-            qa_sessions, _ = _v4897_compile_sessions(qa_sessions, adaptive_roadmap)
-            qa_sessions = _v4940_apply_aerobic_metabolic_range(qa_sessions, aerobic_metabolic_range)
-            qa_truth = _v4897_truth_packet(adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger, sessions=qa_sessions, power_achievements=power_achievements)
-            qa_reco, qa_outlook = _v4897_canonical_training_copy(qa_truth)
-            formal = performance_evidence.get("latest_formal_validation") if isinstance(performance_evidence, dict) else None
-            if isinstance(formal, dict) and not qa_truth.get("pending_validation"):
-                watts = _rhythm_num(formal.get("watts")); when = str(formal.get("date") or formal.get("activity_date") or "").strip()
-                qa_reco.insert(0, "Latest formal validation is recorded" + (f" at {watts:.0f} W" if watts is not None else "") + (f" on {when}" if when else "") + ".")
-            if not qa_reco:
-                qa_reco = ["No deterministic validation checkpoint is currently due. This QA mode intentionally generates no AI workout prescription."]
-            analysis = {
-                "training_load":"Live data were refreshed; AI narrative interpretation is intentionally disabled in this QA view.",
-                "season_distribution":str(training_direction.get("adherence_label") or training_direction.get("distribution_label") or "Current training direction loaded."),
-                "season_outlook":" ".join(qa_outlook) if qa_outlook else "Roadmap and performance evidence were recomputed from live data without an AI call.",
-                "fatigue_signals":"Recovery and restriction signals are computed normally; no AI commentary is added.",
-                "recommendation":" ".join(qa_reco), "strength_suggestion":None, "next_sessions":qa_sessions,
-            }
-            analysis = _v4897_semantic_compile_snapshot(analysis, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger, power_achievements=power_achievements, record_audit=True)
         else:
             analysis = ask_ai_analysis(
                 **analysis_args, data_text_profile=data_text_profile, ai_runtime_override=qa_ai_runtime,
@@ -23429,6 +24926,8 @@ def analyze():
                 analysis["recommendation"] = (scope_answer + (" " + base_rec if base_rec else "")).strip()
                 analysis = _v4897_semantic_compile_snapshot(analysis, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger, power_achievements=power_achievements, record_audit=True, snapshot_question=snapshot_question)
         analysis["next_sessions"] = _v4940_apply_aerobic_metabolic_range(analysis.get("next_sessions"), aerobic_metabolic_range)
+        nova_prescription["sessions"] = [dict(x) for x in (analysis.get("next_sessions") or []) if isinstance(x,dict)]
+        nova_prescription["finalized"] = True
         if not qa_requested:
             microcycle_ledger = update_microcycle_ledger_from_snapshot(microcycle_ledger, analysis.get("next_sessions"), user_id=user["id"])
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
@@ -23451,6 +24950,10 @@ def analyze():
             "subjective_activity_context": subjective_activity_context,
             "week_memory": week_memory,
             "previous_training_blocks": previous_training_blocks,
+            "evidence_ledger": evidence_ledger,
+            "question_state": question_state,
+            "nova_decision": nova_decision,
+            "nova_prescription": nova_prescription,
             "session_progression": session_progression,
             "scientific_progression": scientific_progression,
             "completed_quality_review": completed_quality_review,
@@ -23495,6 +24998,13 @@ def analyze():
             "science_insights": science_context,
             "science_kb_version": SCIENCE_KB.get("version", 1),
         }
+        data = _v87_cross_module_authority_guard(data, repair=True)
+        if python_qa:
+            data["nova_only_regression"] = _v88_nova_only_regression_contract(data)
+            if not (data.get("nova_only_regression") or {}).get("final_pass"):
+                raise ValueError("Nova-only full regression rejected this QA Snapshot; no AI call was made and Production Last Report remains unchanged.")
+        if not (data.get("cross_module_authority_audit") or {}).get("final_pass") and not qa_requested:
+            raise ValueError("Cross-module authority guard rejected this Snapshot; the previous saved report remains authoritative.")
         if qa_requested:
             qa_report = _v4831_qa_report(data, qa_kind, replay_bundle.get("context_fingerprint"), source_report=None, ai_runtime=qa_ai_runtime)
             qa_audit = build_content_audit_markdown(qa_report)
