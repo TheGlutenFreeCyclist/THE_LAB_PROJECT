@@ -80,7 +80,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.80 WIP R95 · DYNAMIC VO2 ONLY + FULL SESSION ENVELOPE · R94 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R96 · RESTORED WELLNESS RECENCY AUTHORITY · R95 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -12610,6 +12610,36 @@ def _vo2_direction(delta):
     return "STABLE"
 def _vo2_path(points):
     return " ".join(("M" if i == 0 else "L") + f" {p['x']:.1f} {p['y']:.1f}" for i, p in enumerate(points))
+
+def _v96_vo2_latest_day(series):
+    """Return the latest valid observation date in a VO2 series."""
+    if not series:
+        return None
+    try:
+        return date.fromisoformat(str((series[-1] or {}).get("date") or "")[:10])
+    except Exception:
+        return None
+
+def _v96_select_wearable_vo2_source(garmin_series, wellness_series):
+    """Select wearable VO2 by observation recency, not retrieval-channel presence.
+
+    Restores the pre-Garmin-contract rule from the V4.8.x VO2 lineage: a newer
+    dynamic Intervals Wellness observation must not be hidden merely because an
+    older Garmin FIT/activity contract was successfully re-read in this run.
+    Garmin wins ties because its cycling-specific provenance is stronger.
+    """
+    gday=_v96_vo2_latest_day(garmin_series)
+    wday=_v96_vo2_latest_day(wellness_series)
+    if garmin_series and not wellness_series:
+        return "GARMIN", "GARMIN_ONLY", gday, wday
+    if wellness_series and not garmin_series:
+        return "WELLNESS", "WELLNESS_ONLY", gday, wday
+    if garmin_series and wellness_series:
+        if wday is not None and (gday is None or wday>gday):
+            return "WELLNESS", "WELLNESS_NEWER_THAN_GARMIN", gday, wday
+        return "GARMIN", "GARMIN_SAME_DATE_OR_NEWER", gday, wday
+    return "NONE", "NO_WEARABLE_VO2", gday, wday
+
 def build_vo2max_trend(season_wellness, current_power_payload=None, current_power_day=None, history_user_id=None, persist_history=True, include_wearable=True, activities=None, activity_blocks=None, include_wellness=True):
     wellness_vo2=build_wearable_vo2_series(season_wellness,max_points=10) if include_wearable and include_wellness else []
     garmin_sources=list(activities or [])+list(activity_blocks or [])
@@ -12633,22 +12663,22 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
     garmin_all,garmin_fallback=_merge_vo2_series(stored_garmin,garmin_vo2,max_points=12)
     wellness_all,wellness_fallback=_merge_vo2_series(stored_wellness,wellness_vo2,max_points=12)
     performance,performance_fallback=_merge_vo2_series(stored_performance,fresh_performance,max_points=12)
-    # R95 · dynamic VO2 only. Garmin activity/custom-field/FIT evidence and
-    # Intervals Wellness remain separate source channels. No owner/admin/manual
-    # constant is allowed to masquerade as a live Garmin Connect value.
+    # R96 · restore the older Intervals VO2 recency contract. Garmin
+    # activity/custom-field/FIT and Intervals Wellness remain separate dynamic
+    # channels, but successful re-reading of an old FIT does NOT make that old
+    # observation newer than a later Wellness observation. No static/manual
+    # current Garmin value is allowed.
     garmin_display=list(garmin_all)
     garmin_recent=False
     if garmin_all:
         try:garmin_recent=(get_rome_now().date()-date.fromisoformat(garmin_all[-1]["date"])).days<=21
         except Exception:garmin_recent=False
-    garmin_latest_day=str((garmin_all[-1] or {}).get("date") or "")[:10] if garmin_all else ""
-    wellness_latest_day=str((wellness_all[-1] or {}).get("date") or "")[:10] if wellness_all else ""
-    garmin_not_older_than_wellness=bool(garmin_latest_day and wellness_latest_day and garmin_latest_day>=wellness_latest_day)
-    # A live cycling-specific Garmin contract remains authoritative provenance,
-    # even when its last activity point is older than the UI freshness window.
-    # Freshness affects only whether a headline CURRENT value is displayed.
+    source_choice,source_selection_reason,garmin_latest_dt,wellness_latest_dt=_v96_select_wearable_vo2_source(garmin_display,wellness_all)
+    garmin_latest_day=garmin_latest_dt.isoformat() if garmin_latest_dt else None
+    wellness_latest_day=wellness_latest_dt.isoformat() if wellness_latest_dt else None
+    garmin_not_older_than_wellness=bool(garmin_latest_dt and (wellness_latest_dt is None or garmin_latest_dt>=wellness_latest_dt))
     live_garmin_contract=bool(garmin_vo2)
-    use_garmin=bool(garmin_display and (live_garmin_contract or garmin_recent or not wellness_all or garmin_not_older_than_wellness))
+    use_garmin=(source_choice=="GARMIN")
     _gc=garmin_contract_summary.get("counts") or {}
     if garmin_vo2:
         garmin_contract_status="FOUND"
@@ -12781,6 +12811,11 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         "garmin_fallback_reason": None if use_garmin else garmin_contract_status,
         "wellness_points": len(wellness_vo2),
         "wellness_history_points": len(wellness_all),
+        "wellness_latest_value": (wellness_all[-1].get("value") if wellness_all else None),
+        "wellness_latest_date": wellness_latest_day,
+        "wellness_current_fresh": bool(wellness_latest_dt is not None and (get_rome_now().date()-wellness_latest_dt).days<=21),
+        "garmin_latest_date": garmin_latest_day,
+        "source_selection_reason": source_selection_reason,
         "garmin_activity_recent": garmin_recent,
         "ticks": ticks,
         "date_ticks": date_ticks,
@@ -13754,9 +13789,12 @@ def _v87_cross_module_authority_guard(snapshot, repair=True):
             garmin_provenance_ok=(gpoints>0 and live_garmin_contract) if is_garmin_source else True
         if is_garmin_source and not garmin_provenance_ok:
             _v87_issue(issues,"VO2_GARMIN_SOURCE_CONTRACT_MISMATCH","vo2_trend.wearable_source","PROVEN_DYNAMIC_GARMIN_CONTRACT_OR_HISTORY",{"source":source,"status":contract,"points":gpoints,"recent":recent})
-        if source=="INTERVALS_WELLNESS" and gpoints>0 and (live_garmin_contract or (contract=="FOUND_HISTORY" and recent)):
-            _v87_issue(issues,"VO2_WELLNESS_USED_DESPITE_AUTHORITATIVE_GARMIN","vo2_trend.wearable_source","GARMIN_CYCLING_SOURCE",{"source":source,"status":contract,"points":gpoints,"recent":recent})
-        checks.append({"name":"EXTERNAL_VO2_CONTRACT","status":contract,"source":source,"recent":recent,"provenance_pass":(not is_garmin_source) or garmin_provenance_ok})
+        gday=str(vo2.get("garmin_latest_date") or vo2.get("garmin_activity_latest_date") or "")[:10]
+        wday=str(vo2.get("wellness_latest_date") or "")[:10]
+        garmin_temporally_authoritative=bool(gpoints>0 and gday and (not wday or gday>=wday))
+        if source=="INTERVALS_WELLNESS" and garmin_temporally_authoritative:
+            _v87_issue(issues,"VO2_WELLNESS_USED_DESPITE_NEWER_OR_EQUAL_GARMIN","vo2_trend.wearable_source","NEWEST_DYNAMIC_SOURCE",{"source":source,"status":contract,"points":gpoints,"recent":recent,"garmin_date":gday,"wellness_date":wday})
+        checks.append({"name":"EXTERNAL_VO2_CONTRACT","status":contract,"source":source,"recent":recent,"garmin_date":gday,"wellness_date":wday,"provenance_pass":(not is_garmin_source) or garmin_provenance_ok})
 
     audit={
         "schema":"V4.8.74-R87-1","status":"PASS" if not issues else "BLOCKED",
@@ -13880,14 +13918,14 @@ def _v88_nova_only_regression_contract(snapshot):
     if str(probe.get("status") or "").upper()=="FOUND":
         probe_v=_vo2_number(probe.get("value"));latest_fit=vo2.get("garmin_contract_latest") if isinstance(vo2.get("garmin_contract_latest"),dict) else {}
         latest_fit_v=_vo2_number(latest_fit.get("value"))
+        garmin_history_v=_vo2_number(vo2.get("garmin_activity_latest_value"))
         found_projection_ok=(
             probe_v is not None
             and latest_fit_v is not None
             and abs(float(probe_v)-float(latest_fit_v))<0.11
             and str(latest_fit.get("source") or "").upper()=="GARMIN_ORIGINAL_FIT"
-            and _vo2_number(vo2.get("wearable_current")) is not None
-            and abs(float(probe_v)-float(_vo2_number(vo2.get("wearable_current"))))<0.11
-            and str(vo2.get("wearable_source") or "").upper()=="GARMIN_ORIGINAL_FIT"
+            and garmin_history_v is not None
+            and abs(float(probe_v)-float(garmin_history_v))<0.11
         )
     checks.append({
         "name":"R91_GARMIN_DEVICE_FIT_DISCOVERY",
@@ -13915,8 +13953,11 @@ def _v88_nova_only_regression_contract(snapshot):
         else:
             r93_authority_ok=(vo2_gpoints>0 and vo2_contract=="FOUND")
         if not r93_authority_ok:r93_reason="GARMIN_SOURCE_WITHOUT_PROVEN_DYNAMIC_CONTRACT"
-    elif vo2_source=="INTERVALS_WELLNESS" and vo2_gpoints>0 and vo2_contract=="FOUND":
-        r93_authority_ok=False;r93_reason="WELLNESS_HIDES_AUTHORITATIVE_GARMIN_SOURCE"
+    elif vo2_source=="INTERVALS_WELLNESS" and vo2_gpoints>0:
+        _gday=str(vo2.get("garmin_latest_date") or vo2.get("garmin_activity_latest_date") or "")[:10]
+        _wday=str(vo2.get("wellness_latest_date") or "")[:10]
+        if _gday and (not _wday or _gday>=_wday):
+            r93_authority_ok=False;r93_reason="WELLNESS_HIDES_NEWER_OR_EQUAL_GARMIN_SOURCE"
     checks.append({
         "name":"R93_VO2_AUTHORITY_FRESHNESS_SEPARATION",
         "source":vo2_source,"contract_status":vo2_contract,"recent":vo2_recent,
@@ -13934,6 +13975,17 @@ def _v88_nova_only_regression_contract(snapshot):
     checks.append({"name":"R95_DYNAMIC_VO2_ONLY","legacy_manual_channel_present":legacy_manual_channel_present,"wearable_fresh":bool(vo2.get("wearable_current_fresh")),"display_current":vo2.get("wearable_display_current"),"history_latest":vo2.get("wearable_history_latest"),"pass":r95_dynamic_ok})
     if not r95_dynamic_ok:
         issues.append({"code":"R95_DYNAMIC_VO2_ONLY_FAILED","legacy_manual_channel_present":legacy_manual_channel_present,"stale_exposed":stale_exposed,"source":vo2_source})
+
+    # R96 · restore V4.8.x recency authority: a newly retrieved but older Garmin
+    # FIT is history, not a veto over a newer dynamic Intervals Wellness VO2.
+    r96_gday=str(vo2.get("garmin_latest_date") or vo2.get("garmin_activity_latest_date") or "")[:10]
+    r96_wday=str(vo2.get("wellness_latest_date") or "")[:10]
+    r96_expected="GARMIN" if r96_gday and (not r96_wday or r96_gday>=r96_wday) else ("WELLNESS" if r96_wday else "NONE")
+    r96_actual="GARMIN" if vo2_source.startswith("GARMIN_") else ("WELLNESS" if vo2_source=="INTERVALS_WELLNESS" else "NONE")
+    r96_recency_ok=(r96_expected=="NONE" or r96_actual==r96_expected)
+    checks.append({"name":"R96_VO2_RECENCY_AUTHORITY","garmin_latest_date":r96_gday or None,"wellness_latest_date":r96_wday or None,"expected_source":r96_expected,"actual_source":r96_actual,"selection_reason":vo2.get("source_selection_reason"),"pass":bool(r96_recency_ok)})
+    if not r96_recency_ok:
+        issues.append({"code":"R96_VO2_RECENCY_AUTHORITY_FAILED","garmin_latest_date":r96_gday or None,"wellness_latest_date":r96_wday or None,"expected_source":r96_expected,"actual_source":r96_actual})
 
     # R94 · repeated hard work must reserve a post-quality cool-down inside the
     # declared session envelope, not merely fit preload + reps + recoveries.
