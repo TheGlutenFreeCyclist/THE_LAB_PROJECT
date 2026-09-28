@@ -80,7 +80,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.74 WIP R88 · FULL NOVA-ONLY REGRESSION · STEP 8"
+APP_VERSION = "THE LAB · PRODUCT V4.8.74 WIP R89 · GARMIN ORIGINAL FIT VO2 TRUTH · R88 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -12216,7 +12216,7 @@ def fetch_intervals_data():
         "icu_training_load,icu_weighted_avg_watts,icu_average_watts,average_watts,average_heartrate,max_heartrate,stream_types,"
         "icu_zone_times,icu_hr_zone_times,icu_hr_zones,icu_hrr,icu_ftp,icu_pm_ftp,icu_pm_ftp_secs,icu_pm_ftp_watts,icu_rolling_ftp,icu_rolling_ftp_delta,icu_achievements,decoupling,"
         "calories,carbs_used,carbs_ingested,trainer,icu_intensity,"
-        "icu_variability_index,joules,sub_type,source,VO2MaxGarmin"
+        "icu_variability_index,joules,sub_type,source,file_type,VO2MaxGarmin"
     )
     activities_url = (
         f"https://intervals.icu/api/v1/athlete/{runtime['athlete_id']}/activities"
@@ -12733,9 +12733,9 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         "agreement_class": agreement_class,
         "wearable_fallback": wearable_fallback,
         "performance_fallback": performance_fallback,
-        "wearable_label": "Garmin cycling · Intervals activity" if use_garmin else "Wearable · Intervals Wellness",
+        "wearable_label": (("Garmin cycling · Original FIT via Intervals" if str(((garmin_contract_summary.get("latest_found") or {}).get("source") or "")).upper()=="GARMIN_ORIGINAL_FIT" else "Garmin cycling · Intervals activity") if use_garmin else "Wearable · Intervals Wellness"),
         "wearable_last_date": wearable[-1]["date"] if wearable else None,
-        "wearable_source": "GARMIN_ACTIVITY_CUSTOM_FIELD" if use_garmin else "INTERVALS_WELLNESS",
+        "wearable_source": ((garmin_contract_summary.get("latest_found") or {}).get("source") or "GARMIN_ACTIVITY_HISTORY") if use_garmin else "INTERVALS_WELLNESS",
         "garmin_activity_points": len(garmin_vo2),
         "garmin_history_points": len(garmin_all),
         "garmin_contract_status": garmin_contract_status,
@@ -13698,10 +13698,11 @@ def _v87_cross_module_authority_guard(snapshot, repair=True):
     # 7) External VO2 source provenance must agree with the R80 contract.
     if vo2.get("available"):
         source=str(vo2.get("wearable_source") or "").upper();contract=str(vo2.get("garmin_contract_status") or "").upper();recent=bool(vo2.get("garmin_activity_recent"));gpoints=int(_rhythm_num(vo2.get("garmin_history_points")) or 0)
-        if source=="GARMIN_ACTIVITY_CUSTOM_FIELD" and (gpoints<=0 or contract not in {"FOUND","FOUND_HISTORY"} or not recent):
+        is_garmin_source=source.startswith("GARMIN_")
+        if is_garmin_source and (gpoints<=0 or contract not in {"FOUND","FOUND_HISTORY"} or not recent):
             _v87_issue(issues,"VO2_GARMIN_SOURCE_CONTRACT_MISMATCH","vo2_trend.wearable_source","RECENT_FOUND_GARMIN_CONTRACT",{"source":source,"status":contract,"points":gpoints,"recent":recent})
         if source=="INTERVALS_WELLNESS" and recent and contract in {"FOUND","FOUND_HISTORY"}:
-            _v87_issue(issues,"VO2_WELLNESS_USED_DESPITE_RECENT_GARMIN","vo2_trend.wearable_source","GARMIN_ACTIVITY_CUSTOM_FIELD",source)
+            _v87_issue(issues,"VO2_WELLNESS_USED_DESPITE_RECENT_GARMIN","vo2_trend.wearable_source","GARMIN_CYCLING_SOURCE",source)
         checks.append({"name":"EXTERNAL_VO2_CONTRACT","status":contract,"source":source})
 
     audit={
@@ -18149,6 +18150,205 @@ def _v80_enrich_garmin_vo2_details(activities, details, max_single_fetches=6):
             }
     return out,{"status":last_status,"probe_used":bool(fetched),"single_fetches":fetched,"activity_id":None,"scope":None}
 
+
+def _v89_fit_unwrap_original(content):
+    """Return raw FIT bytes from Intervals' original-file endpoint.
+
+    Intervals documents /activity/{id}/file as the original file, commonly gzip
+    compressed. requests may already decode HTTP content-encoding, so accept both.
+    """
+    try:
+        raw=bytes(content or b"")
+    except Exception:
+        return b""
+    if raw[:2]==b"\x1f\x8b":
+        try:
+            raw=zlib.decompress(raw,16+zlib.MAX_WBITS)
+        except Exception:
+            return b""
+    return raw
+
+def _v89_fit_garmin_vo2_contract(content, fallback_date=None):
+    """Extract Garmin cycling VO2 from native FIT message 140 field 7.
+
+    This intentionally implements only enough of the FIT container protocol to
+    walk definition/data records and read the Garmin value. It does not try to
+    become a general FIT decoder. Unknown/malformed structures fail closed.
+    """
+    raw=_v89_fit_unwrap_original(content)
+    base={
+        "status":"ABSENT","value":None,"date":str(fallback_date or "")[:10] or None,
+        "source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_MESSAGE_140",
+        "path":"$.fit.message_140.field_7","encoding":"GARMIN_FIT_140_7",
+        "raw_type":"uint","candidate_count":0,"message_140_count":0,
+    }
+    try:
+        if len(raw)<12:return {**base,"fit_status":"EMPTY_OR_NOT_FIT"}
+        offset=0;candidates=[];message_140_count=0;parsed_files=0
+        while offset+12<=len(raw):
+            header_size=raw[offset]
+            if header_size<12 or offset+header_size>len(raw) or raw[offset+8:offset+12]!=b".FIT":
+                break
+            data_size=int.from_bytes(raw[offset+4:offset+8],"little",signed=False)
+            start=offset+header_size;end=start+data_size
+            if end>len(raw):return {**base,"fit_status":"TRUNCATED"}
+            defs={};pos=start;parsed_files+=1
+            while pos<end:
+                rec_header=raw[pos];pos+=1
+                compressed=bool(rec_header & 0x80)
+                if compressed:
+                    local=(rec_header>>5)&0x03
+                    definition=defs.get(local)
+                    if not definition:return {**base,"fit_status":"MISSING_DEFINITION"}
+                    fields=definition["fields"];byteorder=definition["byteorder"];global_num=definition["global_num"]
+                    for field_num,size,_base_type in fields:
+                        # Compressed timestamp header carries field 253 itself.
+                        if field_num==253:
+                            continue
+                        if pos+size>end:return {**base,"fit_status":"TRUNCATED_RECORD"}
+                        chunk=raw[pos:pos+size];pos+=size
+                        if global_num==140 and field_num==7:
+                            value=int.from_bytes(chunk[:min(len(chunk),8)],byteorder,signed=False) if chunk else None
+                            if value is not None:candidates.append(value)
+                    for size in definition["dev_sizes"]:
+                        if pos+size>end:return {**base,"fit_status":"TRUNCATED_DEV_RECORD"}
+                        pos+=size
+                    if global_num==140:message_140_count+=1
+                    continue
+                is_definition=bool(rec_header & 0x40)
+                local=rec_header & 0x0F
+                if is_definition:
+                    if pos+5>end:return {**base,"fit_status":"TRUNCATED_DEFINITION"}
+                    pos+=1  # reserved
+                    arch=raw[pos];pos+=1
+                    byteorder="little" if arch==0 else "big"
+                    global_num=int.from_bytes(raw[pos:pos+2],byteorder,signed=False);pos+=2
+                    n_fields=raw[pos];pos+=1
+                    fields=[]
+                    if pos+n_fields*3>end:return {**base,"fit_status":"TRUNCATED_DEFINITION_FIELDS"}
+                    for _ in range(n_fields):
+                        field_num=raw[pos];size=raw[pos+1];base_type=raw[pos+2];pos+=3
+                        fields.append((field_num,size,base_type))
+                    dev_sizes=[]
+                    if rec_header & 0x20:
+                        if pos>=end:return {**base,"fit_status":"TRUNCATED_DEV_DEFINITION"}
+                        n_dev=raw[pos];pos+=1
+                        if pos+n_dev*3>end:return {**base,"fit_status":"TRUNCATED_DEV_FIELDS"}
+                        for _ in range(n_dev):
+                            _field_num=raw[pos];size=raw[pos+1];_dev_idx=raw[pos+2];pos+=3
+                            dev_sizes.append(size)
+                    defs[local]={"global_num":global_num,"byteorder":byteorder,"fields":fields,"dev_sizes":dev_sizes}
+                    continue
+                definition=defs.get(local)
+                if not definition:return {**base,"fit_status":"MISSING_DEFINITION"}
+                global_num=definition["global_num"];byteorder=definition["byteorder"]
+                for field_num,size,_base_type in definition["fields"]:
+                    if pos+size>end:return {**base,"fit_status":"TRUNCATED_RECORD"}
+                    chunk=raw[pos:pos+size];pos+=size
+                    if global_num==140 and field_num==7:
+                        value=int.from_bytes(chunk[:min(len(chunk),8)],byteorder,signed=False) if chunk else None
+                        if value is not None:candidates.append(value)
+                for size in definition["dev_sizes"]:
+                    if pos+size>end:return {**base,"fit_status":"TRUNCATED_DEV_RECORD"}
+                    pos+=size
+                if global_num==140:message_140_count+=1
+            # optional file CRC (2 bytes), then a chained FIT file may follow
+            offset=end+2 if end+2<=len(raw) else end
+        decoded=[]
+        for raw_value in candidates:
+            d=_v80_decode_garmin_vo2(raw_value)
+            if d.get("valid"):decoded.append((raw_value,d))
+        if decoded:
+            raw_value,d=decoded[-1]  # latest message wins inside the activity file
+            return {
+                **base,"status":"FOUND","value":d.get("value"),"encoding":"GARMIN_FIT_140_7",
+                "raw_value":raw_value,"candidate_count":len(candidates),
+                "message_140_count":message_140_count,"fit_status":"PARSED",
+                "parsed_fit_files":parsed_files,
+            }
+        if candidates:
+            return {
+                **base,"status":"INVALID","raw_value":candidates[-1],
+                "candidate_count":len(candidates),"message_140_count":message_140_count,
+                "fit_status":"PARSED","parsed_fit_files":parsed_files,
+            }
+        return {
+            **base,"candidate_count":0,"message_140_count":message_140_count,
+            "fit_status":"PARSED" if parsed_files else "NOT_FIT","parsed_fit_files":parsed_files,
+        }
+    except Exception:
+        return {**base,"fit_status":"PARSE_ERROR"}
+
+def _v89_fetch_original_fit_garmin_contract(activity):
+    a=activity if isinstance(activity,dict) else {}
+    aid=str(a.get("id") or "")
+    day=str(a.get("start_date_local") or a.get("date") or "")[:10] or None
+    if not aid:
+        return {"status":"FETCH_FAILED","activity_id":None,"date":day,"source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_MESSAGE_140"}
+    url=f"https://intervals.icu/api/v1/activity/{aid}/file"
+    try:
+        r=requests.get(url,headers=get_intervals_headers(),timeout=20)
+        r.raise_for_status()
+        c=_v89_fit_garmin_vo2_contract(r.content,day)
+        c["activity_id"]=aid
+        return c
+    except Exception:
+        return {"status":"FETCH_FAILED","activity_id":aid,"date":day,"source":"GARMIN_ORIGINAL_FIT","scope":"ORIGINAL_FIT_MESSAGE_140"}
+
+def _v89_enrich_garmin_vo2_details(activities, details, max_single_fetches=1, max_fit_fetches=6):
+    """Canonical Garmin enrichment: JSON custom field first, original FIT second.
+
+    The raw FIT fallback removes any requirement that the athlete configured and
+    reprocessed an Intervals custom activity field. It remains bounded and never
+    calls an AI provider.
+    """
+    out,probe=_v80_enrich_garmin_vo2_details(activities,details,max_single_fetches=max_single_fetches)
+    if probe.get("status")=="FOUND":
+        return out,{**probe,"original_fit_used":False,"original_fit_fetches":0,"original_fit_found":0}
+    rows=[a for a in (activities or []) if isinstance(a,dict) and a.get("id")]
+    rows.sort(
+        key=lambda a:(1 if "GARMIN" in str(a.get("source") or "").upper() else 0,
+                      1 if str(a.get("file_type") or "").lower()=="fit" else 0,
+                      str(a.get("start_date_local") or "")),
+        reverse=True,
+    )
+    rows=rows[:max(0,int(max_fit_fetches or 0))]
+    results=[]
+    if rows:
+        with ThreadPoolExecutor(max_workers=min(3,len(rows))) as pool:
+            futures={pool.submit(_v89_fetch_original_fit_garmin_contract,a):a for a in rows}
+            for future in as_completed(futures):
+                a=futures[future]
+                try:c=future.result()
+                except Exception:c={"status":"FETCH_FAILED","activity_id":str(a.get("id") or ""),"date":str(a.get("start_date_local") or "")[:10]}
+                results.append((a,c))
+    found=[]
+    for a,c in results:
+        aid=str(a.get("id") or "")
+        if c.get("status")=="FOUND":
+            merged=dict(out.get(aid) or {})
+            merged["garmin_vo2_contract"]=c
+            merged["garmin_vo2_scope"]="ORIGINAL_FIT_MESSAGE_140"
+            out[aid]=merged
+            found.append(c)
+    latest=max(found,key=lambda c:str(c.get("date") or "")) if found else None
+    statuses={}
+    for _a,c in results:
+        s=str(c.get("status") or "UNKNOWN");statuses[s]=statuses.get(s,0)+1
+    return out,{
+        "status":"FOUND" if found else ("FETCH_FAILED" if results and statuses.get("FETCH_FAILED")==len(results) else "ABSENT"),
+        "probe_used":True,
+        "single_fetches":int(probe.get("single_fetches") or 0),
+        "activity_id":latest.get("activity_id") if latest else None,
+        "scope":latest.get("scope") if latest else None,
+        "path":latest.get("path") if latest else None,
+        "encoding":latest.get("encoding") if latest else None,
+        "value":latest.get("value") if latest else None,
+        "date":latest.get("date") if latest else None,
+        "original_fit_used":bool(results),"original_fit_fetches":len(results),
+        "original_fit_found":len(found),"original_fit_status_counts":statuses,
+    }
+
 def _interval_line(interval):
     secs = int(interval.get("moving_time") or interval.get("elapsed_time") or 0)
     if secs < 45:
@@ -19495,8 +19695,8 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
         blocks.append({
             "activity_id": str(detail.get("id") or summary.get("id") or "") or None,
             "date": dt.date().isoformat(), "time": dt.strftime("%I:%M %p"), "name": name,
-            "garmin_vo2_contract": _v80_garmin_vo2_contract(detail,"ACTIVITY_DETAIL",dt.date().isoformat()),
-            "garmin_vo2": _garmin_activity_vo2_value(detail),
+            "garmin_vo2_contract": (detail.get("garmin_vo2_contract") if isinstance(detail.get("garmin_vo2_contract"),dict) else _v80_garmin_vo2_contract(detail,"ACTIVITY_DETAIL",dt.date().isoformat())),
+            "garmin_vo2": ((detail.get("garmin_vo2_contract") or {}).get("value") if isinstance(detail.get("garmin_vo2_contract"),dict) and (detail.get("garmin_vo2_contract") or {}).get("status")=="FOUND" else _garmin_activity_vo2_value(detail)),
             "heat": is_heat, "family": family,
             "quality_relevant": bool(quality_truth.get("quality_relevant")), "quality_basis": quality_truth.get("basis"),
             "duration_min": round((detail.get("moving_time") or summary.get("moving_time") or 0) / 60),
@@ -24749,9 +24949,9 @@ def analyze():
             if _aid and _aid not in _detail_seen:
                 _detail_seen.add(_aid);_detail_pool.append(_a)
         shared_training_details = fetch_activity_details([a.get("id") for a in _detail_pool]) if _detail_pool else {}
-        shared_training_details, garmin_vo2_contract_probe = _v80_enrich_garmin_vo2_details(
-            cycling_recent_activities, shared_training_details, max_single_fetches=6
-        ) if _detail_pool else ({}, {"status":"ABSENT","probe_used":False,"single_fetches":0})
+        shared_training_details, garmin_vo2_contract_probe = _v89_enrich_garmin_vo2_details(
+            cycling_recent_activities, shared_training_details, max_single_fetches=1, max_fit_fetches=6
+        ) if _detail_pool else ({}, {"status":"ABSENT","probe_used":False,"single_fetches":0,"original_fit_fetches":0})
         progression_training_blocks = build_previous_training_blocks(cycling_recent_activities, 24, activity_details=shared_training_details)
         repeatability_history_blocks = build_previous_training_blocks(
             repeatability_history_activities, len(repeatability_history_activities), activity_details=shared_training_details
