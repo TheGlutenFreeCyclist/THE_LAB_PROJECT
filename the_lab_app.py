@@ -93,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.83 WIP R107 · QUALITY SLOT IDENTITY · R106 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.84 WIP R108 · ANTI-LOOP ARCHITECTURE MEMORY · R107 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -5868,6 +5868,12 @@ def _v4891_finalize_ai_copy(parsed):
             sess["athlete_intent_notice"] = _V4891_TTE_NOTICE_UI.get(notice, _v4891_direct_user_text(notice))
     return out
 # R106 · Recommendation Single Authority.
+# R108 · Anti-loop architecture memory: completed prior-load work is recognized from
+# explicit athlete/session semantics such as "LOAD + 5X3", and Nova tracks consecutive
+# canonical repeated-work signatures. After the same hard architecture is successfully
+# repeated three times, contextual variants that would recycle that exact work block are
+# temporarily down-ranked when a distinct unresolved goal-specific question is available.
+# This is deterministic progression memory, not random workout rotation.
 # R107 · Quality Slot Identity: roadmap quality windows are matched to Coach Clock
 # slots by canonical date/start_minute identity, never by presentation-label equality.
 # The athlete-facing "What I would do from here" is no longer a second coaching
@@ -13248,6 +13254,22 @@ def _v81_evidence_block_key(block):
     if aid:return "ID:"+aid
     return "FALLBACK:"+"|".join((str(b.get("date") or "")[:10],str(b.get("time") or ""),str(b.get("name") or "").strip().lower()))
 
+def _v81_repeatability_signature(event):
+    """Coarse canonical work-architecture identity for anti-loop memory.
+
+    Recovery is rounded to 30 s and work duration to 15 s so harmless recording
+    jitter does not make the same session look novel.
+    """
+    e=event or {}
+    reps=int(_rhythm_num(e.get("reps")) or 0)
+    work=_rhythm_num(e.get("interval_secs"))
+    recovery=_rhythm_num(e.get("recovery_secs"))
+    if reps<1 or work is None or work<=0:
+        return None
+    work_bucket=int(round(float(work)/15.0)*15)
+    recovery_bucket=int(round(float(recovery)/30.0)*30) if recovery is not None and recovery>0 else None
+    return f"{reps}x{work_bucket}s/{recovery_bucket if recovery_bucket is not None else 'NA'}s"
+
 def _v81_evidence_tags(block):
     b=block or {};tags=[];dur=_rhythm_num(b.get("duration_min"));quality=bool(b.get("quality_relevant"))
     intervals=" ".join(str(x) for x in (b.get("intervals") or []))
@@ -13255,7 +13277,7 @@ def _v81_evidence_tags(block):
     if dur is not None and dur>=150:tags.append("LONG_SESSION")
     if quality:
         if re.search(r"over[- ]?under|variable[- ]?load",text,re.I):tags.extend(["OVER_UNDER","VARIABLE_LOAD"])
-        if re.search(r"pre[- ]?load|under fatigue|after .*endurance|fatigue resistance|durability",text,re.I):tags.append("PRELOADED_QUALITY")
+        if re.search(r"pre[- ]?load|prior[- ]?load|\bload\s*\+\s*\d+\s*[x×]\s*\d+|under fatigue|after .*endurance|fatigue resistance|durability",text,re.I):tags.append("PRELOADED_QUALITY")
         if re.search(r"late[- ]session|final hour|last hour|after \d+.*(?:min|h|hour|kj)",text,re.I):tags.append("LATE_QUALITY")
         if re.search(r"race[- ]?like|race transfer|attack|surge|lead[- ]?in|mixed prior",text,re.I):tags.append("RACE_TRANSFER")
     return list(dict.fromkeys(tags))
@@ -13323,9 +13345,16 @@ def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_ke
     loaded=[e for e in rep_events if _num(e.get("recovery_ratio")) is not None and float(e.get("recovery_ratio"))>=0.45]
     loaded_success=[e for e in loaded if e.get("strong")]
     tags={t for e in events for t in (e.get("tags") or [])}
-    science={"quality_sessions":len(quality_events),"repeatability_sessions":len(rep_events),"repeatability_strong_sessions":len(strong_events),"active_load_recovery":bool(len(loaded_success)>=2 or any(float(e.get("recovery_ratio") or 0)>=0.58 for e in loaded_success)),"preloaded_quality":"PRELOADED_QUALITY" in tags,"long_session":"LONG_SESSION" in tags,"late_quality":"LATE_QUALITY" in tags,"race_transfer":"RACE_TRANSFER" in tags,"over_under":"OVER_UNDER" in tags,"variable_load":"VARIABLE_LOAD" in tags,"recovery_under_load_exposures":len(loaded),"recovery_under_load_successes":len(loaded_success),"max_recovery_ratio":round(max(ratios),3) if ratios else None,"max_successful_recovery_ratio":round(max([float(e.get("recovery_ratio")) for e in loaded_success] or []),3) if loaded_success else None,"latest_repeatability":None}
+    latest_signature=_v81_repeatability_signature(rep_events[0]) if rep_events else None
+    signature_streak=0
+    if latest_signature:
+        for e in rep_events:
+            if not e.get("strong") or _v81_repeatability_signature(e)!=latest_signature:
+                break
+            signature_streak+=1
+    science={"quality_sessions":len(quality_events),"repeatability_sessions":len(rep_events),"repeatability_strong_sessions":len(strong_events),"active_load_recovery":bool(len(loaded_success)>=2 or any(float(e.get("recovery_ratio") or 0)>=0.58 for e in loaded_success)),"preloaded_quality":"PRELOADED_QUALITY" in tags,"long_session":"LONG_SESSION" in tags,"late_quality":"LATE_QUALITY" in tags,"race_transfer":"RACE_TRANSFER" in tags,"over_under":"OVER_UNDER" in tags,"variable_load":"VARIABLE_LOAD" in tags,"recovery_under_load_exposures":len(loaded),"recovery_under_load_successes":len(loaded_success),"max_recovery_ratio":round(max(ratios),3) if ratios else None,"max_successful_recovery_ratio":round(max([float(e.get("recovery_ratio")) for e in loaded_success] or []),3) if loaded_success else None,"latest_repeatability":None,"latest_repeatability_signature":latest_signature,"repeatability_signature_streak":signature_streak}
     if rep_events:
-        e=rep_events[0];science["latest_repeatability"]={"date":e.get("date"),"reps":e.get("reps"),"interval_secs":e.get("interval_secs"),"recovery_secs":e.get("recovery_secs"),"avg_watts":e.get("avg_watts"),"min_watts":e.get("min_watts"),"max_watts":e.get("max_watts"),"recovery_avg_watts":e.get("recovery_avg_watts"),"ftp":e.get("ftp"),"recovery_ratio":e.get("recovery_ratio"),"strong":bool(e.get("strong"))}
+        e=rep_events[0];science["latest_repeatability"]={"date":e.get("date"),"reps":e.get("reps"),"interval_secs":e.get("interval_secs"),"recovery_secs":e.get("recovery_secs"),"avg_watts":e.get("avg_watts"),"min_watts":e.get("min_watts"),"max_watts":e.get("max_watts"),"recovery_avg_watts":e.get("recovery_avg_watts"),"ftp":e.get("ftp"),"recovery_ratio":e.get("recovery_ratio"),"strong":bool(e.get("strong")),"signature":latest_signature}
     return {"schema":"V4.8.74-R81-1","available":bool(events),"scope":"ACTIVE_TRAINING_BLOCK","scope_start":start or None,"goal_key":str(goal_key or "").upper() or None,"counts":{"observed_sessions":len(events),"quality_sessions":len(quality_events),"repeatability_sessions":len(rep_events),"repeatability_strong_sessions":len(strong_events),"repeatability_efforts":sum(int(e.get("reps") or 0) for e in rep_events),"rejected_repeatability_sessions":len(rejected)},"repeatability":{"sessions":len(rep_events),"strong_sessions":len(strong_events),"efforts":sum(int(e.get("reps") or 0) for e in rep_events),"mean_retention_pct":round(statistics.mean(retentions),1) if retentions else None,"mean_stability_cost_pct":round(statistics.mean(fades),1) if fades else None,"events":rep_events},"science_features":science,"events":events,"rejections":rejected,"method_note":"Canonical athlete evidence derived once from Activity Truth-backed blocks. Race Repeatability and Scientific Progression consume this same ledger; conflicted/unresolved interval structures fail closed instead of becoming coaching evidence."}
 
 def _v82_question_record(state, exit_satisfied, evidence_count=0, last_evidence_date=None, reason=None, source="EVIDENCE_LEDGER"):
@@ -19880,7 +19909,8 @@ _V503_GOAL_GRAPH = {
 def _v503_block_science_features(blocks, evidence_ledger=None):
     shared=(evidence_ledger or {}).get("science_features") if isinstance(evidence_ledger,dict) else None
     if isinstance(shared,dict):return dict(shared)
-    out={"quality_sessions":0,"repeatability_sessions":0,"repeatability_strong_sessions":0,"active_load_recovery":False,"preloaded_quality":False,"long_session":False,"late_quality":False,"race_transfer":False,"over_under":False,"variable_load":False,"recovery_under_load_exposures":0,"recovery_under_load_successes":0,"max_recovery_ratio":None,"max_successful_recovery_ratio":None,"latest_repeatability":None}
+    out={"quality_sessions":0,"repeatability_sessions":0,"repeatability_strong_sessions":0,"active_load_recovery":False,"preloaded_quality":False,"long_session":False,"late_quality":False,"race_transfer":False,"over_under":False,"variable_load":False,"recovery_under_load_exposures":0,"recovery_under_load_successes":0,"max_recovery_ratio":None,"max_successful_recovery_ratio":None,"latest_repeatability":None,"latest_repeatability_signature":None,"repeatability_signature_streak":0}
+    fallback_signatures=[]
     for b in blocks or []:
         if not isinstance(b,dict): continue
         quality=bool(b.get("quality_relevant")); rep=b.get("repeatability") or {}; dur=_rhythm_num(b.get("duration_min")); ftp=_rhythm_num(b.get("ftp")); rw=_rhythm_num(rep.get("recovery_avg_watts"))
@@ -19894,8 +19924,12 @@ def _v503_block_science_features(blocks, evidence_ledger=None):
             strong=(_rhythm_num(rep.get("first_to_last_decay_pct")) is not None and _rhythm_num(rep.get("first_to_last_decay_pct"))<=3.0) or str(deg.get("label") or "").upper() in {"EXCELLENT","GOOD","STABLE"} or any(str(x.get("type") or "").upper() in {"REPEATABILITY","LATE_REP","REPEATABLE_POWER"} for x in badges if isinstance(x,dict))
             if strong: out["repeatability_strong_sessions"]+=1
             ratio=(rw/ftp) if rw is not None and ftp and ftp>0 else None
+            sig=_v81_repeatability_signature({"reps":rep.get("reps"),"interval_secs":rep.get("interval_secs"),"recovery_secs":rep.get("recovery_secs")})
+            if strong and sig:
+                fallback_signatures.append(sig)
             if out["latest_repeatability"] is None:
-                out["latest_repeatability"]={"date":b.get("date"),"reps":rep.get("reps"),"interval_secs":rep.get("interval_secs"),"recovery_secs":rep.get("recovery_secs"),"avg_watts":rep.get("avg_watts"),"min_watts":rep.get("min_watts"),"max_watts":rep.get("max_watts"),"recovery_avg_watts":rw,"ftp":ftp,"recovery_ratio":round(ratio,3) if ratio is not None else None,"strong":bool(strong)}
+                out["latest_repeatability"]={"date":b.get("date"),"reps":rep.get("reps"),"interval_secs":rep.get("interval_secs"),"recovery_secs":rep.get("recovery_secs"),"avg_watts":rep.get("avg_watts"),"min_watts":rep.get("min_watts"),"max_watts":rep.get("max_watts"),"recovery_avg_watts":rw,"ftp":ftp,"recovery_ratio":round(ratio,3) if ratio is not None else None,"strong":bool(strong),"signature":sig}
+                out["latest_repeatability_signature"]=sig
             if ratio is not None:
                 cur=out.get("max_recovery_ratio");out["max_recovery_ratio"]=round(max(float(cur or 0),ratio),3)
                 if ratio>=0.45:
@@ -19904,9 +19938,16 @@ def _v503_block_science_features(blocks, evidence_ledger=None):
                         out["recovery_under_load_successes"]+=1
                         cur=out.get("max_successful_recovery_ratio");out["max_successful_recovery_ratio"]=round(max(float(cur or 0),ratio),3)
         if re.search(r"over[- ]?under|variable[- ]?load",text,re.I): out["over_under"]=out["variable_load"]=True
-        if re.search(r"pre[- ]?load|under fatigue|after .*endurance|fatigue resistance|durability",text,re.I): out["preloaded_quality"]=True
+        if re.search(r"pre[- ]?load|prior[- ]?load|\bload\s*\+\s*\d+\s*[x×]\s*\d+|under fatigue|after .*endurance|fatigue resistance|durability",text,re.I): out["preloaded_quality"]=True
         if re.search(r"late[- ]session|final hour|last hour|after \d+.*(?:min|h|hour|kj)",text,re.I): out["late_quality"]=True
         if re.search(r"race[- ]?like|race transfer|attack|surge|lead[- ]?in|mixed prior",text,re.I): out["race_transfer"]=True
+    if fallback_signatures:
+        first=fallback_signatures[0]
+        streak=0
+        for sig in fallback_signatures:
+            if sig!=first: break
+            streak+=1
+        out["repeatability_signature_streak"]=streak
     # Recovery-under-load is only considered established after repeated successful evidence or one clearly loaded successful exposure.
     out["active_load_recovery"]=bool(out["recovery_under_load_successes"]>=2 or _rhythm_num(out.get("max_successful_recovery_ratio")) is not None and float(out.get("max_successful_recovery_ratio"))>=0.58)
     return out
@@ -19983,6 +20024,18 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
         add("DURABILITY",82 if feat["long_session"] and not feat["late_quality"] else 40,"Long-duration exposure exists; the open question is how stable output remains late in the ride." if feat["long_session"] else "Durability needs more long-duration exposure first.")
         add("LATE_SESSION_STABILITY",78 if feat["long_session"] and established and not feat["late_quality"] else 44,"Enough endurance history exists to make late-session stability a useful progression question." if feat["long_session"] and established else "Late-session work is not yet the clearest missing evidence.")
         if validation_due: add("REVALIDATION",97,"Refresh the endurance/durability benchmark instead of adding gratuitous intensity.")
+    # R108 anti-loop architecture memory. Three consecutive successful repeats of
+    # the same canonical hard structure mean that another same-block contextual
+    # variant has low information value when a distinct unresolved goal-specific
+    # question is available. This is not random rotation: it only breaks a proven
+    # architecture loop and leaves validation/Calendar hard work untouched.
+    signature_streak=int(feat.get("repeatability_signature_streak") or 0)
+    structure_saturated=bool(signature_streak>=3 and "SPECIFIC_DOSE" in scores and scores.get("SPECIFIC_DOSE",0)>=60)
+    if structure_saturated:
+        for repeated_dim in ("RECOVERY_UNDER_LOAD","DURABILITY","RACE_TRANSFER"):
+            if repeated_dim in scores:
+                scores[repeated_dim]=max(0.0,float(scores[repeated_dim])-18.0)
+                reasons[repeated_dim]=(str(reasons.get(repeated_dim) or "").rstrip()+f" Recent canonical quality has repeated the same work architecture {signature_streak} times in succession, so Nova temporarily down-ranks another same-block contextual variant while a structurally distinct unresolved goal-specific dose question remains open.").strip()
     # Avoid pretending a product threshold is a scientific law: scores rank evidence gaps; they do not certify physiology.
     if not scores:
         if isinstance(question_state,dict) and not (question_state.get("open_dimensions") or []):
@@ -20005,7 +20058,7 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
     margin=(scores[ranked[0]]-scores[ranked[1]]) if len(ranked)>1 else 30
     confidence="HIGH" if dim=="NONE" else ("HIGH" if scores[dim]>=85 and margin>=12 else ("MEDIUM" if scores[dim]>=70 else "LOW"))
     dose_contract=_v504_scientific_dose_contract(goal,dim,feat)
-    return {"schema":"V4.8.74-R72-1","available":True,"goal_key":goal,"primary_anchor":graph.get("anchor"),"dimension":dim,"open_question":reasons.get(dim),"candidate_architectures":arch,"ranked_questions":ranked_questions,"confidence":confidence,"evidence_ids":evidence,"evidence":[{"id":k,**_V503_SCIENCE_EVIDENCE[k]} for k in evidence if k in _V503_SCIENCE_EVIDENCE],"dose_contract":dose_contract,"signals":{"fresh_anchor":fresh_anchor,"repeatability_strong":repeat_strong,"quality_sessions":feat["quality_sessions"],"repeatability_sessions":feat.get("repeatability_sessions"),"repeatability_strong_sessions":feat.get("repeatability_strong_sessions"),"repeatability_efforts":((evidence_ledger or {}).get("counts") or {}).get("repeatability_efforts") if isinstance(evidence_ledger,dict) else None,"evidence_ledger_schema":(evidence_ledger or {}).get("schema") if isinstance(evidence_ledger,dict) else None,"question_state_schema":(question_state or {}).get("schema") if isinstance(question_state,dict) else None,"closed_questions":list((question_state or {}).get("closed_dimensions") or []) if isinstance(question_state,dict) else [],"evidence_scope":(evidence_ledger or {}).get("scope") if isinstance(evidence_ledger,dict) else None,"active_load_recovery_seen":feat["active_load_recovery"],"recovery_under_load_exposures":feat.get("recovery_under_load_exposures"),"recovery_under_load_successes":feat.get("recovery_under_load_successes"),"max_successful_recovery_ratio":feat.get("max_successful_recovery_ratio"),"preloaded_quality_seen":feat["preloaded_quality"],"long_session_seen":feat["long_session"],"race_transfer_seen":feat["race_transfer"],"high_dose_progressed":high_progressed,"moderate_dose_progressed":moderate_progressed,"validation_due":validation_due,"checkpoint_role":role},"guardrail":"Specificity first: science selects the adaptation question; athlete data doses the progression. Change one dominant stress variable at a time when an architecture is novel. Recovery/spacing decides executability, not adaptation purpose. Product score thresholds and dose ramps are conservative heuristics, not physiological laws."}
+    return {"schema":"V4.8.74-R72-1","available":True,"goal_key":goal,"primary_anchor":graph.get("anchor"),"dimension":dim,"open_question":reasons.get(dim),"candidate_architectures":arch,"ranked_questions":ranked_questions,"confidence":confidence,"evidence_ids":evidence,"evidence":[{"id":k,**_V503_SCIENCE_EVIDENCE[k]} for k in evidence if k in _V503_SCIENCE_EVIDENCE],"dose_contract":dose_contract,"signals":{"fresh_anchor":fresh_anchor,"repeatability_strong":repeat_strong,"quality_sessions":feat["quality_sessions"],"repeatability_sessions":feat.get("repeatability_sessions"),"repeatability_strong_sessions":feat.get("repeatability_strong_sessions"),"repeatability_efforts":((evidence_ledger or {}).get("counts") or {}).get("repeatability_efforts") if isinstance(evidence_ledger,dict) else None,"evidence_ledger_schema":(evidence_ledger or {}).get("schema") if isinstance(evidence_ledger,dict) else None,"question_state_schema":(question_state or {}).get("schema") if isinstance(question_state,dict) else None,"closed_questions":list((question_state or {}).get("closed_dimensions") or []) if isinstance(question_state,dict) else [],"evidence_scope":(evidence_ledger or {}).get("scope") if isinstance(evidence_ledger,dict) else None,"active_load_recovery_seen":feat["active_load_recovery"],"recovery_under_load_exposures":feat.get("recovery_under_load_exposures"),"recovery_under_load_successes":feat.get("recovery_under_load_successes"),"max_successful_recovery_ratio":feat.get("max_successful_recovery_ratio"),"preloaded_quality_seen":feat["preloaded_quality"],"long_session_seen":feat["long_session"],"race_transfer_seen":feat["race_transfer"],"high_dose_progressed":high_progressed,"moderate_dose_progressed":moderate_progressed,"validation_due":validation_due,"checkpoint_role":role,"latest_repeatability_signature":feat.get("latest_repeatability_signature"),"repeatability_signature_streak":int(feat.get("repeatability_signature_streak") or 0),"structure_saturated":bool(structure_saturated)},"guardrail":"Specificity first: science selects the adaptation question; athlete data doses the progression. Change one dominant stress variable at a time when an architecture is novel. Recovery/spacing decides executability, not adaptation purpose. Product score thresholds and dose ramps are conservative heuristics, not physiological laws."}
 def _v503_scientific_progression_text(x):
     if not (x or {}).get("available"): return "SCIENTIFIC COACH MEMORY: unavailable."
     if str((x or {}).get("dimension") or "").upper()=="NONE":
