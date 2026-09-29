@@ -93,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.89 WIP R113 · ROADMAP CASCADE PROJECTION · R112 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.90 WIP R114 · BREADTH-GATED TRANSFER · CURRENT QUESTION IDENTITY · R113 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -27789,6 +27789,239 @@ def _v87_cross_module_authority_guard(snapshot, repair=True):
         "Roadmap stage and missing-facet evidence are projected into Training Direction, performance narrative and Next Microcycle; "
         "those surfaces may explain the canonical plan but may not carry stale goal-template advice."
     )
+    out["cross_module_authority_audit"] = audit
+    semantic = out.get("semantic_authority_audit") if isinstance(out.get("semantic_authority_audit"), dict) else {}
+    semantic["cross_module_authority_pass"] = audit["final_pass"]
+    semantic["cross_module_authority_schema"] = audit["schema"]
+    if issues:
+        semantic["final_pass"] = False
+        semantic["pass"] = False
+    out["semantic_authority_audit"] = semantic
+    out["authority_final_pass"] = bool(audit["final_pass"] and semantic.get("final_pass", True))
+    return out
+
+
+
+# ============================================================================
+# R114 · BREADTH-GATED TRANSFER + CURRENT QUESTION IDENTITY
+#
+# R113 projected the evidence-gated Roadmap into athlete-facing direction text,
+# but the live QA exposed three remaining semantic leaks:
+# 1) TRANSFER could be entered with only 2/3 configured goal facets covered;
+# 2) performance_narrative.open_question could still name an older unresolved
+#    dimension rather than Nova's currently selected coaching question;
+# 3) Scientific Progression ranked-question prose could retain a generic legacy
+#    duration architecture even while the Roadmap targeted a different facet.
+#
+# R114 closes those gaps. A configured multi-facet goal may enter TRANSFER only
+# after all configured breadth facets are represented. The selected current
+# question and target facet are projected into the narrative/science surfaces.
+# Historical microcycle objectives are retained for audit history but explicitly
+# scoped as historical; the current Roadmap projection is a separate field.
+# ============================================================================
+R114_SCHEMA = "V4.8.90-R114-1"
+
+_v111_stage_index_r113 = _v111_stage_index
+def _v111_stage_index(goal, facet_state, question_state, evidence_ledger=None):
+    idx = _v111_stage_index_r113(goal, facet_state, question_state, evidence_ledger)
+    goal = str(goal or "").upper()
+    facet = facet_state if isinstance(facet_state, dict) else {}
+    configured = goal in {"POWER_5","VO2MAX","POWER_1","SPRINTER","POWER_20","TIME_TRIAL"}
+    if configured and facet.get("available"):
+        breadth = int(facet.get("coverage_count") or 0)
+        required = int(facet.get("required_count") or 0)
+        # TRANSFER means the goal's configured breadth has actually been built.
+        # REPEAT may coexist with one remaining breadth gap; TRANSFER may not.
+        if required > 0 and breadth < required and int(idx or 0) >= 2:
+            idx = 1
+    return max(0, min(3, int(idx or 0)))
+
+
+_v503_scientific_progression_r113 = _v503_scientific_progression
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None, previous_blocks=None, performance_narrative=None, performance_evidence=None, aerobic_metabolic_range=None, evidence_ledger=None, question_state=None):
+    out = _v503_scientific_progression_r113(
+        goal_key, roadmap, ledger, session_progression, previous_blocks,
+        performance_narrative, performance_evidence, aerobic_metabolic_range,
+        evidence_ledger=evidence_ledger, question_state=question_state
+    )
+    if not isinstance(out, dict):
+        return out
+    breadth = out.get("breadth_override") if isinstance(out.get("breadth_override"), dict) else {}
+    facet = out.get("facet_profile") if isinstance(out.get("facet_profile"), dict) else {}
+    labels = facet.get("labels") if isinstance(facet.get("labels"), dict) else {}
+    target = str(breadth.get("target_facet") or "")
+    target_label = str(labels.get(target) or target).strip() if target else ""
+    dim = str(out.get("dimension") or "").upper()
+    if breadth.get("applied") and target_label and dim:
+        arch = f"goal-specific work targeting {target_label} while preserving one dominant progression lever"
+        out["candidate_architectures"] = [arch]
+        for row in out.get("ranked_questions") or []:
+            if isinstance(row, dict) and str(row.get("dimension") or "").upper() == dim:
+                row["reason"] = (
+                    f"Roadmap breadth is incomplete: direct evidence in {target_label} is still missing. "
+                    "Close this breadth gap before progressing to a downstream transfer context."
+                )
+                row["architectures"] = [arch]
+                row["target_facet"] = target
+                row["target_label"] = target_label
+                break
+        out["current_question_identity"] = {
+            "dimension": dim,
+            "target_facet": target,
+            "target_label": target_label,
+            "source": "EVIDENCE_GATED_ROADMAP_BREADTH",
+        }
+    return out
+
+
+_v113_sync_training_direction_with_roadmap_r113 = _v113_sync_training_direction_with_roadmap
+def _v113_sync_training_direction_with_roadmap(training_direction, adaptive_roadmap, nova_decision=None, scientific_progression=None):
+    td, road = _v113_sync_training_direction_with_roadmap_r113(
+        training_direction, adaptive_roadmap, nova_decision, scientific_progression
+    )
+    dec = nova_decision if isinstance(nova_decision, dict) else {}
+    sci = scientific_progression if isinstance(scientific_progression, dict) else {}
+    dim = str(dec.get("dimension") or sci.get("dimension") or "").upper()
+    projection = td.get("roadmap_projection") if isinstance(td.get("roadmap_projection"), dict) else {}
+    target = str(projection.get("target_facet") or "")
+    target_label = str(projection.get("target_label") or "")
+    pn = road.get("performance_narrative") if isinstance(road.get("performance_narrative"), dict) else {}
+    if isinstance(pn, dict) and dim:
+        pn["open_question"] = dim
+        pn["open_question_source"] = "NOVA_DECISION"
+        pn["open_question_detail"] = (
+            f"Close the current {target_label} evidence gap." if target_label
+            else f"Progress the current {_v113_human_dimension(dim)} question inside the present Roadmap stage."
+        )
+        road["performance_narrative"] = pn
+    return td, road
+
+
+_v87_cross_module_authority_guard_r113 = _v87_cross_module_authority_guard
+def _v87_cross_module_authority_guard(snapshot, repair=True):
+    out = _v87_cross_module_authority_guard_r113(snapshot, repair=repair)
+    if not isinstance(out, dict):
+        return out
+    td = out.get("training_direction") if isinstance(out.get("training_direction"), dict) else {}
+    road = out.get("adaptive_roadmap") if isinstance(out.get("adaptive_roadmap"), dict) else {}
+    dec = road.get("nova_decision") if isinstance(road.get("nova_decision"), dict) else {}
+    if not dec:
+        dec = out.get("nova_decision") if isinstance(out.get("nova_decision"), dict) else {}
+    sci = road.get("scientific_progression") if isinstance(road.get("scientific_progression"), dict) else {}
+    facet = road.get("facet_profile") if isinstance(road.get("facet_profile"), dict) else {}
+    if not facet:
+        facet = sci.get("facet_profile") if isinstance(sci.get("facet_profile"), dict) else {}
+    narrative = road.get("performance_narrative") if isinstance(road.get("performance_narrative"), dict) else {}
+    ledger = out.get("microcycle_ledger") if isinstance(out.get("microcycle_ledger"), dict) else {}
+
+    projection = td.get("roadmap_projection") if isinstance(td.get("roadmap_projection"), dict) else {}
+    target = str(projection.get("target_facet") or "")
+    target_label = str(projection.get("target_label") or "")
+    dim = str(dec.get("dimension") or sci.get("dimension") or projection.get("dimension") or "").upper()
+    stage_index = int(road.get("stage_index") or 0)
+    breadth = int(facet.get("coverage_count") or 0) if facet.get("available") else 0
+    required = int(facet.get("required_count") or 0) if facet.get("available") else 0
+    goal = str(road.get("goal_key") or td.get("primary_goal") or "").upper()
+    configured = goal in {"POWER_5","VO2MAX","POWER_1","SPRINTER","POWER_20","TIME_TRIAL"}
+
+    # Preserve historical ledger truth, but make its temporal scope explicit.
+    if ledger.get("objective"):
+        ledger["objective_scope"] = "HISTORICAL_CYCLE_OPEN"
+    if ledger.get("current_objective"):
+        ledger["current_objective_scope"] = "CURRENT_ROADMAP_PROJECTION"
+    anchor = ledger.get("primary_anchor") if isinstance(ledger.get("primary_anchor"), dict) else {}
+    if anchor.get("strategy_objective"):
+        anchor["strategy_objective_scope"] = "HISTORICAL_AT_ANCHOR_CREATION"
+
+    stage_breadth_pass = not (configured and required > 0 and stage_index >= 2 and breadth < required)
+    question_pass = bool(not dim or str(narrative.get("open_question") or "").upper() == dim)
+    science_pass = True
+    if target_label and sci.get("breadth_override", {}).get("applied"):
+        selected = None
+        for row in sci.get("ranked_questions") or []:
+            if isinstance(row, dict) and str(row.get("dimension") or "").upper() == dim:
+                selected = row
+                break
+        science_text = " ".join(
+            [str(x) for x in (sci.get("candidate_architectures") or [])]
+            + ([str(x) for x in (selected or {}).get("architectures") or []] if selected else [])
+        ).lower()
+        science_pass = target_label.lower() in science_text
+    current_objective_pass = True
+    if ledger:
+        current_objective_pass = (
+            str(ledger.get("current_objective") or "") == str(td.get("microcycle_direction") or "")
+            and str(ledger.get("current_objective_source") or "") == "EVIDENCE_GATED_ROADMAP_PROJECTION"
+        )
+
+    audit = out.get("cross_module_authority_audit") if isinstance(out.get("cross_module_authority_audit"), dict) else {}
+    checks = list(audit.get("checks") or [])
+    issues = list(audit.get("issues") or [])
+    checks.extend([
+        {
+            "name":"R114_STAGE_BREADTH_GATE",
+            "goal_key":goal or None,
+            "stage_index":stage_index,
+            "coverage_count":breadth,
+            "required_count":required,
+            "pass":stage_breadth_pass,
+        },
+        {
+            "name":"R114_CURRENT_QUESTION_IDENTITY",
+            "decision_dimension":dim or None,
+            "narrative_open_question":narrative.get("open_question"),
+            "target_facet":target or None,
+            "target_label":target_label or None,
+            "scientific_target_matches":science_pass,
+            "pass":bool(question_pass and science_pass),
+        },
+        {
+            "name":"R114_MICROCYCLE_OBJECTIVE_SCOPE",
+            "historical_scope":ledger.get("objective_scope"),
+            "current_scope":ledger.get("current_objective_scope"),
+            "current_matches_training_direction":current_objective_pass,
+            "pass":current_objective_pass,
+        },
+    ])
+    if not stage_breadth_pass:
+        issues.append({
+            "code":"ROADMAP_TRANSFER_BEFORE_BREADTH_COMPLETE",
+            "path":"adaptive_roadmap.stage_index",
+            "expected":{"max_stage_index":1,"coverage_count":breadth,"required_count":required},
+            "actual":{"stage_index":stage_index},
+        })
+    if not question_pass:
+        issues.append({
+            "code":"CURRENT_QUESTION_IDENTITY_MISMATCH",
+            "path":"adaptive_roadmap.performance_narrative.open_question",
+            "expected":dim or None,
+            "actual":narrative.get("open_question"),
+        })
+    if not science_pass:
+        issues.append({
+            "code":"SCIENTIFIC_ARCHITECTURE_FACET_MISMATCH",
+            "path":"adaptive_roadmap.scientific_progression.ranked_questions",
+            "expected":target_label or None,
+            "actual":sci.get("candidate_architectures"),
+        })
+    if not current_objective_pass:
+        issues.append({
+            "code":"CURRENT_MICROCYCLE_OBJECTIVE_MISMATCH",
+            "path":"microcycle_ledger.current_objective",
+            "expected":td.get("microcycle_direction"),
+            "actual":ledger.get("current_objective"),
+        })
+    audit["schema"] = R114_SCHEMA
+    audit["checks"] = checks
+    audit["issues"] = issues
+    audit["status"] = "PASS" if not issues else "BLOCKED"
+    audit["final_pass"] = not bool(issues)
+    audit["rule"] = (
+        "TRANSFER requires complete configured breadth; the current Nova question, Roadmap facet, Scientific Progression and "
+        "athlete-facing narrative must share one identity. Historical microcycle objectives remain immutable history and are "
+        "explicitly separated from the current evidence-gated Roadmap objective."
+    )
+    out["microcycle_ledger"] = ledger
     out["cross_module_authority_audit"] = audit
     semantic = out.get("semantic_authority_audit") if isinstance(out.get("semantic_authority_audit"), dict) else {}
     semantic["cross_module_authority_pass"] = audit["final_pass"]
