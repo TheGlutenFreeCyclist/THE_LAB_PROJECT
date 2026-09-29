@@ -93,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.87 WIP R111 · EVIDENCE-GATED ROADMAP · DEEP WORKOUT LIBRARY · R110 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.88 WIP R112 · ROADMAP STAGE SINGLE AUTHORITY · REFERENCE-ONLY POWER · R111 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -27360,6 +27360,265 @@ def _v111_library_coverage_audit():
     return {"revision":NOVA_WORKOUT_LIBRARY_REVISION,"total_workouts":len(_NOVA_WORKOUT_LIBRARY),"goals":rows,"pass":ok}
 
 NOVA_WORKOUT_LIBRARY_COVERAGE=_v111_library_coverage_audit()
+
+
+# ============================================================================
+# R112 · ROADMAP STAGE SINGLE AUTHORITY + REFERENCE-ONLY POWER SEMANTICS
+#
+# R111 correctly computed the evidence-gated Roadmap stage inside Scientific
+# Progression, but the legacy Nova Decision dimension->stage hint could later
+# move YOUR ROADMAP backward (e.g. TRANSFER -> BUILD when SPECIFIC_DOSE was
+# selected to close a missing breadth facet). R112 makes the evidence-gated
+# Roadmap the only stage authority. The selected adaptation dimension may vary
+# inside that stage, but it cannot rewrite stage history.
+#
+# R112 also prevents same-duration observational watt references embedded in a
+# canonical library workout from being parsed as exact prescribed watt targets.
+# ============================================================================
+R112_SCHEMA = "V4.8.88-R112-1"
+
+# Align athlete-facing Roadmap language with the breadth model introduced in R111.
+# These labels describe the supported product evidence space; the primary
+# checkpoint remains goal-specific and is not replaced by a requirement to test
+# every duration maximally.
+_V4873_ROADMAP_GOALS["POWER_5"]["north_star"] = (
+    "Build race-useful multi-minute punch across short, core and extended efforts, "
+    "then make that punch repeatable and usable under fatigue."
+)
+_V4873_ROADMAP_GOALS["POWER_5"]["stages"] = [
+    ("BUILD", "Multi-minute punch", "Establish high-quality punch across more than one multi-minute duration band without forcing maximal tests at every duration."),
+    ("REPEAT", "Repeatability", "Preserve the developed punch across repeated efforts with controlled early reps and limited late-set fade."),
+    ("TRANSFER", "Race-useful punch", "Complete any remaining breadth gap, then carry the developed punch into accumulated fatigue and race-like context while preserving the aerobic base."),
+    ("VALIDATE", "5-minute checkpoint", "Validate the block with the primary 5-minute checkpoint after breadth, repeatability and transfer evidence are sufficiently developed."),
+]
+_V4873_ROADMAP_GOALS["VO2MAX"]["north_star"] = (
+    "Develop maximal-aerobic capacity across short, core and extended high-aerobic efforts, "
+    "then make that capacity repeatable and durable."
+)
+_V4873_ROADMAP_GOALS["POWER_1"]["north_star"] = (
+    "Develop 20–120 second power across short, core and extended anaerobic efforts, "
+    "then make that power repeatable and usable later in demanding riding."
+)
+_V4873_ROADMAP_GOALS["SPRINTER"]["north_star"] = (
+    "Develop sprint performance across peak, core and longer sprint-duration demands "
+    "while preserving the freshness and technique needed to express it."
+)
+_V4873_ROADMAP_GOALS["POWER_20"]["north_star"] = (
+    "Develop sustained power across short, core and extended pressure durations, then preserve it deeper into demanding work."
+)
+_V4873_ROADMAP_GOALS["TIME_TRIAL"]["north_star"] = (
+    "Develop race-specific sustained power across short, core and extended TT-duration demands, then hold it with stable pacing under fatigue."
+)
+
+_build_nova_decision_r111 = build_nova_decision
+def build_nova_decision(goal_key, question_state=None, scientific_progression=None, adaptive_roadmap=None, training_state=None, planning_context=None):
+    out = _build_nova_decision_r111(
+        goal_key, question_state=question_state, scientific_progression=scientific_progression,
+        adaptive_roadmap=adaptive_roadmap, training_state=training_state, planning_context=planning_context
+    )
+    road = adaptive_roadmap if isinstance(adaptive_roadmap, dict) else {}
+    gate = road.get("stage_evidence_gate") if isinstance(road.get("stage_evidence_gate"), dict) else {}
+    stage = road.get("stage") if isinstance(road.get("stage"), dict) else {}
+    stage_code = str(stage.get("code") or "").upper()
+    if gate.get("authority") == "EVIDENCE_GATED_ROADMAP" and stage_code:
+        legacy_hint = out.get("stage_code")
+        out["purpose_stage_hint"] = legacy_hint
+        out["stage_code"] = stage_code
+        out["roadmap_stage_code"] = stage_code
+        out["roadmap_stage_index"] = road.get("stage_index")
+        out["stage_authority"] = "EVIDENCE_GATED_ROADMAP"
+        corrections = list(out.get("corrections") or [])
+        if legacy_hint and str(legacy_hint).upper() != stage_code:
+            corrections.append(f"R112_ROADMAP_STAGE_AUTHORITY_{str(legacy_hint).upper()}_TO_{stage_code}")
+        out["corrections"] = corrections
+        out["schema"] = R112_SCHEMA
+    return out
+
+
+_v83_apply_nova_decision_to_roadmap_r111 = _v83_apply_nova_decision_to_roadmap
+def _v83_apply_nova_decision_to_roadmap(roadmap, decision):
+    road = roadmap if isinstance(roadmap, dict) else {}
+    gate = road.get("stage_evidence_gate") if isinstance(road.get("stage_evidence_gate"), dict) else {}
+    protected = None
+    if gate.get("authority") == "EVIDENCE_GATED_ROADMAP":
+        protected = {
+            "stage_index": road.get("stage_index"),
+            "stage": copy.deepcopy(road.get("stage")),
+            "steps": copy.deepcopy(road.get("steps") or []),
+            "stage_evidence_gate": copy.deepcopy(gate),
+        }
+    out = _v83_apply_nova_decision_to_roadmap_r111(road, decision)
+    if protected is not None:
+        out["stage_index"] = protected["stage_index"]
+        out["stage"] = protected["stage"]
+        out["steps"] = protected["steps"]
+        out["stage_evidence_gate"] = protected["stage_evidence_gate"]
+        out["stage_authority"] = "EVIDENCE_GATED_ROADMAP"
+        stage_code = str(((out.get("stage") or {}).get("code") or "")).upper()
+        embedded = out.get("nova_decision") if isinstance(out.get("nova_decision"), dict) else {}
+        if stage_code:
+            embedded["roadmap_stage_code"] = stage_code
+            embedded["roadmap_stage_index"] = out.get("stage_index")
+            embedded["stage_authority"] = "EVIDENCE_GATED_ROADMAP"
+            embedded["stage_code"] = stage_code
+            out["nova_decision"] = embedded
+    return out
+
+
+def _v112_reference_only_power(session):
+    s = session if isinstance(session, dict) else {}
+    if str(s.get("stimulus_architecture_state") or "").upper() != "NOVA_CANONICAL_LIBRARY":
+        return False
+    blob = str(s.get("main_set") or "").lower()
+    return bool(
+        "use it only as pacing/ceiling context" in blob
+        or "no exact training wattage is inferred" in blob
+        or "no precise watt target is justified" in blob
+        or "no exact watt target is inferred" in blob
+    )
+
+
+def _v112_reference_only_why(dimension, session):
+    dim = str(dimension or "").upper()
+    ref = _rhythm_num((session or {}).get("quality_reference_watts"))
+    mins = _rhythm_num((session or {}).get("quality_reference_interval_min"))
+    context = ""
+    if ref is not None and mins is not None:
+        context = f" The recent {mins:g}-min value ({ref:.0f} W) is pacing context only, not a prescribed target."
+    messages = {
+        "FRESH_CAPACITY": "Nova selected this canonical structure to develop the current fresh-capacity question without inventing an absolute watt target.",
+        "SPECIFIC_DOSE": "Nova selected this canonical structure to close the current dose/breadth gap while keeping the workout mechanics fixed by workout_id.",
+        "REPEATABILITY": "Nova selected this canonical structure to test stable reproduction across the set rather than a single peak effort.",
+        "DURABILITY": "Nova selected this canonical structure to test the proven work after meaningful prior load; prior load is the progression lever, not a higher watt target.",
+        "RACE_TRANSFER": "Nova selected this canonical structure to move proven work into race-like context without inventing a new absolute watt target.",
+        "TIME_AT_PRESSURE": "Nova selected this canonical structure to accumulate controlled time in the required sustained domain without converting a field reference into a target.",
+        "VARIABLE_LOAD": "Nova selected this canonical structure because variable load is the open question; the workout is governed by its canonical mechanics rather than an inferred absolute watt target.",
+    }
+    return (messages.get(dim) or "Nova selected this canonical workout for the current adaptation question without inventing an absolute watt target.") + context
+
+
+_compile_nova_prescription_r111 = compile_nova_prescription
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, microcycle_ledger=None, coaching_contract=None, adaptive_roadmap=None, strength_pattern=None, training_rhythm=None, execution_model=None):
+    out = _compile_nova_prescription_r111(
+        prescription, coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+        recent_activities=recent_activities, undefined_training_intent=undefined_training_intent, power_model=power_model,
+        microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
+        strength_pattern=strength_pattern, training_rhythm=training_rhythm, execution_model=execution_model,
+    )
+    sessions = []
+    changed = 0
+    for row in (out.get("sessions") or []):
+        s = dict(row) if isinstance(row, dict) else row
+        if isinstance(s, dict) and _v112_reference_only_power(s):
+            if s.get("prescribed_power_low") is not None or s.get("prescribed_power_high") is not None or s.get("quality_target_ratio") is not None:
+                changed += 1
+            s["prescribed_power_low"] = None
+            s["prescribed_power_high"] = None
+            s["quality_target_ratio"] = None
+            s["power_band"] = None
+            if str(s.get("intensity_class") or "").lower() in {"tempo","threshold","vo2"}:
+                s["quality_relevance"] = "MEANINGFUL"
+            reasons = list(s.get("coherence_reasons") or [])
+            if "NOVA_REFERENCE_WATTS_NOT_PRESCRIPTION" not in reasons:
+                reasons.append("NOVA_REFERENCE_WATTS_NOT_PRESCRIPTION")
+            s["coherence_reasons"] = reasons
+            s["why"] = _v112_reference_only_why(s.get("nova_prescription_dimension"), s)
+        sessions.append(s)
+    out["sessions"] = sessions
+    out["reference_only_power_repairs"] = changed
+    out["schema"] = R112_SCHEMA
+    return out
+
+
+_v491_competitive_direction_r111 = _v491_competitive_direction
+def _v491_competitive_direction(goal_key, roadmap, progression, achievements, power_model=None):
+    out = _v491_competitive_direction_r111(goal_key, roadmap, progression, achievements, power_model)
+    if str(goal_key or "").upper() == "POWER_5" and isinstance(out, dict):
+        out["headline"] = "Race-useful multi-minute punch"
+        out["focus"] = "Race-useful multi-minute punch"
+        out["next_step"] = "Build breadth across short, core and extended multi-minute punch, then preserve it across later reps, prior load and repeated attacks."
+    return out
+
+
+_v87_cross_module_authority_guard_r111 = _v87_cross_module_authority_guard
+def _v87_cross_module_authority_guard(snapshot, repair=True):
+    out = _v87_cross_module_authority_guard_r111(snapshot, repair=repair)
+    if not isinstance(out, dict):
+        return out
+    road = out.get("adaptive_roadmap") if isinstance(out.get("adaptive_roadmap"), dict) else {}
+    dec = out.get("nova_decision") if isinstance(out.get("nova_decision"), dict) else {}
+    sci = road.get("scientific_progression") if isinstance(road.get("scientific_progression"), dict) else {}
+    gate = road.get("stage_evidence_gate") if isinstance(road.get("stage_evidence_gate"), dict) else {}
+    audit = out.get("cross_module_authority_audit") if isinstance(out.get("cross_module_authority_audit"), dict) else {}
+    checks = list(audit.get("checks") or [])
+    issues = list(audit.get("issues") or [])
+    road_code = str(((road.get("stage") or {}).get("code") or "")).upper()
+    dec_code = str(dec.get("stage_code") or "").upper()
+    sci_code = str(sci.get("roadmap_stage_code") or "").upper()
+    stage_check = {
+        "name": "R112_ROADMAP_STAGE_IDENTITY",
+        "authority": gate.get("authority"),
+        "roadmap_stage": road_code or None,
+        "decision_stage": dec_code or None,
+        "scientific_stage": sci_code or None,
+        "pass": True,
+    }
+    if gate.get("authority") == "EVIDENCE_GATED_ROADMAP":
+        same = bool(road_code and dec_code == road_code and (not sci_code or sci_code == road_code))
+        stage_check["pass"] = same
+        if not same:
+            issues.append({
+                "code":"ROADMAP_STAGE_AUTHORITY_MISMATCH",
+                "path":"adaptive_roadmap.stage",
+                "expected":road_code,
+                "actual":{"nova_decision":dec_code,"scientific_progression":sci_code},
+            })
+    checks.append(stage_check)
+
+    reference_sessions = [
+        s for s in (out.get("next_sessions") or [])
+        if isinstance(s, dict) and str(s.get("stimulus_architecture_state") or "").upper()=="NOVA_CANONICAL_LIBRARY"
+        and _v112_reference_only_power(s)
+    ]
+    ref_pass = all(
+        s.get("prescribed_power_low") is None
+        and s.get("prescribed_power_high") is None
+        and s.get("quality_target_ratio") is None
+        for s in reference_sessions
+    )
+    checks.append({
+        "name":"R112_REFERENCE_ONLY_POWER_SEMANTICS",
+        "checked":len(reference_sessions),
+        "pass":ref_pass,
+    })
+    if not ref_pass:
+        issues.append({
+            "code":"REFERENCE_ONLY_WATTS_BECAME_PRESCRIPTION",
+            "path":"next_sessions",
+            "expected":"REFERENCE_ONLY",
+            "actual":"PRESCRIBED_POWER_PRESENT",
+        })
+
+    audit["schema"] = R112_SCHEMA
+    audit["checks"] = checks
+    audit["issues"] = issues
+    audit["status"] = "PASS" if not issues else "BLOCKED"
+    audit["final_pass"] = not bool(issues)
+    audit["rule"] = (
+        "The evidence-gated Roadmap owns stage identity; Nova Decision owns the current adaptation purpose; "
+        "the canonical workout_id owns mechanics; observational watt references never become exact prescriptions."
+    )
+    out["cross_module_authority_audit"] = audit
+    semantic = out.get("semantic_authority_audit") if isinstance(out.get("semantic_authority_audit"), dict) else {}
+    semantic["cross_module_authority_pass"] = audit["final_pass"]
+    semantic["cross_module_authority_schema"] = audit["schema"]
+    if issues:
+        semantic["final_pass"] = False
+        semantic["pass"] = False
+    out["semantic_authority_audit"] = semantic
+    out["authority_final_pass"] = bool(audit["final_pass"] and semantic.get("final_pass", True))
+    return out
+
 
 
 if __name__ == "__main__":
