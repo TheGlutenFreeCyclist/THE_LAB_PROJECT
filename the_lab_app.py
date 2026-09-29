@@ -93,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.81 WIP R105 · ONBOARDING DATA-SOURCE DISCLAIMERS · R104 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.82 WIP R106 · RECOMMENDATION SINGLE AUTHORITY · R105 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -5867,34 +5867,72 @@ def _v4891_finalize_ai_copy(parsed):
         if notice:
             sess["athlete_intent_notice"] = _V4891_TTE_NOTICE_UI.get(notice, _v4891_direct_user_text(notice))
     return out
+# R106 · Recommendation Single Authority.
+# The athlete-facing "What I would do from here" is no longer a second coaching
+# engine. It is a lossless prose projection of the FINAL canonical session list.
+# Roadmap windows, provider prose and narrative heuristics may explain context
+# elsewhere, but they cannot add, remove, advance or soften a workout here.
+def _v106_session_is_hard(sess):
+    s=sess if isinstance(sess,dict) else {}
+    return bool(
+        s.get("hard_spacing_relevant") or s.get("provisional_quality") or
+        str(s.get("quality_relevance") or "").upper()=="MEANINGFUL" or
+        str(s.get("intensity_class") or "").lower() in {"vo2","threshold"} or
+        str(s.get("stimulus_role") or "").upper()=="VALIDATE"
+    )
+
+def _v106_recommendation_contract(sessions):
+    rows=[x for x in (sessions or []) if isinstance(x,dict)]
+    hard_indexes=[i for i,x in enumerate(rows) if _v106_session_is_hard(x)]
+    easy_indexes=[i for i,x in enumerate(rows) if str(x.get("intensity_class") or "").lower() in {"recovery","endurance"} and not _v106_session_is_hard(x)]
+    return {
+        "schema":"V4.8.82-R106-1",
+        "source":"FINAL_CANONICAL_NEXT_SESSIONS",
+        "session_count":len(rows),
+        "all_easy":bool(rows) and len(easy_indexes)==len(rows),
+        "first_hard_index":hard_indexes[0] if hard_indexes else None,
+        "hard_session_count":len(hard_indexes),
+        "session_signatures":[_v87_session_signature(x) for x in rows],
+    }
+
+def _v106_recommendation_projection(sessions):
+    rows=[x for x in (sessions or []) if isinstance(x,dict)]
+    if not rows:
+        return "No training session is currently prescribed in this Snapshot."
+    contract=_v106_recommendation_contract(rows)
+    first=rows[0]
+    title=str(first.get("title") or "next session").strip()
+    dur=str(first.get("duration") or "").strip()
+    main=str(first.get("main_set") or "").strip()
+    why=str(first.get("why") or "").strip()
+    lead=f"Your next session is {title}"+(f" ({dur})" if dur else "")+"."
+    parts=[lead]
+    if main:
+        parts.extend(_v4844_sentence_list(main)[:2])
+    if why:
+        parts.extend(_v4844_sentence_list(why)[:1])
+    hard_i=contract.get("first_hard_index")
+    if hard_i is not None and hard_i>0:
+        hard=rows[hard_i]
+        hslot=str(hard.get("slot") or "").strip()
+        htitle=str(hard.get("title") or "hard session").strip()
+        label=(hslot+": "+htitle) if hslot else htitle
+        parts.append(f"The next hard session already listed is {label}; follow the preceding sessions exactly as shown and do not move that hard work earlier.")
+    elif contract.get("all_easy"):
+        parts.append("All currently listed sessions are easy/recovery; no hard session is prescribed in this Snapshot.")
+    elif len(rows)>1:
+        parts.append("Follow the remaining listed sessions exactly as shown; this recommendation does not create any additional workout or intensity.")
+    return " ".join(_v4844_dedupe_sentences(parts))[:1500].strip()
+
 def _v4901_coach_call(out, road=None, question=None):
-    if not isinstance(out,dict): return out
-    rows=[x for x in (out.get("next_sessions") or []) if isinstance(x,dict)];q=(road or {}).get("quality_window") or {};parts=[]
-    rec=_v4844_sentence_list(out.get("recommendation"));outlook=_v4844_sentence_list(out.get("season_outlook"))
-    if question:
-        ranked=sorted(((_v4898_request_sentence_score(x,question),x) for x in rec),reverse=True)
-        if ranked and ranked[0][0]>0:parts.append(ranked[0][1])
-    for x in outlook+rec:
-        low=x.lower()
-        if x in parts or _v4897_internal_leak(x) or re.search(r"\b(?:tomorrow|tonight|this evening|next session|next hard|quality window|candidate quality|mandatory easy)\b",low):continue
-        if low.startswith("training first:") or low.startswith("new 2026 ytd best"):continue
-        if any(k in low for k in ("what this means","positive evidence","today's","today ","completed","execution","repeatability")):parts.append(x);break
-    first=rows[0] if rows else {};first_easy=str(first.get("intensity_class") or "").lower() in {"recovery","endurance"} and not first.get("hard_spacing_relevant")
-    if first_easy:
-        dur=str(first.get("duration") or "").strip();parts.append("Your next ride stays easy"+(f" for {dur}" if dur else "")+" in Z1–Z2, with no added intensity.")
-        if len(rows)>1 and str(rows[1].get("intensity_class") or "").lower() in {"recovery","endurance"} and not rows[1].get("hard_spacing_relevant"):parts.append("If you ride again before then, keep that session easy as well.")
-    hard=next((x for x in rows if x.get("hard_spacing_relevant") or x.get("provisional_quality") or str(x.get("quality_relevance") or "").upper()=="MEANINGFUL" or str(x.get("intensity_class") or "").lower() in {"vo2","threshold"} or str(x.get("stimulus_role") or "").upper()=="VALIDATE"),None)
-    edge=str(q.get("earliest") or q.get("preferred") or "").strip();state=str(q.get("state") or "").upper()
-    if hard:
-        label=hard.get("slot") or hard.get("title")
-        parts.append((f"The next hard session is {label}, but it remains conditional on recovery before you start." if state in {"WATCH","RACE WATCH"} else f"The next purposeful hard session is {label}; use it only for the prescribed purpose, not as automatic extra intensity."))
-    elif edge and state in {"WATCH","RACE WATCH"}:
-        parts.append(f"{edge.replace(' · around ',' around ')} is only the earliest spacing checkpoint, not a hard-session prescription; the current plan keeps the listed sessions easy.")
-    if len(parts)<4:
-        stage=str(((road or {}).get("stage") or {}).get("label") or "").strip()
-        if stage:parts.insert(max(1,len(parts)-1),f"The current focus remains {stage}; progression comes from absorbing and reproducing the work, not from forcing another hard day early.")
-    out["recommendation"]=" ".join(_v4844_dedupe_sentences(parts))[:1500].strip() or out.get("recommendation")
+    if not isinstance(out,dict):
+        return out
+    # R106: this field is sealed from the same final sessions rendered directly
+    # underneath it. No independent quality-window or provider reasoning survives.
+    out["recommendation"]=_v106_recommendation_projection(out.get("next_sessions"))
+    out["recommendation_contract"]=_v106_recommendation_contract(out.get("next_sessions"))
     return out
+
 def _v4900_final_output_integrity_guard(parsed, adaptive_roadmap=None, microcycle_ledger=None, power_achievements=None, snapshot_question=None, session_progression=None):
     if not isinstance(parsed, dict):
         return parsed
@@ -14158,6 +14196,21 @@ def _v87_cross_module_authority_guard(snapshot, repair=True):
         if source=="INTERVALS_WELLNESS" and garmin_temporally_authoritative:
             _v87_issue(issues,"VO2_WELLNESS_USED_DESPITE_NEWER_OR_EQUAL_GARMIN","vo2_trend.wearable_source","NEWEST_DYNAMIC_SOURCE",{"source":source,"status":contract,"points":gpoints,"recent":recent,"garmin_date":gday,"wellness_date":wday})
         checks.append({"name":"EXTERNAL_VO2_CONTRACT","status":contract,"source":source,"recent":recent,"garmin_date":gday,"wellness_date":wday,"provenance_pass":(not is_garmin_source) or garmin_provenance_ok})
+
+    # R106 · Final recommendation/session identity seal. This runs AFTER any
+    # session repair above, so the prose cannot describe a superseded session list.
+    expected_recommendation=_v106_recommendation_projection(out.get("next_sessions"))
+    current_recommendation=str(out.get("recommendation") or "").strip()
+    recommendation_identity_ok=(current_recommendation==expected_recommendation)
+    if not recommendation_identity_ok:
+        if repair:
+            out["recommendation"]=expected_recommendation
+            repairs.append({"code":"RECOMMENDATION_RESEALED_FROM_FINAL_SESSIONS","path":"recommendation"})
+            recommendation_identity_ok=True
+        else:
+            _v87_issue(issues,"RECOMMENDATION_SESSION_IDENTITY_MISMATCH","recommendation",expected_recommendation,current_recommendation)
+    out["recommendation_contract"]=_v106_recommendation_contract(out.get("next_sessions"))
+    checks.append({"name":"RECOMMENDATION_SESSION_IDENTITY","pass":recommendation_identity_ok,"schema":out["recommendation_contract"].get("schema"),"sessions":out["recommendation_contract"].get("session_count")})
 
     audit={
         "schema":"V4.8.74-R87-1","status":"PASS" if not issues else "BLOCKED",
@@ -25019,7 +25072,7 @@ def ask_ai_analysis(data_text, metrics, coach_clock, week_memory, planning_conte
         "data_text": data_text,
     }
     prompt = (
-        "You are an expert cycling coach inside THE LAB. There is NO universal once-daily or twice-daily schedule. "
+        "You are the language and explanation renderer inside THE LAB. Nova/Python has already made the coaching decisions and compiled the workout prescription; you must explain that canonical plan, not make a competing one. There is NO universal once-daily or twice-daily schedule. "
         "Python's adaptive COACH CLOCK learns the athlete's actual timing, frequency, duration and double-session propensity from Intervals history. "
         "The COACH CLOCK and HEALTH / AVAILABILITY / EVENT CONTEXT below are authoritative for when a training opportunity exists. Activities already logged are completed. Opportunities removed by Python do not exist for you. "
         "A NO_INTENSITY opportunity permits only easy aerobic/recovery work. A RACE opportunity is the event itself and must not receive an extra workout. A PLANNED opportunity is an athlete-created commitment: its INDOOR/OUTDOOR environment and RIDE PROFILE are authoritative context. RECOVERY is an easy ceiling; ENDURANCE/TEMPO are non-hard profiles; THRESHOLD/MIXED/VO2/SPRINTS express hard intent, still subordinate to health/restrictions and race-proximity safety. NOVA DECIDES means choose from context.\n\n"
@@ -25047,7 +25100,8 @@ def ask_ai_analysis(data_text, metrics, coach_clock, week_memory, planning_conte
         "COMPLETED QUALITY REVIEW RULE: when PREVIOUS TRAINING BLOCK FACTS contains REP= data for a just-completed repeated quality session, evaluate those actual reps explicitly and integrate any same-session Daily Log. Activity decoupling/drift is NOT rep-to-rep power decay; never use a decoupling percentage as first-to-last interval decay. Keep measured interval facts separate from the athlete's subjective note.\n\n"
         "REPORT SUBSTANCE RULE: correctness alone is not enough. When meaningful new evidence exists, explain what happened, what it means for the athlete's current progression, and what it changes about the next decision. Do not pad with generic motivation, but do not compress away the interpretation that makes the Snapshot useful. A same-day subjective note that is credibly linked to completed training should inform the interpretation without overriding measured facts.\n\n"
         "DETERMINISTIC ENGINE RULE: TRAINING STATE, TRAINING DIRECTION, TRAINING RHYTHM, PHYSIOLOGICAL STATE, AEROBIC EFFICIENCY/DURABILITY and POWER MODEL entries in DATA are computed by Python. Use them as structured context and explain them when relevant; do not silently relabel a health-driven load drop as tapering, and do not treat CP/W\u2032 field estimates as laboratory measurements.\n\n"
-        "TRAINING STRATEGY RULE: if TRAINING DIRECTION says an active athlete-declared model/goal exists, use its deterministic adherence, mesocycle focus and microcycle direction when shaping season_outlook, recommendation and upcoming sessions. Do not invent a different declared goal. Health/restrictions, race proximity, recovery and explicit Calendar commitments still outrank strategy; never prescribe extra intensity merely to improve an adherence percentage. If the plan is LEARNING, say so rather than pretending the block has already proved its structure. PERFORMANCE FLOW is Python-owned: respect its open question and diversity constraint; repeated work targets must remain below the relevant fresh ceiling unless the session is an explicit maximal validation.\n\n"
+        "R106 LANGUAGE-ONLY AUTHORITY RULE: NOVA DECISION and the compiled NOVA PRESCRIPTION are the sole workout-decision authority. You are a language renderer for explanation, not a second coach. Do not choose, replace, reorder, advance, delay, soften or intensify sessions; do not invent a quality window or an extra workout. Any next_sessions you return must mirror the supplied compiled NOVA PRESCRIPTION, and any recommendation prose may only explain those exact canonical sessions. Python will discard any conflicting workout mechanics or recommendation.\n\n"
+        "TRAINING STRATEGY RULE: if TRAINING DIRECTION says an active athlete-declared model/goal exists, use its deterministic adherence, mesocycle focus and microcycle direction when explaining season_outlook and the supplied canonical prescription. Do not invent a different declared goal or reshape upcoming sessions. Health/restrictions, race proximity, recovery and explicit Calendar commitments still outrank strategy; never prescribe extra intensity merely to improve an adherence percentage. If the plan is LEARNING, say so rather than pretending the block has already proved its structure. PERFORMANCE FLOW is Python-owned: respect its open question and diversity constraint; repeated work targets must remain below the relevant fresh ceiling unless the session is an explicit maximal validation.\n\n"
         "STRENGTH SUPPORT RULE: strength is never mandatory and must not create a training opportunity. If LEARNED STRENGTH PATTERN is present, you may choose intensity exactly Strength only for a matching valid opportunity; Python will replace your gym details with a rotating goal-aligned progressive strength session, so do not invent a competing exercise list. If no established strength pattern is present, do not schedule gym work. You MAY return one brief strength_suggestion only when optional gym work could materially support the athlete-declared cycling goal; it must be non-prescriptive, one sentence, and never imply that strength is required.\n\n"
         "MICROCYCLE LEDGER RULE: the persistent MICROCYCLE LEDGER is continuity memory from prior Production Snapshots plus completed Intervals work. Do NOT plan the week from zero on every API call. Preserve its strategic primary anchor, objective and all completed hard work. The prior exact reps/watts are a prescription reference, NOT an immutable lock. Athlete-owned Training Definitions, actual history or current recovery may justify revising the exact structure while preserving the same anchor purpose; if you revise it, explain why. Never keep an inferior structure solely because a prior API call wrote it first, and never move already-completed hard work back into the future.\n\n"
         "SESSION PRECISION RULE: every workout prescription must choose one exact interval duration for each work block. Do not prescribe a vague duration family such as '3–6 min efforts' when the athlete needs an executable session. Primary work power must be one exact watt target or a narrow band no wider than 10 W; 350–360 W is acceptable, 310–350 W is not. Progressions may use separate exact targets by rep (for example 330 W, then 340 W, then 350 W). Warm-up/easy recovery may remain feel-based. Conditional fallback power/duration is secondary contingency only and must never be presented as the primary prescription. Python will narrow a broad primary watt band if you ignore this rule.\n\n"
