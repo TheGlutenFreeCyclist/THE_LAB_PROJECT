@@ -93,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.88 WIP R112 · ROADMAP STAGE SINGLE AUTHORITY · REFERENCE-ONLY POWER · R111 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.89 WIP R113 · ROADMAP CASCADE PROJECTION · R112 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -26050,6 +26050,11 @@ def build_preview_data():
     preview_nova_decision = build_nova_decision(preview_training_direction.get("primary_goal"), preview_question_state, preview_scientific_progression, preview_adaptive_roadmap, preview_training_state, preview_plan_context)
     preview_adaptive_roadmap = _v83_apply_nova_decision_to_roadmap(preview_adaptive_roadmap, preview_nova_decision)
     preview_adaptive_roadmap["scientific_progression"] = preview_scientific_progression
+    preview_training_direction, preview_adaptive_roadmap = _v113_sync_training_direction_with_roadmap(
+        preview_training_direction, preview_adaptive_roadmap, preview_nova_decision, preview_scientific_progression
+    )
+    preview_microcycle_ledger["current_objective"] = preview_training_direction.get("microcycle_direction")
+    preview_microcycle_ledger["current_objective_source"] = "EVIDENCE_GATED_ROADMAP_PROJECTION"
     preview_nova_prescription = build_nova_prescription(
         preview_nova_decision, clock, adaptive_roadmap=preview_adaptive_roadmap, microcycle_ledger=preview_microcycle_ledger,
         evidence_ledger=preview_evidence_ledger, power_model=preview_power_model, ftp_anchor=None, aerobic_metabolic_range=preview_aerobic_metabolic_range,
@@ -26538,6 +26543,11 @@ def analyze():
         nova_decision = build_nova_decision(training_direction.get("primary_goal"), question_state, scientific_progression, adaptive_roadmap, training_state, planning_context)
         adaptive_roadmap = _v83_apply_nova_decision_to_roadmap(adaptive_roadmap, nova_decision)
         adaptive_roadmap["scientific_progression"] = scientific_progression
+        training_direction, adaptive_roadmap = _v113_sync_training_direction_with_roadmap(
+            training_direction, adaptive_roadmap, nova_decision, scientific_progression
+        )
+        microcycle_ledger["current_objective"] = training_direction.get("microcycle_direction")
+        microcycle_ledger["current_objective_source"] = "EVIDENCE_GATED_ROADMAP_PROJECTION"
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
         nova_prescription = build_nova_prescription(
             nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
@@ -27619,6 +27629,176 @@ def _v87_cross_module_authority_guard(snapshot, repair=True):
     out["authority_final_pass"] = bool(audit["final_pass"] and semantic.get("final_pass", True))
     return out
 
+
+
+# ============================================================================
+# R113 · ROADMAP CASCADE PROJECTION
+# The Roadmap remains the stage authority; Training Direction, performance
+# narrative and Next Microcycle are projections of that same state. No static
+# goal sentence may contradict the current evidence gap.
+# ============================================================================
+R113_SCHEMA = "V4.8.89-R113-1"
+
+# Broad baseline language used before the evidence-gated Roadmap is available.
+# These strings deliberately describe the full supported profile instead of one
+# narrow interval family, so upstream continuity objects cannot freeze stale
+# duration advice into the current block.
+_TD_GOALS["POWER_5"]["focus"] = "Multi-minute punch · breadth, repeatability and race-useful transfer"
+_TD_GOALS["POWER_5"]["micro"] = "Protect the aerobic floor and use purposeful multi-minute quality only to close the current evidence-gated punch question; recovery and measured spacing decide when that quality is executable."
+_TD_GOALS["VO2MAX"]["focus"] = "Maximal-aerobic development · short, core and extended high-aerobic breadth"
+_TD_GOALS["VO2MAX"]["micro"] = "Protect low-intensity volume and use purposeful high-aerobic quality to close the current evidence-gated VO₂ facet; add no second hard purpose unless recovery and spacing support it."
+_TD_GOALS["POWER_1"]["focus"] = "20–120 s power · anaerobic breadth, repeatability and transfer"
+_TD_GOALS["POWER_1"]["micro"] = "Use high-quality short-power work only for the current evidence-gated anaerobic facet, with enough recovery to preserve output; keep surrounding work aerobic enough to protect quality."
+_TD_GOALS["SPRINTER"]["focus"] = "Sprint power · peak, core and longer sprint-duration demands"
+_TD_GOALS["SPRINTER"]["micro"] = "Preserve freshness and use sprint work only for the current evidence-gated sprint facet; avoid unrelated threshold load that would dilute peak-power quality."
+_TD_GOALS["POWER_20"]["focus"] = "Sustained power · short, core and extended pressure durations"
+_TD_GOALS["POWER_20"]["micro"] = "Use sustained quality to close the current evidence-gated pressure-duration question while preserving aerobic support; only add another quality purpose when recovery and spacing justify it."
+_TD_GOALS["TIME_TRIAL"]["focus"] = "Race-specific sustained power · breadth, pacing stability and durability"
+_TD_GOALS["TIME_TRIAL"]["micro"] = "Use race-specific sustained work to close the current evidence-gated TT question while maintaining aerobic volume; a second quality purpose must support, not replace, the Roadmap stage."
+
+
+def _v113_human_dimension(value):
+    labels = {
+        "FRESH_CAPACITY":"Fresh Capacity",
+        "SPECIFIC_DOSE":"Specific Dose",
+        "REPEATABILITY":"Repeatability",
+        "RECOVERY_UNDER_LOAD":"Recovery Under Load",
+        "DURABILITY":"Durability",
+        "RACE_TRANSFER":"Race Transfer",
+        "VARIABLE_LOAD":"Variable Load",
+        "TIME_AT_PRESSURE":"Time at Pressure",
+        "AEROBIC_VOLUME":"Aerobic Volume",
+        "METABOLIC_STABILITY":"Metabolic Stability",
+        "LATE_SESSION_STABILITY":"Late-session Stability",
+    }
+    key = str(value or "").upper()
+    return labels.get(key) or key.replace("_", " ").title() or "Current adaptation"
+
+
+def _v113_focus_suffix(text):
+    m = re.search(r"( · plan day \d+ · adherence window \d+d)$", str(text or ""))
+    return m.group(1) if m else ""
+
+
+def _v113_sync_training_direction_with_roadmap(training_direction, adaptive_roadmap, nova_decision=None, scientific_progression=None):
+    td = training_direction if isinstance(training_direction, dict) else {}
+    road = adaptive_roadmap if isinstance(adaptive_roadmap, dict) else {}
+    dec = nova_decision if isinstance(nova_decision, dict) else {}
+    sci = scientific_progression if isinstance(scientific_progression, dict) else {}
+    stage = road.get("stage") if isinstance(road.get("stage"), dict) else {}
+    stage_code = str(stage.get("code") or sci.get("roadmap_stage_code") or dec.get("roadmap_stage_code") or "").upper()
+    stage_label = str(stage.get("label") or stage_code.replace("_", " ").title() or "Current stage")
+    facet = road.get("facet_profile") if isinstance(road.get("facet_profile"), dict) else {}
+    if not facet:
+        facet = sci.get("facet_profile") if isinstance(sci.get("facet_profile"), dict) else {}
+    labels = facet.get("labels") if isinstance(facet.get("labels"), dict) else {}
+    target = str(facet.get("next_missing") or "")
+    target_label = str(labels.get(target) or target).strip() if target else ""
+    dimension = str(dec.get("dimension") or sci.get("dimension") or "")
+    dimension_label = _v113_human_dimension(dimension)
+    suffix = _v113_focus_suffix(td.get("mesocycle_focus"))
+
+    if target_label:
+        focus = f"{stage_label} · next evidence gap: {target_label}{suffix}"
+        micro = (
+            f"Current Roadmap stage: {stage_label}. Close the remaining {target_label} evidence gap with one eligible quality exposure "
+            "when recovery and measured spacing allow; keep the surrounding work predominantly aerobic and do not add unrelated intensity. "
+            "Nova selects the canonical workout structure from the library for this exact gap."
+        )
+        next_adaptation = f"Close the next breadth gap: {target_label}."
+    else:
+        focus = f"{stage_label} · current adaptation: {dimension_label}{suffix}"
+        micro = (
+            f"Current Roadmap stage: {stage_label}. Breadth required for this stage is covered; progress the current {dimension_label} question "
+            "only when recovery and measured spacing allow, while preserving the surrounding aerobic work and avoiding an unrelated second coaching purpose."
+        )
+        next_adaptation = f"Progress the current {dimension_label} question without leaving the {stage_label} Roadmap stage."
+
+    td["mesocycle_focus"] = focus
+    td["microcycle_direction"] = micro
+    td["roadmap_projection"] = {
+        "schema": R113_SCHEMA,
+        "authority": "EVIDENCE_GATED_ROADMAP",
+        "stage_code": stage_code or None,
+        "stage_label": stage_label,
+        "dimension": dimension or None,
+        "target_facet": target or None,
+        "target_label": target_label or None,
+    }
+    road["next_microcycle"] = micro
+    road["roadmap_projection"] = copy.deepcopy(td["roadmap_projection"])
+    pn = road.get("performance_narrative") if isinstance(road.get("performance_narrative"), dict) else {}
+    if pn is not None:
+        pn["current_focus"] = focus.replace(suffix, "") if suffix else focus
+        pn["next_adaptation"] = next_adaptation
+        road["performance_narrative"] = pn
+    return td, road
+
+
+_v87_cross_module_authority_guard_r112 = _v87_cross_module_authority_guard
+def _v87_cross_module_authority_guard(snapshot, repair=True):
+    out = _v87_cross_module_authority_guard_r112(snapshot, repair=repair)
+    if not isinstance(out, dict):
+        return out
+    td = out.get("training_direction") if isinstance(out.get("training_direction"), dict) else {}
+    road = out.get("adaptive_roadmap") if isinstance(out.get("adaptive_roadmap"), dict) else {}
+    sci = road.get("scientific_progression") if isinstance(road.get("scientific_progression"), dict) else {}
+    facet = road.get("facet_profile") if isinstance(road.get("facet_profile"), dict) else {}
+    if not facet:
+        facet = sci.get("facet_profile") if isinstance(sci.get("facet_profile"), dict) else {}
+    labels = facet.get("labels") if isinstance(facet.get("labels"), dict) else {}
+    target = str(facet.get("next_missing") or "")
+    target_label = str(labels.get(target) or target).strip() if target else ""
+    micro = str(td.get("microcycle_direction") or "")
+    road_micro = str(road.get("next_microcycle") or "")
+    focus = str(td.get("mesocycle_focus") or "")
+    stage_label = str(((road.get("stage") or {}).get("label") or ""))
+    narrative = road.get("performance_narrative") if isinstance(road.get("performance_narrative"), dict) else {}
+    next_adaptation = str(narrative.get("next_adaptation") or "")
+
+    projection_pass = bool(micro and road_micro == micro)
+    if target_label:
+        projection_pass = projection_pass and target_label.lower() in micro.lower() and target_label.lower() in next_adaptation.lower()
+    if stage_label:
+        projection_pass = projection_pass and stage_label.lower() in focus.lower()
+
+    audit = out.get("cross_module_authority_audit") if isinstance(out.get("cross_module_authority_audit"), dict) else {}
+    checks = list(audit.get("checks") or [])
+    issues = list(audit.get("issues") or [])
+    checks.append({
+        "name":"R113_ROADMAP_PROJECTION_IDENTITY",
+        "stage_label":stage_label or None,
+        "target_facet":target or None,
+        "target_label":target_label or None,
+        "training_direction_matches":projection_pass,
+        "pass":projection_pass,
+    })
+    if not projection_pass:
+        issues.append({
+            "code":"ROADMAP_PROJECTION_MISMATCH",
+            "path":"training_direction.microcycle_direction",
+            "expected":{"stage":stage_label or None,"target":target_label or None,"roadmap_next_microcycle":road_micro},
+            "actual":{"mesocycle_focus":focus,"microcycle_direction":micro,"performance_next_adaptation":next_adaptation},
+        })
+    audit["schema"] = R113_SCHEMA
+    audit["checks"] = checks
+    audit["issues"] = issues
+    audit["status"] = "PASS" if not issues else "BLOCKED"
+    audit["final_pass"] = not bool(issues)
+    audit["rule"] = (
+        "Roadmap stage and missing-facet evidence are projected into Training Direction, performance narrative and Next Microcycle; "
+        "those surfaces may explain the canonical plan but may not carry stale goal-template advice."
+    )
+    out["cross_module_authority_audit"] = audit
+    semantic = out.get("semantic_authority_audit") if isinstance(out.get("semantic_authority_audit"), dict) else {}
+    semantic["cross_module_authority_pass"] = audit["final_pass"]
+    semantic["cross_module_authority_schema"] = audit["schema"]
+    if issues:
+        semantic["final_pass"] = False
+        semantic["pass"] = False
+    out["semantic_authority_audit"] = semantic
+    out["authority_final_pass"] = bool(audit["final_pass"] and semantic.get("final_pass", True))
+    return out
 
 
 if __name__ == "__main__":
