@@ -93,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.86 WIP R110 · RECOMMENDATION-ONLY AI · CANONICAL PLAN AUTHORITY · R109 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.87 WIP R111 · EVIDENCE-GATED ROADMAP · DEEP WORKOUT LIBRARY · R110 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -27057,5 +27057,310 @@ def log_feeling():
     if error:
         return redirect(url_for("home", notice="CHECK INPUT", detail=error))
     return redirect(url_for("home", notice="NOTED", detail="Feeling saved · no AI call"))
+
+# ============================================================================
+# R111 · EVIDENCE-GATED ROADMAP + DEEP CANONICAL WORKOUT LIBRARY
+# One cascade: Roadmap evidence -> Nova question -> one library workout -> all UI.
+# The library is static at Snapshot runtime. Runtime AI never authors mechanics.
+# ============================================================================
+NOVA_WORKOUT_LIBRARY_REVISION = "2026-09-29"
+NOVA_WORKOUT_LIBRARY_VERSION = NOVA_WORKOUT_LIBRARY_REVISION  # compatibility key; no runtime version selection
+
+# Goal-specific breadth facets. These are product evidence bands, not claims that
+# every athlete must perform maximal tests at every duration. A band is credited by
+# a strong canonical repeated-work exposure; formal performance evidence can be
+# displayed separately. The purpose is to prevent one narrow workout family from
+# masquerading as complete development of a broader performance quality.
+_V111_GOAL_FACETS = {
+    "POWER_5": (
+        ("SHORT_PUNCH",150,239,"2.5–4 min punch"),
+        ("CORE_PUNCH",240,359,"4–6 min punch"),
+        ("EXTENDED_PUNCH",360,600,"6–10 min punch"),
+    ),
+    "VO2MAX": (
+        ("SHORT_VO2",120,179,"2–3 min high-aerobic work"),
+        ("CORE_VO2",180,359,"3–6 min maximal-aerobic work"),
+        ("EXTENDED_VO2",360,480,"6–8 min high-aerobic work"),
+    ),
+    "POWER_1": (
+        ("SHORT_ANAEROBIC",20,44,"20–45 s power"),
+        ("CORE_ANAEROBIC",45,75,"45–75 s power"),
+        ("EXTENDED_ANAEROBIC",76,120,"75–120 s power"),
+    ),
+    "SPRINTER": (
+        ("PEAK_SPRINT",5,9,"5–9 s peak sprint"),
+        ("CORE_SPRINT",10,15,"10–15 s sprint"),
+        ("LONG_SPRINT",16,30,"16–30 s sprint endurance"),
+    ),
+    "POWER_20": (
+        ("SHORT_SUSTAINED",360,719,"6–12 min sustained work"),
+        ("CORE_SUSTAINED",720,1199,"12–20 min sustained work"),
+        ("EXTENDED_SUSTAINED",1200,2400,"20–40 min sustained work"),
+    ),
+    "TIME_TRIAL": (
+        ("SHORT_TT",480,1199,"8–20 min TT work"),
+        ("CORE_TT",1200,2399,"20–40 min TT work"),
+        ("EXTENDED_TT",2400,3600,"40–60 min TT work"),
+    ),
+}
+
+
+def _v111_band_for_seconds(goal, seconds):
+    sec=_rhythm_num(seconds); goal=str(goal or "").upper()
+    if sec is None:return None
+    for key,lo,hi,label in _V111_GOAL_FACETS.get(goal,()):
+        if float(lo)<=float(sec)<=float(hi):return key
+    return None
+
+
+def _v111_goal_facet_state(goal, evidence_ledger=None, performance_evidence=None):
+    goal=str(goal or "").upper(); facets=_V111_GOAL_FACETS.get(goal,())
+    if not facets:
+        return {"available":False,"goal_key":goal,"covered":[],"missing":[],"coverage_count":0,"required_count":0,"coverage_ratio":None}
+    ev=evidence_ledger or {}; reps=list(((ev.get("repeatability") or {}).get("events") or [])); covered={}; observations=[]
+    for row in reps:
+        if not isinstance(row,dict) or not bool(row.get("strong")):continue
+        band=_v111_band_for_seconds(goal,row.get("interval_secs"))
+        if not band:continue
+        covered.setdefault(band,[]).append({"date":row.get("date"),"seconds":row.get("interval_secs"),"activity_id":row.get("activity_id"),"source":"STRONG_CANONICAL_REPEATABILITY"})
+        observations.append((band,row.get("date"),row.get("interval_secs")))
+    # Formal/PB evidence is recorded for audit but does not by itself replace a
+    # strong training exposure in the breadth gate.
+    perf=[]
+    for row in (performance_evidence or {}).get("current_cycle_events") or []:
+        if not isinstance(row,dict):continue
+        band=_v111_band_for_seconds(goal,row.get("secs"))
+        if band:perf.append({"band":band,"date":row.get("date"),"seconds":row.get("secs"),"formal":bool(row.get("formal_validation")),"tier":row.get("tier")})
+    keys=[x[0] for x in facets]; missing=[k for k in keys if k not in covered]
+    labels={k:lab for k,_lo,_hi,lab in facets}
+    return {
+        "available":True,"goal_key":goal,"covered":[k for k in keys if k in covered],"missing":missing,
+        "coverage_count":len(covered),"required_count":len(keys),"coverage_ratio":round(len(covered)/max(1,len(keys)),3),
+        "labels":labels,"evidence":covered,"performance_context":perf,
+        "next_missing":missing[0] if missing else None,
+        "rule":"Breadth is credited from strong canonical work across distinct duration bands; one narrow interval family cannot by itself prove the whole goal profile.",
+    }
+
+
+def _v111_stage_index(goal, facet_state, question_state, evidence_ledger=None):
+    goal=str(goal or "ENDURANCE_BASE").upper(); qs=(question_state or {}).get("dimensions") or {}; ev=evidence_ledger or {}; counts=ev.get("counts") or {}
+    quality=int(counts.get("quality_sessions") or 0); strong=int(counts.get("repeatability_strong_sessions") or 0); breadth=int((facet_state or {}).get("coverage_count") or 0)
+    def closed(k): return bool((qs.get(k) or {}).get("exit_satisfied"))
+    def state_at_least(k): return str((qs.get(k) or {}).get("state") or "").upper() in {"SUPPORTED","CONSOLIDATED"}
+    idx=0
+    if goal in {"POWER_5","VO2MAX","POWER_1","SPRINTER"}:
+        # Gate 1 requires enough independent quality observations plus at least two
+        # distinct duration facets. Gate 2 requires repeatability to be closed.
+        if quality>=3 and strong>=2 and breadth>=2: idx=1
+        if quality>=5 and strong>=3 and breadth>=2 and closed("REPEATABILITY"): idx=2
+        # Validation is deliberately expensive: broad duration evidence plus
+        # repeated prior-load durability and at least one race/variable-load signal.
+        transfer_signal=state_at_least("RACE_TRANSFER") or state_at_least("VARIABLE_LOAD") or state_at_least("RECOVERY_UNDER_LOAD")
+        if quality>=8 and strong>=7 and breadth>=3 and closed("DURABILITY") and transfer_signal: idx=3
+    elif goal in {"POWER_20","TIME_TRIAL"}:
+        if quality>=3 and breadth>=2: idx=1
+        if quality>=5 and breadth>=2 and closed("TIME_AT_PRESSURE") and state_at_least("VARIABLE_LOAD"): idx=2
+        if quality>=7 and breadth>=3 and closed("DURABILITY") and state_at_least("RACE_TRANSFER"): idx=3
+    else:
+        if closed("AEROBIC_VOLUME"): idx=1
+        if idx>=1 and closed("METABOLIC_STABILITY"): idx=2
+        if idx>=2 and closed("DURABILITY") and state_at_least("LATE_SESSION_STABILITY"): idx=3
+    return max(0,min(3,idx))
+
+
+def _v111_apply_stage_to_roadmap(roadmap, goal, facet_state, question_state, evidence_ledger=None):
+    road=roadmap if isinstance(roadmap,dict) else {}; cfg=_V4873_ROADMAP_GOALS.get(str(goal or "").upper()) or _V4873_ROADMAP_GOALS["ENDURANCE_BASE"]
+    idx=_v111_stage_index(goal,facet_state,question_state,evidence_ledger); stages=cfg.get("stages") or []
+    steps=[]
+    for i,row in enumerate(stages):
+        code,label,detail=row; steps.append({"code":code,"label":label,"detail":detail,"state":"BUILT" if i<idx else ("NOW" if i==idx else "NEXT")})
+    road["stage_index"]=idx; road["steps"]=steps; road["stage"]=steps[idx] if steps else None; road["facet_profile"]=facet_state
+    if facet_state and facet_state.get("available"):
+        labels=facet_state.get("labels") or {}; covered=[labels.get(k,k) for k in facet_state.get("covered") or []]; missing=[labels.get(k,k) for k in facet_state.get("missing") or []]
+        road["stage_evidence_gate"]={"authority":"EVIDENCE_GATED_ROADMAP","covered_facets":covered,"missing_facets":missing,"coverage_count":facet_state.get("coverage_count"),"required_count":facet_state.get("required_count"),"rule":"Roadmap stage follows accumulated evidence; elapsed days alone cannot advance it and a reopened maintenance question does not move the roadmap backward."}
+        pn=road.get("performance_narrative")
+        if isinstance(pn,dict):
+            stage=road.get("stage") or {}; pn["current_focus"]=f"{stage.get('label')}: consolidate the current stage before advancing."
+            pn["next_adaptation"]=(f"Close the next breadth gap: {missing[0]}." if missing else "Breadth is covered; finish the current transfer/validation gate rather than adding arbitrary variety.")
+            pn["story"]=(f"{goal.replace('_',' ')} is being progressed by evidence, not calendar age. " + (f"Covered: {', '.join(covered)}. Missing: {', '.join(missing)}." if missing else f"All configured breadth facets are represented: {', '.join(covered)}."))
+    return road
+
+# Enlarge the canonical library with a deep, deterministic vocabulary. Entries
+# below are curated parameter combinations, not runtime AI generations.
+def _v111_standard_entry(goal,prefix,reps,work_s,recovery_s,priority,dimensions,title_prefix,pattern="STANDARD"):
+    return {"id":f"{prefix}_{reps}X{int(work_s)}_R{int(recovery_s)}","goal":goal,"dimensions":tuple(dimensions),"pattern":pattern,"reps":int(reps),"work_s":int(work_s),"recovery_s":int(recovery_s),"priority":int(priority),"title":f"{title_prefix} · {reps}×{_v84_duration_label(work_s)}"}
+
+_V111_EXTRA=[]
+_common=("FRESH_CAPACITY","SPECIFIC_DOSE","REPEATABILITY","DURABILITY","RACE_TRANSFER")
+_transfer=("SPECIFIC_DOSE","DURABILITY","RACE_TRANSFER")
+# POWER_5: short/core/extended punch, including 6–10 min breadth work.
+for i,(r,w,rec,p) in enumerate([(8,120,150,76),(7,150,180,80),(6,180,180,88),(5,180,240,91),(4,210,240,89),(4,240,180,86),(4,240,300,88),(3,300,240,90),(3,300,360,88),(3,360,300,86),(3,420,360,80),(2,480,360,78),(2,480,480,76),(2,600,480,70)]):
+    _V111_EXTRA.append(_v111_standard_entry("POWER_5","P5D",r,w,rec,p,_common if w<=360 else _transfer,"5-min power"))
+_V111_EXTRA += [
+    {"id":"P5D_3X12_30_15","goal":"POWER_5","dimensions":("SPECIFIC_DOSE","REPEATABILITY","RACE_TRANSFER"),"pattern":"MICRO_30_15","sets":3,"reps_per_set":12,"work_s":30,"float_s":15,"set_recovery_s":240,"priority":82,"title":"5-min power · 3×12×30/15"},
+    {"id":"P5D_2X15_30_15","goal":"POWER_5","dimensions":("SPECIFIC_DOSE","RACE_TRANSFER"),"pattern":"MICRO_30_15","sets":2,"reps_per_set":15,"work_s":30,"float_s":15,"set_recovery_s":300,"priority":78,"title":"5-min power · 2×15×30/15"},
+]
+# VO2MAX
+for r,w,rec,p in [(10,120,120,76),(8,150,150,82),(7,180,150,86),(6,180,180,91),(5,210,180,90),(5,240,180,94),(5,240,240,90),(4,300,180,92),(4,300,240,90),(3,360,240,84),(3,420,240,80),(3,480,240,76)]:
+    _V111_EXTRA.append(_v111_standard_entry("VO2MAX","V2D",r,w,rec,p,_common if w<=360 else _transfer,"VO₂max"))
+_V111_EXTRA += [
+    {"id":"V2D_2X16_30_15","goal":"VO2MAX","dimensions":("SPECIFIC_DOSE","REPEATABILITY","RACE_TRANSFER"),"pattern":"MICRO_30_15","sets":2,"reps_per_set":16,"work_s":30,"float_s":15,"set_recovery_s":240,"priority":88,"title":"VO₂max · 2×16×30/15"},
+    {"id":"V2D_4X10_30_15","goal":"VO2MAX","dimensions":("SPECIFIC_DOSE","REPEATABILITY","RACE_TRANSFER"),"pattern":"MICRO_30_15","sets":4,"reps_per_set":10,"work_s":30,"float_s":15,"set_recovery_s":180,"priority":86,"title":"VO₂max · 4×10×30/15"},
+]
+# POWER_1
+for r,w,rec,p in [(12,30,120,78),(10,40,150,82),(8,45,180,90),(7,50,180,88),(6,60,180,92),(6,60,240,94),(5,75,240,90),(5,75,300,88),(4,90,300,86),(4,90,360,82),(3,105,360,76),(3,120,420,72)]:
+    _V111_EXTRA.append(_v111_standard_entry("POWER_1","P1D",r,w,rec,p,_common if w<=90 else _transfer,"1-min power",pattern="SHORT_POWER"))
+# SPRINTER
+for r,w,rec,p in [(10,6,120,88),(8,8,150,92),(7,10,180,94),(6,10,240,92),(6,12,240,90),(5,15,300,88),(4,20,360,80),(4,25,420,74),(3,30,480,70)]:
+    _V111_EXTRA.append(_v111_standard_entry("SPRINTER","SPRD",r,w,rec,p,_common if w<=15 else _transfer,"Sprint",pattern="SPRINT"))
+_V111_EXTRA += [
+    {"id":"SPRD_3X4X8","goal":"SPRINTER","dimensions":("REPEATABILITY","RACE_TRANSFER"),"pattern":"SPRINT_CLUSTER","sets":3,"reps_per_set":4,"work_s":8,"float_s":52,"set_recovery_s":300,"priority":88,"title":"Sprint · 3×4 repeated sprints"},
+    {"id":"SPRD_2X6X6","goal":"SPRINTER","dimensions":("REPEATABILITY","RACE_TRANSFER"),"pattern":"SPRINT_CLUSTER","sets":2,"reps_per_set":6,"work_s":6,"float_s":54,"set_recovery_s":300,"priority":84,"title":"Sprint · 2×6 repeated sprints"},
+]
+# POWER_20 / TT sustained vocabularies.
+for goal,prefix,title in [("POWER_20","P20D","20-min power"),("TIME_TRIAL","TTD","TT")]:
+    dims=("FRESH_CAPACITY","TIME_AT_PRESSURE","DURABILITY","RACE_TRANSFER")
+    for r,w,rec,p in [(4,360,180,76),(3,480,240,86),(4,480,240,84),(3,600,240,92),(3,600,300,94),(2,720,240,90),(2,720,300,92),(3,720,300,88),(2,900,300,90),(2,900,360,92),(2,1200,360,82),(2,1200,480,80),(1,1500,0,72),(1,1800,0,68)]:
+        _V111_EXTRA.append(_v111_standard_entry(goal,prefix,r,w,rec,p,dims,title,pattern="SUSTAINED"))
+    _V111_EXTRA += [
+        {"id":f"{prefix}_OU_3X10","goal":goal,"dimensions":("VARIABLE_LOAD","RACE_TRANSFER"),"pattern":"OVER_UNDER","reps":3,"work_s":600,"recovery_s":240,"priority":90,"title":f"{title} · 3×10 min variable load"},
+        {"id":f"{prefix}_OU_3X15","goal":goal,"dimensions":("VARIABLE_LOAD","RACE_TRANSFER"),"pattern":"OVER_UNDER","reps":3,"work_s":900,"recovery_s":300,"priority":88,"title":f"{title} · 3×15 min variable load"},
+        {"id":f"{prefix}_OU_2X20","goal":goal,"dimensions":("VARIABLE_LOAD","RACE_TRANSFER"),"pattern":"OVER_UNDER","reps":2,"work_s":1200,"recovery_s":360,"priority":86,"title":f"{title} · 2×20 min variable load"},
+    ]
+
+# Additional breadth-safe variants to keep each supported profile deep without
+# multiplying cosmetically identical copies.
+for r,w,rec,p in [(4,270,240,87),(4,330,300,84),(2,420,300,79),(2,540,420,73)]:
+    _V111_EXTRA.append(_v111_standard_entry("POWER_5","P5X",r,w,rec,p,_common if w<=360 else _transfer,"5-min power"))
+for r,w,rec,p in [(8,135,120,78),(6,150,120,84),(4,270,180,89),(3,450,240,78)]:
+    _V111_EXTRA.append(_v111_standard_entry("VO2MAX","V2X",r,w,rec,p,_common if w<=360 else _transfer,"VO₂max"))
+for r,w,rec,p in [(10,35,150,80),(7,55,210,87),(4,80,300,84),(3,110,420,74)]:
+    _V111_EXTRA.append(_v111_standard_entry("POWER_1","P1X",r,w,rec,p,_common if w<=90 else _transfer,"1-min power",pattern="SHORT_POWER"))
+for r,w,rec,p in [(8,7,150,90),(6,9,180,92),(5,18,360,82),(3,25,480,72)]:
+    _V111_EXTRA.append(_v111_standard_entry("SPRINTER","SPRX",r,w,rec,p,_common if w<=15 else _transfer,"Sprint",pattern="SPRINT"))
+for r,w,rec,p in [(3,540,240,88),(2,1080,360,86),(1,2100,0,65)]:
+    _V111_EXTRA.append(_v111_standard_entry("POWER_20","P20X",r,w,rec,p,("FRESH_CAPACITY","TIME_AT_PRESSURE","DURABILITY","RACE_TRANSFER"),"20-min power",pattern="SUSTAINED"))
+for r,w,rec,p in [(3,540,240,84),(2,1080,360,88),(1,2400,0,66),(1,2700,0,63),(1,3000,0,60),(1,3600,0,56)]:
+    _V111_EXTRA.append(_v111_standard_entry("TIME_TRIAL","TTX",r,w,rec,p,("FRESH_CAPACITY","TIME_AT_PRESSURE","DURABILITY","RACE_TRANSFER"),"TT",pattern="SUSTAINED"))
+
+# Endurance is slot-driven rather than watt-target-driven, but it still needs
+# multiple canonical architectures so Nova can vary *how* stability/durability is
+# observed without adding hidden intensity.
+_V111_EXTRA += [
+    {"id":"END_VOL_CONTINUOUS","goal":"ENDURANCE_BASE","dimensions":("AEROBIC_VOLUME",),"pattern":"ENDURANCE","variant":"CONTINUOUS","priority":96,"title":"Endurance · continuous aerobic volume"},
+    {"id":"END_VOL_SPLIT","goal":"ENDURANCE_BASE","dimensions":("AEROBIC_VOLUME",),"pattern":"ENDURANCE","variant":"SPLIT_EASY","priority":82,"title":"Endurance · split aerobic volume"},
+    {"id":"END_MET_STEADY","goal":"ENDURANCE_BASE","dimensions":("METABOLIC_STABILITY",),"pattern":"ENDURANCE_STEADY","variant":"STEADY","priority":96,"title":"Endurance · steady metabolic stability"},
+    {"id":"END_MET_CADENCE","goal":"ENDURANCE_BASE","dimensions":("METABOLIC_STABILITY",),"pattern":"ENDURANCE_STEADY","variant":"CADENCE_STABLE","priority":80,"title":"Endurance · cadence-stable aerobic work"},
+    {"id":"END_DUR_LONG","goal":"ENDURANCE_BASE","dimensions":("DURABILITY",),"pattern":"ENDURANCE_DURABILITY","variant":"LONG_STEADY","priority":96,"title":"Endurance · long steady durability"},
+    {"id":"END_DUR_MATCH","goal":"ENDURANCE_BASE","dimensions":("DURABILITY",),"pattern":"ENDURANCE_DURABILITY","variant":"LATE_MATCH","priority":90,"title":"Endurance · late-output matching"},
+    {"id":"END_DUR_BACK2BACK","goal":"ENDURANCE_BASE","dimensions":("DURABILITY",),"pattern":"ENDURANCE_DURABILITY","variant":"BACK_TO_BACK_CONTEXT","priority":78,"title":"Endurance · accumulated-days durability"},
+    {"id":"END_LATE_MATCH","goal":"ENDURANCE_BASE","dimensions":("LATE_SESSION_STABILITY",),"pattern":"ENDURANCE_LATE","variant":"LATE_MATCH","priority":96,"title":"Endurance · late-session match"},
+    {"id":"END_LATE_DRIFT","goal":"ENDURANCE_BASE","dimensions":("LATE_SESSION_STABILITY",),"pattern":"ENDURANCE_LATE","variant":"DRIFT_CONTROL","priority":88,"title":"Endurance · late-session drift control"},
+    {"id":"END_LATE_CADENCE","goal":"ENDURANCE_BASE","dimensions":("LATE_SESSION_STABILITY",),"pattern":"ENDURANCE_LATE","variant":"CADENCE_MATCH","priority":80,"title":"Endurance · late cadence stability"},
+]
+
+# Merge by stable workout id. Existing IDs remain authoritative; the deep catalog
+# only adds missing vocabulary and never creates competing versions.
+_v111_lib={str(x.get("id")):dict(x) for x in _NOVA_WORKOUT_LIBRARY}
+for _row in _V111_EXTRA:_v111_lib.setdefault(str(_row.get("id")),dict(_row))
+_NOVA_WORKOUT_LIBRARY=tuple(_v111_lib[k] for k in sorted(_v111_lib))
+
+# R111 question-state wrapper: a dose question cannot close while the goal's
+# duration breadth is still represented by only one narrow band.
+_build_question_state_r110=build_question_state
+def build_question_state(goal_key, evidence_ledger=None, performance_evidence=None, roadmap=None, microcycle_ledger=None, aerobic_metabolic_range=None, now=None):
+    out=_build_question_state_r110(goal_key,evidence_ledger,performance_evidence,roadmap,microcycle_ledger,aerobic_metabolic_range,now=now)
+    goal=str(goal_key or "ENDURANCE_BASE").upper(); facet=_v111_goal_facet_state(goal,evidence_ledger,performance_evidence); out["facet_profile"]=facet
+    dims=out.get("dimensions") or {}; breadth=int(facet.get("coverage_count") or 0)
+    key="SPECIFIC_DOSE" if goal in {"POWER_5","VO2MAX","POWER_1","SPRINTER"} else ("TIME_AT_PRESSURE" if goal in {"POWER_20","TIME_TRIAL"} else None)
+    if key and key in dims and breadth<2:
+        rec=dict(dims[key]); rec["state"]="BUILDING" if breadth else "UNPROVEN"; rec["exit_satisfied"]=False; rec["reason"]=(str(rec.get("reason") or "").rstrip()+f" Goal breadth is only {breadth}/{facet.get('required_count')}; at least two distinct duration facets are required before this foundational dose question can close.").strip(); rec["source"]="MICROCYCLE_DOSE_CONTEXT + GOAL_BREADTH"; dims[key]=rec
+    seq=list(((_V503_GOAL_GRAPH.get(goal) or _V503_GOAL_GRAPH["ENDURANCE_BASE"]).get("sequence") or ()))
+    out["open_dimensions"]=[d for d in seq if d not in {"REVALIDATION","EXTENSION_OR_REVALIDATION"} and not bool((dims.get(d) or {}).get("exit_satisfied"))]
+    out["closed_dimensions"]=[d for d in seq if bool((dims.get(d) or {}).get("exit_satisfied"))]
+    out["schema"]="V4.8.87-R111-1"; out["method_note"]="Question lifecycle includes goal-specific breadth. A single repeated duration cannot close a broad performance quality; roadmap advancement remains evidence-gated and non-calendar-driven."
+    return out
+
+# Roadmap/science wrapper. It updates the one shared roadmap object before Nova
+# Decision, so every downstream surface sees the same stage and evidence gaps.
+_v503_scientific_progression_r110=_v503_scientific_progression
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None, previous_blocks=None, performance_narrative=None, performance_evidence=None, aerobic_metabolic_range=None, evidence_ledger=None, question_state=None):
+    goal=str(goal_key or "ENDURANCE_BASE").upper(); facet=_v111_goal_facet_state(goal,evidence_ledger,performance_evidence)
+    _v111_apply_stage_to_roadmap(roadmap,goal,facet,question_state,evidence_ledger)
+    out=_v503_scientific_progression_r110(goal,roadmap,ledger,session_progression,previous_blocks,performance_narrative,performance_evidence,aerobic_metabolic_range,evidence_ledger=evidence_ledger,question_state=question_state)
+    out["schema"]="V4.8.87-R111-1"; out["facet_profile"]=facet; out["roadmap_stage_index"]=(roadmap or {}).get("stage_index"); out["roadmap_stage_code"]=((roadmap or {}).get("stage") or {}).get("code")
+    # Breadth is upstream of transfer: while a goal facet is missing and the
+    # foundational dose/time question remains open, do not skip ahead to a
+    # context-only transfer workout merely because one narrow structure succeeded.
+    missing=list(facet.get("missing") or [])
+    breadth_dim="SPECIFIC_DOSE" if goal in {"POWER_5","VO2MAX","POWER_1","SPRINTER"} else ("TIME_AT_PRESSURE" if goal in {"POWER_20","TIME_TRIAL"} else None)
+    qrec=((question_state or {}).get("dimensions") or {}).get(breadth_dim) if breadth_dim else None
+    if missing and breadth_dim and qrec and not qrec.get("exit_satisfied") and int((roadmap or {}).get("stage_index") or 0)<=2:
+        labels=facet.get("labels") or {}; target=missing[0]
+        out["dimension"]=breadth_dim; out["open_question"]=f"The current roadmap still lacks direct evidence in {labels.get(target,target)}; close that breadth gap before adding another downstream transfer context."
+        out["candidate_architectures"]=[f"goal-specific work targeting {labels.get(target,target)} while preserving one dominant progression lever"]
+        out["confidence"]="HIGH" if int(facet.get("coverage_count") or 0)>=1 else "MEDIUM"
+        out["breadth_override"]={"applied":True,"target_facet":target,"reason":"ROADMAP_BREADTH_BEFORE_TRANSFER"}
+    else: out["breadth_override"]={"applied":False,"target_facet":None}
+    return out
+
+# Deep-library selector: use the same facet model as the Roadmap. Novelty remains
+# secondary to purpose; when a facet is missing, a candidate in that band receives
+# a decisive information-value bonus and out-of-band repeats are penalized.
+def _v111_select_workout_template(goal, dimension, evidence_ledger=None, training_definitions=None, slot=None):
+    goal=str(goal or "").upper();dim=str(dimension or "").upper();slot=slot or {}; candidates=[dict(x) for x in _NOVA_WORKOUT_LIBRARY if x.get("goal")==goal and dim in set(x.get("dimensions") or ())]
+    if not candidates:return None,{"version":NOVA_WORKOUT_LIBRARY_REVISION,"revision":NOVA_WORKOUT_LIBRARY_REVISION,"reason":"NO_LIBRARY_CANDIDATE","candidate_count":0}
+    facet=_v111_goal_facet_state(goal,evidence_ledger,None); target=(facet.get("missing") or [None])[0]; hint=_rhythm_num(slot.get("duration_hint_min")) or _parse_duration_minutes(slot.get("duration_hint_label")); events=list((((evidence_ledger or {}).get("repeatability") or {}).get("events") or [])); latest_day=None
+    for e in events:
+        try:d=date.fromisoformat(str(e.get("date") or "")[:10]); latest_day=max(latest_day,d) if latest_day else d
+        except Exception:pass
+    scored=[]
+    for t in candidates:
+        score=float(t.get("priority") or 50); why=[]; sig=_v109_template_signature(t); quality_min=_v109_template_total_quality_min(t); est=_v109_template_estimated_session_min(t,dim); band=_v111_band_for_seconds(goal,t.get("work_s"))
+        if hint is not None and est>float(hint)+5: score-=45;why.append(f"slot_fit-{round(est-float(hint),1)}")
+        if target:
+            if band==target:score+=42;why.append(f"roadmap_missing_facet_{target}+42")
+            elif band is not None:score-=28;why.append(f"out_of_missing_facet_{target}-28")
+            elif str(t.get("pattern") or "").upper().startswith("MICRO"):score-=18;why.append("micro_before_breadth_complete-18")
+        tw=_rhythm_num(t.get("work_s"));recent_same_duration=0
+        for e in events:
+            days=999
+            if latest_day:
+                try:days=max(0,(latest_day-date.fromisoformat(str(e.get("date") or "")[:10])).days)
+                except Exception:pass
+            esig=_v109_event_signature(e)
+            if esig and esig==sig:
+                pen=90 if days<=7 else (60 if days<=14 else (30 if days<=28 else 8));score-=pen;why.append(f"exact_recent_{days}d-{pen}")
+            elif tw is not None and _rhythm_num(e.get("interval_secs")) is not None and abs(float(e.get("interval_secs"))-float(tw))<=5:
+                pen=12 if days<=7 else (7 if days<=14 else (3 if days<=28 else 0));score-=pen;recent_same_duration+=1
+        if _v109_definition_has_template(training_definitions,t):score-=22;why.append("athlete_defined_structure-22")
+        target_q={"FRESH_CAPACITY":14.0,"SPECIFIC_DOSE":18.0,"REPEATABILITY":15.0,"DURABILITY":15.0,"RACE_TRANSFER":15.0,"TIME_AT_PRESSURE":28.0,"VARIABLE_LOAD":28.0}.get(dim)
+        if target_q and quality_min:score-=abs(quality_min-target_q)*0.8
+        scored.append({"id":t.get("id"),"score":round(score,2),"signature":sig,"facet":band,"estimated_session_min":est,"quality_min":quality_min,"reasons":why,"template":t})
+    scored.sort(key=lambda x:(-x["score"],-float((x["template"] or {}).get("priority") or 0),str(x.get("id") or "")))
+    best=scored[0]
+    return dict(best.get("template") or {}),{"version":NOVA_WORKOUT_LIBRARY_REVISION,"revision":NOVA_WORKOUT_LIBRARY_REVISION,"reason":"ROADMAP_PURPOSE_BREADTH_FEASIBILITY_NOVELTY_RANK","candidate_count":len(scored),"selected_id":best.get("id"),"selected_score":best.get("score"),"selected_signature":best.get("signature"),"selected_facet":best.get("facet"),"target_missing_facet":target,"top_candidates":[{k:r.get(k) for k in ("id","score","signature","facet","estimated_session_min","quality_min","reasons")} for r in scored[:6]]}
+
+_v109_select_workout_template=_v111_select_workout_template
+
+# Coverage audit is cheap and deterministic; it makes an under-filled goal a
+# visible product defect instead of silently narrowing Nova's choices.
+def _v111_library_coverage_audit():
+    goals=("POWER_5","VO2MAX","POWER_1","SPRINTER","POWER_20","TIME_TRIAL","ENDURANCE_BASE"); rows={}; ok=True
+    for goal in goals:
+        g=[x for x in _NOVA_WORKOUT_LIBRARY if x.get("goal")==goal]; dims={}
+        for x in g:
+            for d in x.get("dimensions") or ():dims[d]=dims.get(d,0)+1
+        facets=_V111_GOAL_FACETS.get(goal,()); bands={k:0 for k,*_ in facets}
+        for x in g:
+            b=_v111_band_for_seconds(goal,x.get("work_s"))
+            if b in bands:bands[b]+=1
+        goal_ok=bool(len(g)>=10) and all(v>=2 for v in bands.values()) if bands else bool(len(g)>=4)
+        ok=ok and goal_ok; rows[goal]={"workouts":len(g),"dimension_counts":dims,"facet_counts":bands,"pass":goal_ok}
+    return {"revision":NOVA_WORKOUT_LIBRARY_REVISION,"total_workouts":len(_NOVA_WORKOUT_LIBRARY),"goals":rows,"pass":ok}
+
+NOVA_WORKOUT_LIBRARY_COVERAGE=_v111_library_coverage_audit()
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
