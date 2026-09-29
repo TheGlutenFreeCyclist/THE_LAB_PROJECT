@@ -93,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.82 WIP R106 · RECOMMENDATION SINGLE AUTHORITY · R105 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.83 WIP R107 · QUALITY SLOT IDENTITY · R106 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -5868,6 +5868,8 @@ def _v4891_finalize_ai_copy(parsed):
             sess["athlete_intent_notice"] = _V4891_TTE_NOTICE_UI.get(notice, _v4891_direct_user_text(notice))
     return out
 # R106 · Recommendation Single Authority.
+# R107 · Quality Slot Identity: roadmap quality windows are matched to Coach Clock
+# slots by canonical date/start_minute identity, never by presentation-label equality.
 # The athlete-facing "What I would do from here" is no longer a second coaching
 # engine. It is a lossless prose projection of the FINAL canonical session list.
 # Roadmap windows, provider prose and narrative heuristics may explain context
@@ -13717,23 +13719,121 @@ def _v84_easy_raw(slot, decision, reason=None):
         "_tl_nova_deterministic":True,"_tl_nova_dimension":dim,
     }
 
-def _v84_quality_slot_index(clock, adaptive_roadmap=None):
-    slots=list((clock or {}).get("next_slots") or []);q=(adaptive_roadmap or {}).get("quality_window") or {}
-    preferred=[str(q.get("preferred") or "").strip(),str(q.get("earliest") or "").strip()]
-    preferred=[x for x in preferred if x]
-    for target in preferred:
+def _v84_quality_slot_match(clock, adaptive_roadmap=None):
+    """Resolve the roadmap quality window to a Coach Clock slot by identity, not UI copy.
+
+    R107 fixes a structural R106 bug: quality_window labels use 24-hour compact
+    wording (for example "Tomorrow · around 17:24"), while Coach Clock labels may
+    use 12-hour wording plus semantic decoration (for example
+    "Tomorrow · likely second session · around 5:24 PM"). Comparing those labels
+    made the same physical slot look different and forced an erroneous EASY_ONLY
+    prescription. Canonical matching is now date + start_minute from the ISO
+    target, with a tiny rounding tolerance. Display labels are legacy fallback only.
+    """
+    slots=list((clock or {}).get("next_slots") or [])
+    q=(adaptive_roadmap or {}).get("quality_window") or {}
+
+    def _eligible(slot):
+        return bool(
+            isinstance(slot,dict)
+            and not slot.get("is_race")
+            and str(slot.get("restriction") or "NONE").upper()=="NONE"
+        )
+
+    def _target_key(raw):
+        if not raw:
+            return None
+        try:
+            dt=datetime.fromisoformat(str(raw))
+            return dt.date().isoformat(), int(dt.hour*60+dt.minute)
+        except Exception:
+            return None
+
+    def _slot_key(slot):
+        if not isinstance(slot,dict):
+            return None
+        ds=str(slot.get("date") or "").strip()
+        minute=slot.get("start_minute")
+        if not ds or minute is None:
+            return None
+        try:
+            return ds,int(round(float(minute)))
+        except Exception:
+            return None
+
+    targets=[
+        ("PREFERRED",q.get("preferred_iso"),str(q.get("preferred") or "").strip()),
+        ("EARLIEST",q.get("earliest_iso"),str(q.get("earliest") or "").strip()),
+    ]
+    has_target=any(raw or label for _,raw,label in targets)
+
+    for kind,raw,label in targets:
+        key=_target_key(raw)
+        if key is None:
+            continue
+        target_date,target_minute=key
         for i,slot in enumerate(slots):
-            if str((slot or {}).get("label") or "").strip()==target and not (slot or {}).get("is_race") and str((slot or {}).get("restriction") or "NONE").upper()=="NONE":return i
-    # R99: an explicit roadmap target that is not yet represented in the short
-    # Coach Clock horizon must NOT silently become slot 0. Wait until the exact
-    # quality-window slot is actually available.
-    if preferred:
-        return None
+            if not _eligible(slot):
+                continue
+            skey=_slot_key(slot)
+            if skey and skey[0]==target_date and abs(skey[1]-target_minute)<=2:
+                return {
+                    "index":i,"target_kind":kind,"target_iso":str(raw),
+                    "match_mode":"DATE_START_MINUTE","target_date":target_date,
+                    "target_start_minute":target_minute,"slot_label":slot.get("label"),
+                    "slot_date":slot.get("date"),"slot_start_minute":slot.get("start_minute"),
+                }
+        planned=[
+            (i,slot) for i,slot in enumerate(slots)
+            if _eligible(slot)
+            and bool((slot or {}).get("is_planned_training"))
+            and str((slot or {}).get("date") or "")==target_date
+        ]
+        if len(planned)==1:
+            i,slot=planned[0]
+            return {
+                "index":i,"target_kind":kind,"target_iso":str(raw),
+                "match_mode":"EXPLICIT_PLANNED_DATE","target_date":target_date,
+                "target_start_minute":target_minute,"slot_label":slot.get("label"),
+                "slot_date":slot.get("date"),"slot_start_minute":slot.get("start_minute"),
+            }
+
+    for kind,raw,label in targets:
+        if not label:
+            continue
+        for i,slot in enumerate(slots):
+            if _eligible(slot) and str((slot or {}).get("label") or "").strip()==label:
+                return {
+                    "index":i,"target_kind":kind,"target_iso":str(raw or ""),
+                    "match_mode":"LEGACY_LABEL","target_date":None,
+                    "target_start_minute":None,"slot_label":slot.get("label"),
+                    "slot_date":slot.get("date"),"slot_start_minute":slot.get("start_minute"),
+                }
+
+    if has_target:
+        return {
+            "index":None,"target_kind":None,"target_iso":None,
+            "match_mode":"TARGET_NOT_IN_CLOCK_HORIZON","target_date":None,
+            "target_start_minute":None,"slot_label":None,"slot_date":None,
+            "slot_start_minute":None,
+        }
+
     for i,slot in enumerate(slots):
-        if (slot or {}).get("is_race"):continue
-        if str((slot or {}).get("restriction") or "NONE").upper()!="NONE":continue
-        return i
-    return None
+        if _eligible(slot):
+            return {
+                "index":i,"target_kind":"FALLBACK","target_iso":None,
+                "match_mode":"FIRST_OPEN_SLOT","target_date":slot.get("date"),
+                "target_start_minute":slot.get("start_minute"),"slot_label":slot.get("label"),
+                "slot_date":slot.get("date"),"slot_start_minute":slot.get("start_minute"),
+            }
+    return {
+        "index":None,"target_kind":None,"target_iso":None,"match_mode":"NO_ELIGIBLE_SLOT",
+        "target_date":None,"target_start_minute":None,"slot_label":None,
+        "slot_date":None,"slot_start_minute":None,
+    }
+
+def _v84_quality_slot_index(clock, adaptive_roadmap=None):
+    return _v84_quality_slot_match(clock,adaptive_roadmap).get("index")
 
 def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None):
     """R85 deterministic prescription authority with explicit contract coverage.
@@ -13744,7 +13844,7 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
     AI remains explanation-only.
     """
     dec=dict(nova_decision or {});clock=coach_clock or {};road=adaptive_roadmap or {};slots=list(clock.get("next_slots") or [])
-    raw=[_v84_easy_raw(slot,dec) for slot in slots];action=str(dec.get("action") or "MAINTAIN").upper();dim=str(dec.get("dimension") or "NONE").upper();goal=str(dec.get("goal_key") or road.get("goal_key") or "ENDURANCE_BASE").upper();idx=_v84_quality_slot_index(clock,road)
+    raw=[_v84_easy_raw(slot,dec) for slot in slots];action=str(dec.get("action") or "MAINTAIN").upper();dim=str(dec.get("dimension") or "NONE").upper();goal=str(dec.get("goal_key") or road.get("goal_key") or "ENDURANCE_BASE").upper();slot_match=_v84_quality_slot_match(clock,road);idx=slot_match.get("index")
     status="EASY_ONLY";source="NOVA_DECISION";fail_reason=None;quality=None
     if action=="VALIDATE" and idx is not None:
         contract=_v4893_validation_contract(road);quality=_v4893_validation_prescription(contract)
@@ -13801,7 +13901,7 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
     if quality is not None and idx is not None:raw[idx]=quality
     return {
         "schema":"V4.8.74-R85-1","available":True,"authority":"NOVA_PRESCRIPTION_ENGINE","action":action,"dimension":dim,"goal_key":goal,
-        "status":status,"source":source,"selected_slot_index":idx if quality is not None else None,"raw_sessions":raw,
+        "status":status,"source":source,"selected_slot_index":idx if quality is not None else None,"quality_slot_match":slot_match,"raw_sessions":raw,
         "hard_prescription_available":bool(quality is not None and str(quality.get("intensity") or "").upper().startswith("HARD")),
         "fail_closed_reason":fail_reason,"ai_authority":"EXPLANATION_ONLY","contract_id":(quality or {}).get("_tl_nova_contract_id") if isinstance(quality,dict) else None,
         "rule":"Workout mechanics are deterministic and dimension-covered. Observation-backed references may orient pacing but do not become invented absolute targets. The language model may explain the plan but cannot create, replace or modify its structure, dose or purpose.",
