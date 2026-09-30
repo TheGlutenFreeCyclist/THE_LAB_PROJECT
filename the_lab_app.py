@@ -93,7 +93,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.92 WIP R116 · BREADTH QUESTION GATE · REALISTIC REPLAY MUTATIONS · R115 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.93 WIP R117 · HARD CADENCE / RECOVERY / SLOT ALIGNMENT · R116 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -5930,7 +5930,7 @@ def _v106_recommendation_projection(sessions):
         hslot=str(hard.get("slot") or "").strip()
         htitle=str(hard.get("title") or "hard session").strip()
         label=(hslot+": "+htitle) if hslot else htitle
-        parts.append(f"The next hard session already listed is {label}; follow the preceding sessions exactly as shown and do not move that hard work earlier.")
+        parts.append(f"The next hard session candidate is {label}; reassess recovery and confirm this predicted time if your availability differs. Do not add an extra hard session.")
     elif contract.get("all_easy"):
         parts.append("All currently listed sessions are easy/recovery; no hard session is prescribed in this Snapshot.")
     elif len(rows)>1:
@@ -6287,7 +6287,10 @@ def _v4873_apply_roadmap_quality_gate(sessions, adaptive_roadmap=None):
     q = road.get("quality_window") or {}
     state = str(q.get("state") or "").upper()
     blocked = state in {"ON HOLD", "RECOVERY HOLD", "RACE PRIORITY", "LEARNING"}
-    watch = state in {"WATCH", "RACE WATCH"}
+    watch = state in {"WATCH", "RACE WATCH"} or (
+        q.get("spacing_policy") == "R117_HARD_CADENCE_PLUS_RECOVERY_HEURISTIC"
+        and not bool(q.get("availability_confirmed"))
+    )
     edge,_ = _v4881_parse_quality_window_local_dt(road)
     normalized = []
     for sess in rows:
@@ -14031,6 +14034,12 @@ def _v84_quality_slot_match(clock, adaptive_roadmap=None):
         ("PREFERRED",q.get("preferred_iso"),str(q.get("preferred") or "").strip()),
         ("EARLIEST",q.get("earliest_iso"),str(q.get("earliest") or "").strip()),
     ]
+    if (q.get("spacing_policy") == "R117_HARD_CADENCE_PLUS_RECOVERY_HEURISTIC"
+            and q.get("preferred_iso")):
+        # The earliest candidate is informational. Never prescribe it when the
+        # selected R117 preferred slot is outside the three visible Clock slots.
+        # Doing so silently changes the roadmap's workout date and daypart.
+        targets=targets[:1]
     has_target=any(raw or label for _,raw,label in targets)
 
     for kind,raw,label in targets:
@@ -14135,6 +14144,11 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
                 else:fail_reason="WORKOUT_LIBRARY_RENDER_FAILED"
             else:
                 fail_reason="WORKOUT_LIBRARY_NO_CANDIDATE"
+    elif (action=="TRAIN" and dec.get("hard_session_allowed") and idx is None
+          and (road.get("quality_window") or {}).get("spacing_policy")=="R117_HARD_CADENCE_PLUS_RECOVERY_HEURISTIC"):
+        # Explain the intentional EASY_ONLY window instead of silently swapping
+        # the selected future hard target with the visible EARLIEST slot.
+        fail_reason="R117_PREFERRED_HARD_OUTSIDE_CLOCK_HORIZON"
     elif action=="TRAIN" and not dec.get("hard_session_allowed"):
         # Endurance-base questions are not hard sessions and remain executable in a
         # normal unrestricted slot even when Quality Window correctly says no hard.
@@ -15456,6 +15470,167 @@ def _v4873_quality_spacing_profile(activities, now=None):
         "earliest_hours": round(earliest_h, 1),
         "preferred_hours": round(preferred_h, 1),
     }
+# R117: training opportunity is not the same signal as hard-session habit.
+# Historical timing is a scheduling PRIOR, never proof of physiological recovery.
+def _v117_hard_cadence_profile(activities, now=None):
+    now = now or get_rome_now()
+    cutoff = now.replace(tzinfo=None)
+    rows = []
+    for activity in activities or []:
+        try:
+            if not _v4829_is_quality_activity(activity):
+                continue
+            start = _v4829_parse_activity_start(activity)
+            end = _v4829_activity_end(activity)
+            if start is not None and end is not None and end <= cutoff:
+                rows.append((end, start))
+        except (TypeError, ValueError, KeyError):
+            continue
+    rows.sort(key=lambda item: item[0])
+    # One hard training day contributes once, even if the athlete logs two activities.
+    per_day = {}
+    for end, start in rows:
+        key = start.date()
+        if key not in per_day or start < per_day[key][1]:
+            per_day[key] = (end, start)
+    recent = [per_day[k] for k in sorted(per_day)][-9:]
+    days = [start.date() for _, start in recent]
+    gaps = [(b - a).days for a, b in zip(days, days[1:]) if 1 <= (b-a).days <= 9]
+    last_gaps = gaps[-6:]
+    gap_mode = None
+    gap_confidence = 'LOW'
+    if len(last_gaps) >= 3:
+        # Prefer the current repeating pattern over lifetime/weekday coincidence.
+        counts = {v:last_gaps.count(v) for v in set(last_gaps)}
+        best = sorted(counts, key=lambda v:(-counts[v], abs(v-last_gaps[-1]), v))[0]
+        if counts[best] / len(last_gaps) >= 0.55:
+            gap_mode = best
+            gap_confidence = 'HIGH' if len(last_gaps) >= 5 and counts[best]/len(last_gaps) >= .75 else 'MODERATE'
+    starts = [start.hour*60+start.minute for _,start in recent[-8:]]
+    am = [x for x in starts if x < 12*60]
+    pm = [x for x in starts if x >= 12*60]
+    preferred_daypart = None
+    hard_start_minute = None
+    clock_confidence = 'LOW'
+    if len(starts) >= 3:
+        share = max(len(am),len(pm)) / len(starts)
+        if share >= .70:
+            preferred_daypart = 'AM' if len(am) > len(pm) else 'PM'
+            hard_start_minute = int(round(statistics.median(am if preferred_daypart=='AM' else pm)))
+            clock_confidence = 'HIGH' if len(starts)>=5 and share >= .80 else 'MODERATE'
+    return {
+        'source':'OBSERVED_CANONICAL_HARD_ACTIVITY_STARTS',
+        'sample_days':len(recent), 'sample_gaps':len(last_gaps),
+        'recent_day_gaps':last_gaps, 'dominant_gap_days':gap_mode,
+        'gap_confidence':gap_confidence, 'hard_daypart':preferred_daypart,
+        'hard_start_minute':hard_start_minute, 'time_confidence':clock_confidence,
+        'last_hard_day':days[-1].isoformat() if days else None,
+        'note':'Habit is a scheduling prior; activity frequency and median hard spacing cannot certify recovery.'
+    }
+
+def _v117_quality_candidates(training_rhythm, coach_clock, planning_context, now):
+    """Rank Clock opportunities plus future rhythm; only Clock slots may be prescribed."""
+    ctx = planning_context or {}
+    blackout = set(ctx.get('blackout_dates') or [])
+    no_intensity = set(ctx.get('no_intensity_dates') or [])
+    race = ctx.get('race_by_date') or {}
+    plans = ctx.get('training_by_date') or {}
+    learned = _v4873_rhythm_candidate_slots(training_rhythm, now=now, horizon_days=8)
+    clock_rows = (coach_clock or {}).get('next_slots')
+    result = []
+    if isinstance(clock_rows,list):
+        for i,slot in enumerate(clock_rows):
+            ds = str(slot.get('date') or '')
+            if not ds or ds in blackout or ds in no_intensity or ds in race or slot.get('is_race') or str(slot.get('restriction') or 'NONE').upper()!='NONE':
+                continue
+            plan = plans.get(ds) or (slot if slot.get('is_planned_training') else {})
+            demand = _training_profile_demand_class(plan.get('training_demand'))
+            if demand == 'EASY':
+                continue
+            minute = slot.get('start_minute')
+            source = str(slot.get('source') or 'RHYTHM')
+            if minute is None and slot.get('is_planned_training'):
+                # Explicit day, unknown hour: use a learned same-day candidate ONLY
+                # for a conditional window calculation, not as a confirmed time.
+                matching = [x for x in learned if x['dt'].date().isoformat()==ds]
+                if not matching:
+                    continue
+                for row in matching:
+                    result.append({'dt':row['dt'],'explicit':demand in {'HARD','QUALITY'},'authority':'EXPLICIT_DAY_INFERRED_TIME','clock_index':i})
+                continue
+            try:
+                dt=datetime.combine(date.fromisoformat(ds),datetime.min.time())+timedelta(minutes=int(round(float(minute))))
+            except (ValueError,TypeError):
+                continue
+            if dt>now.replace(tzinfo=None):
+                result.append({'dt':dt,'explicit':demand in {'HARD','QUALITY'},'authority':'EXPLICIT' if source=='CALENDAR' else 'RHYTHM_PREDICTED','clock_index':i})
+        # Roadmap should see beyond the THREE displayed Next Sessions.
+        # Otherwise a genuine 48h alternating hard habit disappears immediately
+        # after each hard workout because tomorrow's TWO easy opportunities can
+        # consume all visible Clock slots. Future rhythm candidates do NOT get a
+        # prescription until the real Clock exposes that exact slot.
+        latest_visible=max((r['dt'] for r in result),default=now.replace(tzinfo=None))
+        for row in learned:
+            dt=row['dt'];ds=dt.date().isoformat(); plan=plans.get(ds) or {}
+            if dt <= latest_visible or ds in blackout or ds in no_intensity or ds in race or _training_profile_demand_class(plan.get('training_demand'))=='EASY':
+                continue
+            result.append({'dt':dt,'explicit':_training_profile_demand_class(plan.get('training_demand')) in {'HARD','QUALITY'},'authority':'FUTURE_RHYTHM_PREDICTED','clock_index':None})
+    else:
+        for row in learned:
+            dt=row['dt'];ds=dt.date().isoformat(); plan=plans.get(ds) or {}
+            if ds in blackout or ds in no_intensity or ds in race or _training_profile_demand_class(plan.get('training_demand'))=='EASY':
+                continue
+            result.append({'dt':dt,'explicit':_training_profile_demand_class(plan.get('training_demand')) in {'HARD','QUALITY'},'authority':'RHYTHM_PREDICTED','clock_index':None})
+    return sorted(result,key=lambda row:row['dt'])
+
+def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_delay, second_hard=False):
+    """Safety/recovery gates upstream; rank habit only among permitted candidates.
+
+    The lower bound is a conservative PRODUCT HEURISTIC, not a clinical clearance.
+    The observed median is a descriptive prior, NOT an exact hour threshold.
+    """
+    lower=last_end+timedelta(hours=float(spacing.get('earliest_hours') or 36)+extra_delay) if last_end else None
+    preferred=last_end+timedelta(hours=float(spacing.get('preferred_hours') or 48)+extra_delay) if last_end else None
+    valid=[r for r in candidates if lower is None or r['dt']>=lower]
+    if not valid:
+        return None,None,'NO_VALID_CLOCK_SLOT',None
+    explicit=[r for r in valid if r.get('explicit')]
+    if explicit:
+        return valid[0]['dt'],explicit[0]['dt'],'EXPLICIT_PLANNED_HARD',explicit[0]
+    first=valid[0]
+    # Period and alternating-day tendencies must be learned from HARD sessions,
+    # not inferred from every easy AM ride in the regular training rhythm.
+    gap=cadence.get('dominant_gap_days')
+    part=cadence.get('hard_daypart')
+    preferred_minute=cadence.get('hard_start_minute')
+    last_day=date.fromisoformat(cadence['last_hard_day']) if cadence.get('last_hard_day') else (last_end.date() if last_end else None)
+    strong=gap is not None or part is not None
+    if strong:
+        def score(row):
+            dt=row['dt']; days=(dt.date()-last_day).days if last_day else None
+            minute=dt.hour*60+dt.minute
+            value=0.0
+            if gap is not None and days is not None:
+                value+=3.0 if days==gap else max(-5.0, 1.0-2.0*abs(days-gap))
+            if part:
+                value+=3.0 if ('AM' if minute<720 else 'PM')==part else -3.0
+            if preferred_minute is not None:
+                value+=max(-2.0, 1.0-abs(minute-preferred_minute)/120.0)
+            if preferred is not None and dt>=preferred: value+=.5
+            # In an equivalent pattern do not needlessly defer the training goal.
+            value-=(dt-first['dt']).total_seconds()/86400*0.40
+            return value
+        ranked=sorted(valid,key=lambda row:(-score(row),row['dt']))
+        selected=ranked[0]
+        # If the learned hard pattern is clear, don't force an otherwise valid
+        # athlete-pattern slot to cross the exact observed median to be 'preferred'.
+        reason='OBSERVED_HARD_DAY_AND_DAYPART' if gap is not None and part else ('OBSERVED_HARD_DAY' if gap is not None else 'OBSERVED_HARD_DAYPART')
+        return first['dt'],selected['dt'],reason,selected
+    # Sparse/irregular records: honor the conservative *planning preference*
+    # without claiming that a 0.1-hour difference proves recovery.
+    selected=next((r for r in valid if preferred is None or r['dt']>=preferred),first)
+    return first['dt'],selected['dt'],'SPARSE_HARD_HISTORY_CONSERVATIVE_PREFERENCE',selected
+
 def _v4873_rhythm_candidate_slots(training_rhythm, now=None, horizon_days=8):
     now = now or get_rome_now()
     rhythm = training_rhythm or {}
@@ -16027,45 +16202,20 @@ def build_adaptive_roadmap(training_direction, training_rhythm, activities, coac
     race_prep_watch = race_days is not None and 9 <= race_days <= 14
     recovery_zone = str((metrics or {}).get("race_readiness_zone") or "grey").lower()
     extra_delay = 0.0 if recovery_zone == "green" else (12.0 if recovery_zone == "grey" else 24.0)
+    # R117: choose from the same Clock slots that Nova can actually prescribe.
+    # Hard-session day/time cadence, general training opportunity and recovery
+    # are independent signals. There is no median-hour hard veto.
+    cadence = _v117_hard_cadence_profile(activities, now=now)
     earliest_dt = preferred_dt = None
-    last_end = spacing.get("last_hard_end")
-    if last_end is not None and not health and not recovery_hold and not race_close_hold and not taper_priority:
-        earliest_after=last_end+timedelta(hours=float(spacing.get("earliest_hours") or 36.0)+extra_delay);preferred_after=last_end+timedelta(hours=float(spacing.get("preferred_hours") or 48.0)+extra_delay)
-        candidates=_v4873_rhythm_candidate_slots(training_rhythm,now=now,horizon_days=8);valid=[];explicit=[]
-        for row in candidates:
-            dt=row.get("dt");ds=dt.date().isoformat() if dt else None;planned=training_by_date.get(ds) if ds else None;demand=_training_profile_demand_class((planned or {}).get("training_demand"))
-            if not dt or ds in blackout or ds in no_intensity or ds in race_by_date or demand=="EASY":continue
-            if dt>=earliest_after:valid.append(dt)
-            if demand in {"HARD","QUALITY"} and dt>=earliest_after:explicit.append(dt)
-        if explicit:earliest_dt=preferred_dt=explicit[0]
-        elif valid:
-            if spread_second:
-                # R99: SECOND_HARD_CONDITIONAL is not a fixed 72–96 h lockout.
-                # Earliest remains the first rhythm slot that clears the athlete's
-                # learned lower spacing bound. Preferred is conservative at the
-                # athlete's observed median (plus recovery delay), not an invented
-                # 84 h target. This keeps the second quality dose conditional and
-                # personalized instead of automatically pushing it to Friday.
-                earliest_dt=valid[0]
-                learned_median=float(spacing.get("median_hours") or spacing.get("preferred_hours") or 48.0)
-                second_preferred_after=last_end+timedelta(hours=max(float(spacing.get("preferred_hours") or 48.0),learned_median)+extra_delay)
-                preferred_dt=next((dt for dt in valid if dt>=second_preferred_after),earliest_dt)
-            else:
-                earliest_dt=valid[0];preferred_dt=next((dt for dt in valid if dt>=preferred_after),earliest_dt)
-    elif last_end is None and not health and not recovery_hold and not race_close_hold and not taper_priority:
-        candidates = _v4873_rhythm_candidate_slots(training_rhythm, now=now, horizon_days=8)
-        valid = []
-        for x in candidates:
-            dt = x.get("dt")
-            if not dt:
-                continue
-            ds = dt.date().isoformat()
-            planned = training_by_date.get(ds) or {}
-            if ds in blackout or ds in no_intensity or ds in race_by_date or _training_profile_demand_class(planned.get("training_demand")) == "EASY":
-                continue
-            valid.append(dt)
-        earliest_dt = valid[0] if valid else None
-        preferred_dt = valid[0] if valid else None
+    slot_selection_reason = 'BLOCKED_BY_RECOVERY_OR_RESTRICTION'
+    selected_slot_authority = None
+    selected_row = None  # Hold states do not select a quality candidate.
+    last_end = spacing.get('last_hard_end')
+    if not health and not recovery_hold and not race_close_hold and not taper_priority:
+        candidates = _v117_quality_candidates(training_rhythm,coach_clock,planning_context,now)
+        earliest_dt,preferred_dt,slot_selection_reason,selected_row = _v117_select_quality_window(
+            candidates,last_end,spacing,cadence,extra_delay,second_hard=spread_second)
+        selected_slot_authority = selected_row.get('authority') if selected_row else None
     if formal_today:
         window_state = "ABSORB"
         window_headline = "The planned validation checkpoint is complete. Absorb the effort now; its measured result becomes the reference for the next progression cycle."
@@ -16087,7 +16237,7 @@ def build_adaptive_roadmap(training_direction, training_rhythm, activities, coac
     elif earliest_dt:
         hours_to_earliest = (earliest_dt - now.replace(tzinfo=None)).total_seconds() / 3600.0
         window_state = "OPEN" if hours_to_earliest <= 6 else "WATCH"
-        observed = f"personal hard-session spacing median {spacing.get('median_hours'):.0f} h" if spacing.get("median_hours") is not None else "personal hard-session spacing still learning"
+        observed = (f"observed hard-day cadence ~{cadence['dominant_gap_days']} days; historical spacing median {spacing['median_hours']:.0f} h is descriptive, not a recovery requirement" if cadence.get("dominant_gap_days") and spacing.get("median_hours") is not None else "personal hard-session timing is still learning; the spacing bound is a conservative planning heuristic, not medical clearance")
         earliest_label = _v4873_slot_label(earliest_dt, now)
         preferred_label = _v4873_slot_label(preferred_dt, now)
         if race_prep_watch:
@@ -16218,13 +16368,20 @@ def build_adaptive_roadmap(training_direction, training_rhythm, activities, coac
             "earliest_iso": earliest_dt.isoformat(timespec="minutes") if earliest_dt else None,
             "preferred_iso": preferred_dt.isoformat(timespec="minutes") if preferred_dt else None,
             "headline": window_headline,
-            "spacing_policy": "LEARNED_PERSONAL_SPACING" if spread_second else "LEARNED_PERSONAL_SPACING_BASE",
+            "spacing_policy": "R117_HARD_CADENCE_PLUS_RECOVERY_HEURISTIC",
+            "hard_cadence": cadence,
+            "slot_selection_reason": slot_selection_reason,
+            "selected_slot_authority": selected_slot_authority,
+            "availability_confirmed": selected_slot_authority == "EXPLICIT",
+            "quality_in_displayed_clock": bool(selected_row and selected_row.get("clock_index") is not None),
+            "minimum_spacing_is_medical_threshold": False,
             "fixed_second_hard_band_removed": bool(spread_second),
             "spacing_samples": spacing.get("samples"),
             "median_spacing_hours": spacing.get("median_hours"),
             "q25_spacing_hours": spacing.get("q25_hours"),
             "learned_earliest_hours": spacing.get("earliest_hours"),
             "learned_preferred_hours": spacing.get("preferred_hours"),
+            "recovery_delay_hours": extra_delay,
             "earliest_spacing_hours": round((earliest_dt - spacing.get("last_hard_end")).total_seconds() / 3600.0, 1) if earliest_dt and spacing.get("last_hard_end") else None,
             "preferred_spacing_hours": round((preferred_dt - spacing.get("last_hard_end")).total_seconds() / 3600.0, 1) if preferred_dt and spacing.get("last_hard_end") else None,
             "last_hard_end": spacing.get("last_hard_end").isoformat(timespec="minutes") if spacing.get("last_hard_end") else None,
@@ -28367,6 +28524,7 @@ def _v115_replay_nova_core(fixture):
         **metrics, **season_stats, **analysis,
         "coach_clock": coach_clock,
         "training_rhythm": training_rhythm,
+        "planning_context": planning_context,
         "execution_model": execution_model,
         "strength_pattern": strength_pattern,
         "previous_training_blocks": previous_training_blocks,
@@ -28807,6 +28965,110 @@ def _v115_replay_mutation_suite(fixture):
         "tests":list(base.get("tests") or []),
         "realistic_completion_suite":realistic,
     }
+
+
+# R117 · deterministic hard-cadence / Clock scheduling authority regression gate.
+# Fail closed on a contradiction between Roadmap's chosen time and the actual
+# next-slots used to compile the final workout. No AI provider calls.
+R117_SCHEMA = "V4.8.93-R117-1"
+_v87_cross_module_authority_guard_r116 = _v87_cross_module_authority_guard
+
+def _v87_cross_module_authority_guard(snapshot, repair=False):
+    out = _v87_cross_module_authority_guard_r116(snapshot, repair=repair)
+    road = out.get('adaptive_roadmap') if isinstance(out.get('adaptive_roadmap'),dict) else {}
+    q = road.get('quality_window') if isinstance(road.get('quality_window'),dict) else {}
+    if q.get('spacing_policy') != 'R117_HARD_CADENCE_PLUS_RECOVERY_HEURISTIC':
+        return out  # Historical R115/R116 deterministic fixtures remain supported.
+    clock = out.get('coach_clock') if isinstance(out.get('coach_clock'),dict) else {}
+    pres = out.get('nova_prescription') if isinstance(out.get('nova_prescription'),dict) else {}
+    state = str(q.get('state') or '').upper()
+    match = _v84_quality_slot_match(clock,road)
+    idx = pres.get('selected_slot_index')
+    status = str(pres.get('status') or '').upper()
+    hard_selected = status == 'PRESCRIBED' and bool(pres.get('hard_prescription_available'))
+    issues = []
+    # Recompute timing from the persisted *decision inputs*. A structurally
+    # valid but scientifically unjustified daypart switch (the R116 bug) must
+    # itself fail QA, even if Clock and Prescription agree on the WRONG slot.
+    if hard_selected and q.get('preferred_iso') and clock.get('iso'):
+        try:
+            now=datetime.fromisoformat(str(clock['iso'])).replace(tzinfo=None)
+            end=datetime.fromisoformat(q['last_hard_end']) if q.get('last_hard_end') else None
+            model={
+                'last_hard_end':end,
+                'earliest_hours':q.get('learned_earliest_hours'),
+                'preferred_hours':q.get('learned_preferred_hours'),
+            }
+            rows=_v117_quality_candidates(
+                out.get('training_rhythm'),clock,out.get('planning_context'),now)
+            _,expected_preferred,_,_=_v117_select_quality_window(
+                rows,end,model,q.get('hard_cadence') or {},
+                float(q.get('recovery_delay_hours') or 0),
+                second_hard=bool(q.get('fixed_second_hard_band_removed')))
+            actual=datetime.fromisoformat(q['preferred_iso'])
+            if expected_preferred is None or expected_preferred!=actual:
+                issues.append({'code':'R117_UNJUSTIFIED_TIMING_PREFERENCE','severity':'BLOCK',
+                               'path':'adaptive_roadmap.quality_window.preferred_iso',
+                               'actual':q.get('preferred_iso'),
+                               'expected':expected_preferred.isoformat(timespec='minutes') if expected_preferred else None})
+        except (TypeError,ValueError,KeyError,OverflowError) as exc:
+            issues.append({'code':'R117_TIMING_REPLAY_UNAVAILABLE','severity':'BLOCK',
+                           'path':'adaptive_roadmap.quality_window',
+                           'reason':type(exc).__name__})
+    if hard_selected:
+        if idx is None or match.get('index') != idx:
+            issues.append({'code':'R117_PRESCRIPTION_CLOCK_MISMATCH','severity':'BLOCK',
+                           'path':'nova_prescription.selected_slot_index','actual':idx,
+                           'expected':match.get('index')})
+        if state in {'ON HOLD','RECOVERY HOLD','RACE PRIORITY','LEARNING'}:
+            issues.append({'code':'R117_HARD_DURING_BLOCKED_WINDOW','severity':'BLOCK',
+                           'path':'adaptive_roadmap.quality_window.state','actual':state})
+        if not q.get('preferred_iso'):
+            issues.append({'code':'R117_HARD_WITHOUT_WINDOW','severity':'BLOCK',
+                           'path':'adaptive_roadmap.quality_window.preferred_iso'})
+        try:
+            first=datetime.fromisoformat(q['earliest_iso'])
+            chosen=datetime.fromisoformat(q['preferred_iso'])
+            if first > chosen:
+                issues.append({'code':'R117_PREFERRED_BEFORE_EARLIEST','severity':'BLOCK',
+                               'path':'adaptive_roadmap.quality_window.preferred_iso'})
+            end=datetime.fromisoformat(q['last_hard_end']) if q.get('last_hard_end') else None
+            if end:
+                lower=float(q.get('learned_earliest_hours') or 36) + float(q.get('recovery_delay_hours') or 0)
+                if chosen < end + timedelta(hours=lower):
+                    issues.append({'code':'R117_HARD_BEFORE_RECOVERY_HEURISTIC','severity':'BLOCK',
+                                   'path':'adaptive_roadmap.quality_window.preferred_iso'})
+        except (TypeError,KeyError,ValueError):
+            issues.append({'code':'R117_INVALID_WINDOW_DATES','severity':'BLOCK',
+                           'path':'adaptive_roadmap.quality_window'})
+    audit=out.get('cross_module_authority_audit') if isinstance(out.get('cross_module_authority_audit'),dict) else {}
+    audit['schema']=R117_SCHEMA
+    audit['checks']=list(audit.get('checks') or []) + [{
+        'name':'R117_HARD_CADENCE_CLOCK_RECOVERY_GATE',
+        'selected_slot_index':idx,
+        'matched_clock_index':match.get('index'),
+        'preferred_iso':q.get('preferred_iso'),
+        'selection_reason':q.get('slot_selection_reason'),
+        'availability_confirmed':q.get('availability_confirmed'),
+        'pass':not issues,
+    }]
+    audit['issues']=list(audit.get('issues') or [])+issues
+    audit['final_pass']=not bool(audit['issues'])
+    audit['status']='PASS' if audit['final_pass'] else 'BLOCKED'
+    audit['rule']=str(audit.get('rule') or '')+' R117: a hard prescription must match the exact eligible Clock opportunity, respect the scheduling recovery lower bound and remain blocked during health/recovery/race holds. Learned availability stays provisional.'
+    out['cross_module_authority_audit']=audit
+    semantic=out.get('semantic_authority_audit') if isinstance(out.get('semantic_authority_audit'),dict) else {}
+    semantic['cross_module_authority_pass']=audit['final_pass']
+    semantic['cross_module_authority_schema']=R117_SCHEMA
+    if not audit['final_pass']:
+        final_issues=semantic.get('final_issues') if isinstance(semantic.get('final_issues'),dict) else {}
+        final_issues['cross_module_authority']=[{'reason':x.get('code'),'sentence':str(x.get('path') or '')} for x in audit['issues']]
+        semantic['final_issues']=final_issues
+        semantic['final_pass']=False
+        semantic['pass']=False
+    out['semantic_authority_audit']=semantic
+    out['authority_final_pass']=bool(audit['final_pass'] and semantic.get('final_pass',True))
+    return out
 
 
 if __name__ == "__main__":
