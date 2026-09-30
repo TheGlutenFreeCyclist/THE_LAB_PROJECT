@@ -97,7 +97,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.96 WIP R120 · DISTINCT GROUNDED ANSWERS · OPTIONAL LANGUAGE AI · R117 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.97 WIP R121 · STORED GROUNDED NOVA · R120 LANGUAGE · R117 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -2666,7 +2666,7 @@ BASE_CSS += r"""
 .v46-chat-demo-controls{opacity:.58}.v46-chat-demo-controls button:disabled,.v46-chat-demo-controls textarea:disabled{cursor:not-allowed;filter:saturate(.6)}.v46-chat-demo-messages{min-height:0}
 @media(max-width:760px){.v46-login-shell{justify-content:flex-start;padding:18px 12px 18px}.v46-login-stage{padding:30px 20px 24px}.v46-login-logo{width:235px;max-width:78%;margin-bottom:17px}.v46-brand-lockup h1{font-size:36px}.v46-login-copy{font-size:13.5px}.v46-feature-grid{grid-template-columns:1fr 1fr;margin-top:23px}.v46-login-actions{display:grid;grid-template-columns:1fr 1fr}.v46-login-primary,.v46-login-secondary{width:100%;padding:0 12px}.v46-login-trust{margin-top:16px}.v46-legal{font-size:9px}.v46-modal-card{padding:25px 20px 22px}}
 @media(max-width:480px){.v46-login-stage{padding:26px 16px 21px}.v46-login-logo{width:220px;max-width:84%}.v46-login-kicker{font-size:9.5px;letter-spacing:.115em}.v46-brand-lockup h1{font-size:31px}.v46-feature-grid{grid-template-columns:1fr;gap:8px}.v46-feature-grid article{padding:11px 12px}.v46-login-actions{grid-template-columns:1fr}.v46-login-primary,.v46-login-secondary{min-height:48px}.v46-login-trust{font-size:9.5px}.v46-legal{text-align:left;padding:0 4px}.v46-modal-card h2{font-size:31px}}
-@media print{body.v27-report-mode .v29-coach-chat{display:block!important}.v46-chat-demo-controls{opacity:.72!important}}
+@media print{body.v27-report-mode .v29-coach-chat{display:block!important}body.v27-report-mode .v29-coach-chat[data-stored-grounded="1"]{display:none!important}.v46-chat-demo-controls{opacity:.72!important}}
 """
 BASE_CSS += r"""
 html{width:100%;max-width:100%;-webkit-text-size-adjust:100%;text-size-adjust:100%}
@@ -3348,14 +3348,14 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% endif %}
 </article>
 </div>
-<section class="v29-coach-chat v4865-nova v4867-nova {% if not report_mode and not is_preview %}no-print{% endif %}" id="v29-coach-chat" data-context-id="{{ chat_context_meta.generated_at_local if chat_context_meta else '' }}" data-preview="{{ '1' if is_preview or report_mode else '0' }}">
+<section class="v29-coach-chat v4865-nova v4867-nova {% if not is_preview and (not report_mode or chat_context_meta) %}no-print{% endif %}" id="v29-coach-chat" data-context-id="{{ chat_context_meta.generated_at_local if chat_context_meta else '' }}" data-preview="{{ '1' if is_preview or (report_mode and not chat_context_meta) else '0' }}" data-stored-grounded="{{ '1' if report_mode and chat_context_meta else '0' }}">
 <div class="v4867-nova-head">
 <span class="v4867-nova-orb" aria-hidden="true"><img class="v4875-nova-mark v4875-nova-mark--orb" src="data:image/png;base64,{{ nova_logo_b64 }}" alt=""></span>
 <div class="v4867-nova-heading"><strong>NOVA</strong><small>Ask about your Snapshot, training or recovery.</small></div>
-{% if is_preview %}<span class="v4867-nova-context"><i></i>DEMO · AI DISABLED</span>{% elif report_mode %}<span class="v4867-nova-context"><i></i>STORED REPORT · AI DISABLED</span>{% elif chat_context_meta %}<span class="v4867-nova-context"><i></i>CONTEXT · {{ chat_context_meta.generated_at_local_display }}</span>{% else %}<span class="v4867-nova-context"><i></i>NO SNAPSHOT CONTEXT</span>{% endif %}
+{% if is_preview %}<span class="v4867-nova-context"><i></i>DEMO · AI DISABLED</span>{% elif report_mode and chat_context_meta %}<span class="v4867-nova-context"><i></i>STORED SNAPSHOT · GROUNDED NOVA · 0 AI</span>{% elif report_mode %}<span class="v4867-nova-context"><i></i>STORED REPORT · AI DISABLED</span>{% elif chat_context_meta %}<span class="v4867-nova-context"><i></i>CONTEXT · {{ chat_context_meta.generated_at_local_display }}</span>{% else %}<span class="v4867-nova-context"><i></i>NO SNAPSHOT CONTEXT</span>{% endif %}
 </div>
 <div class="v29-chat-panel v4865-nova-panel">
-{% if is_preview or report_mode %}
+{% if is_preview or (report_mode and not chat_context_meta) %}
 <div class="v46-chat-demo" aria-label="Nova feature preview">
 <div class="v29-chat-stage">
 <div class="v29-chat-messages v46-chat-demo-messages" aria-live="off">
@@ -3377,14 +3377,17 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% elif chat_context_meta %}
 <div class="v29-chat-stage">
 <div class="v29-chat-messages" id="v29-chat-messages" aria-live="polite">
-<div class="v29-msg welcome"><span class="v29-msg-avatar v4875-chat-avatar" aria-hidden="true"><img class="v4875-nova-mark v4875-nova-mark--avatar" src="data:image/png;base64,{{ nova_logo_b64 }}" alt=""></span><div class="v29-bubble">Snapshot loaded. Ask Nova why THE LAB chose a session, how your recovery signals fit together, what your fueling recommendation means, or how recent training changes the decision.</div></div>
+<div class="v29-msg welcome"><span class="v29-msg-avatar v4875-chat-avatar" aria-hidden="true"><img class="v4875-nova-mark v4875-nova-mark--avatar" src="data:image/png;base64,{{ nova_logo_b64 }}" alt=""></span><div class="v29-bubble">{% if report_mode %}Saved Snapshot loaded. Ask me why your roadmap shows its current stage, what evidence is missing, or why I selected the next session. These explanations use no AI calls.{% else %}Snapshot loaded. Ask Nova why THE LAB chose a session, how your recovery signals fit together, what your fueling recommendation means, or how recent training changes the decision.{% endif %}</div></div>
 </div>
 <div class="v29-quick-row">
 <button type="button" class="v29-quick" data-chat-prompt="Why is my roadmap in this stage?">WHY THIS ROADMAP STAGE?</button>
+<button type="button" class="v29-quick" data-chat-prompt="What is holding me back from progressing in my roadmap?">WHAT IS MISSING?</button>
 <button type="button" class="v29-quick" data-chat-prompt="Why is this the right next session for me?">WHY THIS SESSION?</button>
+{% if not report_mode %}
 <button type="button" class="v29-quick" data-chat-prompt="How should I interpret my recovery signals today?">RECOVERY CHECK</button>
 <button type="button" class="v29-quick" data-chat-prompt="Explain the fueling recommendation for my next ride.">EXPLAIN FUELING</button>
 <button type="button" class="v29-quick" data-chat-prompt="What do my recent training blocks change about the plan?">RECENT BLOCKS</button>
+{% endif %}
 </div>
 <form class="v29-chat-compose" id="v29-chat-form">
 <textarea class="v29-chat-input" id="v29-chat-input" rows="1" maxlength="1200" placeholder="Ask Nova a question…" aria-label="Ask Nova a question" required></textarea>
@@ -3392,7 +3395,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </form>
 <div class="v29-chat-error" id="v29-chat-error" hidden></div>
 </div>
-<div class="v29-chat-foot"><span><strong>Roadmap and session explanations run on Nova without AI calls.</strong> Other questions use AI Coach with your personal key.</span><button type="button" class="v29-chat-clear" id="v29-chat-clear">CLEAR CHAT</button></div>
+<div class="v29-chat-foot"><span>{% if report_mode %}<strong>Read-only saved Snapshot · grounded Nova questions only · 0 AI calls.</strong> Other questions are disabled in this view. Open a new live Snapshot only when you independently need refreshed training data.{% else %}<strong>Roadmap and session explanations run on Nova without AI calls.</strong> Other questions use AI Coach with your personal key.{% endif %}</span><button type="button" class="v29-chat-clear" id="v29-chat-clear">CLEAR CHAT</button></div>
 {% else %}
 <div class="v29-chat-disabled"><strong>Generate a Snapshot first</strong>Nova activates only after THE LAB has built a complete Snapshot, so it never answers from an empty context.</div>
 {% endif %}
@@ -3895,18 +3898,18 @@ if(phaseBtn && phasePanel && phaseBtn.getAttribute('data-static')!=='1'){ var to
 var coachChat=document.getElementById('v29-coach-chat');
 if(coachChat){
 var coachForm=document.getElementById('v29-chat-form'), coachInput=document.getElementById('v29-chat-input'), coachSend=document.getElementById('v29-chat-send'), coachMessages=document.getElementById('v29-chat-messages'), coachError=document.getElementById('v29-chat-error'), coachClear=document.getElementById('v29-chat-clear');
-var coachContext=coachChat.getAttribute('data-context-id')||'', coachPreview=coachChat.getAttribute('data-preview')==='1', coachHistory=[], coachBusy=false;
+var coachContext=coachChat.getAttribute('data-context-id')||'', coachPreview=coachChat.getAttribute('data-preview')==='1', coachStoredGrounded=coachChat.getAttribute('data-stored-grounded')==='1', coachHistory=[], coachBusy=false;
 var coachCsrfToken='{{ csrf_token() }}';
-var coachStorageKey='thelab:coach-chat:'+coachContext;
+var coachStorageKey=(coachStoredGrounded?'thelab:grounded-chat:':'thelab:coach-chat:')+coachContext;
 function coachSecurityRecovery(res){if(!res||!res.data)return false;if(res.data.csrf_token)coachCsrfToken=res.data.csrf_token;if((res.data.code==='SESSION_EXPIRED'||res.data.code==='CSRF_REFRESH_REQUIRED')&&res.data.reload_url){window.location.assign(res.data.reload_url);return true;}return false;}
 function coachReadResponse(r){return r.text().then(function(t){var j={};try{j=JSON.parse(t);}catch(_e){j={ok:false,error:(r.status===401||r.status===403)?'Your secure session needs to be refreshed. Reload THE LAB and retry.':'The server returned an unexpected response.'};}return {ok:r.ok,status:r.status,data:j};});}
 function coachScroll(){if(coachMessages){coachMessages.scrollTop=coachMessages.scrollHeight;}}
 function coachPersist(){if(!coachContext)return;try{sessionStorage.setItem(coachStorageKey,JSON.stringify(coachHistory.slice(-16)));}catch(e){}}
 function coachSetError(text){if(!coachError)return;coachError.textContent=text||'';coachError.hidden=!text;}
-function coachMessage(role,text,store){if(!coachMessages||!text)return null;var row=document.createElement('div');row.className='v29-msg '+(role==='user'?'user':'assistant');row.setAttribute('data-chat-history','1');var av=document.createElement('span');av.className='v29-msg-avatar';av.setAttribute('aria-hidden','true');av.textContent=role==='user'?'YOU':'✦';var bubble=document.createElement('div');bubble.className='v29-bubble';var copy=document.createElement('div');copy.textContent=text;bubble.appendChild(copy);if(role==='assistant'){var tools=document.createElement('div');tools.className='v29-msg-tools';var save=document.createElement('button');save.type='button';save.className='v29-save-memory';save.textContent='+ SAVE TO MEMORY';save.addEventListener('click',function(){if(save.disabled)return;if(!confirm('Save this Nova answer to Durable Memory?'))return;save.disabled=true;save.textContent='SAVING…';if(window.V4848RequestFeedback)window.V4848RequestFeedback.start(save,20000);fetch('/coach-chat/save-memory',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':coachCsrfToken},body:JSON.stringify({text:text})}).then(coachReadResponse).then(function(res){if(coachSecurityRecovery(res))return;if(!res.ok||!res.data.ok)throw new Error(res.data.error||'Could not save memory.');save.classList.add('is-saved');save.textContent=res.data.duplicate?'ALREADY IN MEMORY':'SAVED TO MEMORY';}).catch(function(err){save.disabled=false;save.textContent='+ SAVE TO MEMORY';coachSetError(err.message||'Could not save memory.');}).finally(function(){if(window.V4848RequestFeedback)window.V4848RequestFeedback.stop(save);});});tools.appendChild(save);bubble.appendChild(tools);}row.appendChild(av);row.appendChild(bubble);coachMessages.appendChild(row);if(store!==false){coachHistory.push({role:role==='user'?'user':'assistant',text:text});coachHistory=coachHistory.slice(-16);coachPersist();}coachScroll();return row;}
+function coachMessage(role,text,store){if(!coachMessages||!text)return null;var row=document.createElement('div');row.className='v29-msg '+(role==='user'?'user':'assistant');row.setAttribute('data-chat-history','1');var av=document.createElement('span');av.className='v29-msg-avatar';av.setAttribute('aria-hidden','true');av.textContent=role==='user'?'YOU':'✦';var bubble=document.createElement('div');bubble.className='v29-bubble';var copy=document.createElement('div');copy.textContent=text;bubble.appendChild(copy);if(role==='assistant'&&!coachStoredGrounded){var tools=document.createElement('div');tools.className='v29-msg-tools';var save=document.createElement('button');save.type='button';save.className='v29-save-memory';save.textContent='+ SAVE TO MEMORY';save.addEventListener('click',function(){if(save.disabled)return;if(!confirm('Save this Nova answer to Durable Memory?'))return;save.disabled=true;save.textContent='SAVING…';if(window.V4848RequestFeedback)window.V4848RequestFeedback.start(save,20000);fetch('/coach-chat/save-memory',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':coachCsrfToken},body:JSON.stringify({text:text})}).then(coachReadResponse).then(function(res){if(coachSecurityRecovery(res))return;if(!res.ok||!res.data.ok)throw new Error(res.data.error||'Could not save memory.');save.classList.add('is-saved');save.textContent=res.data.duplicate?'ALREADY IN MEMORY':'SAVED TO MEMORY';}).catch(function(err){save.disabled=false;save.textContent='+ SAVE TO MEMORY';coachSetError(err.message||'Could not save memory.');}).finally(function(){if(window.V4848RequestFeedback)window.V4848RequestFeedback.stop(save);});});tools.appendChild(save);bubble.appendChild(tools);}row.appendChild(av);row.appendChild(bubble);coachMessages.appendChild(row);if(store!==false){coachHistory.push({role:role==='user'?'user':'assistant',text:text});coachHistory=coachHistory.slice(-16);coachPersist();}coachScroll();return row;}
 function coachTyping(){if(!coachMessages)return null;var row=document.createElement('div');row.className='v29-msg assistant';row.setAttribute('data-chat-typing','1');var av=document.createElement('span');av.className='v29-msg-avatar';av.textContent='✦';var bubble=document.createElement('div');bubble.className='v29-bubble';var dots=document.createElement('span');dots.className='v29-typing';dots.innerHTML='<i></i><i></i><i></i>';bubble.appendChild(dots);row.appendChild(av);row.appendChild(bubble);coachMessages.appendChild(row);coachScroll();return row;}
 function coachAutosize(){if(!coachInput)return;coachInput.style.height='auto';coachInput.style.height=Math.min(150,Math.max(52,coachInput.scrollHeight))+'px';}
-function coachSendQuestion(raw){var q=String(raw||'').trim();if(!q||coachBusy||coachPreview||!coachContext)return;coachSetError('');var prior=coachHistory.slice(-10);coachMessage('user',q,true);if(coachInput){coachInput.value='';coachAutosize();}coachBusy=true;if(coachSend){coachSend.disabled=true;coachSend.innerHTML='<span>✦</span> THINKING…';if(window.V4848RequestFeedback)window.V4848RequestFeedback.start(coachSend,30000);}var typing=coachTyping();fetch('/coach-chat',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':coachCsrfToken},body:JSON.stringify({question:q,history:prior,context_id:coachContext})}).then(coachReadResponse).then(function(res){if(typing)typing.remove();if(coachSecurityRecovery(res))return;if(!res.ok||!res.data.ok)throw new Error(res.data.error||'Nova could not answer.');coachMessage('assistant',res.data.answer||'No answer returned.',true);}).catch(function(err){if(typing)typing.remove();coachSetError(err.message||'Nova could not answer.');}).finally(function(){coachBusy=false;if(coachSend){if(window.V4848RequestFeedback)window.V4848RequestFeedback.stop(coachSend);coachSend.disabled=false;coachSend.innerHTML='<span>✦</span> SEND';}if(coachInput)coachInput.focus();});}
+function coachSendQuestion(raw){var q=String(raw||'').trim();if(!q||coachBusy||coachPreview||!coachContext)return;coachSetError('');var prior=coachHistory.slice(-10);coachMessage('user',q,true);if(coachInput){coachInput.value='';coachAutosize();}coachBusy=true;if(coachSend){coachSend.disabled=true;coachSend.innerHTML='<span>✦</span> THINKING…';if(window.V4848RequestFeedback)window.V4848RequestFeedback.start(coachSend,30000);}var typing=coachTyping();fetch(coachStoredGrounded?'/coach-chat/grounded':'/coach-chat',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':coachCsrfToken},body:JSON.stringify({question:q,history:prior,context_id:coachContext})}).then(coachReadResponse).then(function(res){if(typing)typing.remove();if(coachSecurityRecovery(res))return;if(!res.ok||!res.data.ok)throw new Error(res.data.error||'Nova could not answer.');coachMessage('assistant',res.data.answer||'No answer returned.',true);}).catch(function(err){if(typing)typing.remove();coachSetError(err.message||'Nova could not answer.');}).finally(function(){coachBusy=false;if(coachSend){if(window.V4848RequestFeedback)window.V4848RequestFeedback.stop(coachSend);coachSend.disabled=false;coachSend.innerHTML='<span>✦</span> SEND';}if(coachInput)coachInput.focus();});}
 if(coachContext&&coachMessages){try{var saved=JSON.parse(sessionStorage.getItem(coachStorageKey)||'[]');if(Array.isArray(saved)){saved.slice(-16).forEach(function(m){if(m&&['user','assistant'].indexOf(m.role)>=0&&typeof m.text==='string'){coachMessage(m.role,m.text,false);coachHistory.push({role:m.role,text:m.text});}});}}catch(e){coachHistory=[];}coachScroll();}
 if(coachForm){coachForm.addEventListener('submit',function(e){e.preventDefault();coachSendQuestion(coachInput?coachInput.value:'');});}
 if(coachInput){coachInput.addEventListener('input',coachAutosize);coachInput.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();coachSendQuestion(coachInput.value);}});coachAutosize();}
@@ -26648,7 +26651,7 @@ def last_report():
         data=_v4891_prepare_snapshot_for_ui(report["data"]), error=None, css=BASE_CSS, logo=LOGO_B64, brand_wordmark=BRAND_WORDMARK_B64, favicon=FAVICON_B64,
         notes=[], chat_answer=None, chat_error=None, feelings=[], latest_feeling=None,
         app_version=report.get("app_version") or APP_VERSION, clock_preview=get_clock_preview(), is_preview=False,
-        report_mode=True, report_meta=report, download_mode=False, chat_context_meta=None,
+        report_mode=True, report_meta=report, download_mode=False, chat_context_meta=report,
     )
 @app.route("/last-report/download")
 def last_report_download():
@@ -27244,6 +27247,34 @@ def analyze():
         latest_report_meta=get_latest_report_meta(), chat_context_meta=chat_context_meta,
         execution_activity_options=_v4886_execution_activity_options(),
     )
+@app.route("/coach-chat/grounded", methods=["POST"])
+def coach_chat_grounded_stored():
+    """R121: read-only, provider-proof explanations from an existing stored report.
+
+    This endpoint deliberately has no fallback to ask_ai_coach_chat, no save,
+    no billing, and never creates/refetches a Snapshot. Full AI Coach stays
+    available ONLY through its existing live route.
+    """
+    if not require_login():
+        return jsonify({"ok": False, "error": "Your session has expired. Log in again."}), 401
+    payload = request.get_json(silent=True) or {}
+    question = str(payload.get("question") or "").strip()
+    context_id = str(payload.get("context_id") or "").strip()
+    if not question or len(question) > 1200:
+        return jsonify({"ok":False,"error":"Enter a question under 1,200 characters."}), 400
+    report = load_latest_report(include_payload=True)
+    if not report or not isinstance(report.get("data"), dict):
+        return jsonify({"ok":False,"error":"No stored Snapshot is available."}), 409
+    # An explicit match makes the explanation refer to the *visible* report,
+    # not silently to a newer report which was just generated in another tab.
+    if not context_id or str(report.get("generated_at_local") or "") != context_id:
+        return jsonify({"ok":False,"error":"This saved Snapshot has changed. Reload Last Full Report to ask Nova."}), 409
+    grounded = _v119_grounded_answer(question, report["data"])
+    if not grounded:
+        return jsonify({"ok":False,"error":"This question needs the separate AI Coach and is unavailable in Last Full Report. Roadmap, progression and session-purpose questions work here without AI calls."}), 422
+    return jsonify({"ok":True,"answer":grounded["answer"],"source":grounded["source"],
+                    "intent":grounded["intent"],"context_id":context_id,"ai_call_used":False})
+
 @app.route("/coach-chat", methods=["POST"])
 def coach_chat():
     if not require_login():
