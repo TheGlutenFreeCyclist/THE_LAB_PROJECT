@@ -67,6 +67,10 @@ AI_SNAPSHOT_PROMPT_CHAR_BUDGET = max(70000, int(os.environ.get("THE_LAB_SNAPSHOT
 AI_CHAT_PROMPT_CHAR_BUDGET = max(50000, int(os.environ.get("THE_LAB_CHAT_PROMPT_CHAR_BUDGET", "70000")))
 AI_SNAPSHOT_MAX_OUTPUT_TOKENS = max(2200, int(os.environ.get("THE_LAB_SNAPSHOT_MAX_OUTPUT_TOKENS", "4500")))
 AI_CHAT_MAX_OUTPUT_TOKENS = max(900, int(os.environ.get("THE_LAB_CHAT_MAX_OUTPUT_TOKENS", "1800")))
+# R118 canary: keep the existing paid commentary ON until deterministic Nova Q&A
+# replaces the answer path. Set to 0 in staging to exercise zero-provider Snapshot.
+# This does NOT affect AI Coach chat or admin QA LIVE comparison.
+SNAPSHOT_LANGUAGE_AI_ENABLED = os.environ.get("THE_LAB_SNAPSHOT_LANGUAGE_AI_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
 BETA_QA_CONSENT_VERSION = "2026-09-v1"
 ATHLETE_CONTEXT = os.environ.get(
     "ATHLETE_CONTEXT",
@@ -93,7 +97,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.93 WIP R117 · HARD CADENCE / RECOVERY / SLOT ALIGNMENT · R116 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.95 WIP R119 · GROUNDED ASK NOVA · OPTIONAL LANGUAGE AI · R117 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -3376,6 +3380,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v29-msg welcome"><span class="v29-msg-avatar v4875-chat-avatar" aria-hidden="true"><img class="v4875-nova-mark v4875-nova-mark--avatar" src="data:image/png;base64,{{ nova_logo_b64 }}" alt=""></span><div class="v29-bubble">Snapshot loaded. Ask Nova why THE LAB chose a session, how your recovery signals fit together, what your fueling recommendation means, or how recent training changes the decision.</div></div>
 </div>
 <div class="v29-quick-row">
+<button type="button" class="v29-quick" data-chat-prompt="Why is my roadmap in this stage?">WHY THIS ROADMAP STAGE?</button>
 <button type="button" class="v29-quick" data-chat-prompt="Why is this the right next session for me?">WHY THIS SESSION?</button>
 <button type="button" class="v29-quick" data-chat-prompt="How should I interpret my recovery signals today?">RECOVERY CHECK</button>
 <button type="button" class="v29-quick" data-chat-prompt="Explain the fueling recommendation for my next ride.">EXPLAIN FUELING</button>
@@ -3387,7 +3392,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </form>
 <div class="v29-chat-error" id="v29-chat-error" hidden></div>
 </div>
-<div class="v29-chat-foot"><span><strong>Nova answers from your current Snapshot.</strong></span><button type="button" class="v29-chat-clear" id="v29-chat-clear">CLEAR CHAT</button></div>
+<div class="v29-chat-foot"><span><strong>Roadmap and session explanations run on Nova without AI calls.</strong> Other questions use AI Coach with your personal key.</span><button type="button" class="v29-chat-clear" id="v29-chat-clear">CLEAR CHAT</button></div>
 {% else %}
 <div class="v29-chat-disabled"><strong>Generate a Snapshot first</strong>Nova activates only after THE LAB has built a complete Snapshot, so it never answers from an empty context.</div>
 {% endif %}
@@ -3401,6 +3406,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 <div class="v4865-macro-panel" id="v4865-training-panel">
 <article class="v4-card v4-coach-call"><div class="v4-coach-kicker">📣 WHAT TO DO NEXT</div><h2>What I would do from here</h2><p>{{ data.recommendation }}</p></article>
+{% if data.nova_daily_answer %}<article class="v4-card v4-coach-call" aria-label="Nova answer to Daily Note"><div class="v4-coach-kicker">NOVA · NO AI CALL</div><h2>Your Daily Note question</h2><p>{{ data.nova_daily_answer.answer }}</p></article>{% elif data.nova_daily_question_needs_ai %}<div class="v4-section-note" role="note">Your Daily Note question needs the separate AI Coach. Snapshot language AI is off; no provider call was made for this question.</div>{% endif %}
 <div class="v23-training-nutrition-stack">
 <article class="v4-card v4-week v8-upcoming-card v23-upcoming-card">
 <div class="v4-section-head v35-upcoming-head">
@@ -26017,6 +26023,167 @@ def _normalize_chat_history(raw_history, max_messages=10):
             continue
         clean.append({"role": role, "text": text[:2500]})
     return clean
+# R119 STEP 2 · Read-only explanation layer. The coach engine must NOT call any of
+# these helpers. No external AI and no independent training decisions here.
+def _v119_nova_intent(question):
+    text=str(question or "").strip().lower()
+    for accent,plain in (("à","a"),("è","e"),("é","e"),("ì","i"),("ò","o"),("ù","u")):
+        text=text.replace(accent,plain)
+    text=re.sub(r"\s+", " ", text)
+    if not text or len(text)>1200:
+        return None
+    # Avoid treating health questions or requests to change a prescription as
+    # simple explanations: those need the existing fuller AI Coach route.
+    if re.search(r"\b(fever|injur|illness|pain|sick|malat|infortun|dolor|febbr|modify|swap|spost|cambia|modific|should i|posso fare)\w*",text):
+        return None
+    stage_words=bool(re.search(r"roadmap|repeatabil|transfer|trasfer|fase|stage|step|progres",text))
+    evidence_words=bool(re.search(r"what.*(missing|need|next|do.*reach|do.*transfer)|how.*(advance|progress|reach)|cosa.*(manc|devo)|come.*(avanz|pass|arriv)|qual.*(prova|evidenz)|per.*passare",text))
+    if stage_words and evidence_words:
+        return "NEXT_EVIDENCE"
+    if stage_words and (re.search(r"why|perche|come mai|tornat|indietro|back|regress|explain|spiega|stato|where|dove|which|quale",text) or len(text)<56):
+        return "ROADMAP"
+    if re.search(r"why|perche|come mai|explain|spiega",text) and re.search(r"session|workout|training|allenament|sedut|3\s*[×x]\s*6|3x6",text):
+        return "NEXT_SESSION"
+    return None
+
+def _v119_list(value):
+    if isinstance(value,list):
+        return value
+    if isinstance(value,dict):
+        numeric=[(int(re.sub(r"[^0-9]", "",str(k))),v) for k,v in value.items() if re.fullmatch(r"\[?\d+\]?",str(k))]
+        return [v for _,v in sorted(numeric)] if len(numeric)==len(value) else []
+    return []
+
+def _v119_grounded_answer(question,snapshot):
+    """Only answer supported explanation intents from this exact Snapshot.
+
+    Return None (AI Coach fallback) whenever the required canonical facts are
+    unavailable. Never mutate the Snapshot or create coaching advice.
+    """
+    intent=_v119_nova_intent(question)
+    if not intent or not isinstance(snapshot,dict):
+        return None
+    authority=snapshot.get("cross_module_authority_audit") or {}
+    if isinstance(authority,dict) and authority.get("final_pass") is False:
+        return None
+    if snapshot.get("qa_regression_blocked"):
+        return None
+    road=snapshot.get("adaptive_roadmap") or {}
+    qs=snapshot.get("question_state") or {}
+    decision=snapshot.get("nova_decision") or {}
+    if not isinstance(road,dict) or not isinstance(qs,dict) or not isinstance(decision,dict):
+        return None
+    lower=str(question or "").lower()
+    italian=bool(re.search(r"\b(perch[eéè]|come mai|tornat[oaie]|indietro|manc[ahie]|allenament[oi]|sedut[ae]|qual[eia]|avanzare|passare|spiegami|roadmap.*mia)\b",lower))
+    stage=road.get("stage") or {}
+    if not isinstance(stage,dict): stage={}
+    stage_code=str(stage.get("code") or road.get("stage_code") or "").upper()
+    decision_stage=str(decision.get("stage_code") or "").upper()
+    if decision_stage and stage_code and decision_stage!=stage_code:
+        return None
+    stage_labels={"BUILD":("Costruzione","Build"),"REPEAT":("Ripetibilità","Repeatability"),"TRANSFER":("Trasferimento","Transfer"),"VALIDATE":("Validazione","Validation")}
+    if stage_code not in stage_labels and intent!="NEXT_SESSION":
+        return None
+    stage_name=stage_labels.get(stage_code,(stage_code.title(),stage_code.title()))[0 if italian else 1]
+    dims=qs.get("dimensions") or {}
+    if not isinstance(dims,dict):dims={}
+    repeat=dims.get("REPEATABILITY") or {}
+    dose=dims.get("SPECIFIC_DOSE") or {}
+    if not isinstance(repeat,dict): repeat={}
+    if not isinstance(dose,dict): dose={}
+    rp=str(repeat.get("state") or "").upper()
+    dp=str(dose.get("state") or "").upper()
+    q_profile=qs.get("facet_profile") or {}
+    r_profile=road.get("facet_profile") or {}
+    if isinstance(q_profile,dict) and isinstance(r_profile,dict) and q_profile and r_profile:
+        for key in ("coverage_count","required_count"):
+            if q_profile.get(key) is not None and r_profile.get(key) is not None and q_profile[key]!=r_profile[key]:
+                return None
+        q_missing=set(str(x) for x in _v119_list(q_profile.get("missing")))
+        r_missing=set(str(x) for x in _v119_list(r_profile.get("missing")))
+        if q_missing!=r_missing:
+            return None
+    profile=q_profile or r_profile
+    if not isinstance(profile,dict):profile={}
+    labels=profile.get("labels") or {}
+    if not isinstance(labels,dict):labels={}
+    missing=_v119_list(profile.get("missing"))
+    coverage=profile.get("coverage_count")
+    required=profile.get("required_count")
+    missing_labels=[str(labels.get(x) or str(x).replace("_"," ").lower()).strip() for x in missing if isinstance(x,str)]
+    if italian:
+        def _it_facet(label):
+            match=re.fullmatch(r"([0-9.,\s–-]+)\s*min\s+punch",label,flags=re.I)
+            return "sforzi da "+match.group(1).strip()+" minuti" if match else label.replace("min punch","minuti di sforzo")
+        missing_labels=[_it_facet(x) for x in missing_labels]
+    def breadth_phrase():
+        if coverage is None or required is None or not missing_labels:
+            return None
+        try:
+            count=int(coverage);total=int(required)
+        except (ValueError,TypeError):
+            return None
+        if count<0 or total<1 or count>total:return None
+        facet=", ".join(missing_labels[:3])
+        return (f"Le prove dirette coprono {count} fasce su {total}; manca ancora una prova solida per {facet}." if italian else
+                f"Direct evidence covers {count} of {total} duration bands; {facet} is still missing.")
+    breadth=breadth_phrase()
+    if intent=="NEXT_EVIDENCE" and not breadth:
+        return None  # No claim about a missing facet without direct facet evidence.
+    evidence=["adaptive_roadmap.stage"]
+    if intent in ("ROADMAP","NEXT_EVIDENCE"):
+        if stage_code=="REPEAT" and rp=="CONSOLIDATED" and dp=="BUILDING" and breadth:
+            if italian:
+                head="La roadmap mostra Ripetibilità come fase attuale, ma questo non significa che tu abbia perso la ripetibilità: la relativa domanda è già consolidata."
+                why="La domanda ancora aperta è la dose specifica, che rimane in costruzione."
+                next_step="Prima di passare al Trasferimento, Nova deve registrare prove dirette solide nella fascia mancante e verificare anche gli altri requisiti della fase."
+                caveat="Questo Snapshot mostra lo stato attuale, ma da solo non dimostra che la roadmap sia effettivamente tornata indietro: per verificarlo serve il precedente stato datato."
+            else:
+                head="The roadmap shows Repeatability as the current stage, but that does not mean you have lost repeatability: that separate coaching question is already consolidated."
+                why="The open coaching question is Specific Dose, which is still building."
+                next_step="Before advancing to Transfer, Nova needs strong direct evidence in the missing duration band and must check the other stage requirements."
+                caveat="This Snapshot shows the current stage; it cannot establish whether the roadmap actually moved backward without an earlier dated stage record."
+            sentences=([breadth,next_step,head,why] if intent=="NEXT_EVIDENCE" else [head,why,breadth,next_step])
+            if intent=="ROADMAP":sentences.append(caveat)
+            evidence += ["question_state.dimensions.REPEATABILITY.state","question_state.dimensions.SPECIFIC_DOSE.state","question_state.facet_profile"]
+        else:
+            if italian:
+                sentences=[f"La fase attuale della roadmap è {stage_name}. Una fase della roadmap e lo stato della singola capacità misurano cose diverse."]
+                if breadth:sentences.append(breadth)
+                if dp:sentences.append(f"La domanda sulla dose specifica risulta {dp.lower()}.")
+                sentences.append("Per ricostruire un eventuale ritorno a una fase precedente occorre confrontare Snapshot datati; quello attuale non basta.")
+            else:
+                sentences=[f"The current roadmap stage is {stage_name}. A roadmap stage and the evidence state of an individual coaching question are different measures."]
+                if breadth:sentences.append(breadth)
+                if dp:sentences.append(f"The Specific Dose question is {dp.lower()}.")
+                sentences.append("An actual return from a later stage requires comparison with an earlier dated Snapshot; the current one alone cannot prove it.")
+            if breadth:evidence.append("question_state.facet_profile")
+            if dp:evidence.append("question_state.dimensions.SPECIFIC_DOSE.state")
+    else:
+        action=str(decision.get("action") or "").upper()
+        sessions=_v119_list(snapshot.get("next_sessions"))
+        if not sessions:return None
+        chosen=next((x for x in sessions if isinstance(x,dict) and (x.get("provisional_quality") or str(x.get("intensity") or "").upper()=="HARD")),None)
+        if chosen is None:
+            chosen=next((x for x in sessions if isinstance(x,dict)),None)
+        if not isinstance(chosen,dict) or not action:return None
+        name=str(chosen.get("title") or "").strip()[:110]
+        if not name:return None
+        missing_part=(" Manca ancora la prova diretta nella fascia "+", ".join(missing_labels[:2])+"." if italian else " Direct evidence is still missing in "+", ".join(missing_labels[:2])+".") if missing_labels else ""
+        if italian:
+            if action=="TRAIN" and chosen.get("provisional_quality"):
+                sentences=[f"Nova propone {name} per affrontare la domanda ancora aperta della roadmap, senza aggiungere un secondo obiettivo intenso."+missing_part,"La sessione resta provvisoria: va rivalutata se cambiano recupero o disponibilità. Le istruzioni esecutive valide restano quelle nella scheda dell'allenamento."]
+            else:
+                sentences=[f"La prima sessione mostrata è {name}; la decisione attuale di Nova è {action.lower()}.","Non posso aggiungere un diverso allenamento o una nuova intensità attraverso questa spiegazione: valgono le sessioni già mostrate."]
+        else:
+            if action=="TRAIN" and chosen.get("provisional_quality"):
+                sentences=[f"Nova proposes {name} to address the current unresolved roadmap question, without creating a second hard-training purpose."+missing_part,"This session remains provisional: reassess if recovery or availability changes. The session card remains the authority for workout execution."]
+            else:
+                sentences=[f"The first displayed session is {name}; Nova's current decision is {action.lower()}.","This explanation does not add an alternative workout or intensity. Follow the sessions shown in the Snapshot."]
+        evidence += ["nova_decision.action","next_sessions"]
+        if missing_labels:evidence.append("question_state.facet_profile")
+    return {"schema":"R119-GROUNDED-NOVA-QA-1","intent":intent,"answer":" ".join(sentences),"source":"NOVA_SNAPSHOT_FACTS","ai_call_used":False,"evidence_fields":evidence}
+
 def ask_ai_coach_chat(question, snapshot, history=None, report_meta=None):
     cross_context=(snapshot or {}).get("cross_modal_context") or {}
     provider_question, blocked_context_only_question = _v4890_provider_question(question, cross_context)
@@ -26837,12 +27004,19 @@ def analyze():
             snapshot_question=snapshot_question, strength_pattern=strength_pattern, session_progression=session_progression,
         )
         if not python_qa:
-            commentary, snapshot_ai_event_id = _v110_polish_nova_recommendation(
-                analysis, nova_prescription=nova_prescription, snapshot_question=provider_snapshot_question,
-                ai_runtime_override=qa_ai_runtime, usage_kind=("QA_LIVE_SNAPSHOT" if qa_requested else "SNAPSHOT"),
-            )
-            analysis["recommendation_ai_commentary"] = commentary or None
-            analysis["recommendation_ai_mode"] = "LANGUAGE_ONLY_APPEND"
+            # R118 STEP 1 · Isolated language-only feature flag. Both paths must
+            # traverse the exact same canonical projection and authority checks.
+            # Admin LIVE QA keeps the provider enabled for A/B comparisons.
+            if SNAPSHOT_LANGUAGE_AI_ENABLED or qa_kind == "LIVE":
+                commentary, snapshot_ai_event_id = _v110_polish_nova_recommendation(
+                    analysis, nova_prescription=nova_prescription, snapshot_question=provider_snapshot_question,
+                    ai_runtime_override=qa_ai_runtime, usage_kind=("QA_LIVE_SNAPSHOT" if qa_requested else "SNAPSHOT"),
+                )
+                analysis["recommendation_ai_commentary"] = commentary or None
+                analysis["recommendation_ai_mode"] = "LANGUAGE_ONLY_APPEND"
+            else:
+                analysis["recommendation_ai_commentary"] = None
+                analysis["recommendation_ai_mode"] = "NOVA_ONLY_NO_PROVIDER"
             analysis = _v4901_coach_call(analysis)
             analysis = _v4890_noncoached_prescription_guard(analysis, cross_modal_context)
             analysis = _v4897_semantic_compile_snapshot(analysis, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger, power_achievements=power_achievements, record_audit=True, snapshot_question=snapshot_question)
@@ -26924,6 +27098,12 @@ def analyze():
             "science_kb_version": SCIENCE_KB.get("version", 1),
         }
         data = _v87_cross_module_authority_guard(data, repair=True)
+        if python_qa or (not SNAPSHOT_LANGUAGE_AI_ENABLED and qa_kind != "LIVE"):
+            _daily_grounded = _v119_grounded_answer(snapshot_question, data)
+            if _daily_grounded:
+                data["nova_daily_answer"] = _daily_grounded
+            elif snapshot_question and not python_qa:
+                data["nova_daily_question_needs_ai"] = True
         qa_regression_blocked = False
         qa_regression_message = None
         if python_qa:
@@ -27007,12 +27187,6 @@ def coach_chat():
     if not require_login():
         return jsonify({"ok": False, "error": "Your session has expired. Log in again."}), 401
     user = current_user(touch=False)
-    if user and str(user.get("role") or "").lower() != "admin":
-        try:
-            if not athlete_setup_status(user["id"]).get("ai_connected"):
-                return jsonify({"ok": False, "error": "AI access is currently unavailable. In BYOK mode, add your personal API key in Athlete Settings; if owner-funded access was removed, that personal key is required before Nova can run."}), 409
-        except Exception:
-            return jsonify({"ok": False, "error": "AI access could not be verified. Open Athlete Settings and try again."}), 409
     payload = request.get_json(silent=True) or {}
     question = str(payload.get("question") or "").strip()
     context_id = str(payload.get("context_id") or "").strip()
@@ -27026,6 +27200,20 @@ def coach_chat():
         return jsonify({"ok": False, "error": "No stored Snapshot is available. Generate a Snapshot first."}), 409
     if context_id and str(report.get("generated_at_local") or "") != context_id:
         return jsonify({"ok": False, "error": "A newer Snapshot is available. Reload the dashboard before continuing this chat."}), 409
+    # Read-only factual explanations have no provider dependency or call cost.
+    grounded = _v119_grounded_answer(question, report["data"])
+    if grounded:
+        return jsonify({"ok":True, "answer":grounded["answer"], "source":grounded["source"],
+                        "intent":grounded["intent"], "context_id":report.get("generated_at_local"),
+                        "ai_call_used":False})
+    # Preserve the existing user-owned AI Coach for everything outside this
+    # deliberately narrow and evidence-grounded Nova question set.
+    if user and str(user.get("role") or "").lower() != "admin":
+        try:
+            if not athlete_setup_status(user["id"]).get("ai_connected"):
+                return jsonify({"ok":False,"error":"This question needs AI Coach. Add your personal API key in Athlete Settings or ask a supported roadmap/session question."}),409
+        except Exception:
+            return jsonify({"ok":False,"error":"AI access could not be verified. Open Athlete Settings and try again."}),409
     try:
         cross_context=(report.get("data") or {}).get("cross_modal_context") or {}
         _provider_q, blocked_context_only = _v4890_provider_question(question, cross_context)
