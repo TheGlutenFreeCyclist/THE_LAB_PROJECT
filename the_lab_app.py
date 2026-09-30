@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.02 WIP R126 · UI CLEANUP / PB FEEDBACK / ZERO-AI QUESTION SEPARATION · R125 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.03 WIP R127 · PRECISE SOURCE-LAP POWER · R126 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -20129,7 +20129,7 @@ def _v125_original_fit_laps(content):
                     if compressed and fid==253:continue
                     if pos+sz>end:return []
                     b=raw[pos:pos+sz];pos+=sz
-                    if g!=19 or fid not in {2,7,8,19}:continue
+                    if g!=19 or fid not in {2,7,8,19,41}:continue
                     if sz not in {1,2,4,8}:continue
                     v=int.from_bytes(b,bo)
                     if v in {(1<<(8*sz))-1}:continue
@@ -20142,10 +20142,26 @@ def _v125_original_fit_laps(content):
                     watt=row.get(19)
                     if raw_secs is None or watt is None:continue
                     duration=float(raw_secs)/1000.0
-                    # FIT avg_power is measured, not inferred.
-                    if 25<=duration<=7200 and 20<=watt<=2500:
+                    # R127: prefer the lap's own work/time mean when the FIT exposes
+                    # total_work. It preserves sub-watt information that avg_power
+                    # stores only as an integer and matches athlete-facing lap means
+                    # more closely. Never use it if it materially conflicts with the
+                    # native avg_power field. FIT total_work is joules.
+                    avg_watts=float(watt)
+                    avg_source='FIT_AVG_POWER'
+                    total_work=row.get(41)
+                    if total_work is not None and duration>0:
+                        work_time_watts=float(total_work)/duration
+                        if 20<=work_time_watts<=2500 and abs(work_time_watts-float(watt))<=3.0:
+                            avg_watts=work_time_watts
+                            avg_source='FIT_TOTAL_WORK_DIV_TIMER'
+                    if 25<=duration<=7200 and 20<=avg_watts<=2500:
                         laps.append({'moving_time':round(duration), 'elapsed_time':round(duration),
-                                     'average_watts':watt,'fit_start_time':row.get(2),
+                                     'average_watts':round(avg_watts,3),
+                                     'fit_avg_power_watts':watt,
+                                     'fit_total_work_j':total_work,
+                                     'average_watts_source':avg_source,
+                                     'fit_start_time':row.get(2),
                                      '_v125_record_origin':'ORIGINAL_FIT_LAP'})
             offset=end+2 if end+2<=len(raw) else end
         return laps[:200]
