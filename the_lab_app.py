@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.99 WIP R123 · SNAPSHOT BUTTON UI · R122 ZERO-AI BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.00 WIP R124 · OBSERVED POWER / POTENTIAL SEPARATION · R123 ZERO-AI BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -4926,6 +4926,26 @@ def _v4841_primary_prescription_text(text):
     if m:
         return base[:after + m.start()].rstrip(" ,;.-")
     return base
+def _v124_strip_non_prescriptive_power_context(text):
+    """Exclude explanatory PB/model figures from the executable workout clause.
+
+    This is a critical trust boundary: textual powers cited as background must
+    never be parsed into an explicit exercise target or scored as adherence.
+    Supports both historical R123 and newly separated R124 explanatory text.
+    """
+    s = str(text or "")
+    cut = re.search(
+        r"(?i)(?:^|(?<=[.!?])\s+)(?:"
+        r"observed\s+(?:recent|season)\b|"
+        r"recent\s+(?:same[- ]duration|\d+(?:\.\d+)?[- ]?min\s+(?:best|reference))\b|"
+        r"exploratory\s+(?:neighboring[- ]duration|model|power[- ]curve)\b|"
+        r"an?\s+(?:interpolated|modeled)\s+\d+(?:\.\d+)?[- ]?min\s+(?:reference|estimate)\b"
+        r")",
+        s,
+    )
+    return s[:cut.start()].rstrip(" \t\n\r.;") if cut else s
+
+
 def _v4845_primary_work_text(text):
     raw = str(text or "")
     if not raw:
@@ -4935,6 +4955,7 @@ def _v4845_primary_work_text(text):
         raw, flags=re.I,
     ))
     base = raw[markers[-1].end():] if markers else _v4841_primary_prescription_text(raw)
+    base = _v124_strip_non_prescriptive_power_context(base)
     if not base:
         return ""
     cut = re.search(
@@ -6859,6 +6880,14 @@ def _v4846_sanitize_legacy_ledger_prescription(ledger):
         if lo is not None and hi is not None:
             entry["prescribed_power_low"] = _clean_number(lo)
             entry["prescribed_power_high"] = _clean_number(hi)
+        elif _v124_strip_non_prescriptive_power_context(main_set) != main_set:
+            # Historical R123 reports could accidentally serialize a quoted
+            # curve estimate as an executable target. Do not retain those
+            # stale numeric targets if the actual work clause has none.
+            entry["prescribed_power_low"] = None
+            entry["prescribed_power_high"] = None
+            entry["quality_target_ratio"] = None
+            entry["reference_power_cleanup"] = "R124_NONPRESCRIPTIVE_CONTEXT_ONLY"
         return entry
     anchor = out.get("primary_anchor") if isinstance(out.get("primary_anchor"), dict) else None
     if anchor:
@@ -13665,18 +13694,141 @@ def _v84_observed_repeatability_prescription(evidence_ledger, dimension):
     else:return None
     return {"title":title,"duration":"Nova-selected duration","intensity":"HARD","main_set":main,"why":why,"_tl_nova_deterministic":True,"_tl_nova_dimension":dimension,"_tl_evidence_activity_id":ref.get("activity_id"),"_tl_evidence_date":ref.get("date")}
 
+def _v124_power_duration_evidence(power_model, interval_minutes):
+    """Three independent truths: recent observation, season PB, exploratory trend.
+
+    The estimate is intentionally never returned as a calibration/reference watt,
+    an execution target, or an assessment benchmark. No medical/physiological
+    potential is inferred from neighboring power-curve points.
+    """
+    m = power_model if isinstance(power_model, dict) else {}
+    out = {
+        "schema": "R124_POWER_EVIDENCE_V1", "duration_seconds": None,
+        "observed_recent_watts": None, "observed_season_best_watts": None,
+        "observed_recent_source": None, "observed_season_source": None,
+        "long_term_scope": str(m.get("long_term_label") or "long-term").strip(),
+        "exploratory_estimate_watts": None, "estimate_source": None,
+        "estimate_confidence": None, "estimate_role": "ADVISORY_ONLY_NOT_VALIDATED",
+        "execution_target_watts": None, "assessment_target_watts": None,
+        "assessment_policy": "COMPLETED_STRUCTURE_AND_COMPARABLE_REPEATED_WORK",
+    }
+    try:
+        sec = float(interval_minutes) * 60.0
+        if not math.isfinite(sec) or not 30 <= sec <= 7200:
+            return out
+        out["duration_seconds"] = int(round(sec))
+    except (ValueError, TypeError, OverflowError):
+        return out
+    def usable(value):
+        try:
+            v = float(value)
+            return round(v, 1) if math.isfinite(v) and 50 <= v <= 1800 else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+    # These are direct 42d / Jan-1-to-today points returned from Intervals.icu,
+    # not fitted CP/W-prime estimates. Preserve their time-window distinction.
+    for p in m.get("reference_points") or []:
+        if not isinstance(p, dict):
+            continue
+        try:
+            if abs(float(p.get("secs")) - sec) > 1:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if out["observed_recent_watts"] is None:
+            out["observed_recent_watts"] = usable(p.get("recent"))
+            if out["observed_recent_watts"] is not None:
+                out["observed_recent_source"] = "DIRECT_42D_BEST_POWER_CURVE"
+        if out["observed_season_best_watts"] is None:
+            out["observed_season_best_watts"] = usable(p.get("long_term"))
+            if out["observed_season_best_watts"] is not None:
+                out["observed_season_source"] = "DIRECT_LONG_TERM_BEST_POWER_CURVE"
+    # Legacy/preview models can carry direct curve samples in their fit inputs
+    # without exposing the full exact-duration reference_points array.
+    for key, observed_key, source_key in (
+        ("recent", "observed_recent_watts", "observed_recent_source"),
+        ("season", "observed_season_best_watts", "observed_season_source"),
+    ):
+        if out[observed_key] is not None:
+            continue
+        section = m.get(key) or {}
+        for p in section.get("points") or []:
+            try:
+                if abs(float(p.get("secs")) - sec) > 1:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            val = usable(p.get("watts"))
+            if val is not None:
+                out[observed_key] = val
+                out[source_key] = "DIRECT_MODEL_INPUT_CURVE_SAMPLE"
+                break
+    # Exploratory neighboring-duration interpolation is preserved as a clearly
+    # labeled signal. Its low model-fit confidence must remain visible.
+    recent = m.get("recent") or {}
+    by_sec = {}
+    for p in recent.get("points") or []:
+        try:
+            x = float(p.get("secs")); y = usable(p.get("watts"))
+            if math.isfinite(x) and 30 <= x <= 7200 and y is not None:
+                by_sec[x] = max(y, by_sec.get(x, 0))
+        except (TypeError, ValueError, OverflowError):
+            continue
+    points = sorted(by_sec.items())
+    lo = max((x for x in points if x[0] < sec), default=None, key=lambda x: x[0])
+    hi = min((x for x in points if x[0] > sec), default=None, key=lambda x: x[0])
+    if lo is not None and hi is not None and lo[1] >= hi[1]:
+        frac = (math.log(sec)-math.log(lo[0]))/(math.log(hi[0])-math.log(lo[0]))
+        estimate = usable(lo[1] + frac * (hi[1]-lo[1]))
+        if estimate is not None:
+            out["exploratory_estimate_watts"] = estimate
+            out["estimate_source"] = "LOG_DURATION_INTERPOLATION_OF_NEIGHBORING_MODEL_INPUTS"
+            conf = str(recent.get("confidence") or "UNASSESSED").upper()
+            out["estimate_confidence"] = conf if conf in ("HIGH", "MODERATE", "LOW") else "UNASSESSED"
+            recorded = max([v for v in (out["observed_recent_watts"], out["observed_season_best_watts"]) if v is not None], default=None)
+            if recorded is not None and estimate <= recorded:
+                out["estimate_role"] = "NON_ACTIONABLE_ESTIMATE_NOT_ABOVE_OBSERVED"
+    return out
+
+
+def _v124_power_evidence_explanation(evidence, interval_minutes):
+    e = evidence or {}
+    try: duration = f"{float(interval_minutes):g}-min"
+    except (TypeError, ValueError): return ""
+    recent = e.get("observed_recent_watts")
+    season = e.get("observed_season_best_watts")
+    estimate = e.get("exploratory_estimate_watts")
+    parts = []
+    if recent is not None:
+        parts.append(f"Observed recent {duration} best: {recent:.0f} W")
+    if season is not None:
+        scope = str(e.get("long_term_scope") or "long-term").strip()
+        parts.append(f"observed {scope} {duration} best: {season:.0f} W")
+    show_estimate = estimate is not None and str(e.get("estimate_role") or "") != "NON_ACTIONABLE_ESTIMATE_NOT_ABOVE_OBSERVED"
+    if show_estimate:
+        conf = str(e.get("estimate_confidence") or "UNASSESSED").lower()
+        parts.append(f"exploratory neighboring-duration interpolation: ~{estimate:.0f} W ({conf} confidence)")
+    if not parts:
+        return ""
+    if show_estimate:
+        qualifier = "The estimate indicates a possible direction to explore, not achieved capacity; "
+    else:
+        qualifier = "The observed records describe single-effort results; "
+    return "; ".join(parts) + ". " + qualifier + "none of these figures is a repeated-rep workout target or a post-workout grading threshold."
+
+
 def _v85_reference_context(power_model, minutes=None, ftp_anchor=None):
-    """Return observation-backed pacing context without converting it into a target."""
-    ref=None
+    """Show observed performance first, then optional exploratory trend, never a dose."""
     if minutes is not None:
-        try:ref=_v4836_observed_power_reference(power_model or {},float(minutes))
-        except Exception:ref=None
-    if ref is not None:
-        return f"Recent same-duration field reference: {ref:.0f} W. Use it only as pacing/ceiling context; it is not a minimum, cap or mandatory target."
-    fa=ftp_anchor or {};ftp=_rhythm_num(fa.get("prescription_watts") if fa.get("prescription_watts") is not None else fa.get("anchor_watts"))
-    if ftp is not None and 80<=ftp<=600:
-        return f"Validated FTP context: {ftp:.0f} W. Use it only to orient the effort domain; no exact training wattage is inferred from it here."
-    return "No precise watt target is justified from current evidence; use free/resistance mode and preserve the prescribed structure and purpose."
+        e = _v124_power_duration_evidence(power_model, minutes)
+        explanation = _v124_power_evidence_explanation(e, minutes)
+        if explanation:
+            return explanation
+    fa = ftp_anchor or {}
+    ftp = _rhythm_num(fa.get("prescription_watts") if fa.get("prescription_watts") is not None else fa.get("anchor_watts"))
+    if ftp is not None and 80 <= ftp <= 600:
+        return f"Validated FTP context: {ftp:.0f} W. No exact repeated-work watt target or grading threshold is inferred from FTP alone."
+    return "No measured same-duration benchmark or justified power target is available; use free/resistance mode and preserve the prescribed workout structure and purpose."
 
 def _v85_raw(title, intensity, main_set, why, dimension, contract_id, source_ref=None):
     return {
@@ -22346,7 +22498,7 @@ def _v4827_prescribed_power_range(*texts):
         structured_target = bool(re.search(r"(?:\d+\s*[×x]\s*)?\d+(?:\.\d+)?\s*(?:min|m|sec|s)?[^.;:]{0,28}(?:@|\bat\s*)$", before, flags=re.I))
         return any(term in before for term in phase_terms) and not structured_target
     for text in texts:
-        original = str(text or "")
+        original = _v124_strip_non_prescriptive_power_context(text)
         if not original:
             continue
         profile = _v4845_primary_work_profile(original)
@@ -22707,41 +22859,14 @@ def _v4830_session_duration_reference_guard(why, main_set, power_model):
     s = re.sub(r"(?<=[.!?])(?=[A-Z])", " ", s)
     return re.sub(r"\s{2,}", " ", s).strip()
 def _v4836_observed_power_reference(power_model, interval_minutes):
-    try:
-        target_secs = float(interval_minutes) * 60.0
-    except (TypeError, ValueError):
-        return None
-    if not (30 <= target_secs <= 7200):
-        return None
-    points = []
-    for section_name in ("recent", "season"):
-        section = (power_model or {}).get(section_name) or {}
-        for point in section.get("points") or []:
-            try:
-                secs = float(point.get("secs"))
-                watts = float(point.get("watts"))
-            except (TypeError, ValueError):
-                continue
-            if 30 <= secs <= 7200 and 50 <= watts <= 1000:
-                points.append((secs, watts, section_name))
-        if points:
-            break
-    if not points:
-        return None
-    by_secs = {}
-    for secs, watts, _ in points:
-        by_secs[secs] = max(watts, by_secs.get(secs, 0.0))
-    pts = sorted(by_secs.items())
-    for secs, watts in pts:
-        if abs(secs - target_secs) <= 1:
-            return round(watts, 1)
-    lower = max((p for p in pts if p[0] < target_secs), default=None, key=lambda x: x[0])
-    upper = min((p for p in pts if p[0] > target_secs), default=None, key=lambda x: x[0])
-    if lower and upper:
-        x0, x1, xt = math.log(lower[0]), math.log(upper[0]), math.log(target_secs)
-        frac = (xt - x0) / (x1 - x0) if x1 != x0 else 0.0
-        return round(lower[1] + frac * (upper[1] - lower[1]), 1)
-    return None
+    """Only exact-duration OBSERVED best-power curve points qualify as references.
+
+    Earlier code interpolated model-fit samples and called the result 'observed'.
+    That could inflate a reference and contaminate exercise calibration.
+    R124 keeps exploratory estimates completely separate.
+    """
+    evidence = _v124_power_duration_evidence(power_model, interval_minutes)
+    return evidence.get("observed_recent_watts") or evidence.get("observed_season_best_watts")
 def _v4836_quality_calibration(coherence, main_set, power_model):
     coherence = coherence or {}
     band = str(coherence.get("power_band") or "").lower()
@@ -27974,6 +28099,8 @@ def _v112_reference_only_power(session):
     blob = str(s.get("main_set") or "").lower()
     return bool(
         "use it only as pacing/ceiling context" in blob
+        or "not achieved capacity" in blob
+        or "not a workout target" in blob
         or "no exact training wattage is inferred" in blob
         or "no precise watt target is justified" in blob
         or "no exact watt target is inferred" in blob
@@ -27982,21 +28109,23 @@ def _v112_reference_only_power(session):
 
 def _v112_reference_only_why(dimension, session):
     dim = str(dimension or "").upper()
-    ref = _rhythm_num((session or {}).get("quality_reference_watts"))
+    ev = (session or {}).get("power_evidence")
     mins = _rhythm_num((session or {}).get("quality_reference_interval_min"))
-    context = ""
-    if ref is not None and mins is not None:
-        context = f" The recent {mins:g}-min value ({ref:.0f} W) is pacing context only, not a prescribed target."
+    if mins is None:
+        mins = _v4830_interval_minutes((session or {}).get("main_set"))
+    context = _v124_power_evidence_explanation(ev, mins) if ev and mins else ""
+    if context:
+        context = " " + context
     messages = {
-        "FRESH_CAPACITY": "Nova selected this canonical structure to develop the current fresh-capacity question without inventing an absolute watt target.",
-        "SPECIFIC_DOSE": "Nova selected this canonical structure to close the current dose/breadth gap while keeping the workout mechanics fixed by workout_id.",
-        "REPEATABILITY": "Nova selected this canonical structure to test stable reproduction across the set rather than a single peak effort.",
-        "DURABILITY": "Nova selected this canonical structure to test the proven work after meaningful prior load; prior load is the progression lever, not a higher watt target.",
-        "RACE_TRANSFER": "Nova selected this canonical structure to move proven work into race-like context without inventing a new absolute watt target.",
-        "TIME_AT_PRESSURE": "Nova selected this canonical structure to accumulate controlled time in the required sustained domain without converting a field reference into a target.",
-        "VARIABLE_LOAD": "Nova selected this canonical structure because variable load is the open question; the workout is governed by its canonical mechanics rather than an inferred absolute watt target.",
+        "FRESH_CAPACITY": "Nova selected this structure to develop the current fresh-capacity question without inventing an absolute watt target.",
+        "SPECIFIC_DOSE": "Nova chose this structure to collect missing goal-specific evidence. Grade completed work by the prescribed interval structure, repeatability and comparable prior executions, not a modeled single-effort estimate.",
+        "REPEATABILITY": "Nova selected this structure to test steady repeatability across the set, not a single peak effort.",
+        "DURABILITY": "Nova selected this structure to test proven repeated work after prior load; the progression lever is prior load, not estimated peak watts.",
+        "RACE_TRANSFER": "Nova selected this structure to move proven work into race-like context without an invented power target.",
+        "TIME_AT_PRESSURE": "Nova selected this structure to accumulate controlled work in the required sustained domain.",
+        "VARIABLE_LOAD": "Nova selected this structure because variable load is the open question; the lifts follow the in-session base, not modeled wattage.",
     }
-    return (messages.get(dim) or "Nova selected this canonical workout for the current adaptation question without inventing an absolute watt target.") + context
+    return (messages.get(dim) or "Nova selected this structure for the current adaptation question without an invented absolute watt target.") + context
 
 
 _compile_nova_prescription_r111 = compile_nova_prescription
@@ -28012,6 +28141,16 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
     for row in (out.get("sessions") or []):
         s = dict(row) if isinstance(row, dict) else row
         if isinstance(s, dict) and _v112_reference_only_power(s):
+            _duration = _rhythm_num(s.get("quality_reference_interval_min"))
+            if _duration is None:
+                _duration = _v4830_interval_minutes(s.get("main_set"))
+            _evidence = _v124_power_duration_evidence(power_model, _duration)
+            s["power_evidence"] = _evidence
+            s["quality_reference_watts"] = _evidence.get("observed_recent_watts") or _evidence.get("observed_season_best_watts")
+            s["quality_reference_interval_min"] = _duration
+            s["quality_reference_source"] = _evidence.get("observed_recent_source") or _evidence.get("observed_season_source")
+            s["quality_assessment_reference_watts"] = None
+            s["quality_assessment_policy"] = "STRUCTURE_AND_OBSERVED_LIKE_FOR_LIKE_ONLY; MODEL_ESTIMATE_NEVER_GRADED"
             if s.get("prescribed_power_low") is not None or s.get("prescribed_power_high") is not None or s.get("quality_target_ratio") is not None:
                 changed += 1
             s["prescribed_power_low"] = None
