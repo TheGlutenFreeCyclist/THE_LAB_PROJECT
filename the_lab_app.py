@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.01 WIP R125 · SOURCE LAPS / QUALITY FEEDBACK / PB RECOGNITION · R124 ZERO-AI BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.02 WIP R126 · UI CLEANUP / PB FEEDBACK / ZERO-AI QUESTION SEPARATION · R125 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -3067,7 +3067,6 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% if session.get('role') == 'admin' %}<div class="v4832-modal qa" id="qa-actions-modal" role="dialog" aria-modal="true" aria-labelledby="qa-actions-title" hidden>
 <div class="v4832-modal-backdrop" data-v4832-close></div><div class="v4832-modal-panel" tabindex="-1"><div class="v4832-modal-head"><div class="v4832-modal-title"><strong id="qa-actions-title">Admin QA</strong><span>Test THE LAB without replacing the Production Last Report.</span></div><button class="v4832-modal-close" type="button" data-v4832-close aria-label="Close QA actions">×</button></div><div class="v4832-modal-actions">
-<form class="v4834-qa-run-form" method="post" action="{{ url_for('analyze') }}" data-v4834-qa-run="PYTHON"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="qa_mode" value="PYTHON"><button type="submit" data-v4834-qa-button data-idle-label="⚙ Run Nova-only QA · €0 AI" data-running-label="Running Nova-only QA…">⚙ Run Nova-only QA · €0 AI</button></form>
 <span class="v4832-menu-note">Live Intervals.icu + full Nova coaching/composer pipeline in read-only mode. Same Snapshot UI, zero AI-provider calls, zero AI quota usage, and Production Last Report is not replaced.</span>
 <div class="v4832-menu-sep"></div>
 <form class="v4834-qa-run-form" method="post" action="{{ url_for('analyze') }}" data-v4834-qa-run="LIVE"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="qa_mode" value="LIVE"><button type="submit" data-v4834-qa-button data-idle-label="▶ Run Live QA Test" data-running-label="Generating Live QA…">▶ Run Live QA Test</button></form>
@@ -3801,7 +3800,6 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v4865-macro-copy"><h2>SCIENCE & LEARNING</h2><p>Advanced physiology · personal references · data gaps · science</p></div>
 </div>
 <div class="v4865-macro-panel" id="v4865-science-panel">
-<a class="v4865-science-link" href="{{ url_for('science_library') }}"><span aria-hidden="true">📖</span><div><strong>THE CYCLIST'S SCIENCE</strong><small>Open the evidence library · research context for the training concepts used in THE LAB.</small></div></a>
 {% if data.advanced_physiology and data.advanced_physiology.cards %}
 {% set v4874_metric_copy = {
 'hrv_stability': {'explain':'Shows how stable your recent HRV pattern is relative to your own baseline, helping separate normal variation from a sustained shift.','learn':'More consistent readings strengthen your personal baseline and make future changes easier to interpret.'},
@@ -11907,21 +11905,52 @@ def _v4873_prioritize_power_achievements(context, goal_key):
     c["display_scope_label"] = scopes[0] if len(scopes) == 1 else ("MULTI-SCOPE BESTS" if scopes else c.get("scope_label"))
     c["presentation_goal"] = goal_key or None
     return c
+def _v126_verified_power_pb_events(power_achievements):
+    """Normalize activity-linked verified PBs from exact-day events and podium badges.
+
+    Power-curve events without a proven activity/date remain valid aggregate milestones,
+    but they cannot be attached to a specific completed-session recap.
+    """
+    pa=power_achievements or {}
+    out=[]; seen=set(); default_scope=str(pa.get("scope_label") or "tracked period")
+    def add(ev):
+        if not isinstance(ev,dict): return
+        if ev.get("secs") is None or ev.get("watts") is None or (ev.get("delta_w") or 0)<=0: return
+        day=str(ev.get("date") or "")[:10]; aid=str(ev.get("activity_id") or "")
+        if not day or not aid: return
+        try: sec=int(ev.get("secs")); watts=int(round(float(ev.get("watts")))); delta=int(round(float(ev.get("delta_w"))))
+        except (TypeError,ValueError): return
+        key=(aid,day,sec,watts)
+        if key in seen:return
+        seen.add(key)
+        x=dict(ev);x.update({"activity_id":aid,"date":day,"secs":sec,"watts":watts,"delta_w":delta})
+        x.setdefault("scope_label",default_scope)
+        out.append(x)
+    for ev in pa.get("events") or []: add(ev)
+    for badge in pa.get("badges") or []:
+        if not isinstance(badge,dict) or int(badge.get("rank") or 0)!=1: continue
+        base={"activity_id":badge.get("activity_id"),"date":badge.get("date"),"scope_label":default_scope}
+        points=badge.get("points") or []
+        if points:
+            for p in points:
+                if not isinstance(p,dict):continue
+                add({**base,"secs":p.get("secs"),"watts":p.get("watts"),"delta_w":p.get("delta_w")})
+        else:
+            add({**base,"secs":badge.get("secs"),"watts":badge.get("watts"),"delta_w":badge.get("delta_w")})
+    out.sort(key=lambda x:(str(x.get("date") or ""),int(x.get("delta_w") or 0)),reverse=True)
+    return out
+
 def _v4873_reconcile_native_breakthrough(performance_breakthrough, power_achievements):
     perf = dict(performance_breakthrough or {})
-    derived = {
-        int(x.get("secs")): int(x.get("watts"))
-        for x in (power_achievements or {}).get("events") or []
-        if x.get("secs") is not None and x.get("watts") is not None
-    }
-    if not derived:
+    verified_events=_v126_verified_power_pb_events(power_achievements)
+    if not verified_events:
         return perf
     # A verified THE LAB best exists even if Intervals emits no native PB ribbon.
     # The latest-activity panel must not depend on provider-specific achievements.
     native_rows=list(perf.get("activities") or [])
     covered_ids={(str(r.get('activity_id') or ''),str(r.get('date') or '')[:10]) for r in native_rows}
     today=get_rome_now().date()
-    for ev in (power_achievements or {}).get('events') or []:
+    for ev in verified_events:
         if not isinstance(ev,dict) or not ev.get('activity_id') or not ev.get('date') or not (ev.get('delta_w') or 0)>0:
             continue
         day=str(ev['date'])[:10]
@@ -11938,9 +11967,6 @@ def _v4873_reconcile_native_breakthrough(performance_breakthrough, power_achieve
     native_rows.sort(key=lambda r:str(r.get('date') or ''),reverse=True)
     kept_rows = []
     suppressed = 0
-    verified_events=[e for e in (power_achievements or {}).get('events') or []
-                     if isinstance(e,dict) and e.get('date') and e.get('secs') is not None
-                     and e.get('watts') is not None and (e.get('delta_w') or 0)>0]
     for row0 in native_rows:
         row = dict(row0 or {})
         kept = []
@@ -20877,9 +20903,8 @@ def _v125_latest_activity_feedback(blocks, achievements, evidence_ledger=None, n
         if 0<=days<=2:rows.append(b)
     if not rows:return {'available':False}
     b=rows[0];aid=str(b.get('activity_id') or '');activity_day=str(b.get('date') or '')[:10]
-    pbs=[e for e in ((achievements or {}).get('events') or []) if isinstance(e,dict) and
-         (str(e.get('activity_id') or '')==aid if e.get('activity_id') else str(e.get('date') or '')[:10]==activity_day)
-         and (e.get('delta_w') or 0)>0]
+    pbs=[e for e in _v126_verified_power_pb_events(achievements) if
+         str(e.get('activity_id') or '')==aid and str(e.get('date') or '')[:10]==activity_day]
     pb=max(pbs,key=lambda e:int(e.get('delta_w') or 0)) if pbs else None
     truth=b.get('activity_truth') or {}; rep=b.get('repeatability') or {}
     partial=b.get('partial_work_evidence') or {}
@@ -27438,6 +27463,10 @@ def analyze():
         data_text_profile.update({_data_key: len(_data_value) for _data_key, _data_value in data_parts})
         snapshot_question = extract_snapshot_daily_question(daily_logs_full)
         provider_snapshot_question, blocked_context_only_snapshot_question = _v4890_provider_question(snapshot_question, cross_modal_context)
+        # R126: an unanswered free-form Daily Note belongs to the separate AI Coach lane.
+        # It must not fail the sports/semantic authority of a zero-AI Snapshot. QA LIVE
+        # still tests the legacy provider-language path with that question included.
+        semantic_snapshot_question = provider_snapshot_question if qa_kind == "LIVE" else None
         provider_planning_context = _v4890_provider_safe_structure(planning_context, cross_modal_context)
         provider_coach_clock = _v4890_provider_safe_structure(coach_clock, cross_modal_context)
         provider_feeling_trend = _v4890_provider_safe_structure(feeling_trend_live, cross_modal_context)
@@ -27467,7 +27496,7 @@ def analyze():
             adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger, feeling_trend=feeling_trend_live,
             planning_context=planning_context, race_repeatability=race_repeatability, vo2_trend=vo2_trend,
             metabolic_context=metabolic_context, performance_evidence=performance_evidence, power_achievements=power_achievements,
-            snapshot_question=snapshot_question, strength_pattern=strength_pattern, session_progression=session_progression,
+            snapshot_question=semantic_snapshot_question, strength_pattern=strength_pattern, session_progression=session_progression,
         )
         if not python_qa:
             # R122: ordinary Snapshot always Nova-only. Only explicitly requested,
@@ -27485,7 +27514,7 @@ def analyze():
                 analysis["recommendation_ai_mode"] = "NOVA_ONLY_NO_PROVIDER"
             analysis = _v4901_coach_call(analysis)
             analysis = _v4890_noncoached_prescription_guard(analysis, cross_modal_context)
-            analysis = _v4897_semantic_compile_snapshot(analysis, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger, power_achievements=power_achievements, record_audit=True, snapshot_question=snapshot_question)
+            analysis = _v4897_semantic_compile_snapshot(analysis, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger, power_achievements=power_achievements, record_audit=True, snapshot_question=semantic_snapshot_question)
             # R110: context-only questions remain outside the AI training-advice lane.
             if blocked_context_only_snapshot_question:
                 analysis["recommendation_ai_commentary"] = None
