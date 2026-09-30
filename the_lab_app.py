@@ -97,7 +97,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.95 WIP R119 · GROUNDED ASK NOVA · OPTIONAL LANGUAGE AI · R117 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.96 WIP R120 · DISTINCT GROUNDED ANSWERS · OPTIONAL LANGUAGE AI · R117 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -26026,23 +26026,41 @@ def _normalize_chat_history(raw_history, max_messages=10):
 # R119 STEP 2 · Read-only explanation layer. The coach engine must NOT call any of
 # these helpers. No external AI and no independent training decisions here.
 def _v119_nova_intent(question):
+    """R120 language intent gate; preserve R119 function contract for existing routes.
+
+    Prioritise an explicit progression obstacle over incidental "back" language.
+    Never route injury / prescription-changing questions to templated explanations.
+    """
     text=str(question or "").strip().lower()
     for accent,plain in (("à","a"),("è","e"),("é","e"),("ì","i"),("ò","o"),("ù","u")):
         text=text.replace(accent,plain)
     text=re.sub(r"\s+", " ", text)
     if not text or len(text)>1200:
         return None
-    # Avoid treating health questions or requests to change a prescription as
-    # simple explanations: those need the existing fuller AI Coach route.
     if re.search(r"\b(fever|injur|illness|pain|sick|malat|infortun|dolor|febbr|modify|swap|spost|cambia|modific|should i|posso fare)\w*",text):
         return None
-    stage_words=bool(re.search(r"roadmap|repeatabil|transfer|trasfer|fase|stage|step|progres",text))
-    evidence_words=bool(re.search(r"what.*(missing|need|next|do.*reach|do.*transfer)|how.*(advance|progress|reach)|cosa.*(manc|devo)|come.*(avanz|pass|arriv)|qual.*(prova|evidenz)|per.*passare",text))
-    if stage_words and evidence_words:
+    stage_words=bool(re.search(r"\b(?:roadmap|repeatabil\w*|transfer|trasfer\w*|fas[ei]|stage|step|progress\w*|progres\w*|avanz\w*)\b",text))
+    # Explicit 'why back to stage' asks for stage history, not future requirements.
+    rollback=bool(re.search(r"\b(?:back\s+(?:in|to)|(?:went|go|going)\s+back|move\w*\s+back|returned\s+to|regress\w*|tornat\w*|indietro)\b",text))
+    # Match the exact live user question 'What is holding me back from progressing
+    # in my roadmap?' as well as other phrasing. Bare 'back' is NOT rollback.
+    obstacle=bool(re.search(
+        r"(?:\bwhat\b.*\b(?:missing|need\w*|require\w*|prevent\w*|block\w*|holding|stopping|keeping)\b|"
+        r"\bwhat\b.*\b(?:must|should)\b.*\bdo\b|"
+        r"\b(?:holding\s+(?:me\s+)?back|prevent\w*|block\w*|stop\w*|keep\w*\s+me)\b|"
+        r"\bhow\b.*\b(?:advance|progress|reach|move\s+(?:to|forward))\b|"
+        r"\bwhat\b.*\b(?:advance|progress|reach|transfer|move\s+forward)\b|"
+        r"\b(?:cosa|che\s+cosa)\b.*\b(?:manc\w*|serv\w*|imped\w*|bloc\w*|occor\w*|devo)\b|"
+        r"\b(?:come|perche|per)\b.*\b(?:avanz\w*|pass\w*|arriv\w*|progred\w*)\b|"
+        r"\b(?:manc\w*|imped\w*|bloc\w*)\b.*\b(?:avanz\w*|pass\w*|progress\w*|progres\w*)\b)",text))
+    if stage_words and obstacle:
+        # A question with two explicit independent demands remains for AI Coach.
+        if rollback and re.search(r"\b(?:and|e)\b.*\b(?:what|cosa|che cosa)\b",text):
+            return None
         return "NEXT_EVIDENCE"
-    if stage_words and (re.search(r"why|perche|come mai|tornat|indietro|back|regress|explain|spiega|stato|where|dove|which|quale",text) or len(text)<56):
+    if stage_words and (rollback or re.search(r"\b(?:why|perche|come mai|explain|spiega|stato|where|dove|which|quale)\b",text) or len(text)<56):
         return "ROADMAP"
-    if re.search(r"why|perche|come mai|explain|spiega",text) and re.search(r"session|workout|training|allenament|sedut|3\s*[×x]\s*6|3x6",text):
+    if re.search(r"\b(?:why|perche|come mai|explain|spiega)\b",text) and re.search(r"\b(?:session|workout|training|allenament\w*|sedut\w*|3\s*[×x]\s*6|3x6)\b",text):
         return "NEXT_SESSION"
     return None
 
@@ -26055,10 +26073,9 @@ def _v119_list(value):
     return []
 
 def _v119_grounded_answer(question,snapshot):
-    """Only answer supported explanation intents from this exact Snapshot.
-
-    Return None (AI Coach fallback) whenever the required canonical facts are
-    unavailable. Never mutate the Snapshot or create coaching advice.
+    """R120 evidence-grounded explanations: separate stage history, advancement,
+    and session purpose. Existing endpoint/return schema remain compatible.
+    No prescriptive changes, invented recovery clearance or claimed stage history.
     """
     intent=_v119_nova_intent(question)
     if not intent or not isinstance(snapshot,dict):
@@ -26089,8 +26106,8 @@ def _v119_grounded_answer(question,snapshot):
     if not isinstance(dims,dict):dims={}
     repeat=dims.get("REPEATABILITY") or {}
     dose=dims.get("SPECIFIC_DOSE") or {}
-    if not isinstance(repeat,dict): repeat={}
-    if not isinstance(dose,dict): dose={}
+    if not isinstance(repeat,dict):repeat={}
+    if not isinstance(dose,dict):dose={}
     rp=str(repeat.get("state") or "").upper()
     dp=str(dose.get("state") or "").upper()
     q_profile=qs.get("facet_profile") or {}
@@ -26099,90 +26116,135 @@ def _v119_grounded_answer(question,snapshot):
         for key in ("coverage_count","required_count"):
             if q_profile.get(key) is not None and r_profile.get(key) is not None and q_profile[key]!=r_profile[key]:
                 return None
-        q_missing=set(str(x) for x in _v119_list(q_profile.get("missing")))
-        r_missing=set(str(x) for x in _v119_list(r_profile.get("missing")))
-        if q_missing!=r_missing:
+        if set(str(x) for x in _v119_list(q_profile.get("missing")))!=set(str(x) for x in _v119_list(r_profile.get("missing"))):
             return None
+        # Do not describe a duration band as covered if the modules disagree.
+        if q_profile.get("covered") is not None and r_profile.get("covered") is not None:
+            if set(str(x) for x in _v119_list(q_profile["covered"]))!=set(str(x) for x in _v119_list(r_profile["covered"])):
+                return None
     profile=q_profile or r_profile
     if not isinstance(profile,dict):profile={}
     labels=profile.get("labels") or {}
     if not isinstance(labels,dict):labels={}
     missing=_v119_list(profile.get("missing"))
+    covered=_v119_list(profile.get("covered"))
     coverage=profile.get("coverage_count")
     required=profile.get("required_count")
-    missing_labels=[str(labels.get(x) or str(x).replace("_"," ").lower()).strip() for x in missing if isinstance(x,str)]
-    if italian:
-        def _it_facet(label):
-            match=re.fullmatch(r"([0-9.,\s–-]+)\s*min\s+punch",label,flags=re.I)
-            return "sforzi da "+match.group(1).strip()+" minuti" if match else label.replace("min punch","minuti di sforzo")
-        missing_labels=[_it_facet(x) for x in missing_labels]
+    def _facet_label(key):
+        val=str(labels.get(key) or str(key).replace("_"," ").lower()).strip()
+        if italian:
+            match=re.fullmatch(r"([0-9.,\s–-]+)\s*min\s+punch",val,flags=re.I)
+            if match:return "sforzi da "+re.sub(r"(?<=\d)\.(?=\d)",",",match.group(1).strip())+" minuti"
+            return val.replace("min punch","minuti di sforzo")
+        return val
+    missing_labels=[_facet_label(x) for x in missing if isinstance(x,str)]
+    covered_labels=[_facet_label(x) for x in covered if isinstance(x,str)]
+    def _en_effort(label):
+        match=re.fullmatch(r"([0-9.,\s–-]+)\s*min\s+punch",label,flags=re.I)
+        return "efforts lasting "+match.group(1).strip()+" minutes" if match else label
+    count=total=None
+    if coverage is not None and required is not None:
+        try: count,total=int(coverage),int(required)
+        except (ValueError,TypeError):pass
+    if count is not None and (count<0 or total<1 or count>total):return None
+    # A next-step statement needs direct evidence, never a learned assumption.
+    if intent=="NEXT_EVIDENCE" and (count is None or not missing_labels):return None
+    if covered and count is not None and len(covered)!=count:return None
     def breadth_phrase():
-        if coverage is None or required is None or not missing_labels:
-            return None
-        try:
-            count=int(coverage);total=int(required)
-        except (ValueError,TypeError):
-            return None
-        if count<0 or total<1 or count>total:return None
+        if count is None or not missing_labels:return None
         facet=", ".join(missing_labels[:3])
         return (f"Le prove dirette coprono {count} fasce su {total}; manca ancora una prova solida per {facet}." if italian else
                 f"Direct evidence covers {count} of {total} duration bands; {facet} is still missing.")
     breadth=breadth_phrase()
-    if intent=="NEXT_EVIDENCE" and not breadth:
-        return None  # No claim about a missing facet without direct facet evidence.
     evidence=["adaptive_roadmap.stage"]
-    if intent in ("ROADMAP","NEXT_EVIDENCE"):
+    if intent=="ROADMAP":
+        # Stage and evidence state are different axes; never claim a rollback from
+        # a single current Snapshot, even if the user describes it as one.
         if stage_code=="REPEAT" and rp=="CONSOLIDATED" and dp=="BUILDING" and breadth:
             if italian:
-                head="La roadmap mostra Ripetibilità come fase attuale, ma questo non significa che tu abbia perso la ripetibilità: la relativa domanda è già consolidata."
-                why="La domanda ancora aperta è la dose specifica, che rimane in costruzione."
-                next_step="Prima di passare al Trasferimento, Nova deve registrare prove dirette solide nella fascia mancante e verificare anche gli altri requisiti della fase."
-                caveat="Questo Snapshot mostra lo stato attuale, ma da solo non dimostra che la roadmap sia effettivamente tornata indietro: per verificarlo serve il precedente stato datato."
+                sentences=["La roadmap mostra Ripetibilità come fase attuale, ma non significa che tu abbia perso la capacità di ripetere gli sforzi: quella capacità risulta già consolidata.",
+                           "Nova sta ancora completando la dose specifica necessaria per questa fase.",breadth,
+                           "Questo Snapshot, da solo, non dimostra che la roadmap sia tornata indietro: servono due stati datati per verificare un cambiamento effettivo."]
             else:
-                head="The roadmap shows Repeatability as the current stage, but that does not mean you have lost repeatability: that separate coaching question is already consolidated."
-                why="The open coaching question is Specific Dose, which is still building."
-                next_step="Before advancing to Transfer, Nova needs strong direct evidence in the missing duration band and must check the other stage requirements."
-                caveat="This Snapshot shows the current stage; it cannot establish whether the roadmap actually moved backward without an earlier dated stage record."
-            sentences=([breadth,next_step,head,why] if intent=="NEXT_EVIDENCE" else [head,why,breadth,next_step])
-            if intent=="ROADMAP":sentences.append(caveat)
+                sentences=["The roadmap currently shows Repeatability, but that does not mean your ability to repeat efforts has deteriorated: the separate Repeatability question is already consolidated.",
+                           "Nova is still building the Specific Dose evidence required at this stage.",breadth,
+                           "This Snapshot cannot establish whether the roadmap actually moved backward; that requires an earlier dated stage record."]
             evidence += ["question_state.dimensions.REPEATABILITY.state","question_state.dimensions.SPECIFIC_DOSE.state","question_state.facet_profile"]
         else:
             if italian:
-                sentences=[f"La fase attuale della roadmap è {stage_name}. Una fase della roadmap e lo stato della singola capacità misurano cose diverse."]
+                sentences=[f"La fase visualizzata è {stage_name}. La fase della roadmap e lo stato delle singole capacità non sono la stessa cosa."]
                 if breadth:sentences.append(breadth)
-                if dp:sentences.append(f"La domanda sulla dose specifica risulta {dp.lower()}.")
-                sentences.append("Per ricostruire un eventuale ritorno a una fase precedente occorre confrontare Snapshot datati; quello attuale non basta.")
+                if dp:sentences.append(f"La dose specifica risulta {dp.lower()}.")
+                sentences.append("Questo Snapshot, da solo, non dimostra che la roadmap sia tornata indietro: occorre confrontare due stati datati.")
             else:
-                sentences=[f"The current roadmap stage is {stage_name}. A roadmap stage and the evidence state of an individual coaching question are different measures."]
+                sentences=[f"Your current roadmap stage is {stage_name}. The displayed stage and the evidence state of an individual ability are different things."]
                 if breadth:sentences.append(breadth)
-                if dp:sentences.append(f"The Specific Dose question is {dp.lower()}.")
-                sentences.append("An actual return from a later stage requires comparison with an earlier dated Snapshot; the current one alone cannot prove it.")
+                if dp:sentences.append(f"Specific Dose is {dp.lower()}.")
+                sentences.append("An actual return from a later stage cannot be established without an earlier dated roadmap record.")
             if breadth:evidence.append("question_state.facet_profile")
             if dp:evidence.append("question_state.dimensions.SPECIFIC_DOSE.state")
+    elif intent=="NEXT_EVIDENCE":
+        # Not a rearranged ROADMAP answer: lead with the precise missing evidence,
+        # then the pathway; do not include an irrelevant stage-history disclaimer.
+        if stage_code=="REPEAT" and dp=="BUILDING":
+            if italian:
+                sentences=["Per avanzare oltre Ripetibilità, Nova deve ancora completare le prove sulla dose specifica."]
+                if covered_labels:sentences.append("Hai già prove dirette per "+" e ".join(covered_labels[:3])+".")
+                sentences += ["Mancano ancora prove dirette su "+" e ".join(missing_labels[:3])+".",
+                    "Solo una seduta effettivamente completata e valutata può aggiungere questa prova; la prescrizione, da sola, non basta.",
+                    "Nova controllerà anche gli altri requisiti della fase prima di proporre il Trasferimento."]
+            else:
+                sentences=["To progress beyond Repeatability, Nova still needs stronger Specific Dose evidence."]
+                if covered_labels:sentences.append("You already have direct evidence for "+" and ".join(_en_effort(x) for x in covered_labels[:3])+".")
+                sentences += ["The outstanding gap is "+" and ".join(_en_effort(x) for x in missing_labels[:3])+".",
+                    "Only completed, evaluated work can add this evidence; a prescribed workout does not count as progress by itself.",
+                    "Nova must also check the other stage requirements before moving to Transfer."]
+            evidence += ["question_state.dimensions.SPECIFIC_DOSE.state","question_state.facet_profile","adaptive_roadmap.facet_profile"]
+        else:
+            if italian:
+                sentences=[f"La fase attuale è {stage_name}.","Per avanzare restano da documentare: "+" e ".join(missing_labels[:3])+".",
+                           "Una sessione programmata non equivale a una prova acquisita; Nova deve valutare l'esecuzione reale e gli altri requisiti della fase."]
+            else:
+                sentences=[f"Your current roadmap stage is {stage_name}.","The remaining direct-evidence gap is "+" and ".join(missing_labels[:3])+".",
+                           "A planned workout is not completed evidence: Nova must assess the actual work and any other stage requirements."]
+            evidence.append("question_state.facet_profile")
     else:
         action=str(decision.get("action") or "").upper()
         sessions=_v119_list(snapshot.get("next_sessions"))
         if not sessions:return None
         chosen=next((x for x in sessions if isinstance(x,dict) and (x.get("provisional_quality") or str(x.get("intensity") or "").upper()=="HARD")),None)
-        if chosen is None:
-            chosen=next((x for x in sessions if isinstance(x,dict)),None)
+        if chosen is None:chosen=next((x for x in sessions if isinstance(x,dict)),None)
         if not isinstance(chosen,dict) or not action:return None
         name=str(chosen.get("title") or "").strip()[:110]
         if not name:return None
-        missing_part=(" Manca ancora la prova diretta nella fascia "+", ".join(missing_labels[:2])+"." if italian else " Direct evidence is still missing in "+", ".join(missing_labels[:2])+".") if missing_labels else ""
+        gap=", ".join(missing_labels[:2])
+        specific=bool(str(decision.get("dimension") or "").upper()=="SPECIFIC_DOSE" and gap)
         if italian:
             if action=="TRAIN" and chosen.get("provisional_quality"):
-                sentences=[f"Nova propone {name} per affrontare la domanda ancora aperta della roadmap, senza aggiungere un secondo obiettivo intenso."+missing_part,"La sessione resta provvisoria: va rivalutata se cambiano recupero o disponibilità. Le istruzioni esecutive valide restano quelle nella scheda dell'allenamento."]
+                if specific:
+                    sentences=[f"Nova propone {name} per sviluppare e verificare la capacità di sostenere {gap}, ancora da documentare nella roadmap.",
+                               "La seduta programmata offre l'occasione di raccogliere questa prova; il progresso dipenderà da come verrà effettivamente eseguita."]
+                else:
+                    sentences=[f"Nova propone {name} in base alla domanda di allenamento attualmente aperta."]
+                sentences.append("L'orario è una previsione basata sulle tue abitudini: se recupero o disponibilità cambiano, occorre rivalutare la sessione. Per l'esecuzione valgono le istruzioni sulla scheda.")
             else:
-                sentences=[f"La prima sessione mostrata è {name}; la decisione attuale di Nova è {action.lower()}.","Non posso aggiungere un diverso allenamento o una nuova intensità attraverso questa spiegazione: valgono le sessioni già mostrate."]
+                sentences=[f"La sessione mostrata è {name}. Nova ha attualmente selezionato la decisione {action.lower()}.",
+                           "Questa spiegazione non cambia l'allenamento: segui la scheda prevista e rivaluta in caso di cambiamenti nel recupero."]
         else:
             if action=="TRAIN" and chosen.get("provisional_quality"):
-                sentences=[f"Nova proposes {name} to address the current unresolved roadmap question, without creating a second hard-training purpose."+missing_part,"This session remains provisional: reassess if recovery or availability changes. The session card remains the authority for workout execution."]
+                if specific:
+                    sentences=[f"Nova proposes {name} to build and assess your ability with {_en_effort(gap)}, where the roadmap still lacks strong direct evidence.",
+                               "The planned intervals give you a chance to provide that evidence; progress depends on what you actually complete."]
+                else:
+                    sentences=[f"Nova proposes {name} to address the current unresolved training question."]
+                sentences.append("This training slot is provisional: its time is predicted from your routine, not confirmed availability. Reassess if your recovery or schedule changes, and use the workout card for execution details.")
             else:
-                sentences=[f"The first displayed session is {name}; Nova's current decision is {action.lower()}.","This explanation does not add an alternative workout or intensity. Follow the sessions shown in the Snapshot."]
+                sentences=[f"The session shown is {name}. Nova's current decision is {action.lower()}.",
+                           "This explanation does not change the prescribed workout. Follow the session card and reassess if recovery changes."]
         evidence += ["nova_decision.action","next_sessions"]
+        if specific:evidence.append("nova_decision.dimension")
         if missing_labels:evidence.append("question_state.facet_profile")
-    return {"schema":"R119-GROUNDED-NOVA-QA-1","intent":intent,"answer":" ".join(sentences),"source":"NOVA_SNAPSHOT_FACTS","ai_call_used":False,"evidence_fields":evidence}
+    return {"schema":"R120-GROUNDED-NOVA-QA-1","intent":intent,"answer":" ".join(sentences),"source":"NOVA_SNAPSHOT_FACTS","ai_call_used":False,"evidence_fields":evidence}
 
 def ask_ai_coach_chat(question, snapshot, history=None, report_meta=None):
     cross_context=(snapshot or {}).get("cross_modal_context") or {}
