@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.8.98 WIP R122 · ZERO-AI SNAPSHOT · STORED NOVA · R117 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.8.99 WIP R123 · SNAPSHOT BUTTON UI · R122 ZERO-AI BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -2829,11 +2829,12 @@ V4862_POST_SNAPSHOT_INPUT_CSS = r"""
 """
 BASE_CSS += V4862_POST_SNAPSHOT_INPUT_CSS
 V4878_SNAPSHOT_GUIDE_CSS = r"""
-.v4878-snapshot-actions{display:grid;grid-template-columns:minmax(0,.72fr) minmax(0,1.28fr);gap:9px;align-items:stretch}
-.v4878-guide-trigger{display:flex;align-items:center;justify-content:center;gap:9px;min-height:46px;border:1px solid rgba(69,215,232,.24);border-radius:14px;background:rgba(69,215,232,.055);color:#d9fbfe;font-weight:850;letter-spacing:.015em;transition:.18s ease}
+.v4878-snapshot-actions{display:grid;grid-template-columns:minmax(0,.87fr) minmax(0,1.13fr);gap:8px;align-items:stretch}
+.v4878-guide-trigger{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0;min-height:46px;padding:0 8px;white-space:nowrap;border:1px solid rgba(69,215,232,.24);border-radius:14px;background:rgba(69,215,232,.055);color:#d9fbfe;font-weight:800;letter-spacing:0;transition:.18s ease}
 .v4878-guide-trigger:hover{transform:translateY(-1px);border-color:rgba(69,215,232,.42);background:rgba(69,215,232,.095)}
-.v4878-guide-trigger svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
-.v4878-guide-trigger span{font-size:13px}
+.v4878-guide-trigger svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+.v4878-guide-trigger span{font-size:11px;white-space:nowrap}
+.v4878-snapshot-actions #snapshot-btn,.v4878-snapshot-actions .v4-btn-orange{display:flex;align-items:center;justify-content:center;min-width:0;padding:0 7px;font-size:12.4px;font-weight:800;letter-spacing:.015em;line-height:1.1;text-align:center;white-space:nowrap;text-transform:uppercase}
 .v4878-snapshot-guide .v4832-modal-panel{width:min(720px,100%);max-height:min(760px,calc(100vh - 36px));padding:18px;border-color:rgba(69,215,232,.28)}
 .v4878-guide-intro{margin:0 2px 13px;padding:11px 12px;border:1px solid rgba(69,215,232,.15);border-radius:13px;background:rgba(69,215,232,.04);color:#bdcbd5;font-size:12px;line-height:1.55}
 .v4878-guide-intro strong{color:#e9fdff}
@@ -3280,12 +3281,12 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% if is_preview %}
 <div class="v481-preflight is-preview" id="snapshot-input-direction"><div class="v481-preflight-head"><span>🧭</span><div><strong>TRAINING DIRECTION · PRE-SNAPSHOT</strong><small>In the live workspace this is chosen before the next Snapshot is generated.</small></div></div><div class="v481-preflight-grid"><label class="v481-preflight-field"><span>TRAINING MODEL</span><select disabled><option>PYRAMIDAL</option></select></label><label class="v481-preflight-field"><span>PRIMARY GOAL</span><select disabled><option>⏱️ 20' POWER</option></select></label></div></div>
 <a class="v4-preview-link" href="{{ url_for('home') if session.get('logged_in') else url_for('login') }}">{{ 'Back to live home' if session.get('logged_in') else 'Back to sign in' }}</a>
-<div class="v4878-snapshot-actions"><button class="v4878-guide-trigger" type="button" data-v4832-open="snapshot-guide-modal" aria-haspopup="dialog" aria-controls="snapshot-guide-modal" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20.5H7z"/><path d="M14 3.5v4h4M10 12h5M10 15.5h5"/></svg><span>Snapshot Guide</span></button><button class="v4-btn v4-btn-orange" style="width:100%;opacity:.55;cursor:not-allowed;" type="button" disabled>Generate Snapshot · disabled in preview</button></div>
+<div class="v4878-snapshot-actions"><button class="v4878-guide-trigger" type="button" data-v4832-open="snapshot-guide-modal" aria-haspopup="dialog" aria-controls="snapshot-guide-modal" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20.5H7z"/><path d="M14 3.5v4h4M10 12h5M10 15.5h5"/></svg><span>Snapshot Guide</span></button><button class="v4-btn v4-btn-orange" style="width:100%;opacity:.55;cursor:not-allowed;" type="button" disabled aria-label="Generate Snapshot disabled in preview">GENERATE SNAPSHOT</button></div>
 {% else %}
 <a class="v4-preview-link" href="{{ url_for('preview') }}">UI Preview · free</a>
 <form method="post" action="{{ url_for('analyze') }}" id="snapshot-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <div class="v481-preflight" id="snapshot-input-direction"><div class="v481-preflight-head"><span>🧭</span><div><strong>TRAINING DIRECTION · PRE-SNAPSHOT</strong><small>Choose what you want THE LAB to evaluate in the next Snapshot.</small></div></div><div class="v481-preflight-grid"><label class="v481-preflight-field"><span>TRAINING MODEL</span><select name="distribution_target" required>{% for o in training_strategy_ui.distribution_options %}<option value="{{ o.key }}" {% if o.key == training_strategy_ui.distribution_target %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</select></label><label class="v481-preflight-field"><span>PRIMARY GOAL</span><select name="primary_goal" required><option value="" {% if not training_strategy_ui.primary_goal %}selected{% endif %} disabled>Choose goal…</option>{% for o in training_strategy_ui.goal_options %}{% if o.key!='VO2MAX' or training_strategy_ui.primary_goal=='VO2MAX' %}<option value="{{ o.key }}" {% if o.key == training_strategy_ui.primary_goal %}selected{% endif %}>{{ o.emoji }} {{ o.label }}</option>{% endif %}{% endfor %}</select></label></div><small class="v481-preflight-note">Changing either choice starts a new declared block. If the choices are unchanged, the current block continues. One click below saves the direction first, then generates the Snapshot.</small></div>
-<div class="v4878-snapshot-actions"><button class="v4878-guide-trigger" type="button" data-v4832-open="snapshot-guide-modal" aria-haspopup="dialog" aria-controls="snapshot-guide-modal" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20.5H7z"/><path d="M14 3.5v4h4M10 12h5M10 15.5h5"/></svg><span>Snapshot Guide</span></button><button class="v4-btn v4-btn-orange" style="width:100%;" type="submit" id="snapshot-btn" data-request-feedback="off">Generate Snapshot · Nova only · 0 AI calls</button></div>
+<div class="v4878-snapshot-actions"><button class="v4878-guide-trigger" type="button" data-v4832-open="snapshot-guide-modal" aria-haspopup="dialog" aria-controls="snapshot-guide-modal" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20.5H7z"/><path d="M14 3.5v4h4M10 12h5M10 15.5h5"/></svg><span>Snapshot Guide</span></button><button class="v4-btn v4-btn-orange" style="width:100%;" type="submit" id="snapshot-btn" data-request-feedback="off">GENERATE SNAPSHOT</button></div>
 <div class="loading-track" id="loading-track"><div class="loading-fill"></div></div>
 <p class="loading-label" id="loading-label"></p>
 </form>
