@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.00 WIP R124 · OBSERVED POWER / POTENTIAL SEPARATION · R123 ZERO-AI BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.01 WIP R125 · SOURCE LAPS / QUALITY FEEDBACK / PB RECOGNITION · R124 ZERO-AI BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -3719,6 +3719,14 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <p>Milestones and recent minute-by-minute podium efforts from your power history.</p>
 </article>
 {% endif %}
+{% set lf = data.latest_activity_feedback if data.latest_activity_feedback is defined and data.latest_activity_feedback else none %}
+{% if lf and lf.available %}
+<article class="v4822-breakthrough" style="margin-top:18px">
+  <div class="v4822-breakthrough-head"><div><span class="v4822-breakthrough-kicker">LATEST QUALITY SESSION · NOVA</span><h3>{{ lf.headline }}</h3><div class="v4822-activity-name">{{ lf.name }}</div></div><span class="v4822-breakthrough-date">{{ lf.date|ui_date }}</span></div>
+  <p style="font-size:13px;line-height:1.65;white-space:normal;margin:14px 0">{{ lf.text }}</p>
+  {% if lf.structure_status != 'VERIFIED' %}<p class="v4822-method">Source-lap verification pending. A missing lap import is not an incomplete athlete effort.</p>{% endif %}
+</article>
+{% endif %}
 {% set perf = data.performance_breakthrough if data.performance_breakthrough is defined and data.performance_breakthrough else none %}
 {% if perf and perf.available %}
 {% set latest_perf = perf.latest if perf.latest else none %}
@@ -3727,7 +3735,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v4822-breakthrough-grid">
 <div class="v4822-achievements">
 {% for r in perf.activities %}{% for ach in r.achievements %}
-<div class="v4822-achievement"><span class="v4822-achievement-icon">{{ '⚡' if ach.type == 'BEST_POWER' else ('📈' if ach.type == 'FTP_UP' else '🏅') }}</span><div class="v4822-achievement-copy"><strong>{{ ach.label }}{% if ach.type != 'FTP_UP' and ach.duration %} · {{ ach.duration }}{% endif %}</strong><small>{% if ach.type == 'FTP_UP' %}{% if ach.duration and ach.watts %}Triggering effort · {{ ach.duration }} @ {{ ach.watts }} W{% else %}Intervals-recognized FTP increase{% endif %}{% else %}{{ ach.message if ach.message else (r.activity_name ~ ' · ' ~ r.date_display) }}{% endif %}</small></div>{% if ach.type == 'FTP_UP' and r.rolling_ftp %}<span class="v4822-achievement-value">FTP {{ r.rolling_ftp }} W</span>{% elif ach.watts %}<span class="v4822-achievement-value">{{ ach.watts }} W</span>{% endif %}</div>
+<div class="v4822-achievement"><span class="v4822-achievement-icon">{{ '🏅' if ach.type in ['BEST_POWER', 'THE_LAB_PB'] else ('📈' if ach.type == 'FTP_UP' else '🏅') }}</span><div class="v4822-achievement-copy"><strong>{{ ach.label }}{% if ach.type != 'FTP_UP' and ach.duration %} · {{ ach.duration }}{% endif %}</strong><small>{% if ach.type == 'FTP_UP' %}{% if ach.duration and ach.watts %}Triggering effort · {{ ach.duration }} @ {{ ach.watts }} W{% else %}Intervals-recognized FTP increase{% endif %}{% else %}{{ ach.message if ach.message else (r.activity_name ~ ' · ' ~ r.date_display) }}{% endif %}</small></div>{% if ach.type == 'FTP_UP' and r.rolling_ftp %}<span class="v4822-achievement-value">FTP {{ r.rolling_ftp }} W</span>{% elif ach.watts %}<span class="v4822-achievement-value">{{ ach.watts }} W</span>{% endif %}</div>
 {% endfor %}{% endfor %}
 </div>
 {% if latest_perf and (latest_perf.rolling_ftp or latest_perf.pm_ftp) %}
@@ -11906,26 +11914,66 @@ def _v4873_reconcile_native_breakthrough(performance_breakthrough, power_achieve
         for x in (power_achievements or {}).get("events") or []
         if x.get("secs") is not None and x.get("watts") is not None
     }
-    if not derived or not perf.get("activities"):
+    if not derived:
         return perf
+    # A verified THE LAB best exists even if Intervals emits no native PB ribbon.
+    # The latest-activity panel must not depend on provider-specific achievements.
+    native_rows=list(perf.get("activities") or [])
+    covered_ids={(str(r.get('activity_id') or ''),str(r.get('date') or '')[:10]) for r in native_rows}
+    today=get_rome_now().date()
+    for ev in (power_achievements or {}).get('events') or []:
+        if not isinstance(ev,dict) or not ev.get('activity_id') or not ev.get('date') or not (ev.get('delta_w') or 0)>0:
+            continue
+        day=str(ev['date'])[:10]
+        try:
+            age=(today-date.fromisoformat(day)).days
+        except (ValueError, TypeError):continue
+        if age<0 or age>int(perf.get('window_days') or 7):continue
+        key=(str(ev['activity_id']),day)
+        if key not in covered_ids:
+            native_rows.append({'activity_id':key[0],'date':day,'date_display':day,
+                                'activity_name':'Cycling activity','achievements':[],
+                                'pb_count':0,'ftp_up_count':0,'rolling_ftp_delta':0})
+            covered_ids.add(key)
+    native_rows.sort(key=lambda r:str(r.get('date') or ''),reverse=True)
     kept_rows = []
     suppressed = 0
-    for row0 in perf.get("activities") or []:
+    verified_events=[e for e in (power_achievements or {}).get('events') or []
+                     if isinstance(e,dict) and e.get('date') and e.get('secs') is not None
+                     and e.get('watts') is not None and (e.get('delta_w') or 0)>0]
+    for row0 in native_rows:
         row = dict(row0 or {})
         kept = []
         for ach0 in row.get("achievements") or []:
             ach = dict(ach0 or {})
             if ach.get("type") == "BEST_POWER" and ach.get("secs") is not None:
                 sec = int(ach.get("secs"))
-                dw = derived.get(sec)
+                matching = next((e for e in verified_events
+                                 if int(e['secs'])==sec and str(e.get('date') or '')[:10]==str(row.get('date') or '')[:10]
+                                 and (not e.get('activity_id') or str(e['activity_id'])==str(row.get('activity_id') or ''))),None)
+                dw = int(matching['watts']) if matching is not None else None
                 aw = ach.get("watts")
                 same = dw is not None and (aw is None or abs(int(aw) - dw) <= 1)
                 if same:
                     suppressed += 1
                     continue
             kept.append(ach)
+        # Existing YTD power milestones are a stronger PB authority than
+        # provider-specific ribbons. Carry one verified PB into this activity's
+        # recap; suppress only a matching native duplicate for that same effort.
+        for ev in verified_events:
+            if str(ev.get('date'))[:10]!=str(row.get('date') or '')[:10]:continue
+            if ev.get('activity_id') and str(ev['activity_id'])!=str(row.get('activity_id') or ''):continue
+            sec=int(ev['secs']);pw=int(ev['watts'])
+            if any(x.get('type') in {'BEST_POWER','THE_LAB_PB'} and int(x.get('secs') or 0)==sec
+                   and abs(int(x.get('watts') or 0)-pw)<=1 for x in kept):continue
+            label=f"{sec//60}-minute power PB" if sec%60==0 else f"{sec}-second power PB"
+            kept.insert(0,{'id':f"lab_pb_{row.get('activity_id')}_{sec}",'type':'THE_LAB_PB',
+                           'label':label,'secs':sec,'duration':f"{sec//60}min" if sec%60==0 else f"{sec}s",
+                           'watts':pw,'delta_w':int(ev.get('delta_w') or 0),'source':'VERIFIED_YTD_POWER_CURVE',
+                           'message':f"New {str(ev.get('scope_label') or 'tracked-period')} best: {pw} W · +{int(ev.get('delta_w') or 0)} W vs previous best"})
         row["achievements"] = kept
-        row["pb_count"] = sum(1 for a in kept if a.get("type") == "BEST_POWER")
+        row["pb_count"] = sum(1 for a in kept if a.get("type") in {"BEST_POWER","THE_LAB_PB"})
         row["ftp_up_count"] = sum(1 for a in kept if a.get("type") == "FTP_UP")
         if kept or (row.get("rolling_ftp_delta") or 0) > 0:
             kept_rows.append(row)
@@ -11935,7 +11983,12 @@ def _v4873_reconcile_native_breakthrough(performance_breakthrough, power_achieve
     ftp_detected = bool(ftp_count or any((r.get("rolling_ftp_delta") or 0) > 0 for r in kept_rows))
     bits = []
     if pb_count:
-        bits.append(f"{pb_count} Intervals power PB{'s' if pb_count != 1 else ''}")
+        first_pb=next((a for r in kept_rows for a in r.get('achievements') or []
+                       if a.get('type') in {'BEST_POWER','THE_LAB_PB'}),None)
+        if pb_count==1 and first_pb and first_pb.get('duration'):
+            bits.append(f"New {first_pb['duration']} power best · {first_pb.get('watts')} W")
+        else:
+            bits.append(f"{pb_count} verified power PB{'s' if pb_count!=1 else ''}")
     if ftp_detected:
         if latest and (latest.get("rolling_ftp_delta") or 0) > 0:
             bits.append(f"FTP +{latest['rolling_ftp_delta']} W")
@@ -11949,8 +12002,10 @@ def _v4873_reconcile_native_breakthrough(performance_breakthrough, power_achieve
     perf["available"] = bool(kept_rows)
     perf["headline"] = " · ".join(bits) if bits else "Recent Intervals achievement"
     perf["native_power_duplicates_suppressed"] = suppressed
+    if verified_events:
+        perf["method_note"] = "Native Intervals achievement context plus verified THE LAB YTD power-curve PBs, deduplicated per activity. Derived PBs are never manufactured from model estimates."
     if suppressed:
-        perf["method_note"] = (str(perf.get("method_note") or "").rstrip(".") + "; matching BEST_POWER ribbons already represented by THE LAB YTD milestones are suppressed in the athlete UI.").strip()
+        perf["method_note"] += " Matching native PB duplicates were replaced by the same verified YTD milestone in this activity recap."
     return perf
 def _v4873_cached_ytd_curve_points(day, user_id=None):
     try:
@@ -19974,6 +20029,168 @@ def _v79_normalize_interval_row(row, pos):
     out["average_watts"] = float(watts)
     return out
 
+def _v125_original_fit_laps(content):
+    """Read FIT lap (global 19) records from an *original* activity file.
+
+    Independent of ICU automatically detected intervals. Accept original .FIT,
+    gzip FIT and ZIP containing one FIT. Never generate lap duration or power from
+    the activity name, another interval, the power curve or an athlete's screenshot.
+    This parser only reads standard lap elapsed/timer duration and average power.
+    """
+    import zipfile
+    import io
+    try:raw=bytes(content or b'')
+    except (TypeError,ValueError):return []
+    if raw[:2]==b'\x1f\x8b':
+        try:
+            dec=zlib.decompressobj(16+zlib.MAX_WBITS)
+            raw=dec.decompress(raw,8_000_001)
+            if not dec.eof or len(raw)>8_000_000:return []
+        except Exception:return []
+    if raw[:2] == b'PK':
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                names=[n for n in z.namelist() if n.lower().endswith('.fit') and not n.endswith('/')]
+                if len(names)!=1:return []
+                inf=z.getinfo(names[0])
+                if inf.file_size>8_000_000:return []
+                raw=z.read(names[0])
+        except Exception:return []
+    if len(raw)<14 or len(raw)>8_000_000:return []
+    laps=[];offset=0
+    try:
+        while offset+12<=len(raw):
+            hs=raw[offset]
+            if hs<12 or offset+hs>len(raw) or raw[offset+8:offset+12]!=b'.FIT':break
+            size=int.from_bytes(raw[offset+4:offset+8],'little')
+            start=offset+hs;end=start+size
+            if end>len(raw):return []
+            defs={};pos=start
+            while pos<end:
+                h=raw[pos];pos+=1
+                compressed=bool(h&0x80)
+                if compressed:
+                    local=(h>>5)&3
+                    d=defs.get(local)
+                    if not d:return []
+                else:
+                    local=h&15
+                    if h&0x40:
+                        if pos+5>end:return []
+                        pos+=1;arch=raw[pos];pos+=1
+                        if arch not in (0,1):return []
+                        bo='little' if arch==0 else 'big'
+                        g=int.from_bytes(raw[pos:pos+2],bo);pos+=2
+                        count=raw[pos];pos+=1
+                        if pos+3*count>end:return []
+                        fields=[]
+                        for _ in range(count):
+                            fields.append((raw[pos],raw[pos+1],raw[pos+2]));pos+=3
+                        dev=[]
+                        if h&0x20:
+                            if pos>=end:return []
+                            nc=raw[pos];pos+=1
+                            if pos+3*nc>end:return []
+                            for _ in range(nc):
+                                dev.append(raw[pos+1]);pos+=3
+                        defs[local]=(g,bo,fields,dev)
+                        continue
+                    d=defs.get(local)
+                    if not d:return []
+                g,bo,fields,dev=d
+                row={}
+                for fid,sz,typ in fields:
+                    if compressed and fid==253:continue
+                    if pos+sz>end:return []
+                    b=raw[pos:pos+sz];pos+=sz
+                    if g!=19 or fid not in {2,7,8,19}:continue
+                    if sz not in {1,2,4,8}:continue
+                    v=int.from_bytes(b,bo)
+                    if v in {(1<<(8*sz))-1}:continue
+                    row[fid]=v
+                for sz in dev:
+                    if pos+sz>end:return []
+                    pos+=sz
+                if g==19:
+                    raw_secs=row.get(8,row.get(7))
+                    watt=row.get(19)
+                    if raw_secs is None or watt is None:continue
+                    duration=float(raw_secs)/1000.0
+                    # FIT avg_power is measured, not inferred.
+                    if 25<=duration<=7200 and 20<=watt<=2500:
+                        laps.append({'moving_time':round(duration), 'elapsed_time':round(duration),
+                                     'average_watts':watt,'fit_start_time':row.get(2),
+                                     '_v125_record_origin':'ORIGINAL_FIT_LAP'})
+            offset=end+2 if end+2<=len(raw) else end
+        return laps[:200]
+    except Exception:
+        return []
+
+
+def _v125_enrich_bounded_laps(activities, details, user_id=None):
+    """One bounded original-file probe for latest unresolved repeated-work activity.
+
+    A failed probe is explicitly surfaced in the Content Audit; never silently
+    claim a damaged automatic interval was an incomplete athlete effort.
+    """
+    out=details if isinstance(details,dict) else {}
+    ordered=sorted((a for a in activities or [] if isinstance(a,dict) and a.get('id')),
+                   key=lambda a:str(a.get('start_date_local') or ''),reverse=True)
+    for a in ordered[:3]:
+        aid=str(a['id']);d=out.get(aid) or a
+        if not _v4887_is_cycling_activity(a):continue
+        native=d.get('icu_intervals') or []
+        work=[r for r in native if isinstance(r,dict) and str(r.get('type') or '').upper()=='WORK']
+        if len(work)<3 or _v79_activity_interval_truth(d).get('status')=='RESOLVED':continue
+        secs=[_num(r.get('moving_time') or r.get('elapsed_time')) for r in work]
+        valid=[v for v in secs if v is not None and v>=120]
+        if len(valid)<3:continue
+        med=statistics.median(valid)
+        if sum(abs(v-med)<=max(15,med*.12) for v in valid)<2:continue
+        merged=dict(d)
+        probe={'status':'ATTEMPTED','source':'ORIGINAL_ACTIVITY_FILE','ai_calls':0,
+               'activity_id':aid,'lap_rows_found':0,'http_status':None}
+        try:
+            rt=_resolve_intervals_runtime(user_id)
+            url=f'https://intervals.icu/api/v1/activity/{aid}/file'
+            res=requests.get(url,headers={**get_intervals_headers(rt),'Accept':'application/octet-stream'},timeout=13)
+            probe['http_status']=int(res.status_code)
+            if res.status_code!=200:probe['status']='HTTP_UNAVAILABLE'
+            elif len(res.content)>8_000_000:probe['status']='FILE_TOO_LARGE'
+            else:
+                laps=_v125_original_fit_laps(res.content)
+                probe['lap_rows_found']=len(laps)
+                if laps:
+                    merged['source_laps']=laps
+                    merged['_v125_source_lap_provenance']='ORIGINAL_ACTIVITY_FIT_LAP'
+                    probe['status']='LAPS_EXTRACTED'
+                else:probe['status']='NO_READABLE_FIT_LAPS'
+        except Exception as exc:
+            probe['status']='PROBE_FAILED'
+            probe['error_class']=type(exc).__name__
+        merged['_v125_source_lap_probe']=probe
+        out[aid]=merged
+        break  # One source file per normal Snapshot/QA, even when unsuccessful.
+    return out
+
+
+def _v125_partial_work_evidence(truth, ftp=None):
+    """Provide *descriptive* feedback on unresolved intervals, never canonical credit."""
+    if (truth or {}).get('status')!='RAW_FALLBACK':return None
+    rows=[r for r in (truth or {}).get('work_rows') or [] if isinstance(r,dict)]
+    watts=[];seconds=[]
+    for r in rows:
+        secs=_num(r.get('moving_time') or r.get('elapsed_time'))
+        w=_num(r.get('average_watts'))
+        if secs is None or w is None or secs<120 or w<100:continue
+        watts.append(round(w,1));seconds.append(round(secs))
+    if len(seconds)<2:return None
+    med=statistics.median(seconds)
+    if any(abs(v-med)>max(60,.20*med) for v in seconds):return None
+    return {'status':'DESCRIPTIVE_ONLY','source':truth.get('source'),
+            'work_secs_observed':seconds,'work_watts_observed':watts,
+            'note':'Automatic interval boundaries are unverified. These are approximate segments, not confirmed source laps; no full-session evidence credit is granted.'}
+
 def _v79_lap_candidates(detail):
     """Find device/source lap arrays without assuming one Intervals payload path."""
     found = []
@@ -20161,6 +20378,7 @@ def _v79_activity_interval_truth(detail):
                 "status": "RESOLVED",
                 "lap_path": candidate.get("path"),
                 "lap_candidates_seen": len(lap_candidates),
+                "source_lap_probe": d.get('_v125_source_lap_probe'),
                 "raw_icu_work_count": sum(1 for x in (d.get("icu_intervals") or []) if isinstance(x, dict) and str(x.get("type") or "WORK").upper() == "WORK"),
             }
     native = [x for x in (d.get("icu_intervals") or []) if isinstance(x, dict)]
@@ -20171,6 +20389,7 @@ def _v79_activity_interval_truth(detail):
             "status": "RESOLVED",
             "lap_path": None,
             "lap_candidates_seen": len(lap_candidates),
+            "source_lap_probe": d.get('_v125_source_lap_probe'),
             "raw_icu_work_count": sum(1 for x in native if str(x.get("type") or "WORK").upper() == "WORK"),
         }
     return {
@@ -20184,6 +20403,7 @@ def _v79_activity_interval_truth(detail):
         "corrections": [],
         "lap_path": None,
         "lap_candidates_seen": len(lap_candidates),
+        "source_lap_probe": d.get('_v125_source_lap_probe'),
         "raw_icu_work_count": sum(1 for x in native if str(x.get("type") or "WORK").upper() == "WORK"),
     }
 
@@ -20198,6 +20418,7 @@ def _v79_activity_truth_summary(truth):
         "corrections": list(t.get("corrections") or []),
         "lap_path": t.get("lap_path"),
         "lap_candidates_seen": t.get("lap_candidates_seen"),
+        "source_lap_probe": t.get("source_lap_probe"),
         "raw_icu_work_count": t.get("raw_icu_work_count"),
         "downstream_conflict": t.get("downstream_conflict"),
     }
@@ -20644,6 +20865,56 @@ def _v4879_note_power_band(note):
     if low is not None and high is not None and low < high:
         return low, high
     return None
+def _v125_latest_activity_feedback(blocks, achievements, evidence_ledger=None, now=None):
+    """Recognize today's observed quality, even if canonical lap reconstruction fails."""
+    now=now or get_rome_now()
+    today=now.date().isoformat()
+    rows=[]
+    for b in (blocks or []):
+        if not isinstance(b,dict) or not b.get('quality_relevant'):continue
+        try:days=(now.date()-date.fromisoformat(str(b.get('date') or '')[:10])).days
+        except (ValueError,TypeError):continue
+        if 0<=days<=2:rows.append(b)
+    if not rows:return {'available':False}
+    b=rows[0];aid=str(b.get('activity_id') or '');activity_day=str(b.get('date') or '')[:10]
+    pbs=[e for e in ((achievements or {}).get('events') or []) if isinstance(e,dict) and
+         (str(e.get('activity_id') or '')==aid if e.get('activity_id') else str(e.get('date') or '')[:10]==activity_day)
+         and (e.get('delta_w') or 0)>0]
+    pb=max(pbs,key=lambda e:int(e.get('delta_w') or 0)) if pbs else None
+    truth=b.get('activity_truth') or {}; rep=b.get('repeatability') or {}
+    partial=b.get('partial_work_evidence') or {}
+    if rep and str(truth.get('status'))=='RESOLVED':
+        watts=rep.get('watts') or []
+        text=f"Verified {rep.get('reps')} × {rep.get('interval_label')} at " + '/'.join(str(w) for w in watts) + ' W.'
+        if rep.get('first_to_last_decay_pct') is not None:
+            text+=f" First-to-last power fade: {rep['first_to_last_decay_pct']}%."
+        verdict='VERIFIED'
+    elif partial:
+        seconds=partial.get('work_secs_observed') or []; watts=partial.get('work_watts_observed') or []
+        text=("Activity imported as " + ', '.join(f"{int(s)//60}:{int(s)%60:02d} at {w:g} W" for s,w in zip(seconds,watts)) +
+              '. The source lap boundaries are not available or do not validate these automatic segments. Do not infer that a shorter automatic segment means you rode a shorter lap.')
+        verdict='SOURCE_LAPS_NOT_VERIFIED'
+    else:
+        text='Intense session recorded. Detailed repetition structure is unavailable from the imported source.'
+        verdict='STRUCTURE_UNAVAILABLE'
+    if pb:
+        sec=int(pb.get('secs') or 0); duration=f'{sec//60}min' if sec%60==0 else f'{sec}s'
+        scope=str(pb.get('scope_label') or 'tracked period')
+        headline=f"🏅 New {duration} best ({scope}): {int(pb['watts'])} W"
+        text=f"Verified new {scope} {duration} best: {int(pb['watts'])} W (+{int(pb['delta_w'])} W). " + text
+    else:
+        headline='Latest completed quality session'
+    ledger_matches=[r for r in ((evidence_ledger or {}).get('repeatability') or {}).get('events') or []
+                    if str(r.get('activity_id') or '')==aid]
+    if ledger_matches:
+        text+=' The canonical interval analysis is available as roadmap evidence; separate progression gates still apply.'
+    elif partial or not rep:
+        text+=' Roadmap breadth credit remains pending source-lap verification; the verified power best is recognized independently.'
+    return {'available':True,'activity_id':aid,'date':activity_day,'name':b.get('name'),
+            'headline':headline,'text':text,'structure_status':verdict,'pb':pb,
+            'roadmap_repetition_evidence':bool(ledger_matches),
+            'method':'SOURCE_LAPS_FIRST; AUTOMATIC_INTERVALS_DESCRIPTIVE_IF_UNVERIFIED; DIRECT_PB_INDEPENDENT'}
+
 def _v4879_completed_quality_review(previous_blocks, subjective_context, now=None):
     now = now or get_rome_now()
     today = now.date().isoformat()
@@ -21314,6 +21585,7 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
             "power_zone_summary": pz_text, "hr_zone_summary": hz_text,
             "intervals": work, "work_interval_evidence": work_interval_evidence,
             "repeatability": repeatability, "interval_structure_source": interval_truth.get("source") or "UNRESOLVED",
+            "partial_work_evidence": _v125_partial_work_evidence(interval_truth,ftp),
             "activity_truth": _v79_activity_truth_summary(interval_truth),
             "wbal": native_wbal, "metabolic_profile": _v4894_session_metabolic_profile(detail, native_wbal), "consideration": consideration,
         })
@@ -26996,6 +27268,7 @@ def analyze():
         shared_training_details, garmin_vo2_contract_probe = _v89_enrich_garmin_vo2_details(
             cycling_season_activities, shared_training_details, max_single_fetches=1, max_fit_fetches=6, user_id=user["id"]
         ) if cycling_season_activities else ({}, {"status":"ABSENT","probe_used":False,"single_fetches":0,"original_fit_fetches":0})
+        shared_training_details = _v125_enrich_bounded_laps(cycling_recent_activities, shared_training_details, user_id=user["id"])
         progression_training_blocks = build_previous_training_blocks(cycling_recent_activities, 24, activity_details=shared_training_details)
         repeatability_history_blocks = build_previous_training_blocks(
             repeatability_history_activities, len(repeatability_history_activities), activity_details=shared_training_details
@@ -27029,6 +27302,7 @@ def analyze():
             goal_key=training_direction.get("primary_goal"), scope_start=training_direction.get("started_on") or (strategy_plan or {}).get("started_on"),
         )
         race_repeatability=build_race_repeatability(repeatability_history_blocks or progression_training_blocks,session_progression,evidence_ledger=evidence_ledger)
+        latest_activity_feedback=_v125_latest_activity_feedback(previous_training_blocks,power_achievements,evidence_ledger=evidence_ledger)
         if completed_quality_review and previous_training_blocks and completed_quality_review.get("name")==previous_training_blocks[0].get("name"):completed_quality_review["execution_quality"]=previous_training_blocks[0].get("execution_quality")
         stored_performance_evidence = _v4896_plan_performance_evidence(strategy_plan)
         performance_evidence = _v4896_build_performance_evidence(
@@ -27275,6 +27549,7 @@ def analyze():
             "power_achievements": power_achievements,
             "performance_evidence": performance_evidence,
             "performance_breakthrough": performance_breakthrough,
+            "latest_activity_feedback": latest_activity_feedback,
             "ftp_anchor": ftp_anchor,
             "training_definitions": training_definitions,
             "undefined_training_intent": undefined_training_intent,
