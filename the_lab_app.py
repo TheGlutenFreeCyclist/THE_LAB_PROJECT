@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.03 WIP R127 · PRECISE SOURCE-LAP POWER · R126 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.04 WIP R128 · RECORD-LEVEL LAP POWER · R127 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -20061,92 +20061,192 @@ def _v125_original_fit_laps(content):
     Independent of ICU automatically detected intervals. Accept original .FIT,
     gzip FIT and ZIP containing one FIT. Never generate lap duration or power from
     the activity name, another interval, the power curve or an athlete's screenshot.
-    This parser only reads standard lap elapsed/timer duration and average power.
+
+    R128 source hierarchy for lap power:
+      1) time-weighted record-level FIT power inside the lap boundaries, when record
+         coverage is sufficient and the result is coherent with the native lap field;
+      2) lap total_work / timer_time, when available and coherent;
+      3) native integer lap avg_power.
     """
     import zipfile
     import io
-    try:raw=bytes(content or b'')
-    except (TypeError,ValueError):return []
+    try:
+        raw=bytes(content or b'')
+    except (TypeError,ValueError):
+        return []
     if raw[:2]==b'\x1f\x8b':
         try:
             dec=zlib.decompressobj(16+zlib.MAX_WBITS)
             raw=dec.decompress(raw,8_000_001)
-            if not dec.eof or len(raw)>8_000_000:return []
-        except Exception:return []
+            if not dec.eof or len(raw)>8_000_000:
+                return []
+        except Exception:
+            return []
     if raw[:2] == b'PK':
         try:
             with zipfile.ZipFile(io.BytesIO(raw)) as z:
                 names=[n for n in z.namelist() if n.lower().endswith('.fit') and not n.endswith('/')]
-                if len(names)!=1:return []
+                if len(names)!=1:
+                    return []
                 inf=z.getinfo(names[0])
-                if inf.file_size>8_000_000:return []
+                if inf.file_size>8_000_000:
+                    return []
                 raw=z.read(names[0])
-        except Exception:return []
-    if len(raw)<14 or len(raw)>8_000_000:return []
-    laps=[];offset=0
+        except Exception:
+            return []
+    if len(raw)<14 or len(raw)>8_000_000:
+        return []
+
+    def _record_mean(points,start_ts,end_ts,native_watts):
+        if start_ts is None or end_ts is None or end_ts<=start_ts:
+            return None
+        pts=sorted((float(t),float(p)) for t,p in points
+                   if t is not None and p is not None and start_ts-2<=float(t)<=end_ts+2 and 0<float(p)<2500)
+        if len(pts)<10:
+            return None
+        # De-duplicate timestamps; last sample at a timestamp wins.
+        dedup={}
+        for t,p in pts:
+            dedup[t]=p
+        pts=sorted(dedup.items())
+        if len(pts)<10 or pts[0][0]>start_ts+5 or pts[-1][0]<end_ts-5:
+            return None
+        energy=0.0
+        covered=0.0
+        for i,(t,p) in enumerate(pts):
+            seg_start=max(float(start_ts),t)
+            next_t=pts[i+1][0] if i+1<len(pts) else float(end_ts)
+            seg_end=min(float(end_ts),next_t)
+            dt=max(0.0,seg_end-seg_start)
+            if dt<=0:
+                continue
+            # FIT records can be sparse ("smart recording"). Forward-hold only
+            # short gaps; long gaps do not manufacture unseen power.
+            if dt>5.0:
+                dt=5.0
+            energy += p*dt
+            covered += dt
+        duration=float(end_ts)-float(start_ts)
+        if duration<=0 or covered < max(10.0,0.85*duration):
+            return None
+        mean=energy/covered
+        if not (20<=mean<=2500):
+            return None
+        if native_watts is not None and abs(mean-float(native_watts))>3.0:
+            return None
+        return mean, len(pts), round(covered,1)
+
+    laps=[]
+    records=[]
+    offset=0
     try:
         while offset+12<=len(raw):
             hs=raw[offset]
-            if hs<12 or offset+hs>len(raw) or raw[offset+8:offset+12]!=b'.FIT':break
+            if hs<12 or offset+hs>len(raw) or raw[offset+8:offset+12]!=b'.FIT':
+                break
             size=int.from_bytes(raw[offset+4:offset+8],'little')
-            start=offset+hs;end=start+size
-            if end>len(raw):return []
-            defs={};pos=start
+            start=offset+hs
+            end=start+size
+            if end>len(raw):
+                return []
+            defs={}
+            pos=start
+            last_timestamp=None
+            section_laps=[]
+            section_records=[]
             while pos<end:
-                h=raw[pos];pos+=1
+                h=raw[pos]
+                pos+=1
                 compressed=bool(h&0x80)
+                compressed_offset=(h&0x1F) if compressed else None
                 if compressed:
                     local=(h>>5)&3
                     d=defs.get(local)
-                    if not d:return []
+                    if not d:
+                        return []
                 else:
                     local=h&15
                     if h&0x40:
-                        if pos+5>end:return []
-                        pos+=1;arch=raw[pos];pos+=1
-                        if arch not in (0,1):return []
+                        if pos+5>end:
+                            return []
+                        pos+=1
+                        arch=raw[pos]
+                        pos+=1
+                        if arch not in (0,1):
+                            return []
                         bo='little' if arch==0 else 'big'
-                        g=int.from_bytes(raw[pos:pos+2],bo);pos+=2
-                        count=raw[pos];pos+=1
-                        if pos+3*count>end:return []
+                        g=int.from_bytes(raw[pos:pos+2],bo)
+                        pos+=2
+                        count=raw[pos]
+                        pos+=1
+                        if pos+3*count>end:
+                            return []
                         fields=[]
                         for _ in range(count):
-                            fields.append((raw[pos],raw[pos+1],raw[pos+2]));pos+=3
+                            fields.append((raw[pos],raw[pos+1],raw[pos+2]))
+                            pos+=3
                         dev=[]
                         if h&0x20:
-                            if pos>=end:return []
-                            nc=raw[pos];pos+=1
-                            if pos+3*nc>end:return []
+                            if pos>=end:
+                                return []
+                            nc=raw[pos]
+                            pos+=1
+                            if pos+3*nc>end:
+                                return []
                             for _ in range(nc):
-                                dev.append(raw[pos+1]);pos+=3
+                                dev.append(raw[pos+1])
+                                pos+=3
                         defs[local]=(g,bo,fields,dev)
                         continue
                     d=defs.get(local)
-                    if not d:return []
+                    if not d:
+                        return []
                 g,bo,fields,dev=d
                 row={}
                 for fid,sz,typ in fields:
-                    if compressed and fid==253:continue
-                    if pos+sz>end:return []
-                    b=raw[pos:pos+sz];pos+=sz
-                    if g!=19 or fid not in {2,7,8,19,41}:continue
-                    if sz not in {1,2,4,8}:continue
+                    if compressed and fid==253:
+                        continue
+                    if pos+sz>end:
+                        return []
+                    b=raw[pos:pos+sz]
+                    pos+=sz
+                    wanted = ((g==19 and fid in {2,7,8,19,41,253}) or
+                              (g==20 and fid in {7,253}))
+                    if not wanted:
+                        continue
+                    if sz not in {1,2,4,8}:
+                        continue
                     v=int.from_bytes(b,bo)
-                    if v in {(1<<(8*sz))-1}:continue
+                    if v == (1<<(8*sz))-1:
+                        continue
                     row[fid]=v
                 for sz in dev:
-                    if pos+sz>end:return []
+                    if pos+sz>end:
+                        return []
                     pos+=sz
-                if g==19:
+
+                if compressed:
+                    if last_timestamp is not None:
+                        base=int(last_timestamp)&~0x1F
+                        ts=base+int(compressed_offset)
+                        if int(compressed_offset) < (int(last_timestamp)&0x1F):
+                            ts+=0x20
+                        row[253]=ts
+                        last_timestamp=ts
+                elif row.get(253) is not None:
+                    last_timestamp=int(row[253])
+
+                if g==20:
+                    ts=row.get(253)
+                    pwr=row.get(7)
+                    if ts is not None and pwr is not None and 0<pwr<2500:
+                        section_records.append((int(ts),float(pwr)))
+                elif g==19:
                     raw_secs=row.get(8,row.get(7))
                     watt=row.get(19)
-                    if raw_secs is None or watt is None:continue
+                    if raw_secs is None or watt is None:
+                        continue
                     duration=float(raw_secs)/1000.0
-                    # R127: prefer the lap's own work/time mean when the FIT exposes
-                    # total_work. It preserves sub-watt information that avg_power
-                    # stores only as an integer and matches athlete-facing lap means
-                    # more closely. Never use it if it materially conflicts with the
-                    # native avg_power field. FIT total_work is joules.
                     avg_watts=float(watt)
                     avg_source='FIT_AVG_POWER'
                     total_work=row.get(41)
@@ -20155,14 +20255,44 @@ def _v125_original_fit_laps(content):
                         if 20<=work_time_watts<=2500 and abs(work_time_watts-float(watt))<=3.0:
                             avg_watts=work_time_watts
                             avg_source='FIT_TOTAL_WORK_DIV_TIMER'
+                    start_ts=row.get(2)
+                    end_ts=row.get(253)
+                    if start_ts is not None and end_ts is None:
+                        end_ts=float(start_ts)+duration
                     if 25<=duration<=7200 and 20<=avg_watts<=2500:
-                        laps.append({'moving_time':round(duration), 'elapsed_time':round(duration),
-                                     'average_watts':round(avg_watts,3),
-                                     'fit_avg_power_watts':watt,
-                                     'fit_total_work_j':total_work,
-                                     'average_watts_source':avg_source,
-                                     'fit_start_time':row.get(2),
-                                     '_v125_record_origin':'ORIGINAL_FIT_LAP'})
+                        section_laps.append({
+                            'moving_time':round(duration),
+                            'elapsed_time':round(duration),
+                            'average_watts':round(avg_watts,3),
+                            'fit_avg_power_watts':watt,
+                            'fit_total_work_j':total_work,
+                            'average_watts_source':avg_source,
+                            'fit_start_time':start_ts,
+                            'fit_end_time':end_ts,
+                            '_v125_record_origin':'ORIGINAL_FIT_LAP',
+                        })
+
+            # R128: refine each lap from record-level power only after the whole FIT
+            # section has been parsed, so lap boundaries can be matched to samples.
+            for lap in section_laps:
+                start_ts=lap.get('fit_start_time')
+                end_ts=lap.get('fit_end_time')
+                if start_ts is not None and end_ts is None:
+                    end_ts=float(start_ts)+float(lap.get('moving_time') or 0)
+                refined=_record_mean(section_records,start_ts,end_ts,lap.get('fit_avg_power_watts'))
+                if refined:
+                    mean,samples,coverage=refined
+                    lap['average_watts']=round(mean,3)
+                    lap['average_watts_source']='FIT_RECORD_POWER_TIME_WEIGHTED'
+                    lap['fit_record_power_watts']=round(mean,3)
+                    lap['fit_record_power_samples']=int(samples)
+                    lap['fit_record_power_coverage_s']=coverage
+                else:
+                    lap['fit_record_power_watts']=None
+                    lap['fit_record_power_samples']=0
+                    lap['fit_record_power_coverage_s']=0.0
+            laps.extend(section_laps)
+            records.extend(section_records)
             offset=end+2 if end+2<=len(raw) else end
         return laps[:200]
     except Exception:
@@ -20191,7 +20321,8 @@ def _v125_enrich_bounded_laps(activities, details, user_id=None):
         if sum(abs(v-med)<=max(15,med*.12) for v in valid)<2:continue
         merged=dict(d)
         probe={'status':'ATTEMPTED','source':'ORIGINAL_ACTIVITY_FILE','ai_calls':0,
-               'activity_id':aid,'lap_rows_found':0,'http_status':None}
+               'activity_id':aid,'lap_rows_found':0,'http_status':None,
+               'record_power_refined_laps':0,'lap_power_sources':[]}
         try:
             rt=_resolve_intervals_runtime(user_id)
             url=f'https://intervals.icu/api/v1/activity/{aid}/file'
@@ -20202,6 +20333,10 @@ def _v125_enrich_bounded_laps(activities, details, user_id=None):
             else:
                 laps=_v125_original_fit_laps(res.content)
                 probe['lap_rows_found']=len(laps)
+                probe['record_power_refined_laps']=sum(
+                    1 for lap in laps if (lap or {}).get('average_watts_source')=='FIT_RECORD_POWER_TIME_WEIGHTED'
+                )
+                probe['lap_power_sources']=[str((lap or {}).get('average_watts_source') or '') for lap in laps[:20]]
                 if laps:
                     merged['source_laps']=laps
                     merged['_v125_source_lap_provenance']='ORIGINAL_ACTIVITY_FIT_LAP'
