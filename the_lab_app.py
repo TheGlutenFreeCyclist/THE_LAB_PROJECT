@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.06 WIP R130 · SCOPED DAILY AVAILABILITY · R129 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.07 WIP R131 · SEVERE SESSION PROGRESSION GATE · R130 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -30127,6 +30127,227 @@ def _v87_cross_module_authority_guard(snapshot, repair=False):
         semantic['pass']=False
     out['semantic_authority_audit']=semantic
     out['authority_final_pass']=bool(audit['final_pass'] and semantic.get('final_pass',True))
+    return out
+
+
+# ============================================================================
+# R131 · SEVERE SESSION PROGRESSION GATE
+# A successful/steady interval session is not automatically a safe progression
+# baseline. When the latest repeated quality session was ceiling-like (direct PB
+# at the same duration + near-ceiling repeated work + very high modeled demand),
+# Recovery Under Load remains the open adaptation question but Nova first uses a
+# lower-dose intensity re-entry. This is a deterministic product guardrail, not
+# a physiological law or a medical threshold.
+# ============================================================================
+R131_SCHEMA = "V4.9.07-R131-1"
+
+
+def _v131_pb_for_activity(performance_evidence, activity_id, interval_secs=None):
+    pe = performance_evidence if isinstance(performance_evidence, dict) else {}
+    aid = str(activity_id or "")
+    candidates = []
+    for key in ("display_event", "strongest_current"):
+        row = pe.get(key)
+        if isinstance(row, dict):
+            candidates.append(row)
+    for row in pe.get("events") or []:
+        if isinstance(row, dict):
+            candidates.append(row)
+    seen = set()
+    for row in candidates:
+        rid = str(row.get("id") or id(row))
+        if rid in seen:
+            continue
+        seen.add(rid)
+        if str(row.get("kind") or "").upper() != "PB":
+            continue
+        if aid and str(row.get("activity_id") or "") != aid:
+            continue
+        secs = _rhythm_num(row.get("secs"))
+        if interval_secs is not None and secs is not None and abs(float(secs) - float(interval_secs)) > 8:
+            continue
+        watts = _rhythm_num(row.get("watts"))
+        if watts is None or watts <= 0:
+            continue
+        return row
+    return None
+
+
+def _v131_latest_severe_quality_guard(previous_blocks, performance_evidence=None, ledger=None):
+    blocks = [b for b in (previous_blocks or []) if isinstance(b, dict)]
+    latest = next((b for b in blocks if b.get("quality_relevant") and isinstance(b.get("repeatability"), dict) and b.get("repeatability")), None)
+    if not latest:
+        return {"schema": R131_SCHEMA, "active": False, "reason": "NO_RECENT_REPEATABILITY_REFERENCE"}
+    rep = latest.get("repeatability") or {}
+    reps = _rhythm_num(rep.get("reps")); secs = _rhythm_num(rep.get("interval_secs")); avg = _rhythm_num(rep.get("avg_watts"))
+    decay = _rhythm_num(rep.get("first_to_last_decay_pct"))
+    strong = bool((decay is not None and decay <= 3.0) or str((((latest.get("execution_quality") or {}).get("degradation") or {}).get("label") or "")).upper() in {"EXCELLENT","GOOD","STABLE"})
+    pb = _v131_pb_for_activity(performance_evidence, latest.get("activity_id"), secs)
+    pb_w = _rhythm_num((pb or {}).get("watts"))
+    repeated_vs_pb = (float(avg) / float(pb_w)) if avg is not None and pb_w and pb_w > 0 else None
+    wbal = latest.get("wbal") or {}
+    dep = _rhythm_num(wbal.get("max_depletion_pct")); min_pct = _rhythm_num(wbal.get("min_wbal_pct"))
+    wbal_severe = bool((dep is not None and dep >= 90.0) or (min_pct is not None and min_pct <= 10.0))
+    meta = latest.get("metabolic_profile") or {}
+    metabolic_severe = str(meta.get("high_intensity_label") or "").upper() == "VERY HIGH" and str(meta.get("demand_label") or "").upper() in {"HIGH","VERY HIGH"}
+    long_multi = bool(reps is not None and reps >= 2 and secs is not None and secs >= 180)
+    near_ceiling = bool(repeated_vs_pb is not None and repeated_vs_pb >= 0.95)
+    pb_linked = bool(pb and str((pb or {}).get("activity_id") or "") == str(latest.get("activity_id") or ""))
+    validate_role = False
+    for row in (((ledger or {}).get("stimulus_ledger") or {}).get("completed") or []):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("date") or "") == str(latest.get("date") or "") and str(row.get("role") or "").upper() == "VALIDATE":
+            validate_role = True
+            break
+    active = bool(strong and long_multi and ((pb_linked and near_ceiling and (wbal_severe or metabolic_severe)) or (validate_role and wbal_severe)))
+    return {
+        "schema": R131_SCHEMA,
+        "active": active,
+        "classification": "CEILING_LIKE_RECENT_QUALITY" if active else "NORMAL_PROGRESSABLE_REFERENCE",
+        "activity_id": latest.get("activity_id"), "date": latest.get("date"), "name": latest.get("name"),
+        "reps": int(round(reps)) if reps is not None else None,
+        "interval_secs": int(round(secs)) if secs is not None else None,
+        "work_avg_watts": round(float(avg),1) if avg is not None else None,
+        "same_duration_pb_watts": round(float(pb_w),1) if pb_w is not None else None,
+        "repeated_work_vs_pb_ratio": round(float(repeated_vs_pb),3) if repeated_vs_pb is not None else None,
+        "pb_linked": pb_linked,
+        "wbal_max_depletion_pct": round(float(dep),1) if dep is not None else None,
+        "wbal_min_pct": round(float(min_pct),1) if min_pct is not None else None,
+        "wbal_severe": wbal_severe,
+        "metabolic_severe": metabolic_severe,
+        "validation_role": validate_role,
+        "strong_execution": strong,
+        "rule": "A recent long repeated session that is both near a directly observed same-duration PB and severely demanding is not reused immediately as a progression baseline. Keep intensity possible, but reduce work-dose architecture before adding recovery load.",
+        "threshold_note": "Product guardrail only; PB ratio and W′bal/demand cutoffs are conservative heuristics, not universal physiological thresholds.",
+    }
+
+
+def _v131_reentry_contract(guard):
+    if not isinstance(guard, dict) or not guard.get("active"):
+        return None
+    severe_secs = int(guard.get("interval_secs") or 0); severe_reps = int(guard.get("reps") or 0)
+    if severe_secs <= 0 or severe_reps <= 0:
+        return None
+    # Canonical shorter-bout bridge. 6 min -> 3 min; 4 min -> 2 min.
+    candidate = int(round((severe_secs * 0.50) / 30.0) * 30)
+    candidate = max(120, min(240, candidate))
+    severe_total = severe_secs * severe_reps
+    target_total = severe_total * 0.67
+    reps = max(3, min(5, int(round(target_total / max(candidate,1)))))
+    if reps * candidate > severe_total * 0.75:
+        reps = max(3, int((severe_total * 0.75) // candidate))
+    rec_secs = max(180, min(300, candidate + 60))
+    return {
+        "available": True,
+        "schema": R131_SCHEMA,
+        "stage": "POST_SEVERE_INTENSITY_REENTRY",
+        "dominant_lever": "WORK_DOSE_REDUCTION_BEFORE_RECOVERY_LOAD",
+        "reference": {
+            "activity_id": guard.get("activity_id"), "date": guard.get("date"),
+            "reps": severe_reps, "interval_secs": severe_secs,
+            "work_avg_watts": guard.get("work_avg_watts"),
+            "same_duration_pb_watts": guard.get("same_duration_pb_watts"),
+            "repeated_work_vs_pb_ratio": guard.get("repeated_work_vs_pb_ratio"),
+            "wbal_max_depletion_pct": guard.get("wbal_max_depletion_pct"),
+        },
+        "prescription": {
+            "reps": reps, "interval_secs": candidate, "recovery_secs": rec_secs,
+            "recovery_mode": "EASY_SELF_SELECTED",
+            "max_total_work_secs": int(round(severe_total * 0.75)),
+            "work_reference_ratio_low": 0.90, "work_reference_ratio_high": 0.93,
+        },
+        "rule": "After a ceiling-like repeated session, do not progress the same long-bout structure or add recovery load at the next quality exposure. Preserve intensity, reduce bout duration and total hard work, and use easy recovery. Recovery Under Load remains open and can resume only after a controlled non-severe bridge.",
+        "evidence_basis": "Individual response guard: direct same-duration PB proximity + severe modeled demand. The shorter re-entry dose is a conservative product heuristic; it is not claimed as a universal physiological threshold.",
+    }
+
+
+_v503_scientific_progression_r130 = _v503_scientific_progression
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None, previous_blocks=None, performance_narrative=None, performance_evidence=None, aerobic_metabolic_range=None, evidence_ledger=None, question_state=None):
+    out = _v503_scientific_progression_r130(
+        goal_key, roadmap, ledger, session_progression, previous_blocks,
+        performance_narrative, performance_evidence, aerobic_metabolic_range,
+        evidence_ledger=evidence_ledger, question_state=question_state,
+    )
+    if not isinstance(out, dict):
+        return out
+    guard = _v131_latest_severe_quality_guard(previous_blocks, performance_evidence, ledger)
+    out["severe_session_guard"] = guard
+    if guard.get("active") and str(out.get("dimension") or "").upper() == "RECOVERY_UNDER_LOAD":
+        dc = _v131_reentry_contract(guard)
+        if dc:
+            out["dose_contract"] = dc
+            out["candidate_architectures"] = ["shorter high-aerobic re-entry with easy recovery before any recovery-load progression"]
+            out["open_question"] = (
+                "Recovery Under Load remains the next adaptation question, but the latest repeated session was ceiling-like. "
+                "First use a lower-dose intensity bridge; do not make that severe session harder at the next quality exposure."
+            )
+            for row in out.get("ranked_questions") or []:
+                if isinstance(row, dict) and str(row.get("dimension") or "").upper() == "RECOVERY_UNDER_LOAD":
+                    row["reason"] = out["open_question"]
+                    row["architectures"] = list(out["candidate_architectures"])
+                    break
+    out["schema"] = R131_SCHEMA
+    return out
+
+
+_v504_scientific_dose_violations_r130 = _v504_scientific_dose_violations
+def _v504_scientific_dose_violations(proposed, main_set, road):
+    sci=(road or {}).get("scientific_progression") or {}; dc=sci.get("dose_contract") or {}
+    if str(dc.get("stage") or "").upper() != "POST_SEVERE_INTENSITY_REENTRY":
+        return _v504_scientific_dose_violations_r130(proposed, main_set, road)
+    p=dc.get("prescription") or {}; v=[]
+    pi=_rhythm_num((proposed or {}).get("interval_minutes")); pr=_rhythm_num((proposed or {}).get("reps")); pp=_rhythm_num((proposed or {}).get("power_high")); rph=_rhythm_num((proposed or {}).get("recovery_power_high"))
+    target_m=(_rhythm_num(p.get("interval_secs")) or 0)/60.0; target_r=_rhythm_num(p.get("reps"))
+    if pi is None or abs(pi-target_m)>max(0.17,0.05*max(target_m,1)): v.append("POST_SEVERE_WORK_DURATION_NOT_DOWNSHIFTED")
+    if pr is None or target_r is not None and abs(pr-target_r)>=1: v.append("POST_SEVERE_REP_COUNT_CHANGED")
+    if rph is not None and rph>0: v.append("POST_SEVERE_RECOVERY_LOAD_MUST_REMAIN_EASY_UNQUANTIFIED")
+    if re.search(r"\b(?:recovery|recoveries|between\s+reps?|float)[^.]{0,120}?\b\d{2,3}\s*W\b",str(main_set or ""),re.I): v.append("POST_SEVERE_RECOVERY_LOAD_MUST_REMAIN_EASY_UNQUANTIFIED")
+    if re.search(r"\b(?:tempo|sweet\s*spot|threshold|z3|z4)\b",str(main_set or ""),re.I): v.append("POST_SEVERE_RECOVERY_LOAD_TOO_HIGH")
+    if pp is not None and _rhythm_num(p.get("work_watts_high")) is not None and pp>float(p.get("work_watts_high"))+5: v.append("POST_SEVERE_WORK_POWER_EXCEEDS_REENTRY_CAP")
+    return list(dict.fromkeys(v))
+
+
+_v503_scientific_hard_repair_r130 = _v503_scientific_hard_repair
+def _v503_scientific_hard_repair(ledger, road, power_model, ftp_anchor=None):
+    sci=(road or {}).get("scientific_progression") or {}; dc=sci.get("dose_contract") or {}
+    if str(dc.get("stage") or "").upper() != "POST_SEVERE_INTENSITY_REENTRY":
+        return _v503_scientific_hard_repair_r130(ledger, road, power_model, ftp_anchor=ftp_anchor)
+    q=str(((road or {}).get("quality_window") or {}).get("state") or "").upper()
+    if q not in {"OPEN","WATCH"}: return None
+    p=dc.get("prescription") or {}; reps=int(p.get("reps") or 0); secs=int(p.get("interval_secs") or 0); rec_secs=int(p.get("recovery_secs") or 0)
+    if reps<2 or secs<=0 or rec_secs<=0: return None
+    ref=_v4836_observed_power_reference(power_model or {}, secs/60.0)
+    if ref is None: return None
+    lo=int(round((float(ref)*float(p.get("work_reference_ratio_low") or 0.90))/5.0)*5)
+    hi=int(round((float(ref)*float(p.get("work_reference_ratio_high") or 0.93))/5.0)*5)
+    hi=max(hi,lo+5)
+    p["work_watts_low"]=lo; p["work_watts_high"]=hi; dc["prescription"]=p; sci["dose_contract"]=dc
+    work_label=f"{secs/60:g} min" if secs%60==0 else f"{secs:g} s"; rec_label=f"{rec_secs/60:g} min" if rec_secs%60==0 else f"{rec_secs/60:.1f} min"
+    title=f"Post-ceiling re-entry {reps}×{work_label}"
+    main=(f"{reps}×{work_label} free at {lo}–{hi} W; {rec_label} easy Z1 between reps, self-selected watts. "
+          "Keep the work controlled and repeatable. This is deliberately lower-dose than the last ceiling-like session: do not extend the reps, do not chase a PB, and do not load the recoveries yet.")
+    why=("The last repeated quality session was both near a directly observed same-duration PB and severely demanding. "
+         "Keep intensity in the plan, but step down bout duration and total hard work before returning to Recovery Under Load progression.")
+    ic="vo2"; sig=_v4886_primary_stimulus_signature(title=title,main_set=main,intensity_class=ic)
+    violations=_v504_scientific_dose_violations(sig,main,road)
+    if violations:return None
+    arch={"state":"POST_SEVERE_INTENSITY_REENTRY","allowed":True,"domain":sig.get("domain"),"domain_label":sig.get("domain_label"),"role":"TRAIN","dimensions":["WORK_DOSE_REDUCTION","RECOVERY_LOAD_DEFERRED"],"architecture_pattern":sig.get("architecture_pattern"),"intensity_class":ic,"dose_contract_stage":dc.get("stage")}
+    return title,"Hard · controlled re-entry",main,why,arch
+
+
+_build_nova_prescription_r130 = build_nova_prescription
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    out=_build_nova_prescription_r130(nova_decision,coach_clock,adaptive_roadmap=adaptive_roadmap,microcycle_ledger=microcycle_ledger,evidence_ledger=evidence_ledger,power_model=power_model,ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,training_definitions=training_definitions)
+    sci=(adaptive_roadmap or {}).get("scientific_progression") or {}; dc=sci.get("dose_contract") or {}
+    if isinstance(out,dict) and str(dc.get("stage") or "").upper()=="POST_SEVERE_INTENSITY_REENTRY" and out.get("status")=="PRESCRIBED":
+        out["source"]="SEVERE_SESSION_REENTRY_CONTRACT"
+        out["contract_id"]="POST_SEVERE_INTENSITY_REENTRY_V1"
+        out["workout_id"]="POST_SEVERE_INTENSITY_REENTRY_V1"
+        for row in out.get("raw_sessions") or []:
+            if isinstance(row,dict) and str(row.get("title") or "").startswith("Post-ceiling re-entry"):
+                row["_tl_nova_contract_id"]="POST_SEVERE_INTENSITY_REENTRY_V1"
+                row["_tl_nova_workout_id"]="POST_SEVERE_INTENSITY_REENTRY_V1"
     return out
 
 
