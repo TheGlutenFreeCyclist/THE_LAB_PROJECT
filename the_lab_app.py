@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.07 WIP R131 · SEVERE SESSION PROGRESSION GATE · R130 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.08 WIP R132 · FUTURE NOTE INTENT + DELTA-AWARE COACH CALL · R131 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -5955,8 +5955,13 @@ def _v106_recommendation_projection(sessions):
     dur=str(first.get("duration") or "").strip()
     main=str(first.get("main_set") or "").strip()
     why=str(first.get("why") or "").strip()
-    lead=f"Your next session is {title}"+(f" ({dur})" if dur else "")+"."
-    parts=[lead]
+    slot=str(first.get("slot") or "").strip()
+    intent_notice=str(first.get("athlete_intent_notice") or "").strip()
+    lead=(f"{slot}: {title}" if slot else f"Your next session is {title}")+(f" ({dur})" if dur else "")+"."
+    parts=[]
+    if intent_notice:
+        parts.extend(_v4844_sentence_list(intent_notice)[:2])
+    parts.append(lead)
     if main:
         parts.extend(_v4844_sentence_list(main)[:2])
     if why:
@@ -5967,6 +5972,9 @@ def _v106_recommendation_projection(sessions):
         hslot=str(hard.get("slot") or "").strip()
         htitle=str(hard.get("title") or "hard session").strip()
         label=(hslot+": "+htitle) if hslot else htitle
+        hnotice=str(hard.get("athlete_intent_notice") or "").strip()
+        if hnotice and hnotice != intent_notice:
+            parts.extend(_v4844_sentence_list(hnotice)[:1])
         parts.append(f"The next hard session candidate is {label}; reassess recovery and confirm this predicted time if your availability differs. Do not add an extra hard session.")
     elif contract.get("all_easy"):
         parts.append("All currently listed sessions are easy/recovery; no hard session is prescribed in this Snapshot.")
@@ -10130,6 +10138,7 @@ def build_planning_context(now=None):
     now = now or get_rome_now()
     today = now.date()
     daily_availability = _v129_daily_note_availability(now=now)
+    future_note_intent = _v132_future_note_intent(now=now)
     items = load_planning_items(active_only=True, limit=100)
     relevant = [i for i in items if str(i.get("end_date")) >= today.isoformat()]
     health_now = [i for i in relevant if i.get("kind") in ("SICK", "INJURED") and _date_in_item(i, today)]
@@ -10203,6 +10212,13 @@ def build_planning_context(now=None):
         if available_parts:
             msg += f"; {available_parts} explicitly available"
         summary_parts.append(msg)
+    if future_note_intent.get("active"):
+        pref = ", ".join(str(x).lower() for x in (future_note_intent.get("preferred_dayparts") or [])) or "unspecified time"
+        msg = f"Daily Note future intent: {future_note_intent.get('date')} quality preferred {pref}" if future_note_intent.get("quality_preferred") else f"Daily Note future availability: {future_note_intent.get('date')} preferred {pref}"
+        uncertain = ", ".join(str(x).lower() for x in (future_note_intent.get("uncertain_dayparts") or []))
+        if uncertain:
+            msg += f"; {uncertain} availability uncertain"
+        summary_parts.append(msg)
     return {
         "health_override": health_override,
         "blackout_dates": sorted(blackout_dates),
@@ -10214,6 +10230,7 @@ def build_planning_context(now=None):
         "active_today": active_today,
         "upcoming_items": relevant[:20],
         "daily_availability": daily_availability,
+        "future_note_intent": future_note_intent,
         "summary": " · ".join(summary_parts) if summary_parts else "Training as planned",
     }
 def planning_context_text(context):
@@ -10236,6 +10253,9 @@ def planning_context_text(context):
     daily_availability = context.get("daily_availability") or {}
     if daily_availability.get("active"):
         lines.append("- TODAY DAILY-NOTE AVAILABILITY: unavailable during " + ", ".join(daily_availability.get("blocked_dayparts") or []) + ". This explicit same-day availability constraint outranks learned rhythm for those time windows.")
+    future_intent = context.get("future_note_intent") or {}
+    if future_intent.get("active"):
+        lines.append("- FUTURE DAILY-NOTE INTENT: " + str(future_intent.get("date") or "future") + "; preferred dayparts " + ", ".join(future_intent.get("preferred_dayparts") or ["UNSPECIFIED"]) + "; uncertain dayparts " + ", ".join(future_intent.get("uncertain_dayparts") or ["NONE"]) + "; quality preferred=" + str(bool(future_intent.get("quality_preferred"))) + ". Explicit future intent outranks learned daypart preference, but never bypasses recovery/health/race gates.")
     race = context.get("next_race")
     if race:
         conflict = f' | CONFLICT: {race.get("conflict")}' if race.get("conflict") else ''
@@ -14570,6 +14590,7 @@ def compose_nova_snapshot(metrics=None, season_stats=None, training_state=None, 
     """
     metrics=metrics or {};season_stats=season_stats or {};training_state=training_state or {};training_direction=training_direction or {};question_state=question_state or {};nova_decision=nova_decision or {};nova_prescription=nova_prescription or {};road=adaptive_roadmap or {};planning_context=planning_context or {};race_repeatability=race_repeatability or {};vo2_trend=vo2_trend or {};metabolic_context=metabolic_context or {};performance_evidence=performance_evidence or {}
     sessions=[dict(x) for x in (nova_prescription.get("sessions") or nova_prescription.get("raw_sessions") or []) if isinstance(x,dict)]
+    sessions=_v132_apply_future_intent_to_sessions(sessions, planning_context, road)
     truth=_v4897_truth_packet(snapshot={"next_sessions":sessions},adaptive_roadmap=road,microcycle_ledger=microcycle_ledger,sessions=sessions,power_achievements=power_achievements)
     canonical_reco,canonical_outlook=_v4897_canonical_training_copy(truth)
 
@@ -15903,6 +15924,14 @@ def _v117_quality_candidates(training_rhythm, coach_clock, planning_context, now
     no_intensity = set(ctx.get('no_intensity_dates') or [])
     race = ctx.get('race_by_date') or {}
     plans = ctx.get('training_by_date') or {}
+    future_intent = ctx.get('future_note_intent') or {}
+    intent_date = str(future_intent.get('date') or '') if future_intent.get('active') else ''
+    preferred_parts = set(future_intent.get('preferred_dayparts') or [])
+    uncertain_parts = set(future_intent.get('uncertain_dayparts') or [])
+    quality_preferred = bool(future_intent.get('quality_preferred'))
+    def _intent_part(dt):
+        minute=dt.hour*60+dt.minute
+        return 'MORNING' if minute < 720 else ('AFTERNOON' if minute < 1080 else 'EVENING')
     learned = _v4873_rhythm_candidate_slots(training_rhythm, now=now, horizon_days=8)
     clock_rows = (coach_clock or {}).get('next_slots')
     result = []
@@ -15931,7 +15960,11 @@ def _v117_quality_candidates(training_rhythm, coach_clock, planning_context, now
             except (ValueError,TypeError):
                 continue
             if dt>now.replace(tzinfo=None):
-                result.append({'dt':dt,'explicit':demand in {'HARD','QUALITY'},'authority':'EXPLICIT' if source=='CALENDAR' else 'RHYTHM_PREDICTED','clock_index':i})
+                part=_intent_part(dt)
+                if ds==intent_date and part in uncertain_parts:
+                    continue
+                note_pref=bool(ds==intent_date and quality_preferred and (not preferred_parts or part in preferred_parts))
+                result.append({'dt':dt,'explicit':bool(demand in {'HARD','QUALITY'} or note_pref),'authority':('DAILY_NOTE_FUTURE_PREFERENCE' if note_pref else ('EXPLICIT' if source=='CALENDAR' else 'RHYTHM_PREDICTED')),'clock_index':i})
         # Roadmap should see beyond the THREE displayed Next Sessions.
         # Otherwise a genuine 48h alternating hard habit disappears immediately
         # after each hard workout because tomorrow's TWO easy opportunities can
@@ -15942,13 +15975,21 @@ def _v117_quality_candidates(training_rhythm, coach_clock, planning_context, now
             dt=row['dt'];ds=dt.date().isoformat(); plan=plans.get(ds) or {}
             if dt <= latest_visible or ds in blackout or ds in no_intensity or ds in race or _training_profile_demand_class(plan.get('training_demand'))=='EASY':
                 continue
-            result.append({'dt':dt,'explicit':_training_profile_demand_class(plan.get('training_demand')) in {'HARD','QUALITY'},'authority':'FUTURE_RHYTHM_PREDICTED','clock_index':None})
+            part=_intent_part(dt)
+            if ds==intent_date and part in uncertain_parts:
+                continue
+            note_pref=bool(ds==intent_date and quality_preferred and (not preferred_parts or part in preferred_parts))
+            result.append({'dt':dt,'explicit':bool(_training_profile_demand_class(plan.get('training_demand')) in {'HARD','QUALITY'} or note_pref),'authority':('DAILY_NOTE_FUTURE_PREFERENCE' if note_pref else 'FUTURE_RHYTHM_PREDICTED'),'clock_index':None})
     else:
         for row in learned:
             dt=row['dt'];ds=dt.date().isoformat(); plan=plans.get(ds) or {}
             if ds in blackout or ds in no_intensity or ds in race or _training_profile_demand_class(plan.get('training_demand'))=='EASY':
                 continue
-            result.append({'dt':dt,'explicit':_training_profile_demand_class(plan.get('training_demand')) in {'HARD','QUALITY'},'authority':'RHYTHM_PREDICTED','clock_index':None})
+            part=_intent_part(dt)
+            if ds==intent_date and part in uncertain_parts:
+                continue
+            note_pref=bool(ds==intent_date and quality_preferred and (not preferred_parts or part in preferred_parts))
+            result.append({'dt':dt,'explicit':bool(_training_profile_demand_class(plan.get('training_demand')) in {'HARD','QUALITY'} or note_pref),'authority':('DAILY_NOTE_FUTURE_PREFERENCE' if note_pref else 'RHYTHM_PREDICTED'),'clock_index':None})
     return sorted(result,key=lambda row:row['dt'])
 
 def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_delay, second_hard=False):
@@ -30349,6 +30390,108 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
                 row["_tl_nova_contract_id"]="POST_SEVERE_INTENSITY_REENTRY_V1"
                 row["_tl_nova_workout_id"]="POST_SEVERE_INTENSITY_REENTRY_V1"
     return out
+
+
+# R132 · FUTURE DAILY-NOTE INTENT + DELTA-AWARE COACH CALL
+R132_SCHEMA = "V4.9.08-R132-1"
+
+def _v132_future_note_intent(now=None, logs=None):
+    """Extract bounded prospective scheduling intent from the latest Daily Note.
+
+    Unlike R130 same-day availability, this parser is explicitly allowed to read
+    tomorrow/future intent. It may prioritize a daypart or mark another daypart
+    uncertain, but it never overrides health/race/recovery spacing gates.
+    """
+    now = now or get_rome_now()
+    empty={
+        "schema":R132_SCHEMA,"active":False,"date":None,"preferred_dayparts":[],
+        "uncertain_dayparts":[],"quality_preferred":False,"source":None,
+        "note_excerpt":None,"parse_policy":"R132_PROSPECTIVE_NOTE_INTENT",
+    }
+    try:
+        rows=list(logs if logs is not None else load_daily_logs(40))
+    except Exception:
+        rows=[]
+    if not rows:
+        return empty
+    rows.sort(key=lambda r:(str(r.get("logged_at_utc") or ""),str(r.get("local_date") or ""),str(r.get("local_time") or "")),reverse=True)
+    row=rows[0]; note=str(row.get("note") or "").strip()
+    if not note:
+        return empty
+    low=re.sub(r"\s+"," ",note.lower().replace("’","'")).strip()
+    target_date=None
+    if re.search(r"\b(?:tomorrow|domani)\b",low,re.I):
+        target_date=(now.date()+timedelta(days=1)).isoformat()
+    elif re.search(r"\b(?:day after tomorrow|dopodomani)\b",low,re.I):
+        target_date=(now.date()+timedelta(days=2)).isoformat()
+    if not target_date:
+        return empty
+    preferred=[]; uncertain=[]
+    if re.search(r"\b(?:morning|a\.?m\.?|mattina)\b",low,re.I):
+        preferred.append("MORNING")
+    if re.search(r"\b(?:evening|tonight|sera)\b",low,re.I):
+        preferred.append("EVENING")
+    if re.search(r"\b(?:afternoon|pomeriggio)\b",low,re.I):
+        preferred.append("AFTERNOON")
+    # Uncertainty/likely-unavailability scopes to the nearby named daypart.
+    uncertainty_patterns={
+        "MORNING":r"(?:don't know|do not know|not sure|unsure|might not|may not|can't|cannot|won't be able|not available|unavailable|non so|forse non|non posso|non disponibile)[^.!?]{0,90}(?:morning|mattina)",
+        "AFTERNOON":r"(?:don't know|do not know|not sure|unsure|might not|may not|can't|cannot|won't be able|not available|unavailable|non so|forse non|non posso|non disponibile)[^.!?]{0,90}(?:afternoon|pomeriggio)",
+        "EVENING":r"(?:don't know|do not know|not sure|unsure|might not|may not|can't|cannot|won't be able|not available|unavailable|non so|forse non|non posso|non disponibile)[^.!?]{0,90}(?:evening|sera)",
+    }
+    for part,pat in uncertainty_patterns.items():
+        if re.search(pat,low,re.I):
+            uncertain.append(part)
+    preferred=[x for x in dict.fromkeys(preferred) if x not in set(uncertain)]
+    quality=bool(re.search(r"\b(?:quality(?: work| session| training)?|hard(?: work| session| training)?|intensity|vo2|threshold|qualit[aà]|lavoro di qualit[aà])\b",low,re.I))
+    # A weak preference like "presumably/probably in the morning" is still
+    # useful scheduling intent; it is not treated as confirmed availability.
+    preference_language=bool(re.search(r"\b(?:presumably|probably|prefer|preferably|likely|ideal(?:ly)?|presumibilmente|probabilmente|preferirei|meglio)\b",low,re.I))
+    active=bool(target_date and (quality or preferred or uncertain) and (preference_language or uncertain or quality))
+    return {
+        "schema":R132_SCHEMA,"active":active,"date":target_date,
+        "preferred_dayparts":preferred,"uncertain_dayparts":list(dict.fromkeys(uncertain)),
+        "quality_preferred":quality,"source":"DAILY_NOTE_EXPLICIT_FUTURE_INTENT" if active else None,
+        "note_excerpt":note[:360] if active else None,"parse_policy":"R132_PROSPECTIVE_NOTE_INTENT",
+    }
+
+def _v132_apply_future_intent_to_sessions(sessions, planning_context, road=None):
+    rows=[dict(x) for x in (sessions or []) if isinstance(x,dict)]
+    intent=(planning_context or {}).get("future_note_intent") or {}
+    if not intent.get("active"):
+        return rows
+    ds=str(intent.get("date") or ""); preferred=set(intent.get("preferred_dayparts") or []); uncertain=set(intent.get("uncertain_dayparts") or [])
+    quality_pref=bool(intent.get("quality_preferred"))
+    def part(row):
+        try:
+            minute=int(round(float(row.get("start_minute"))))
+        except Exception:
+            return None
+        return "MORNING" if minute < 720 else ("AFTERNOON" if minute < 1080 else "EVENING")
+    hard=[r for r in rows if _v106_session_is_hard(r)]
+    hard_on_target=[r for r in hard if str(r.get("date") or "")==ds]
+    preferred_hard=[r for r in hard_on_target if (not preferred or part(r) in preferred)]
+    note_bits=[]
+    if quality_pref:
+        if preferred:
+            human="/".join(x.lower() for x in sorted(preferred))
+            note_bits.append(f"Your latest note says you would prefer tomorrow's quality work in the {human}.")
+        else:
+            note_bits.append("Your latest note says you are ready for quality work tomorrow.")
+    if uncertain:
+        human="/".join(x.lower() for x in sorted(uncertain))
+        note_bits.append(f"You also said {human} availability is uncertain, so Nova should not treat that window as confirmed.")
+    if quality_pref and preferred and hard_on_target and not preferred_hard:
+        note_bits.append("The currently selected hard window does not match that preference; treat it as provisional rather than as an athlete-confirmed time.")
+    notice=" ".join(note_bits).strip()
+    if notice:
+        # Put the athlete-intent context on the first visible session so the coach
+        # call cannot silently lose it, and on the hard row for auditability.
+        if rows:
+            rows[0]["athlete_intent_notice"]=notice
+        for r in hard_on_target:
+            r["athlete_intent_notice"]=notice
+    return rows
 
 
 if __name__ == "__main__":
