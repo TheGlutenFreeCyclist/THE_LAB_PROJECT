@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.04 WIP R128 · RECORD-LEVEL LAP POWER · R127 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.05 WIP R129 · LIVE AVAILABILITY CLOCK · R128 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -6738,8 +6738,8 @@ def _v503_scientific_hard_repair(ledger,road,power_model,ftp_anchor=None):
     if None in (work_lo,work_hi,bridge_lo,bridge_hi):return None
     work_label=f"{secs/60:g} min" if secs>=60 and secs%60==0 else f"{secs:g} s";rec_label=f"{rec_secs/60:g} min" if rec_secs%60==0 else f"{rec_secs/60:.1f} min"
     title=f"Loaded-repeatability {reps}×{work_label}"
-    main=f"{reps}×{work_label} free at {work_lo}–{work_hi} W. Recovery between reps: {rec_label} continuously at {bridge_lo}–{bridge_hi} W. This progression changes recovery load only: keep the recovery duration unchanged; do not add reps or chase higher work power. If work power starts to fade materially, reduce the recovery load first."
-    why=f"The last comparable repeated session was stable with recovery around {r.get('recovery_avg_watts')} W. The next question is whether you can preserve that work while making recovery only modestly more active; this is an introductory recovery-load step, not a jump to Z3/threshold between reps." if str(dc.get("stage") or "").upper()=="INTRODUCTORY_ACTIVE_RECOVERY" else "A prior active-recovery step was successful. Increase recovery load one step while keeping work structure unchanged so the adaptation question remains interpretable."
+    main=f"{reps}×{work_label} free at {work_lo}–{work_hi} W. Recovery between reps: {rec_label} continuously at {bridge_lo}–{bridge_hi} W. This is not a reassessment or PB attempt: keep work inside the prescribed band and progress recovery load only. Keep the recovery duration unchanged; do not add reps or chase higher work power. If work power starts to fade materially, reduce the recovery load first."
+    why=f"The last comparable repeated session was stable with recovery around {r.get('recovery_avg_watts')} W. The next question is whether you can preserve that work while making recovery only modestly more active; this is a training progression, not another maximal reassessment, and not a jump to Z3/threshold between reps." if str(dc.get("stage") or "").upper()=="INTRODUCTORY_ACTIVE_RECOVERY" else "A prior active-recovery step was successful. Increase recovery load one step while keeping work structure unchanged. This is a training progression, not a PB attempt or reassessment."
     ic="vo2";sig=_v4886_primary_stimulus_signature(title=title,main_set=main,intensity_class=ic); rel=_v4883_material_progression(sig,(_v4883_completed_stimulus_rows(ledger or {}) or [None])[-1])
     violations=_v504_scientific_dose_violations(sig,main,road)
     if violations:return None
@@ -10013,9 +10013,60 @@ def get_latest_feeling():
 def _date_in_item(item, d):
     ds = d.isoformat() if isinstance(d, date) else str(d)
     return str(item.get("start_date")) <= ds <= str(item.get("end_date"))
+def _v129_daily_note_availability(now=None, logs=None):
+    """Extract only explicit *today* availability constraints from the latest Daily Note.
+
+    This is intentionally conservative and deterministic. It does not infer schedule
+    preferences from sentiment or general fatigue. It only reacts when the athlete
+    explicitly says they cannot train / are unavailable and names a same-day
+    daypart (morning/afternoon/evening) or explicitly says today/all day.
+    """
+    now = now or get_rome_now()
+    today_iso = now.date().isoformat()
+    try:
+        rows = list(logs if logs is not None else load_daily_logs(40))
+    except Exception:
+        rows = []
+    today_rows = [r for r in rows if str(r.get("local_date") or "") == today_iso]
+    if not today_rows:
+        return {"active": False, "date": today_iso, "blocked_dayparts": [], "source": None, "note_excerpt": None}
+    today_rows.sort(key=lambda r: (str(r.get("logged_at_utc") or ""), str(r.get("local_time") or "")), reverse=True)
+    note = str(today_rows[0].get("note") or "").strip()
+    if not note:
+        return {"active": False, "date": today_iso, "blocked_dayparts": [], "source": None, "note_excerpt": None}
+    low = re.sub(r"\s+", " ", note.lower().replace("’", "'")).strip()
+    unavailable = bool(re.search(
+        r"(?:\bcan't\s+(?:train|ride)\b|\bcannot\s+(?:train|ride)\b|\bunable\s+to\s+(?:train|ride)\b|"
+        r"\bnot\s+available\b|\bunavailable\b|\bno\s+training\b|"
+        r"\bnon\s+posso\s+allenarmi\b|\bnon\s+mi\s+posso\s+allenare\b|\bnon\s+riesco\s+ad\s+allenarmi\b|"
+        r"\bnon\s+sono\s+disponibile\b|\bniente\s+allenamento\b|\bnon\s+posso\s+pedalare\b)",
+        low, flags=re.I,
+    ))
+    if not unavailable:
+        return {"active": False, "date": today_iso, "blocked_dayparts": [], "source": None, "note_excerpt": None}
+    blocked = []
+    if re.search(r"\b(?:stamattina|questa\s+mattina|mattina|this\s+morning|morning|a\.?m\.?)\b", low, re.I):
+        blocked.append("MORNING")
+    if re.search(r"\b(?:questo\s+pomeriggio|pomeriggio|this\s+afternoon|afternoon)\b", low, re.I):
+        blocked.append("AFTERNOON")
+    if re.search(r"\b(?:stasera|questa\s+sera|sera|this\s+evening|evening|tonight|p\.?m\.?)\b", low, re.I):
+        blocked.append("EVENING")
+    if not blocked and re.search(r"\b(?:oggi|today|all\s+day|tutto\s+il\s+giorno|intera\s+giornata)\b", low, re.I):
+        blocked.append("ALL_DAY")
+    if not blocked:
+        return {"active": False, "date": today_iso, "blocked_dayparts": [], "source": None, "note_excerpt": None}
+    return {
+        "active": True,
+        "date": today_iso,
+        "blocked_dayparts": list(dict.fromkeys(blocked)),
+        "source": "DAILY_NOTE_EXPLICIT_AVAILABILITY",
+        "note_excerpt": note[:280],
+    }
+
 def build_planning_context(now=None):
     now = now or get_rome_now()
     today = now.date()
+    daily_availability = _v129_daily_note_availability(now=now)
     items = load_planning_items(active_only=True, limit=100)
     relevant = [i for i in items if str(i.get("end_date")) >= today.isoformat()]
     health_now = [i for i in relevant if i.get("kind") in ("SICK", "INJURED") and _date_in_item(i, today)]
@@ -10082,6 +10133,9 @@ def build_planning_context(now=None):
         demand = _training_profile_label(next_training.get("training_demand"))
         when = f" in {td} day(s)" if td is not None else ""
         summary_parts.append(f'Planned {env.lower()} training{when}: {next_training.get("title") or "Training"} [{demand}]')
+    if daily_availability.get("active"):
+        parts = ", ".join(str(x).lower().replace("_", " ") for x in (daily_availability.get("blocked_dayparts") or []))
+        summary_parts.append(f"Daily Note availability: {parts} unavailable today")
     return {
         "health_override": health_override,
         "blackout_dates": sorted(blackout_dates),
@@ -10092,6 +10146,7 @@ def build_planning_context(now=None):
         "next_training": next_training,
         "active_today": active_today,
         "upcoming_items": relevant[:20],
+        "daily_availability": daily_availability,
         "summary": " · ".join(summary_parts) if summary_parts else "Training as planned",
     }
 def planning_context_text(context):
@@ -10111,6 +10166,9 @@ def planning_context_text(context):
         lines.append("- NO TRAINING dates: " + ", ".join(context["blackout_dates"]))
     if context.get("no_intensity_dates"):
         lines.append("- NO INTENSITY dates: " + ", ".join(context["no_intensity_dates"]))
+    daily_availability = context.get("daily_availability") or {}
+    if daily_availability.get("active"):
+        lines.append("- TODAY DAILY-NOTE AVAILABILITY: unavailable during " + ", ".join(daily_availability.get("blocked_dayparts") or []) + ". This explicit same-day availability constraint outranks learned rhythm for those time windows.")
     race = context.get("next_race")
     if race:
         conflict = f' | CONFLICT: {race.get("conflict")}' if race.get("conflict") else ''
@@ -19045,7 +19103,9 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
     race_by_date = planning_context.get("race_by_date") or {}
     training_by_date = planning_context.get("training_by_date") or {}
     health = planning_context.get("health_override")
-    blocked_today = today_iso in blackout
+    daily_availability = planning_context.get("daily_availability") or {}
+    daily_blocked_parts = set(daily_availability.get("blocked_dayparts") or []) if daily_availability.get("active") and str(daily_availability.get("date") or "") == today_iso else set()
+    blocked_today = today_iso in blackout or "ALL_DAY" in daily_blocked_parts
     no_intensity_today = today_iso in easy_only
     clock_profile = rhythm.get("clock_profile") or {}
     weekday_scores = rhythm.get("weekday_scores") or {}
@@ -19066,6 +19126,27 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
         if value is None:
             value = rhythm.get("median_session_duration_min") or clock_profile.get("overall_duration_min")
         return round(value, 1) if value is not None else None
+    def slot_daypart(start_minute):
+        if start_minute is None:
+            return None
+        if start_minute < 12 * 60:
+            return "MORNING"
+        if start_minute < 17 * 60:
+            return "AFTERNOON"
+        return "EVENING"
+    def daily_note_blocks(slot_date, start_minute):
+        if not slot_date or slot_date != today or not daily_blocked_parts:
+            return False
+        if "ALL_DAY" in daily_blocked_parts:
+            return True
+        return slot_daypart(start_minute) in daily_blocked_parts
+    def same_day_start_is_future(start_minute):
+        if start_minute is None:
+            return True
+        now_minute = now.hour * 60 + now.minute
+        # A learned clock time is a candidate start, never an appointment in the past.
+        # Five minutes of tolerance avoids flicker around Snapshot generation.
+        return start_minute >= now_minute - 5
     def day_word(slot_date):
         if slot_date == today:
             return "Today"
@@ -19112,6 +19193,11 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
             label = f'{day_word(slot_date)} · likely second session' + (f' · around {when}' if when else '')
             window = "history-learned same-day opportunity"
             source = "RHYTHM"
+        elif period == "RHYTHM_ALTERNATE":
+            when = _rhythm_format_minutes(start_minute)
+            label = f'{day_word(slot_date)} · later learned window' + (f' · around {when}' if when else '')
+            window = "history-learned later same-day opportunity"
+            source = "RHYTHM"
         elif period == "RHYTHM_SECOND":
             when = _rhythm_format_minutes(start_minute)
             label = f'{day_word(slot_date)} · likely second session' + (f' · around {when}' if when else '')
@@ -19157,20 +19243,34 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
         and float(weekday_double.get(today.weekday()) or 0) >= 0.45
     ):
         second_start = predicted_start(today, second=True)
-        now_minute = now.hour * 60 + now.minute
-        if second_start is None or now_minute <= second_start + 90:
+        if (second_start is None or same_day_start_is_future(second_start)) and not daily_note_blocks(today, second_start):
             candidates.append(base_slot(today, "SAME_DAY_SECOND", source="RHYTHM", second=True))
             seen_dates.add(today_iso)
             same_day_second = True
     if not today_rows and not blocked_today and not today_explicit and rhythm.get("state") != "LEARNING":
         score = float(weekday_scores.get(today.weekday()) or 0)
         start_min = predicted_start(today)
-        now_min = now.hour * 60 + now.minute
         day_supported = today.weekday() in likely_weekdays if pattern_strength != "LOW" else score >= 0.45
-        timing_open = start_min is None or now_min <= start_min + 120
-        if day_supported and timing_open and today_iso not in seen_dates:
+        first_available = same_day_start_is_future(start_min) and not daily_note_blocks(today, start_min)
+        if day_supported and first_available and today_iso not in seen_dates:
             candidates.append(base_slot(today, "RHYTHM"))
             seen_dates.add(today_iso)
+        elif day_supported and today_iso not in seen_dates:
+            # If the usual first window is already past or explicitly unavailable, a
+            # well-established later double-day clock may still be the next plausible
+            # *single* opportunity today. Do not call it a second session when the
+            # first one never happened.
+            second_start = predicted_start(today, second=True)
+            second_supported = (
+                float(rhythm.get("double_propensity") or 0) >= 0.45
+                and float(weekday_double.get(today.weekday()) or 0) >= 0.45
+                and second_start is not None
+                and same_day_start_is_future(second_start)
+                and not daily_note_blocks(today, second_start)
+            )
+            if second_supported:
+                candidates.append(base_slot(today, "RHYTHM_ALTERNATE", source="RHYTHM", second=True))
+                seen_dates.add(today_iso)
     frequency_targets = set()
     if rhythm.get("state") != "LEARNING" and pattern_strength == "LOW":
         gap = rhythm.get("median_training_gap_days")
@@ -19243,6 +19343,10 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
         phase = "RESTRICTED"
         headline = "No-intensity restriction active"
         explanation = "Training may be possible, but Python limits any valid opportunity to easy aerobic/recovery work."
+    elif daily_availability.get("active") and next_slots and next_slots[0].get("date") == today_iso:
+        phase = "RHYTHM · AVAILABILITY"
+        headline = "The next usable window respects today's availability"
+        explanation = "Your explicit Daily Note availability removes the blocked daypart before learned rhythm proposes the next usable opportunity."
     elif same_day_second:
         phase = "RHYTHM · SAME-DAY"
         headline = "Another session is plausible today"
@@ -19296,6 +19400,8 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
         "next_slots": next_slots, "next_slot_label": next_slots[0]["label"] if next_slots else "No valid training opportunity",
         "day_progress": day_progress, "marker_x": round(90 + 68 * math.cos(clock_angle), 1), "marker_y": round(90 + 68 * math.sin(clock_angle), 1),
         "planning_summary": planning_context.get("summary", "Training as planned"),
+        "daily_availability": daily_availability,
+        "past_rhythm_slots_pruned": True,
     }
 def coach_clock_text(clock):
     slot_lines = []
