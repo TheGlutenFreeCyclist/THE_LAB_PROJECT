@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.09 WIP R133 · UNIFIED ATHLETE NOTE INTERPRETER · R132 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.10 WIP R134 · NOTE-AWARE HARD HORIZON FALLBACK · R133 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -31027,6 +31027,118 @@ def _v106_recommendation_projection(sessions):
     elif len(rows)>1:
         parts.append("Follow the remaining listed sessions exactly as shown; this recommendation does not create any additional workout or intensity.")
     return " ".join(_v4844_dedupe_sentences(parts))[:1700].strip()
+
+
+# R134 · NOTE-AWARE HARD HORIZON FALLBACK
+R134_SCHEMA = "V4.9.10-R134-1"
+_v84_quality_slot_match_r133 = _v84_quality_slot_match
+_v132_apply_future_intent_to_sessions_r133 = _v132_apply_future_intent_to_sessions
+
+
+def _v84_quality_slot_match(clock, adaptive_roadmap=None):
+    """R134: never erase an otherwise authorized hard workout just because the
+    R117 preferred target sits immediately outside the three displayed Clock slots.
+
+    Preferred timing remains the roadmap prior. When that preferred target is not
+    displayed, but the R117 EARLIEST target exactly matches an eligible visible
+    Clock opportunity, compile the workout into that visible slot and mark the
+    match explicitly as a horizon fallback. This does not move a hard session
+    before the recovery lower bound: EARLIEST is itself produced after that gate.
+    """
+    match = _v84_quality_slot_match_r133(clock, adaptive_roadmap)
+    q = (adaptive_roadmap or {}).get("quality_window") or {}
+    if not (
+        isinstance(match, dict)
+        and match.get("match_mode") == "TARGET_NOT_IN_CLOCK_HORIZON"
+        and q.get("spacing_policy") == "R117_HARD_CADENCE_PLUS_RECOVERY_HEURISTIC"
+        and q.get("earliest_iso")
+    ):
+        return match
+
+    try:
+        target = datetime.fromisoformat(str(q.get("earliest_iso")))
+        target_date = target.date().isoformat()
+        target_minute = int(target.hour * 60 + target.minute)
+    except Exception:
+        return match
+
+    for i, slot in enumerate(list((clock or {}).get("next_slots") or [])):
+        if not isinstance(slot, dict):
+            continue
+        if slot.get("is_race") or str(slot.get("restriction") or "NONE").upper() != "NONE":
+            continue
+        ds = str(slot.get("date") or "").strip()
+        minute = slot.get("start_minute")
+        try:
+            minute = int(round(float(minute)))
+        except Exception:
+            continue
+        if ds == target_date and abs(minute - target_minute) <= 2:
+            return {
+                "index": i,
+                "target_kind": "EARLIEST",
+                "target_iso": str(q.get("earliest_iso")),
+                "preferred_target_iso": str(q.get("preferred_iso") or ""),
+                "match_mode": "R134_R117_VISIBLE_ELIGIBLE_FALLBACK",
+                "target_date": target_date,
+                "target_start_minute": target_minute,
+                "slot_label": slot.get("label"),
+                "slot_date": slot.get("date"),
+                "slot_start_minute": slot.get("start_minute"),
+            }
+    return match
+
+
+def _v132_apply_future_intent_to_sessions(sessions, planning_context, road=None):
+    """R134 projection: keep R133 note semantics and explain timing deferral.
+
+    If the athlete explicitly prefers quality on a date/daypart but the authorized
+    hard session lands later, the coach call must say that the preferred window was
+    not selected by the scheduling/recovery gate instead of merely printing EASY.
+    """
+    rows = _v132_apply_future_intent_to_sessions_r133(sessions, planning_context, road)
+    interp = (planning_context or {}).get("athlete_note_interpretation") or {}
+    target = _v133_future_target(interp)
+    if not (target and target.get("quality_preferred") and rows):
+        return rows
+
+    target_date = str(target.get("date") or "")
+    preferred = set(target.get("preferred_dayparts") or [])
+
+    def _part(row):
+        try:
+            minute = int(round(float(row.get("start_minute"))))
+        except Exception:
+            return None
+        return _v133_daypart_from_minute(minute, future=True)
+
+    hard_rows = [r for r in rows if _v106_session_is_hard(r)]
+    matching = [
+        r for r in hard_rows
+        if str(r.get("date") or "") == target_date
+        and (not preferred or _part(r) in preferred)
+    ]
+    if matching or not hard_rows:
+        return rows
+
+    next_hard = hard_rows[0]
+    q = (road or {}).get("quality_window") or {}
+    fallback_mode = str(((road or {}).get("nova_prescription") or {}).get("quality_slot_match", {}).get("match_mode") or "")
+    # road.nova_prescription may not yet be embedded at composer time; infer the
+    # same condition from preferred/earliest visibility without claiming physiology.
+    gate_phrase = "The preferred quality window from your note is not the window selected by the current scheduling/recovery gate."
+    if q.get("earliest_iso"):
+        try:
+            earliest = datetime.fromisoformat(str(q.get("earliest_iso")))
+            if earliest.date().isoformat() > target_date:
+                gate_phrase = "Your preferred quality window is earlier than the current scheduling/recovery gate selects."
+        except Exception:
+            pass
+    hard_label = str(next_hard.get("slot") or next_hard.get("date") or "the next eligible opportunity")
+    notice = gate_phrase + f" Nova therefore carries the next eligible quality candidate to {hard_label} rather than deleting the hard workout."
+    rows[0]["athlete_intent_notice"] = notice
+    next_hard["athlete_intent_notice"] = notice
+    return rows
 
 
 if __name__ == "__main__":
