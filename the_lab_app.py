@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.05 WIP R129 · LIVE AVAILABILITY CLOCK · R128 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.06 WIP R130 · SCOPED DAILY AVAILABILITY · R129 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -10014,53 +10014,116 @@ def _date_in_item(item, d):
     ds = d.isoformat() if isinstance(d, date) else str(d)
     return str(item.get("start_date")) <= ds <= str(item.get("end_date"))
 def _v129_daily_note_availability(now=None, logs=None):
-    """Extract only explicit *today* availability constraints from the latest Daily Note.
+    """Extract explicit *today* availability constraints from the latest Daily Note.
 
-    This is intentionally conservative and deterministic. It does not infer schedule
-    preferences from sentiment or general fatigue. It only reacts when the athlete
-    explicitly says they cannot train / are unavailable and names a same-day
-    daypart (morning/afternoon/evening) or explicitly says today/all day.
+    R130 scopes unavailability to the clause that actually contains the negative
+    statement. Positive clauses such as "back on the trainer at 5 pm" must not be
+    turned into an evening block merely because they contain a daypart/time token.
+    Explicit positive availability is also retained so it can override a broad
+    same-note block for that daypart.
     """
     now = now or get_rome_now()
     today_iso = now.date().isoformat()
+    empty = {
+        "active": False, "date": today_iso, "blocked_dayparts": [],
+        "available_dayparts": [], "source": None, "note_excerpt": None,
+        "parse_policy": "R130_CLAUSE_SCOPED_AVAILABILITY",
+    }
     try:
         rows = list(logs if logs is not None else load_daily_logs(40))
     except Exception:
         rows = []
     today_rows = [r for r in rows if str(r.get("local_date") or "") == today_iso]
     if not today_rows:
-        return {"active": False, "date": today_iso, "blocked_dayparts": [], "source": None, "note_excerpt": None}
+        return empty
     today_rows.sort(key=lambda r: (str(r.get("logged_at_utc") or ""), str(r.get("local_time") or "")), reverse=True)
     note = str(today_rows[0].get("note") or "").strip()
     if not note:
-        return {"active": False, "date": today_iso, "blocked_dayparts": [], "source": None, "note_excerpt": None}
+        return empty
     low = re.sub(r"\s+", " ", note.lower().replace("’", "'")).strip()
-    unavailable = bool(re.search(
+
+    negative_re = re.compile(
         r"(?:\bcan't\s+(?:train|ride)\b|\bcannot\s+(?:train|ride)\b|\bunable\s+to\s+(?:train|ride)\b|"
         r"\bnot\s+available\b|\bunavailable\b|\bno\s+training\b|"
         r"\bnon\s+posso\s+allenarmi\b|\bnon\s+mi\s+posso\s+allenare\b|\bnon\s+riesco\s+ad\s+allenarmi\b|"
         r"\bnon\s+sono\s+disponibile\b|\bniente\s+allenamento\b|\bnon\s+posso\s+pedalare\b)",
-        low, flags=re.I,
-    ))
-    if not unavailable:
-        return {"active": False, "date": today_iso, "blocked_dayparts": [], "source": None, "note_excerpt": None}
+        re.I,
+    )
+    positive_re = re.compile(
+        r"(?:\b(?:i\s+)?can\s+(?:train|ride)\b|\bavailable\s+(?:to\s+train|to\s+ride|from|after|at)\b|"
+        r"\bback\s+(?:on|to)\s+(?:the\s+)?trainer\b|\bback\s+(?:on|to)\s+(?:the\s+)?bike\b|"
+        r"\bposso\s+(?:allenarmi|allenare|pedalare)\b|\bsono\s+disponibile\b|"
+        r"\btorno\s+(?:sui|sul|in)\s+(?:rulli|trainer|bici)\b|\brientro\s+(?:sui|sul|in)\s+(?:rulli|trainer|bici)\b)",
+        re.I,
+    )
+
+    # Punctuation and contrast conjunctions create separate semantic clauses.
+    # We deliberately do not split on plain "or/e" so "can't train morning or evening"
+    # remains one negative clause and blocks both named dayparts.
+    clauses = [c.strip(" ,") for c in re.split(
+        r"(?:[.!?;]+\s*|,\s*(?=(?:but|however|though|ma|per[oò])\b)|\s+\b(?:but|however|though|ma|per[oò])\b\s+)",
+        low,
+        flags=re.I,
+    ) if c and c.strip(" ,")]
+    if not clauses:
+        clauses = [low]
+
+    def _clock_dayparts(text):
+        out = []
+        # 12-hour times with am/pm.
+        for m in re.finditer(r"\b(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*([ap])\.?m\.?\b", text, re.I):
+            hour = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "p" else 0)
+            out.append("MORNING" if hour < 12 else ("AFTERNOON" if hour < 17 else "EVENING"))
+        # 24-hour forms, mainly useful for Italian notes (e.g. alle 17 / 17:30).
+        for m in re.finditer(r"(?:\b(?:at|from|after|alle|dalle|dopo)\s+)([01]?\d|2[0-3])(?::([0-5]\d))?\b(?!\s*[ap]\.?m\.?\b)", text, re.I):
+            hour = int(m.group(1))
+            out.append("MORNING" if hour < 12 else ("AFTERNOON" if hour < 17 else "EVENING"))
+        return out
+
+    def _named_dayparts(text):
+        out = []
+        if re.search(r"\b(?:stamattina|questa\s+mattina|mattina|this\s+morning|morning|a\.?m\.?)\b", text, re.I):
+            out.append("MORNING")
+        if re.search(r"\b(?:questo\s+pomeriggio|pomeriggio|this\s+afternoon|afternoon)\b", text, re.I):
+            out.append("AFTERNOON")
+        if re.search(r"\b(?:stasera|questa\s+sera|sera|this\s+evening|evening|tonight)\b", text, re.I):
+            out.append("EVENING")
+        return out
+
     blocked = []
-    if re.search(r"\b(?:stamattina|questa\s+mattina|mattina|this\s+morning|morning|a\.?m\.?)\b", low, re.I):
-        blocked.append("MORNING")
-    if re.search(r"\b(?:questo\s+pomeriggio|pomeriggio|this\s+afternoon|afternoon)\b", low, re.I):
-        blocked.append("AFTERNOON")
-    if re.search(r"\b(?:stasera|questa\s+sera|sera|this\s+evening|evening|tonight|p\.?m\.?)\b", low, re.I):
-        blocked.append("EVENING")
-    if not blocked and re.search(r"\b(?:oggi|today|all\s+day|tutto\s+il\s+giorno|intera\s+giornata)\b", low, re.I):
-        blocked.append("ALL_DAY")
+    available = []
+    saw_negative = False
+    for clause in clauses:
+        neg = bool(negative_re.search(clause))
+        pos = bool(positive_re.search(clause))
+        if neg:
+            saw_negative = True
+            parts = _named_dayparts(clause) + _clock_dayparts(clause)
+            if parts:
+                blocked.extend(parts)
+            elif re.search(r"\b(?:oggi|today|all\s+day|tutto\s+il\s+giorno|intera\s+giornata)\b", clause, re.I):
+                blocked.append("ALL_DAY")
+        if pos:
+            # Positive availability is independent of the negative clause and can
+            # explicitly restore a daypart (e.g. "Back on the trainer at 5 pm").
+            available.extend(_named_dayparts(clause) + _clock_dayparts(clause))
+
+    if not saw_negative:
+        return empty
+    blocked = list(dict.fromkeys(blocked))
+    available = list(dict.fromkeys(available))
     if not blocked:
-        return {"active": False, "date": today_iso, "blocked_dayparts": [], "source": None, "note_excerpt": None}
+        return empty
+    # A specific positive daypart always wins over a same-note specific block.
+    blocked = [p for p in blocked if p == "ALL_DAY" or p not in set(available)]
     return {
-        "active": True,
+        "active": bool(blocked),
         "date": today_iso,
-        "blocked_dayparts": list(dict.fromkeys(blocked)),
+        "blocked_dayparts": blocked,
+        "available_dayparts": available,
         "source": "DAILY_NOTE_EXPLICIT_AVAILABILITY",
         "note_excerpt": note[:280],
+        "parse_policy": "R130_CLAUSE_SCOPED_AVAILABILITY",
     }
 
 def build_planning_context(now=None):
@@ -10135,7 +10198,11 @@ def build_planning_context(now=None):
         summary_parts.append(f'Planned {env.lower()} training{when}: {next_training.get("title") or "Training"} [{demand}]')
     if daily_availability.get("active"):
         parts = ", ".join(str(x).lower().replace("_", " ") for x in (daily_availability.get("blocked_dayparts") or []))
-        summary_parts.append(f"Daily Note availability: {parts} unavailable today")
+        available_parts = ", ".join(str(x).lower().replace("_", " ") for x in (daily_availability.get("available_dayparts") or []))
+        msg = f"Daily Note availability: {parts} unavailable today"
+        if available_parts:
+            msg += f"; {available_parts} explicitly available"
+        summary_parts.append(msg)
     return {
         "health_override": health_override,
         "blackout_dates": sorted(blackout_dates),
@@ -19105,7 +19172,10 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
     health = planning_context.get("health_override")
     daily_availability = planning_context.get("daily_availability") or {}
     daily_blocked_parts = set(daily_availability.get("blocked_dayparts") or []) if daily_availability.get("active") and str(daily_availability.get("date") or "") == today_iso else set()
-    blocked_today = today_iso in blackout or "ALL_DAY" in daily_blocked_parts
+    daily_available_parts = set(daily_availability.get("available_dayparts") or []) if str(daily_availability.get("date") or "") == today_iso else set()
+    # Calendar blackout remains a whole-day block. A broad Daily Note block may be
+    # narrowed by a later explicit positive availability statement in the same note.
+    blocked_today = today_iso in blackout or ("ALL_DAY" in daily_blocked_parts and not daily_available_parts)
     no_intensity_today = today_iso in easy_only
     clock_profile = rhythm.get("clock_profile") or {}
     weekday_scores = rhythm.get("weekday_scores") or {}
@@ -19137,9 +19207,12 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
     def daily_note_blocks(slot_date, start_minute):
         if not slot_date or slot_date != today or not daily_blocked_parts:
             return False
+        part = slot_daypart(start_minute)
+        if part in daily_available_parts:
+            return False
         if "ALL_DAY" in daily_blocked_parts:
             return True
-        return slot_daypart(start_minute) in daily_blocked_parts
+        return part in daily_blocked_parts
     def same_day_start_is_future(start_minute):
         if start_minute is None:
             return True
