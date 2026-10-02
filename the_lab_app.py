@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.13 WIP R137 · NOTE LANGUAGE COVERAGE · SAFE ADHERENCE ATTRIBUTION · R136 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.17 WIP R141 · WEEKLY SESSION ROLE RHYTHM · R140 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -32420,6 +32420,638 @@ def _v136_link_prescription(block, ledger):
         return None
     confidence="EXACT_IDENTITY" if best[5] else ("EXACT_DATE" if best[1]==0 and best[3] and best[4] else ("HIGH" if best[3] and best[4] and best[1]<=1 else "MODERATE"))
     return {"plan":best[2],"confidence":confidence,"date_delta_days":best[1],"reps_match":best[3],"duration_match":best[4],"source":best[2].get("_link_source")}
+
+
+# R138 · ROBUST RECOVERY CONTRACT PARSING
+# Fixes the whole class where a valid Recovery Under Load contract is rejected
+# because recovery duration/power are expressed with decimals, seconds or equivalent wording.
+R138_SCHEMA = "V4.9.14-R138-1"
+_v4883_stimulus_signature_r137_final = _v4883_stimulus_signature
+_v106_recommendation_projection_r137_final = _v106_recommendation_projection
+
+def _v138_recovery_clause_segments(text):
+    raw=str(text or "")
+    if not raw:return []
+    spans=[];start=0
+    for m in re.finditer(r"[!?;]|\.(?=\s|$)",raw):
+        seg=raw[start:m.start()].strip()
+        if seg:spans.append(seg)
+        start=m.end()
+    tail=raw[start:].strip()
+    if tail:spans.append(tail)
+    return spans
+
+def _v138_recovery_fields(main_set):
+    cue_re=re.compile(
+        r"\b(?:recovery(?:\s+between\s+(?:reps?|efforts?|intervals?))?|recover(?:y)?|rest|"
+        r"between\s+(?:reps?|efforts?|intervals?)|bridge|active\s+recovery|"
+        r"recupero|recupera(?:re)?|tra\s+(?:le\s+)?ripetute|fra\s+(?:le\s+)?ripetute|tra\s+i\s+blocchi)\b",
+        re.I,
+    )
+    best={"recovery_minutes":None,"recovery_power_low":None,"recovery_power_high":None}
+    for seg in _v138_recovery_clause_segments(main_set):
+        if not cue_re.search(seg):continue
+        # Duration may be written as 4 min, 3.9 min, 235 s, 235 sec, etc.
+        dm=re.search(r"(?<!\d)(\d+(?:[.,]\d+)?)\s*(min(?:ute)?s?|m\b|s\b|sec(?:ond)?s?)",seg,re.I)
+        if dm:
+            try:
+                val=float(dm.group(1).replace(',','.'));unit=dm.group(2).lower()
+                if unit.startswith('s'):
+                    val/=60.0
+                if 0.05 <= val <= 60:
+                    best["recovery_minutes"]=round(val,3)
+            except Exception:
+                pass
+        # Parse recovery power only inside a recovery-scoped sentence, so work power
+        # from an adjacent sentence cannot be mistaken for recovery load.
+        pm=re.search(r"(?<!\d)([1-7]\d{1,2})\s*(?:-|–|—|to|a)\s*([1-7]\d{1,2})\s*w\b",seg,re.I)
+        if pm:
+            try:
+                lo=float(pm.group(1));hi=float(pm.group(2))
+                if 40 <= lo <= 799 and 40 <= hi <= 799:
+                    best["recovery_power_low"]=min(lo,hi);best["recovery_power_high"]=max(lo,hi)
+            except Exception:
+                pass
+        elif cue_re.search(seg):
+            sm=re.search(r"(?<!\d)([1-7]\d{1,2})\s*w\b",seg,re.I)
+            if sm:
+                try:
+                    w=float(sm.group(1))
+                    if 40 <= w <= 799:
+                        best["recovery_power_low"]=w;best["recovery_power_high"]=w
+                except Exception:
+                    pass
+        if best["recovery_minutes"] is not None and best["recovery_power_high"] is not None:
+            break
+    return best
+
+def _v4883_stimulus_signature(title=None, main_set=None, family=None, intensity_class=None):
+    out=_v4883_stimulus_signature_r137_final(title=title,main_set=main_set,family=family,intensity_class=intensity_class)
+    if not isinstance(out,dict):return out
+    ext=_v138_recovery_fields(main_set)
+    if out.get("recovery_minutes") is None and ext.get("recovery_minutes") is not None:
+        out["recovery_minutes"]=ext["recovery_minutes"]
+    if out.get("recovery_power_low") is None and ext.get("recovery_power_low") is not None:
+        out["recovery_power_low"]=ext["recovery_power_low"]
+    if out.get("recovery_power_high") is None and ext.get("recovery_power_high") is not None:
+        out["recovery_power_high"]=ext["recovery_power_high"]
+    if ext.get("recovery_power_high") is not None and out.get("architecture_pattern") not in {"OVER_UNDER"}:
+        out["architecture_pattern"]="LOAD_BRIDGED"
+    return out
+
+def _v106_recommendation_projection(sessions):
+    text=_v106_recommendation_projection_r137_final(sessions)
+    text=re.sub(r"\.{2,}",".",str(text or ""))
+    text=re.sub(r"\s+([,.;:!?])",r"\1",text)
+    return text.strip()
+
+
+# R139 · CAUSAL ADHERENCE ATTRIBUTION
+# A completed activity can only be attributed to a prescription that already
+# existed when the activity was performed. Structural similarity alone may
+# never link an earlier activity to a later-created prescription.
+R139_SCHEMA = "V4.9.15-R139-1"
+_v136_link_prescription_r138_final = _v136_link_prescription
+_v492_execution_quality_r138_final = _v492_execution_quality
+
+def _v139_parse_local_dt(value):
+    if value is None:
+        return None
+    try:
+        dt=datetime.fromisoformat(str(value).strip().replace("Z","+00:00"))
+        if dt.tzinfo is None:
+            dt=dt.replace(tzinfo=ROME_TZ)
+        return dt.astimezone(ROME_TZ)
+    except Exception:
+        return None
+
+def _v139_activity_dt(block):
+    ds=str((block or {}).get("date") or "")[:10]
+    ts=str((block or {}).get("time") or "").strip()
+    if not ds:
+        return None
+    # Accept HH:MM, HH:MM:SS and 12-hour display forms.
+    candidates=[]
+    if ts:
+        candidates.extend([f"{ds}T{ts}", f"{ds} {ts}"])
+    else:
+        candidates.append(f"{ds}T23:59:59")
+    for raw in candidates:
+        try:
+            dt=datetime.fromisoformat(raw)
+            return dt.replace(tzinfo=ROME_TZ) if dt.tzinfo is None else dt.astimezone(ROME_TZ)
+        except Exception:
+            pass
+        for fmt in ("%Y-%m-%d %I:%M %p","%Y-%m-%d %I:%M:%S %p"):
+            try:
+                dt=datetime.strptime(raw,fmt).replace(tzinfo=ROME_TZ)
+                return dt
+            except Exception:
+                pass
+    return None
+
+def _v139_prescription_created_dt(plan):
+    for key in ("recorded_at_local","created_at_local","snapshot_generated_local","planned_at_local"):
+        dt=_v139_parse_local_dt((plan or {}).get(key))
+        if dt is not None:
+            return dt
+    return None
+
+def _v139_causally_eligible(plan, block, explicit_identity=False):
+    act_dt=_v139_activity_dt(block)
+    created=_v139_prescription_created_dt(plan)
+    # New R136+ prescriptions carry a creation timestamp. This is authoritative:
+    # no activity that already happened may be retroactively assigned to them.
+    if created is not None and act_dt is not None and created > act_dt:
+        return False
+    try:
+        bd=date.fromisoformat(str((block or {}).get("date") or "")[:10])
+        pd=date.fromisoformat(str((plan or {}).get("date") or "")[:10])
+    except Exception:
+        return False
+    # Legacy plans with no creation timestamp cannot safely claim an activity
+    # from an earlier date purely by structural similarity. Exact identity is
+    # still accepted only when there is no contradictory creation timestamp.
+    if created is None and pd > bd and not explicit_identity:
+        return False
+    return True
+
+def _v136_link_prescription(block, ledger):
+    """R139 attribution with causal ordering before structural/date scoring."""
+    rep=(block or {}).get("repeatability") or {}
+    actual_reps=int(rep.get("reps") or 0); actual_secs=float(rep.get("interval_secs") or 0)
+    try: bd=date.fromisoformat(str((block or {}).get("date") or "")[:10])
+    except Exception: return None
+    ranked=[]
+    for plan in _v136_candidate_prescriptions(ledger,block):
+        sig=_v136_plan_signature(plan)
+        try: pd=date.fromisoformat(str(plan.get("date") or "")[:10]); delta=(bd-pd).days
+        except Exception: continue
+        if abs(delta)>2: continue
+        reps_match=bool(sig.get("reps") and actual_reps==sig.get("reps"))
+        secs_match=bool(sig.get("secs") and actual_secs and abs(actual_secs-float(sig.get("secs")))<=max(10.0,.08*float(sig.get("secs"))))
+        explicit_identity=bool(
+            ((block or {}).get("nova_workout_id") and (block or {}).get("nova_workout_id")==plan.get("nova_workout_id")) or
+            ((block or {}).get("nova_canonical_plan_id") and (block or {}).get("nova_canonical_plan_id")==plan.get("nova_canonical_plan_id"))
+        )
+        if not _v139_causally_eligible(plan,block,explicit_identity=explicit_identity):
+            continue
+        exact_date=delta==0
+        if explicit_identity:
+            attributable=True
+        elif exact_date:
+            attributable=bool(reps_match or secs_match)
+        else:
+            attributable=bool(reps_match and secs_match)
+        if not attributable: continue
+        score=(16 if explicit_identity else 0)+(8 if exact_date else (5 if abs(delta)==1 else 3))+(4 if reps_match else 0)+(4 if secs_match else 0)
+        if plan.get("nova_workout_id"): score+=2
+        ranked.append((score,abs(delta),plan,reps_match,secs_match,explicit_identity))
+    if not ranked: return None
+    ranked.sort(key=lambda x:(-x[0],x[1],_v136_prescription_fingerprint(x[2])))
+    best=ranked[0]
+    if len(ranked)>1 and ranked[1][0]==best[0] and _v136_prescription_fingerprint(ranked[1][2])!=_v136_prescription_fingerprint(best[2]):
+        return None
+    confidence="EXACT_IDENTITY" if best[5] else ("EXACT_DATE" if best[1]==0 and best[3] and best[4] else ("HIGH" if best[3] and best[4] and best[1]<=1 else "MODERATE"))
+    return {"plan":best[2],"confidence":confidence,"date_delta_days":best[1],"reps_match":best[3],"duration_match":best[4],"explicit_identity":best[5],"source":best[2].get("_link_source"),"causal_guard":R139_SCHEMA}
+
+def _v492_execution_quality(block,ledger=None):
+    out=_v492_execution_quality_r138_final(block,ledger)
+    # Re-evaluate any R137 structural/identity link under R139 causality.
+    adh=(out or {}).get("adherence") or {}
+    link=_v136_link_prescription(block,ledger or {}) if (out or {}).get("available") else None
+    if not link:
+        if isinstance(adh,dict) and adh.get("available"):
+            out["adherence"]={"available":False,"label":"N/A","score":None,"reason":"NO_CAUSALLY_ATTRIBUTABLE_THE_LAB_PRESCRIPTION"}
+        elif isinstance(adh,dict):
+            adh["reason"]="NO_CAUSALLY_ATTRIBUTABLE_THE_LAB_PRESCRIPTION"
+            out["adherence"]=adh
+        return out
+    plan=dict(link["plan"])
+    fake={"primary_anchor":{**plan,"source":"SNAPSHOT_PLAN","status":"HARD_ACTIVITY_OBSERVED","date":(block or {}).get("date"),"observed_activity":{"name":(block or {}).get("name")}}}
+    scored=_v492_execution_quality_r135_final(block,fake)
+    scored_adh=(scored or {}).get("adherence") or {}
+    if scored_adh.get("available"):
+        scored_adh["link_mode"]="R139_EXACT_PRESCRIPTION_IDENTITY" if link.get("explicit_identity") else "R139_CAUSAL_STRUCTURAL_MATCH"
+        scored_adh["link_confidence"]=link["confidence"]
+        scored_adh["link_source"]=link["source"]
+        scored_adh["planned_date"]=plan.get("date")
+        scored_adh["nova_workout_id"]=plan.get("nova_workout_id")
+        scored_adh["canonical_plan_id"]=plan.get("nova_canonical_plan_id")
+        scored_adh["causal_guard"]=R139_SCHEMA
+        scored["adherence"]=scored_adh
+        return scored
+    return out
+
+
+
+# R140 · HARD RHYTHM SEPARATION
+# General training rhythm answers "when does the athlete usually train?".
+# Hard-session rhythm answers "when does purposeful quality usually happen?".
+# The former may provide candidate opportunities, but must never by itself promote
+# an EARLIEST recovery-eligible slot into a hard prescription.
+R140_SCHEMA = "V4.9.16-R140-1"
+_v117_hard_cadence_profile_r139_final = _v117_hard_cadence_profile
+_v117_select_quality_window_r139_final = _v117_select_quality_window
+_v136_promote_quality_target_r139_final = _v136_promote_quality_target
+_v84_quality_slot_match_r139_final = _v84_quality_slot_match
+
+
+def _v140_hard_weekday_profile(starts):
+    starts=sorted([x for x in (starts or []) if isinstance(x,datetime)])[-12:]
+    counts={i:0 for i in range(7)}
+    for dt in starts:counts[dt.weekday()]+=1
+    n=len(starts)
+    weekday_n=sum(counts[i] for i in range(5));weekend_n=counts[5]+counts[6]
+    weekday_share=(weekday_n/n) if n else 0.0;weekend_share=(weekend_n/n) if n else 0.0
+    max_count=max(counts.values()) if counts else 0
+    preferred=[]
+    if n>=5 and max_count>=2:
+        preferred=[i for i,c in counts.items() if c>=2 and c>=max_count*0.50]
+    profile="MIXED";confidence="LOW"
+    if n>=5 and weekday_share>=0.75:
+        profile="WEEKDAY_DOMINANT";confidence="HIGH" if n>=8 and weekday_share>=0.85 else "MODERATE"
+    elif n>=5 and weekend_share>=0.75:
+        profile="WEEKEND_DOMINANT";confidence="HIGH" if n>=8 and weekend_share>=0.85 else "MODERATE"
+    elif n>=7 and preferred and sum(counts[i] for i in preferred)/n>=0.70:
+        profile="WEEKDAY_PATTERN";confidence="MODERATE"
+    return {
+        "hard_week_profile":profile,"hard_week_confidence":confidence,
+        "hard_weekday_counts":counts,"preferred_hard_weekdays":preferred,
+        "hard_weekday_share":round(weekday_share,3),"hard_weekend_share":round(weekend_share,3),
+        "hard_week_sample_days":n,
+    }
+
+
+def _v117_hard_cadence_profile(activities, now=None):
+    base=dict(_v117_hard_cadence_profile_r139_final(activities,now=now) or {})
+    now=now or get_rome_now();cutoff=now.replace(tzinfo=None)
+    per_day={}
+    for activity in activities or []:
+        try:
+            if not _v4829_is_quality_activity(activity):continue
+            start=_v4829_parse_activity_start(activity);end=_v4829_activity_end(activity)
+            if start is None or end is None or end>cutoff:continue
+            key=start.date()
+            if key not in per_day or start<per_day[key]:per_day[key]=start
+        except (TypeError,ValueError,KeyError):
+            continue
+    starts=[per_day[k] for k in sorted(per_day)][-12:]
+    base.update(_v140_hard_weekday_profile(starts))
+    base["schema"]=R140_SCHEMA
+    base["note"]="Hard-session weekday/daypart/timing are scheduling priors learned only from canonical hard activity starts; general training rhythm is a separate opportunity model and cannot promote an easy habit into hard work."
+    return base
+
+
+def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_delay, second_hard=False):
+    """R140 ranks eligible opportunities using hard-specific cadence, never general rhythm alone."""
+    lower=last_end+timedelta(hours=float(spacing.get('earliest_hours') or 36)+extra_delay) if last_end else None
+    preferred=last_end+timedelta(hours=float(spacing.get('preferred_hours') or 48)+extra_delay) if last_end else None
+    valid=[r for r in candidates if lower is None or r['dt']>=lower]
+    if not valid:return None,None,'NO_VALID_CLOCK_SLOT',None
+    explicit=[r for r in valid if r.get('explicit')]
+    if explicit:
+        return valid[0]['dt'],explicit[0]['dt'],'EXPLICIT_PLANNED_HARD',explicit[0]
+    first=valid[0]
+    gap=cadence.get('dominant_gap_days');part=cadence.get('hard_daypart');preferred_minute=cadence.get('hard_start_minute')
+    preferred_weekdays=set(cadence.get('preferred_hard_weekdays') or [])
+    week_profile=str(cadence.get('hard_week_profile') or 'MIXED').upper()
+    last_day=date.fromisoformat(cadence['last_hard_day']) if cadence.get('last_hard_day') else (last_end.date() if last_end else None)
+    strong=bool(gap is not None or part is not None or preferred_weekdays or week_profile in {'WEEKDAY_DOMINANT','WEEKEND_DOMINANT','WEEKDAY_PATTERN'})
+    if strong:
+        def score(row):
+            dt=row['dt'];days=(dt.date()-last_day).days if last_day else None;minute=dt.hour*60+dt.minute;value=0.0
+            if gap is not None and days is not None:
+                value+=3.0 if days==gap else max(-5.0,1.0-2.0*abs(days-gap))
+            if part:value+=3.0 if ('AM' if minute<720 else 'PM')==part else -3.0
+            if preferred_minute is not None:value+=max(-2.0,1.0-abs(minute-preferred_minute)/120.0)
+            if preferred_weekdays:
+                value+=4.0 if dt.weekday() in preferred_weekdays else -4.0
+            if week_profile=='WEEKDAY_DOMINANT':value+=2.5 if dt.weekday()<5 else -5.0
+            elif week_profile=='WEEKEND_DOMINANT':value+=2.5 if dt.weekday()>=5 else -5.0
+            if preferred is not None and dt>=preferred:value+=0.5
+            value-=(dt-first['dt']).total_seconds()/86400*0.40
+            return value
+        ranked=sorted(valid,key=lambda row:(-score(row),row['dt']))
+        selected=ranked[0]
+        reason_bits=[]
+        if preferred_weekdays or week_profile!='MIXED':reason_bits.append('WEEKDAY')
+        if gap is not None:reason_bits.append('DAY')
+        if part:reason_bits.append('DAYPART')
+        reason='OBSERVED_HARD_'+'_'.join(reason_bits) if reason_bits else 'OBSERVED_HARD_PATTERN'
+        return first['dt'],selected['dt'],reason,selected
+    selected=next((r for r in valid if preferred is None or r['dt']>=preferred),first)
+    return first['dt'],selected['dt'],'SPARSE_HARD_HISTORY_CONSERVATIVE_PREFERENCE',selected
+
+
+def _v136_promote_quality_target(clock, road):
+    """R140 promotes the hard-specific PREFERRED target, never generic EARLIEST rhythm."""
+    q=(road or {}).get('quality_window') or {}
+    raw=q.get('preferred_iso')
+    if not raw or q.get('spacing_policy')!='R117_HARD_CADENCE_PLUS_RECOVERY_HEURISTIC':return clock
+    try:dt=datetime.fromisoformat(str(raw))
+    except Exception:return clock
+    rows=[dict(x) for x in (clock or {}).get('next_slots') or [] if isinstance(x,dict)]
+    target_key=(dt.date().isoformat(),dt.hour*60+dt.minute)
+    for row in rows:
+        try:key=(str(row.get('date') or ''),int(round(float(row.get('start_minute')))))
+        except Exception:continue
+        if key[0]==target_key[0] and abs(key[1]-target_key[1])<=2:return clock
+    if not rows:return clock
+    replace=None
+    for i in range(len(rows)-1,-1,-1):
+        row=rows[i]
+        if str(row.get('source') or '').upper()=='RHYTHM' and not row.get('is_race') and not row.get('is_planned_training'):
+            replace=i;break
+    if replace is None:return clock
+    old=rows[replace];minute=target_key[1];today=get_rome_now().date()
+    day='Today' if dt.date()==today else ('Tomorrow' if dt.date()==today+timedelta(days=1) else dt.strftime('%A'))
+    promoted=dict(old)
+    promoted.update({
+        'date':target_key[0],'period':'RHYTHM','slot':None,
+        'label':f"{day} · hard rhythm candidate · around {_rhythm_format_minutes(minute)}",
+        'start_minute':minute,'source':'RHYTHM','timing_confidence':old.get('timing_confidence') or 'PREDICTED',
+        'availability_state':'PREDICTED','availability_confirmed':False,
+        'r140_hard_rhythm_horizon_promoted':True,
+    })
+    rows[replace]=promoted;rows.sort(key=lambda x:(str(x.get('date') or '9999-99-99'),int(x.get('start_minute') or 9999)))
+    clock['next_slots']=rows[:3];clock['next_slot_label']=clock['next_slots'][0].get('label') if clock['next_slots'] else 'No valid training opportunity'
+    clock['r140_quality_target_promoted']=str(raw)
+    return clock
+
+
+def _v84_quality_slot_match(clock, adaptive_roadmap=None):
+    """R140 disables the R134 EARLIEST fallback; preferred hard cadence owns timing."""
+    return _v84_quality_slot_match_r133(clock,adaptive_roadmap)
+
+
+# R141 · WEEKLY SESSION ROLE RHYTHM
+# R140 separated generic training opportunities from hard-session timing, but it
+# still learned the hard prior only from hard starts. R141 adds the missing
+# denominator: what type of training the athlete usually performs on each
+# weekday. A weekend that is normally Z2/volume must not become quality merely
+# because it is the first recovery-eligible opportunity.
+R141_SCHEMA = "V4.9.17-R141-1"
+_v117_hard_cadence_profile_r140_final = _v117_hard_cadence_profile
+_v117_select_quality_window_r140_final = _v117_select_quality_window
+
+
+def _v141_is_race_activity(activity):
+    a=activity or {}
+    if str(a.get("sub_type") or "").upper()=="RACE":
+        return True
+    name=str(a.get("name") or "").lower()
+    # Narrow fallback for sources that omit sub_type. A "race simulation"
+    # workout is intentionally not excluded.
+    return bool(re.search(r"\b(?:granfondo|gran fondo|gara)\b",name))
+
+
+def _v141_role_counts(observations):
+    counts={i:{"training_days":0,"quality_days":0,"aerobic_only_days":0} for i in range(7)}
+    for day,is_quality in observations:
+        wd=day.weekday()
+        counts[wd]["training_days"]+=1
+        counts[wd]["quality_days"]+=int(bool(is_quality))
+        counts[wd]["aerobic_only_days"]+=int(not is_quality)
+    return counts
+
+
+def _v141_rate(q,n):
+    return (float(q)/float(n)) if n else None
+
+
+def _v141_smoothed_rate(q,n):
+    # beta(1,1) shrinkage: enough to avoid turning one observation into a law,
+    # weak enough to let a repeated personal pattern dominate.
+    return (float(q)+1.0)/(float(n)+2.0) if n else None
+
+
+def _v141_weekly_session_role_profile(activities, now=None, lookback_days=42, recent_days=21):
+    now=now or get_rome_now()
+    cutoff=now.replace(tzinfo=None)
+    first_day=cutoff.date()-timedelta(days=max(13,int(lookback_days)-1))
+    recent_first=cutoff.date()-timedelta(days=max(6,int(recent_days)-1))
+    per_day={}
+    for activity in activities or []:
+        try:
+            if not _v4887_is_cycling_activity(activity):
+                continue
+            start=_v4829_parse_activity_start(activity)
+            end=_v4829_activity_end(activity)
+            if start is None or end is None or end>cutoff or start.date()<first_day:
+                continue
+            bucket=per_day.setdefault(start.date(),{"activities":[],"race":False})
+            bucket["activities"].append(activity)
+            if _v141_is_race_activity(activity):
+                bucket["race"]=True
+        except (TypeError,ValueError,KeyError):
+            continue
+
+    observations=[]
+    race_days=0
+    for day,bucket in sorted(per_day.items()):
+        # Competition is not a chosen weekly training role. Excluding race days
+        # prevents a Sunday event from teaching "Sunday = quality workout".
+        if bucket.get("race"):
+            race_days+=1
+            continue
+        acts=bucket.get("activities") or []
+        if not acts:
+            continue
+        observations.append((day,any(_v4829_is_quality_activity(a) for a in acts)))
+
+    established=_v141_role_counts(observations)
+    recent_obs=[row for row in observations if row[0]>=recent_first]
+    recent=_v141_role_counts(recent_obs)
+    training_days=len(observations);quality_days=sum(int(q) for _,q in observations)
+    recent_training_days=len(recent_obs);recent_quality_days=sum(int(q) for _,q in recent_obs)
+
+    established_rates={};recent_rates={};learned_rates={};roles={}
+    preferred=[];aerobic_biased=[];shift_weekdays=[]
+    for wd in range(7):
+        en=established[wd]["training_days"];eq=established[wd]["quality_days"]
+        rn=recent[wd]["training_days"];rq=recent[wd]["quality_days"]
+        er=_v141_rate(eq,en);rr=_v141_rate(rq,rn)
+        es=_v141_smoothed_rate(eq,en);rs=_v141_smoothed_rate(rq,rn)
+        established_rates[wd]=round(er,3) if er is not None else None
+        recent_rates[wd]=round(rr,3) if rr is not None else None
+        if rn>=2 and es is not None and rs is not None:
+            learned=0.70*rs+0.30*es
+        elif rn>=2 and rs is not None:
+            learned=rs
+        else:
+            learned=es
+        learned_rates[wd]=round(learned,3) if learned is not None else None
+        if er is not None and rr is not None and rn>=2 and abs(rr-er)>=0.35:
+            shift_weekdays.append(wd)
+        role="LEARNING"
+        if en>=2 and learned is not None:
+            if learned>=0.62:
+                role="QUALITY_BIASED";preferred.append(wd)
+            elif learned<=0.38:
+                role="AEROBIC_BIASED";aerobic_biased.append(wd)
+            else:
+                role="MIXED"
+        roles[wd]=role
+
+    def aggregate(days,counts):
+        n=sum(counts[i]["training_days"] for i in days)
+        q=sum(counts[i]["quality_days"] for i in days)
+        return n,q,_v141_rate(q,n),_v141_smoothed_rate(q,n)
+
+    wen,weq,wer,wes=aggregate((0,1,2,3,4),established)
+    wkn,wkq,wkr,wks=aggregate((5,6),established)
+    rwen,rweq,rwer,rwes=aggregate((0,1,2,3,4),recent)
+    rwkn,rwkq,rwkr,rwks=aggregate((5,6),recent)
+    learned_weekday=(0.70*rwes+0.30*wes) if rwen>=5 and rwes is not None and wes is not None else wes
+    learned_weekend=(0.70*rwks+0.30*wks) if rwkn>=4 and rwks is not None and wks is not None else wks
+
+    weekend_role="LEARNING"
+    if wkn>=4 and learned_weekend is not None:
+        if learned_weekend<=0.38 and (learned_weekday is None or learned_weekday-learned_weekend>=0.18):
+            weekend_role="AEROBIC_BIASED"
+        elif learned_weekend>=0.62 and (learned_weekday is None or learned_weekend-learned_weekday>=0.18):
+            weekend_role="QUALITY_BIASED"
+        else:
+            weekend_role="MIXED"
+
+    return {
+        "schema":R141_SCHEMA,
+        "window_days":int(lookback_days),"recent_window_days":int(recent_days),
+        "training_days":training_days,"quality_days":quality_days,
+        "recent_training_days":recent_training_days,"recent_quality_days":recent_quality_days,
+        "overall_quality_day_rate":round(_v141_rate(quality_days,training_days),3) if training_days else None,
+        "weekday_training_days":wen,"weekday_quality_days":weq,
+        "weekday_quality_day_rate":round(wer,3) if wer is not None else None,
+        "weekend_training_days":wkn,"weekend_quality_days":wkq,
+        "weekend_quality_day_rate":round(wkr,3) if wkr is not None else None,
+        "recent_weekday_quality_day_rate":round(rwer,3) if rwer is not None else None,
+        "recent_weekend_quality_day_rate":round(rwkr,3) if rwkr is not None else None,
+        "learned_weekday_quality_rate":round(learned_weekday,3) if learned_weekday is not None else None,
+        "learned_weekend_quality_rate":round(learned_weekend,3) if learned_weekend is not None else None,
+        "weekend_role":weekend_role,
+        "weekday_counts":established,"recent_weekday_counts":recent,
+        "established_quality_rate_by_weekday":established_rates,
+        "recent_quality_rate_by_weekday":recent_rates,
+        "learned_quality_rate_by_weekday":learned_rates,
+        "weekday_roles":roles,
+        "preferred_quality_weekdays":preferred,
+        "aerobic_biased_weekdays":aerobic_biased,
+        "shift_detected":bool(shift_weekdays),"shift_weekdays":shift_weekdays,
+        "race_days_excluded":race_days,
+        "rule":"Learn session role from all observed cycling training days, not only hard starts. Recent role has more weight when repeated; race days are excluded. Explicit athlete/Calendar intent can override the prior when recovery and safety gates allow.",
+    }
+
+
+def _v117_hard_cadence_profile(activities, now=None):
+    base=dict(_v117_hard_cadence_profile_r140_final(activities,now=now) or {})
+    role=_v141_weekly_session_role_profile(activities,now=now)
+    base["weekly_session_role"]=role
+    base["preferred_quality_weekdays"]=list(role.get("preferred_quality_weekdays") or [])
+    base["aerobic_biased_weekdays"]=list(role.get("aerobic_biased_weekdays") or [])
+    base["quality_rate_by_weekday"]=dict(role.get("learned_quality_rate_by_weekday") or {})
+    base["weekend_session_role"]=role.get("weekend_role")
+    base["weekday_quality_day_rate"]=role.get("learned_weekday_quality_rate")
+    base["weekend_quality_day_rate"]=role.get("learned_weekend_quality_rate")
+    base["session_role_shift_detected"]=bool(role.get("shift_detected"))
+    base["schema"]=R141_SCHEMA
+    base["note"]="General rhythm predicts opportunities. Hard-start rhythm predicts quality timing. Weekly session-role rhythm learns which weekdays are usually quality versus aerobic-only, with recent repeated behavior weighted more heavily; none of these priors alone certifies recovery."
+    return base
+
+
+def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_delay, second_hard=False):
+    """R141 ranks recovery-eligible opportunities by learned weekly session role."""
+    lower=last_end+timedelta(hours=float(spacing.get('earliest_hours') or 36)+extra_delay) if last_end else None
+    preferred=last_end+timedelta(hours=float(spacing.get('preferred_hours') or 48)+extra_delay) if last_end else None
+    valid=[r for r in candidates if lower is None or r['dt']>=lower]
+    if not valid:
+        return None,None,'NO_VALID_CLOCK_SLOT',None
+
+    # Explicit Calendar/athlete quality intent owns the choice among already
+    # recovery-eligible slots. Learned rhythm never overrules explicit intent.
+    explicit=[r for r in valid if r.get('explicit')]
+    if explicit:
+        selected=explicit[0]
+        return valid[0]['dt'],selected['dt'],'EXPLICIT_PLANNED_HARD',selected
+
+    first=valid[0]
+    gap=cadence.get('dominant_gap_days')
+    part=cadence.get('hard_daypart')
+    preferred_minute=cadence.get('hard_start_minute')
+    hard_preferred=set(cadence.get('preferred_hard_weekdays') or [])
+    role_preferred=set(cadence.get('preferred_quality_weekdays') or [])
+    aerobic_biased=set(cadence.get('aerobic_biased_weekdays') or [])
+    hard_week_profile=str(cadence.get('hard_week_profile') or 'MIXED').upper()
+    weekend_role=str(cadence.get('weekend_session_role') or 'LEARNING').upper()
+    role_rates=cadence.get('quality_rate_by_weekday') or {}
+    role_context=cadence.get('weekly_session_role') or {}
+    overall_rate=role_context.get('overall_quality_day_rate')
+    last_day=date.fromisoformat(cadence['last_hard_day']) if cadence.get('last_hard_day') else (last_end.date() if last_end else None)
+
+    strong=bool(
+        gap is not None or part is not None or hard_preferred or role_preferred
+        or aerobic_biased or hard_week_profile in {'WEEKDAY_DOMINANT','WEEKEND_DOMINANT','WEEKDAY_PATTERN'}
+        or weekend_role in {'AEROBIC_BIASED','QUALITY_BIASED'}
+    )
+    if not strong:
+        selected=next((r for r in valid if preferred is None or r['dt']>=preferred),first)
+        return first['dt'],selected['dt'],'SPARSE_HARD_HISTORY_CONSERVATIVE_PREFERENCE',selected
+
+    def score(row):
+        dt=row['dt'];wd=dt.weekday();minute=dt.hour*60+dt.minute
+        days=(dt.date()-last_day).days if last_day else None
+        value=0.0
+        if gap is not None and days is not None:
+            value+=3.0 if days==gap else max(-5.0,1.0-2.0*abs(days-gap))
+        if part:
+            value+=2.5 if ('AM' if minute<720 else 'PM')==part else -2.5
+        if preferred_minute is not None:
+            value+=max(-2.0,1.0-abs(minute-preferred_minute)/120.0)
+        if hard_preferred:
+            value+=2.0 if wd in hard_preferred else -1.5
+
+        # The denominator R140 lacked: quality frequency on this weekday among
+        # all observed training days, not merely among hard-session starts.
+        rate=role_rates.get(wd)
+        try:
+            rate=float(rate) if rate is not None else None
+        except (TypeError,ValueError):
+            rate=None
+        try:
+            base_rate=float(overall_rate) if overall_rate is not None else 0.5
+        except (TypeError,ValueError):
+            base_rate=0.5
+        if rate is not None:
+            value+=(rate-base_rate)*10.0
+        if wd in role_preferred:
+            value+=3.0
+        if wd in aerobic_biased:
+            value-=3.0
+        if weekend_role=='AEROBIC_BIASED' and wd>=5:
+            value-=4.0
+        elif weekend_role=='QUALITY_BIASED' and wd>=5:
+            value+=3.0
+
+        # Hard-only weekday frequency remains secondary evidence.
+        if hard_week_profile=='WEEKDAY_DOMINANT':
+            value+=1.0 if wd<5 else -2.0
+        elif hard_week_profile=='WEEKEND_DOMINANT':
+            value+=1.0 if wd>=5 else -2.0
+
+        if preferred is not None and dt>=preferred:
+            value+=0.5
+        # Chronology breaks ties; it cannot turn earliest eligibility into a
+        # hard prescription when the learned session role says otherwise.
+        value-=(dt-first['dt']).total_seconds()/86400*0.35
+        return value
+
+    ranked=sorted(valid,key=lambda row:(-score(row),row['dt']))
+    selected=ranked[0]
+    reason_bits=["SESSION_ROLE"]
+    if gap is not None:reason_bits.append("DAY")
+    if part:reason_bits.append("DAYPART")
+    return first['dt'],selected['dt'],'OBSERVED_HARD_'+'_'.join(reason_bits),selected
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
