@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.18 WIP R142 · MULTIMODAL SESSION TYPE RHYTHM · R141 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.19 WIP R143 · RACE-SAFE TYPE RHYTHM + CYCLE-SAFE PRESCRIPTION CONTINUITY · R142 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -33241,3 +33241,224 @@ def _v117_hard_cadence_profile(activities, now=None):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+
+
+# R143 · RACE-SAFE MULTIMODAL DAY COMPOSITION
+# R142 correctly excluded cycling race days from the cycling session-role learner,
+# but daily_composition still classified those days as CYCLING_QUALITY. That
+# created a cross-module contradiction (e.g. Sunday quality_days=0 in CYCLING
+# while daily_composition counted one Sunday CYCLING_QUALITY). R143 preserves
+# competitions descriptively as CYCLING_RACE while preventing them from teaching
+# weekday training-role priors. Strength observed on a race day remains learnable.
+R143_SCHEMA = "V4.9.19-R143-1"
+
+
+def _v143_daily_composition_profile(activities, now=None, lookback_days=42, recent_days=21):
+    now = now or get_rome_now()
+    rows = _v142_completed_activity_rows(activities, now=now, lookback_days=lookback_days)
+    per_day = {}
+    for row in rows:
+        d = row["date"]
+        bucket = per_day.setdefault(d, {"cycling": [], "strength": []})
+        if row["modality"] == "CYCLING":
+            bucket["cycling"].append(row["activity"])
+        elif row["modality"] == "STRENGTH":
+            bucket["strength"].append(row["activity"])
+
+    recent_first = now.date() - timedelta(days=max(6, int(recent_days) - 1))
+    counts = {}
+    recent_counts = {}
+    weekday_counts = {i: {} for i in range(7)}
+    race_days = 0
+    cycling_training_days = 0
+    for d, bucket in sorted(per_day.items()):
+        cyc = bucket["cycling"]
+        strength = bucket["strength"]
+        race_cyc = [a for a in cyc if _v141_is_race_activity(a)]
+        training_cyc = [a for a in cyc if not _v141_is_race_activity(a)]
+
+        cycling_role = None
+        if race_cyc:
+            # A competition is descriptive context, not a chosen training role.
+            # If non-race cycling also occurred the same day, keep its training
+            # role independently instead of letting the race force QUALITY.
+            race_days += 1
+        if training_cyc:
+            cycling_training_days += 1
+            cycling_role = "CYCLING_QUALITY" if any(_v4829_is_quality_activity(a) for a in training_cyc) else "CYCLING_AEROBIC"
+
+        parts = []
+        if cycling_role:
+            parts.append(cycling_role)
+        elif race_cyc:
+            parts.append("CYCLING_RACE")
+        if strength:
+            parts.append("STRENGTH")
+        if not parts:
+            continue
+
+        role = "+".join(parts)
+        counts[role] = counts.get(role, 0) + 1
+        weekday_counts[d.weekday()][role] = weekday_counts[d.weekday()].get(role, 0) + 1
+        if d >= recent_first:
+            recent_counts[role] = recent_counts.get(role, 0) + 1
+
+    strength_days = sum(v for k, v in counts.items() if "STRENGTH" in k)
+    return {
+        "schema": R143_SCHEMA,
+        "window_days": int(lookback_days),
+        "recent_window_days": int(recent_days),
+        "state": "LEARNED" if counts else "UNLEARNED",
+        "day_role_counts": counts,
+        "recent_day_role_counts": recent_counts,
+        "weekday_day_role_counts": weekday_counts,
+        "strength_day_count": strength_days,
+        "strength_composition_learned": bool(strength_days),
+        "race_days_descriptive_only": race_days,
+        "cycling_training_days": cycling_training_days,
+        "rule": "Combined day composition is descriptive and modality-aware. Cycling races are represented as CYCLING_RACE but never teach weekday training-role priors; non-race cycling and canonical strength on the same date remain independently learnable. A modality with no observed sessions remains UNLEARNED.",
+    }
+
+
+_v142_multimodal_session_type_rhythm_r143_base = _v142_multimodal_session_type_rhythm
+
+def _v142_multimodal_session_type_rhythm(activities, now=None):
+    now = now or get_rome_now()
+    cycling = dict(_v141_weekly_session_role_profile(activities, now=now) or {})
+    cycling.update({
+        "modality": "CYCLING",
+        "learning_state": "LEARNED" if int(cycling.get("training_days") or 0) > 0 else "UNLEARNED",
+    })
+    strength = _v142_strength_type_profile(activities, now=now)
+    composition = _v143_daily_composition_profile(activities, now=now)
+    learned_modalities = ["CYCLING"] if cycling.get("learning_state") == "LEARNED" else []
+    if strength.get("state") != "UNLEARNED":
+        learned_modalities.append("STRENGTH")
+    return {
+        "schema": R143_SCHEMA,
+        "coached_modalities": ["CYCLING", "STRENGTH"],
+        "learned_modalities": learned_modalities,
+        "unlearned_modalities": [m for m in ("CYCLING", "STRENGTH") if m not in learned_modalities],
+        "modalities": {"CYCLING": cycling, "STRENGTH": strength},
+        "daily_composition": composition,
+        "rule": "Session-type rhythm is multimodal by design. Each coached modality learns from its own evidence; missing modality data stays UNLEARNED. Cycling races remain descriptive competition context and do not train weekday session-role priors. Cross-modality day composition becomes usable only after both modalities have actual observations.",
+    }
+
+
+# Refresh the public wrappers so Snapshot surfaces receive R143 composition.
+def build_training_rhythm(season_activities, now=None, scope="CYCLING"):
+    base = dict(_build_training_rhythm_r141_final(season_activities, now=now, scope=scope) or {})
+    if str(scope or "CYCLING").upper() in {"CYCLING", "SYSTEMIC"}:
+        base["session_type_rhythm"] = _v142_multimodal_session_type_rhythm(season_activities, now=now)
+        base["session_type_rhythm_schema"] = R143_SCHEMA
+    return base
+
+
+def build_strength_pattern(activities, now=None):
+    base = dict(_build_strength_pattern_r141_final(activities, now=now) or {})
+    base["session_type_rhythm"] = _v142_strength_type_profile(activities, now=now)
+    base["session_type_rhythm_schema"] = R143_SCHEMA
+    return base
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.19 WIP R143 · RACE-SAFE TYPE RHYTHM + CYCLE-SAFE PRESCRIPTION CONTINUITY · R142 BASELINE"
+
+
+# R143 · CYCLE-SAFE PRESCRIPTION CONTINUITY
+# R136 correctly began preserving future hard prescriptions for adherence, but
+# could promote a prescription dated after cycle_end into the current cycle's
+# primary_anchor once the previous anchor had been observed. Keep the future
+# prescription in prescription_history, but preserve current-cycle anchor
+# semantics and expose the future item as next_cycle_anchor only.
+_update_microcycle_ledger_from_snapshot_r143_base = update_microcycle_ledger_from_snapshot
+
+
+def _v143_cycle_bounds_from_ledger(ledger):
+    try:
+        cs = date.fromisoformat(str((ledger or {}).get("cycle_start") or "")[:10])
+        ce = date.fromisoformat(str((ledger or {}).get("cycle_end") or "")[:10])
+        return cs, ce
+    except Exception:
+        return None, None
+
+
+def _v143_anchor_date(row):
+    try:
+        return date.fromisoformat(str((row or {}).get("date") or "")[:10])
+    except Exception:
+        return None
+
+
+def _v143_restore_current_cycle_anchor(out, prior_anchor, now=None):
+    """Pure post-processor: a primary anchor must belong to ledger cycle bounds."""
+    if not isinstance(out, dict) or not out.get("available"):
+        return out
+    cs, ce = _v143_cycle_bounds_from_ledger(out)
+    anchor = out.get("primary_anchor") if isinstance(out.get("primary_anchor"), dict) else None
+    ad = _v143_anchor_date(anchor)
+    if not cs or not ce or not anchor or not ad or cs <= ad <= ce:
+        return out
+
+    # Preserve the out-of-cycle prescription explicitly for auditability and
+    # next-cycle seeding, while prescription_history remains the attribution
+    # authority for adherence.
+    future = dict(anchor)
+    future["source"] = "NEXT_CYCLE_SNAPSHOT_PLAN"
+    future["status"] = "PLANNED"
+    ncs = ad - timedelta(days=ad.weekday())
+    nce = ncs + timedelta(days=6)
+    out["next_cycle_anchor"] = future
+    out["next_cycle_start"] = ncs.isoformat()
+    out["next_cycle_end"] = nce.isoformat()
+    out["cycle_scope_correction"] = "R143_OUT_OF_CYCLE_PRIMARY_ANCHOR_DEMOTED"
+
+    prior = dict(prior_anchor) if isinstance(prior_anchor, dict) else None
+    pd = _v143_anchor_date(prior)
+    if prior and pd and cs <= pd <= ce:
+        out["primary_anchor"] = prior
+        pstatus = str(prior.get("status") or "").upper()
+        out["continuity_state"] = "ANCHOR OBSERVED" if pstatus == "HARD_ACTIVITY_OBSERVED" else ("ANCHOR PLANNED" if pstatus == "PLANNED" else str(out.get("continuity_state") or "OPEN"))
+        # R136 may have archived the same current-cycle anchor only because it
+        # incorrectly advanced to the future anchor. Undo that artificial move.
+        prior_fp = _v136_prescription_fingerprint(prior)
+        ah = [dict(x) for x in (out.get("anchor_history") or []) if isinstance(x, dict)]
+        out["anchor_history"] = [x for x in ah if _v136_prescription_fingerprint(x) != prior_fp]
+    else:
+        # If no valid prior anchor exists, prefer an observed hard session from
+        # the current cycle rather than assigning a future date to this cycle.
+        completed = [dict(x) for x in (out.get("completed_hard_sessions") or []) if isinstance(x, dict)]
+        valid = []
+        for x in completed:
+            xd = _v143_anchor_date(x)
+            if xd and cs <= xd <= ce:
+                valid.append(x)
+        if valid:
+            last = sorted(valid, key=lambda x: (str(x.get("date") or ""), str(x.get("time") or "")))[-1]
+            out["primary_anchor"] = {
+                "source": "COMPLETED_ACTIVITY",
+                "date": last.get("date"),
+                "title": last.get("name"),
+                "family": last.get("family"),
+                "status": "HARD_ACTIVITY_OBSERVED",
+                "interval_minutes": None,
+            }
+            out["continuity_state"] = "ANCHOR OBSERVED"
+        else:
+            out["primary_anchor"] = None
+            out["continuity_state"] = "OPEN"
+    return out
+
+
+def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=None):
+    now = now or get_rome_now()
+    prior_anchor = _v4831_json_clone((ledger or {}).get("primary_anchor") or {}) if isinstance((ledger or {}).get("primary_anchor"), dict) else None
+    out = _update_microcycle_ledger_from_snapshot_r143_base(ledger, sessions, user_id=user_id, now=now)
+    out = _v143_restore_current_cycle_anchor(out, prior_anchor, now=now)
+    # Base already persisted once; persist the corrected cycle-safe state.
+    if isinstance(out, dict) and out.get("ledger_id"):
+        payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
+        _db_execute("UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?", (payload, _now_utc_text(), out["ledger_id"], _data_owner_user_id(user_id)))
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.19 WIP R143 · RACE-SAFE TYPE RHYTHM + CYCLE-SAFE PRESCRIPTION CONTINUITY · R142 BASELINE"
