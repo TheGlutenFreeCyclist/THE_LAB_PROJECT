@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.17 WIP R141 · WEEKLY SESSION ROLE RHYTHM · R140 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.18 WIP R142 · MULTIMODAL SESSION TYPE RHYTHM · R141 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -33052,6 +33052,192 @@ def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_de
     if part:reason_bits.append("DAYPART")
     return first['dt'],selected['dt'],'OBSERVED_HARD_'+'_'.join(reason_bits),selected
 
+
+
+# R142 · MULTIMODAL SESSION TYPE RHYTHM
+# Session-type rhythm is a coached-modality model, not a cycling-only patch.
+# CYCLING and STRENGTH learn independently from their own canonical evidence;
+# missing data for one modality remains UNLEARNED and never becomes negative
+# evidence against that modality. A combined day-composition layer appears only
+# after the relevant modality has actually been observed.
+R142_SCHEMA = "V4.9.18-R142-1"
+_build_training_rhythm_r141_final = build_training_rhythm
+_build_strength_pattern_r141_final = build_strength_pattern
+_v117_hard_cadence_profile_r141_final = _v117_hard_cadence_profile
+
+
+def _v142_completed_activity_rows(activities, now=None, lookback_days=90):
+    now = now or get_rome_now()
+    cutoff = now.replace(tzinfo=None)
+    first_day = cutoff.date() - timedelta(days=max(1, int(lookback_days)) - 1)
+    rows = []
+    for a in activities or []:
+        try:
+            start = _v4829_parse_activity_start(a)
+            end = _v4829_activity_end(a)
+            if start is None or end is None or end > cutoff or start.date() < first_day:
+                continue
+            modality = _v4887_activity_modality(a)
+            if modality not in {"CYCLING", "STRENGTH"}:
+                continue
+            rows.append({"activity": a, "dt": start, "date": start.date(), "modality": modality})
+        except (TypeError, ValueError, KeyError):
+            continue
+    rows.sort(key=lambda r: r["dt"])
+    return rows
+
+
+def _v142_strength_type_profile(activities, now=None):
+    """Strength is UNLEARNED until actual canonical WeightTraining evidence exists."""
+    base = dict(_build_strength_pattern_r141_final(activities, now=now) or {})
+    sessions = int(base.get("sessions_90d") or 0)
+    if sessions <= 0:
+        return {
+            "schema": R142_SCHEMA,
+            "modality": "STRENGTH",
+            "state": "UNLEARNED",
+            "confidence": "NONE",
+            "observed_sessions": 0,
+            "observed_days": 0,
+            "likely_weekdays": [],
+            "typical_start_minute": None,
+            "typical_duration_min": None,
+            "median_gap_days": None,
+            "regularity": None,
+            "pattern_mode": "UNLEARNED",
+            "rule": "No strength habit is inferred from absence. Learning starts automatically when canonical WeightTraining sessions appear.",
+        }
+    state = str(base.get("state") or "OBSERVED").upper()
+    return {
+        "schema": R142_SCHEMA,
+        "modality": "STRENGTH",
+        "state": state,
+        "confidence": str(base.get("confidence") or "LOW").upper(),
+        "observed_sessions": sessions,
+        "observed_days": sessions,  # build_strength_pattern is already date-deduplicated for cadence evidence downstream
+        "distinct_weeks": int(base.get("distinct_weeks") or 0),
+        "last_session_date": base.get("last_session_date"),
+        "likely_weekdays": list(base.get("likely_weekdays") or []),
+        "likely_weekday_labels": list(base.get("likely_weekday_labels") or []),
+        "typical_start_minute": base.get("typical_start_minute"),
+        "typical_start_label": base.get("typical_start_label"),
+        "typical_duration_min": base.get("typical_duration_min"),
+        "typical_duration_label": base.get("typical_duration_label"),
+        "median_gap_days": base.get("median_gap_days"),
+        "regularity": base.get("regularity"),
+        "pattern_mode": base.get("pattern_mode"),
+        "can_propose": bool(base.get("can_propose")),
+        "rule": "Strength timing is learned only from canonical WeightTraining history and remains independent from cycling session-role learning.",
+    }
+
+
+def _v142_daily_composition_profile(activities, now=None, lookback_days=42, recent_days=21):
+    now = now or get_rome_now()
+    rows = _v142_completed_activity_rows(activities, now=now, lookback_days=lookback_days)
+    per_day = {}
+    for row in rows:
+        d = row["date"]
+        bucket = per_day.setdefault(d, {"cycling": [], "strength": []})
+        if row["modality"] == "CYCLING":
+            bucket["cycling"].append(row["activity"])
+        elif row["modality"] == "STRENGTH":
+            bucket["strength"].append(row["activity"])
+
+    recent_first = now.date() - timedelta(days=max(6, int(recent_days) - 1))
+    counts = {}
+    recent_counts = {}
+    weekday_counts = {i: {} for i in range(7)}
+    for d, bucket in sorted(per_day.items()):
+        cyc = bucket["cycling"]
+        strength = bucket["strength"]
+        cyc_quality = any(_v4829_is_quality_activity(a) for a in cyc)
+        if cyc and cyc_quality:
+            cycling_role = "CYCLING_QUALITY"
+        elif cyc:
+            cycling_role = "CYCLING_AEROBIC"
+        else:
+            cycling_role = None
+        parts = []
+        if cycling_role:
+            parts.append(cycling_role)
+        if strength:
+            parts.append("STRENGTH")
+        if not parts:
+            continue
+        role = "+".join(parts)
+        counts[role] = counts.get(role, 0) + 1
+        weekday_counts[d.weekday()][role] = weekday_counts[d.weekday()].get(role, 0) + 1
+        if d >= recent_first:
+            recent_counts[role] = recent_counts.get(role, 0) + 1
+
+    strength_days = sum(v for k, v in counts.items() if "STRENGTH" in k)
+    return {
+        "schema": R142_SCHEMA,
+        "window_days": int(lookback_days),
+        "recent_window_days": int(recent_days),
+        "state": "LEARNED" if counts else "UNLEARNED",
+        "day_role_counts": counts,
+        "recent_day_role_counts": recent_counts,
+        "weekday_day_role_counts": weekday_counts,
+        "strength_day_count": strength_days,
+        "strength_composition_learned": bool(strength_days),
+        "rule": "Combined day composition is descriptive. A modality with no observed sessions is not learned as absent; it simply remains UNLEARNED until evidence appears.",
+    }
+
+
+def _v142_multimodal_session_type_rhythm(activities, now=None):
+    """One session-type model with independent coached-modality subprofiles."""
+    now = now or get_rome_now()
+    cycling = dict(_v141_weekly_session_role_profile(activities, now=now) or {})
+    cycling.update({
+        "modality": "CYCLING",
+        "learning_state": "LEARNED" if int(cycling.get("training_days") or 0) > 0 else "UNLEARNED",
+    })
+    strength = _v142_strength_type_profile(activities, now=now)
+    composition = _v142_daily_composition_profile(activities, now=now)
+    learned_modalities = ["CYCLING"] if cycling.get("learning_state") == "LEARNED" else []
+    if strength.get("state") != "UNLEARNED":
+        learned_modalities.append("STRENGTH")
+    return {
+        "schema": R142_SCHEMA,
+        "coached_modalities": ["CYCLING", "STRENGTH"],
+        "learned_modalities": learned_modalities,
+        "unlearned_modalities": [m for m in ("CYCLING", "STRENGTH") if m not in learned_modalities],
+        "modalities": {"CYCLING": cycling, "STRENGTH": strength},
+        "daily_composition": composition,
+        "rule": "Session-type rhythm is multimodal by design. Each coached modality learns from its own evidence; missing modality data stays UNLEARNED. Cross-modality day composition becomes usable only after both modalities have actual observations.",
+    }
+
+
+def build_training_rhythm(season_activities, now=None, scope="CYCLING"):
+    base = dict(_build_training_rhythm_r141_final(season_activities, now=now, scope=scope) or {})
+    # The default athlete rhythm surface now carries the multimodal type model.
+    # Explicit STRENGTH rhythm calls stay lean to avoid recursive duplication.
+    if str(scope or "CYCLING").upper() in {"CYCLING", "SYSTEMIC"}:
+        base["session_type_rhythm"] = _v142_multimodal_session_type_rhythm(season_activities, now=now)
+        base["session_type_rhythm_schema"] = R142_SCHEMA
+    return base
+
+
+def build_strength_pattern(activities, now=None):
+    base = dict(_build_strength_pattern_r141_final(activities, now=now) or {})
+    base["session_type_rhythm"] = _v142_strength_type_profile(activities, now=now)
+    base["session_type_rhythm_schema"] = R142_SCHEMA
+    return base
+
+
+def _v117_hard_cadence_profile(activities, now=None):
+    base = dict(_v117_hard_cadence_profile_r141_final(activities, now=now) or {})
+    multi = _v142_multimodal_session_type_rhythm(activities, now=now)
+    base["session_type_rhythm"] = multi
+    base["strength_session_type_state"] = ((multi.get("modalities") or {}).get("STRENGTH") or {}).get("state")
+    base["schema"] = R142_SCHEMA
+    base["note"] = (
+        "General cycling rhythm predicts opportunities. Cycling session-role rhythm learns aerobic versus quality days. "
+        "Strength rhythm is learned independently from canonical WeightTraining history and remains UNLEARNED when no such data exist. "
+        "Once strength observations appear, combined day composition can learn cycling-only, strength-only and mixed-day habits without treating absence as a prohibition."
+    )
+    return base
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
