@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.10 WIP R134 · NOTE-AWARE HARD HORIZON FALLBACK · R133 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.11 WIP R135 · STRUCTURED NOTE AUTHORITY · CLEAN COACH CALL · R134 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -3426,7 +3426,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <article class="v4-card v4-session {{ s.intensity_class }} v23-session-card v23-col-{{ loop.index }}">
 <div class="v4-session-slot">{{ s.slot }}</div>
 <h3>{{ s.title|replace('Coach-selected session','Nova-selected session') }}</h3>
-<div class="v4-session-meta"><span class="v4-session-pill">{{ s.duration|replace('Coach-selected duration','Nova-selected duration') }}</span><span class="v4-session-pill">{{ s.intensity }}</span>{% if s.provisional_quality %}<span class="v4-session-pill v4873-provisional-pill">⚡ CANDIDATE · REASSESS</span>{% endif %}{% if s.environment %}<span class="v4-session-pill {% if s.is_planned_training %}v24-plan-pill{% endif %}">{{ "🚴 " if s.is_planned_training else "" }}{{ s.environment }}</span>{% endif %}{% if s.planned_demand and s.planned_demand not in ["COACH","RACE"] %}<span class="v4-session-pill v24-plan-pill">PLAN {{ s.planned_demand }}</span>{% endif %}{% if s.athlete_intent_notice %}<span class="v4-session-pill v24-plan-pill">⚠ {{ s.athlete_intent_notice|replace('COACH ALIGNED','NOVA ALIGNED') }}</span>{% elif s.definition_notice %}<span class="v4-session-pill v24-plan-pill">⚠ {{ s.definition_notice }}</span>{% endif %}</div>
+<div class="v4-session-meta"><span class="v4-session-pill">{{ s.duration|replace('Coach-selected duration','Nova-selected duration') }}</span><span class="v4-session-pill">{{ s.intensity }}</span>{% if s.provisional_quality %}<span class="v4-session-pill v4873-provisional-pill">⚡ CANDIDATE · REASSESS</span>{% endif %}{% if s.environment %}<span class="v4-session-pill {% if s.is_planned_training %}v24-plan-pill{% endif %}">{{ "🚴 " if s.is_planned_training else "" }}{{ s.environment }}</span>{% endif %}{% if s.planned_demand and s.planned_demand not in ["COACH","RACE"] %}<span class="v4-session-pill v24-plan-pill">PLAN {{ s.planned_demand }}</span>{% endif %}</div>
 <div class="v4-session-main">{{ s.main_set|replace('See coach recommendation.','See the recommendation above.') }}</div>
 <div class="v4-session-why"><strong>Why:</strong> {{ s.why }}</div>
 </article>
@@ -31139,6 +31139,650 @@ def _v132_apply_future_intent_to_sessions(sessions, planning_context, road=None)
     rows[0]["athlete_intent_notice"] = notice
     next_hard["athlete_intent_notice"] = notice
     return rows
+
+
+# R135 · STRUCTURED NOTE AUTHORITY + CLEAN COACH CALL
+# - UNCERTAIN availability is not UNAVAILABLE: keep the opportunity provisional.
+# - Future-note constraints project into the Clock, not only into hard-session ranking.
+# - Long athlete-intent explanations are narrative context, never UI pills.
+# - Semantic authority recognizes structured athlete intent even when it is not phrased as a question.
+R135_SCHEMA = "V4.9.11-R135-1"
+_v117_quality_candidates_r134 = _v117_quality_candidates
+_build_coach_clock_r134 = build_coach_clock
+_v132_apply_future_intent_to_sessions_r134 = _v132_apply_future_intent_to_sessions
+_v4897_semantic_compile_snapshot_r134 = _v4897_semantic_compile_snapshot
+_v133_interpret_athlete_note_r134 = _v133_interpret_athlete_note
+
+
+def _v133_interpret_athlete_note(now=None, logs=None):
+    """R135 enrichment: clock-time wording is equivalent to named daypart wording.
+
+    The R133 interpreter remains the base parser. This pass only normalizes explicit
+    availability semantics such as "at 5 pm", "after 17:00", "alle 17", so wording
+    style cannot decide whether availability is understood.
+    """
+    now = now or get_rome_now()
+    result = _v133_interpret_athlete_note_r134(now=now, logs=logs)
+    try:
+        rows = list(logs if logs is not None else load_daily_logs(80))
+    except Exception:
+        rows = []
+    rows = [r for r in rows if str(r.get("note") or "").strip()]
+    rows.sort(key=lambda r:(str(r.get("logged_at_utc") or ""),str(r.get("local_date") or ""),str(r.get("local_time") or "")), reverse=True)
+    if not rows:
+        return result
+    note = str(rows[0].get("note") or "").strip()
+    if not note:
+        return result
+    clauses = [c.strip(" ,") for c in re.split(
+        r"(?:[.!?;]+\s*|,\s*(?=(?:but|however|though|ma|per[oò])\b)|\s+\b(?:but|however|though|ma|per[oò])\b\s+)",
+        note, flags=re.I,
+    ) if c and c.strip(" ,")]
+    if not clauses:
+        clauses = [note]
+    current_date = None
+    enriched = {}
+    pos_re = re.compile(r"\b(?:can train|can ride|can work out|available to train|available to ride|back on the trainer|back on the bike|posso allenarmi|posso pedalare|sono disponibile|torno sui rulli|torno sul trainer)\b", re.I)
+    neg_re = re.compile(r"\b(?:can't|cannot|won't be able|will not be able|not available|unavailable|no training|non posso|non riesco|non disponibile|niente allenamento)\b", re.I)
+    unc_re = re.compile(r"\b(?:don't know|do not know|not sure|unsure|might not|may not|maybe not|forse non|non so|non sono sicur[oa]|se riesco)\b", re.I)
+    for clause in clauses:
+        dt = _v133_target_date(clause, now)
+        if dt:
+            current_date = dt
+        if not current_date:
+            continue
+        parts = _v133_dayparts(clause, future=current_date != now.date().isoformat())
+        if not parts:
+            continue
+        low = _v133_norm_note(clause)
+        is_unc = bool(unc_re.search(low))
+        is_neg = bool(neg_re.search(low))
+        is_pos = bool(pos_re.search(low))
+        if not (is_unc or is_neg or is_pos):
+            continue
+        state = "UNCERTAIN" if is_unc else ("UNAVAILABLE" if is_neg else "AVAILABLE")
+        bucket = enriched.setdefault(current_date, {"AVAILABLE":set(),"UNAVAILABLE":set(),"UNCERTAIN":set()})
+        for part in parts:
+            bucket[state].add(part)
+    if not enriched:
+        return result
+    targets = [dict(t) for t in (result.get("future_targets") or [])]
+    by_date = {str(t.get("date") or ""):t for t in targets}
+    for ds,states in enriched.items():
+        t = by_date.get(ds)
+        if t is None:
+            t = {"date":ds,"preferred_dayparts":[],"uncertain_dayparts":[],"unavailable_dayparts":[],"available_dayparts":[],"session_profile":None,"quality_preferred":False,"hard_blocked":False,"conditional":False,"confidence":"EXPLICIT"}
+            targets.append(t); by_date[ds]=t
+        available = set(t.get("available_dayparts") or []) | states["AVAILABLE"]
+        unavailable = set(t.get("unavailable_dayparts") or []) | states["UNAVAILABLE"]
+        uncertain = set(t.get("uncertain_dayparts") or []) | states["UNCERTAIN"]
+        # In phrases such as "not sure if I can train at 5", uncertainty wins over
+        # the embedded positive verb. Explicit unavailability also outranks positive.
+        available -= uncertain | unavailable
+        unavailable -= uncertain
+        t["available_dayparts"] = list(dict.fromkeys(list(t.get("available_dayparts") or []) + sorted(available)))
+        t["available_dayparts"] = [p for p in t["available_dayparts"] if p not in uncertain and p not in unavailable]
+        t["unavailable_dayparts"] = list(dict.fromkeys([p for p in list(t.get("unavailable_dayparts") or []) + sorted(unavailable) if p not in uncertain]))
+        t["uncertain_dayparts"] = list(dict.fromkeys(list(t.get("uncertain_dayparts") or []) + sorted(uncertain)))
+        t["preferred_dayparts"] = [p for p in (t.get("preferred_dayparts") or []) if p not in set(t["uncertain_dayparts"]) and p not in set(t["unavailable_dayparts"])]
+    targets.sort(key=lambda t:str(t.get("date") or ""))
+    result["future_targets"] = targets
+    result["availability"] = {"entries":[
+        {"date":t["date"],"daypart":part,"state":state}
+        for t in targets
+        for state,key in (("AVAILABLE","available_dayparts"),("UNAVAILABLE","unavailable_dayparts"),("UNCERTAIN","uncertain_dayparts"))
+        for part in t.get(key) or []
+    ]}
+    result["timing_preference"] = {"entries":[{"date":t["date"],"preferred_dayparts":t.get("preferred_dayparts") or []} for t in targets if t.get("preferred_dayparts")]}
+    result["active"] = bool(result.get("active") or targets)
+    if targets and not ((result.get("narrative_context") or {}).get("summary")):
+        t = targets[0]
+        bits=[]
+        if t.get("available_dayparts"): bits.append("availability confirmed in the "+_v135_human_parts(t.get("available_dayparts")))
+        if t.get("uncertain_dayparts"): bits.append("availability uncertain in the "+_v135_human_parts(t.get("uncertain_dayparts")))
+        if t.get("unavailable_dayparts"): bits.append("unavailable in the "+_v135_human_parts(t.get("unavailable_dayparts")))
+        if bits:
+            result["narrative_context"]={"material":True,"summary":"Your latest note matters here: "+"; ".join(bits)+"."}
+    return result
+
+
+def _v135_note_daypart(minute):
+    return _v133_daypart_from_minute(minute, future=True)
+
+
+def _v135_target_from_context(planning_context):
+    interp = (planning_context or {}).get("athlete_note_interpretation") or {}
+    return _v133_future_target(interp) if isinstance(interp, dict) else None
+
+
+def _v135_slot_matches_part(slot, part):
+    if part == "ALL_DAY":
+        return True
+    try:
+        minute = int(round(float(slot.get("start_minute"))))
+    except Exception:
+        return False
+    return _v135_note_daypart(minute) == part
+
+
+def build_coach_clock(season_activities, now=None, planning_context=None, training_rhythm=None):
+    """R135: project structured future availability into learned Clock opportunities.
+
+    UNAVAILABLE removes a learned opportunity. UNCERTAIN keeps it visible and marks
+    it provisional. AVAILABLE confirms availability only; it does not convert a
+    learned clock time into an explicit appointment. Calendar restrictions remain
+    authoritative upstream.
+    """
+    planning_context = planning_context or build_planning_context(now or get_rome_now())
+    clock = _build_coach_clock_r134(
+        season_activities, now=now, planning_context=planning_context, training_rhythm=training_rhythm
+    )
+    target = _v135_target_from_context(planning_context)
+    if not target:
+        return clock
+    ds = str(target.get("date") or "")
+    unavailable = set(target.get("unavailable_dayparts") or [])
+    uncertain = set(target.get("uncertain_dayparts") or [])
+    available = set(target.get("available_dayparts") or [])
+    preferred = set(target.get("preferred_dayparts") or [])
+    rows = []
+    removed = 0
+    for raw in list((clock or {}).get("next_slots") or []):
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        if str(row.get("date") or "") != ds:
+            rows.append(row)
+            continue
+        part = _v135_note_daypart(row.get("start_minute"))
+        # Explicit athlete unavailability removes learned opportunities. An explicit
+        # Calendar race/planned item stays visible so the conflict is inspectable;
+        # downstream restrictions/authority decide execution.
+        unavailable_here = "ALL_DAY" in unavailable or (part in unavailable if part else False)
+        if unavailable_here and str(row.get("source") or "").upper() != "CALENDAR":
+            removed += 1
+            continue
+        uncertain_here = "ALL_DAY" in uncertain or (part in uncertain if part else False)
+        available_here = "ALL_DAY" in available or (part in available if part else False)
+        preferred_here = part in preferred if part else False
+        if uncertain_here:
+            row["availability_state"] = "UNCERTAIN"
+            row["availability_confirmed"] = False
+            row["availability_source"] = "DAILY_NOTE_STRUCTURED_INTENT"
+        elif available_here:
+            row["availability_state"] = "AVAILABLE"
+            row["availability_confirmed"] = True
+            row["availability_source"] = "DAILY_NOTE_STRUCTURED_INTENT"
+        else:
+            row.setdefault("availability_state", "PREDICTED")
+            row.setdefault("availability_confirmed", False)
+        if preferred_here:
+            row["athlete_timing_preferred"] = True
+        rows.append(row)
+    clock = dict(clock or {})
+    clock["next_slots"] = rows
+    clock["next_slot_label"] = rows[0].get("label") if rows else "No valid training opportunity"
+    clock["future_note_availability_applied"] = True
+    clock["future_note_slots_removed"] = removed
+    return clock
+
+
+def _v117_quality_candidates(training_rhythm, coach_clock, planning_context, now):
+    """R135: UNCERTAIN is a candidate state, never a synonym for UNAVAILABLE."""
+    ctx = dict(planning_context or {})
+    future = dict(ctx.get("future_note_intent") or {})
+    uncertain = set(future.get("uncertain_dayparts") or [])
+    intent_date = str(future.get("date") or "") if future.get("active") else ""
+    if uncertain:
+        # Let the established candidate builder see the slot, then annotate it as
+        # provisional. True UNAVAILABLE remains filtered by the underlying logic.
+        future["uncertain_dayparts"] = []
+        ctx["future_note_intent"] = future
+    rows = [dict(x) for x in _v117_quality_candidates_r134(training_rhythm, coach_clock, ctx, now)]
+    if not uncertain or not intent_date:
+        return rows
+    for row in rows:
+        dt = row.get("dt")
+        if not isinstance(dt, datetime) or dt.date().isoformat() != intent_date:
+            continue
+        part = _v135_note_daypart(dt.hour * 60 + dt.minute)
+        if "ALL_DAY" in uncertain or part in uncertain:
+            row["availability_state"] = "UNCERTAIN"
+            row["availability_confirmed"] = False
+            row["authority"] = "DAILY_NOTE_FUTURE_UNCERTAIN"
+            # Uncertain availability is never promoted to explicit/confirmed merely
+            # because the note also expressed a quality preference.
+            row["explicit"] = False
+    return rows
+
+
+def _v135_resolution_from_rows(rows, planning_context, road=None):
+    target = _v135_target_from_context(planning_context)
+    if not target:
+        return None
+    q = (road or {}).get("quality_window") or {}
+    target_date = str(target.get("date") or "")
+    preferred = set(target.get("preferred_dayparts") or [])
+    uncertain = set(target.get("uncertain_dayparts") or [])
+    unavailable = set(target.get("unavailable_dayparts") or [])
+    profile = str(target.get("session_profile") or "").upper() or None
+    hard = next((r for r in rows if _v106_session_is_hard(r)), None)
+    requested_slot = None
+    for row in rows:
+        if str(row.get("date") or "") != target_date:
+            continue
+        part = _v135_note_daypart(row.get("start_minute"))
+        if not preferred or part in preferred:
+            requested_slot = row
+            break
+    lower = None
+    try:
+        lower = float(q.get("learned_earliest_hours") or 0) + float(q.get("recovery_delay_hours") or 0)
+    except Exception:
+        lower = None
+    req_spacing = None
+    if requested_slot is not None:
+        try:
+            req_spacing = float(requested_slot.get("since_last_hard_hours"))
+        except Exception:
+            req_spacing = None
+    hard_part = _v135_note_daypart(hard.get("start_minute")) if hard else None
+    hard_uncertain = bool(hard and str(hard.get("date") or "") == target_date and ("ALL_DAY" in uncertain or hard_part in uncertain))
+    aligned = bool(
+        hard and str(hard.get("date") or "") == target_date and
+        (not preferred or hard_part in preferred)
+    )
+    status = "UNDERSTOOD"
+    reason = None
+    if profile in {"REST", "NO_TRAINING"} or target.get("hard_blocked"):
+        status = "REST_OR_HARD_BLOCK"
+    elif profile == "QUALITY" or target.get("quality_preferred"):
+        if aligned:
+            status = "ALIGNED_QUALITY"
+        elif requested_slot is not None and lower and req_spacing is not None and req_spacing < lower:
+            status = "PREFERRED_BEFORE_SPACING_LOWER_BOUND"
+            reason = "PLANNING_SPACING_LOWER_BOUND"
+        elif hard and hard_uncertain:
+            status = "PROVISIONAL_ALTERNATE_SAME_DAY"
+        elif hard:
+            status = "QUALITY_DEFERRED"
+        else:
+            status = "QUALITY_NOT_CURRENTLY_EXECUTABLE"
+    elif profile == "EASY":
+        status = "EASY_INTENT"
+    elif unavailable or uncertain or target.get("available_dayparts"):
+        status = "AVAILABILITY_ONLY"
+    return {
+        "schema": R135_SCHEMA,
+        "active": True,
+        "profile": profile,
+        "target_date": target_date,
+        "preferred_dayparts": sorted(preferred),
+        "uncertain_dayparts": sorted(uncertain),
+        "unavailable_dayparts": sorted(unavailable),
+        "available_dayparts": list(target.get("available_dayparts") or []),
+        "conditional": bool(target.get("conditional")),
+        "status": status,
+        "reason": reason,
+        "planning_lower_bound_hours": round(lower, 1) if lower else None,
+        "requested_slot_label": requested_slot.get("slot") if requested_slot else None,
+        "requested_slot_spacing_hours": round(req_spacing, 1) if req_spacing is not None else None,
+        "selected_hard_slot": hard.get("slot") if hard else None,
+        "selected_hard_date": hard.get("date") if hard else None,
+        "selected_hard_daypart": hard_part,
+        "selected_hard_availability": "UNCERTAIN" if hard_uncertain else (hard.get("availability_state") if hard else None),
+        "aligned_preference": aligned,
+    }
+
+
+def _v132_apply_future_intent_to_sessions(sessions, planning_context, road=None):
+    """R135: structured resolution replaces long warning/disclaimer strings."""
+    rows = _v132_apply_future_intent_to_sessions_r134(sessions, planning_context, road)
+    resolution = _v135_resolution_from_rows(rows, planning_context, road)
+    # R134 used the same long explanatory text as both a narrative sentence and a
+    # yellow metadata pill. Keep machine-readable context; remove presentation text.
+    for row in rows:
+        if isinstance(row, dict):
+            notice = str(row.get("athlete_intent_notice") or "")
+            if "preferred quality window" in notice.lower() or "daily note" in notice.lower() or "latest note" in notice.lower():
+                row["athlete_intent_notice"] = None
+    if resolution and rows:
+        rows[0]["athlete_note_resolution"] = dict(resolution)
+        hard = next((r for r in rows if _v106_session_is_hard(r)), None)
+        if hard is not None:
+            hard["athlete_note_resolution"] = dict(resolution)
+    return rows
+
+
+def _v135_human_parts(parts):
+    mapping = {"MORNING":"morning", "AFTERNOON":"afternoon", "EVENING":"evening", "ALL_DAY":"all day"}
+    vals = [mapping.get(str(x).upper(), str(x).lower()) for x in (parts or [])]
+    return "/".join(vals)
+
+
+def _v135_specific_easy_line(row):
+    if not isinstance(row, dict):
+        return None
+    slot = str(row.get("slot") or "").strip()
+    main = str(row.get("main_set") or "").strip()
+    if slot and main:
+        first = _v4844_sentence_list(main)
+        return f"If you use {slot}, {first[0][0].lower() + first[0][1:] if first and len(first[0])>1 else (first[0] if first else 'keep it easy')}."
+    return None
+
+
+def _v106_recommendation_projection(sessions):
+    """R135: decision-focused coach call; note semantics change the reasoning, not a badge."""
+    rows = [x for x in (sessions or []) if isinstance(x, dict)]
+    if not rows:
+        return "No training session is currently prescribed in this Snapshot."
+    contract = _v106_recommendation_contract(rows)
+    first = rows[0]
+    hard_i = contract.get("first_hard_index")
+    hard = rows[hard_i] if hard_i is not None and 0 <= hard_i < len(rows) else None
+    resolution = first.get("athlete_note_resolution") if isinstance(first.get("athlete_note_resolution"), dict) else None
+    parts = []
+
+    if resolution and resolution.get("active"):
+        profile = str(resolution.get("profile") or "").upper()
+        pref = _v135_human_parts(resolution.get("preferred_dayparts"))
+        uncertain = _v135_human_parts(resolution.get("uncertain_dayparts"))
+        status = str(resolution.get("status") or "")
+        req_slot = str(resolution.get("requested_slot_label") or "").strip()
+        req_h = resolution.get("requested_slot_spacing_hours")
+        lower = resolution.get("planning_lower_bound_hours")
+        hard_slot = str(resolution.get("selected_hard_slot") or "").strip()
+        hard_title = str((hard or {}).get("title") or "quality session").strip()
+        if profile == "QUALITY" or status.startswith("ALIGNED_QUALITY") or status.startswith("PREFERRED_") or status.startswith("PROVISIONAL_") or status.startswith("QUALITY_"):
+            lead = "You want quality"
+            if pref:
+                lead += f" in the {pref}"
+            lead += "."
+            parts.append(lead)
+            if status == "ALIGNED_QUALITY" and hard:
+                parts.append(f"The plan aligns with that: {hard_slot}: {hard_title}.")
+            elif status == "PREFERRED_BEFORE_SPACING_LOWER_BOUND":
+                if req_slot and req_h is not None and lower is not None:
+                    parts.append(f"That preferred window is about {req_h:g} h after the last hard session, below Nova's current {lower:g} h planning lower bound, so it stays easy rather than becoming the hard block.")
+                elif req_slot:
+                    parts.append(f"That preferred window is earlier than the current planning spacing bound, so it stays easy rather than becoming the hard block.")
+                if hard:
+                    if str(resolution.get("selected_hard_availability") or "") == "UNCERTAIN":
+                        parts.append(f"{hard_slot} is the first quality-eligible alternative, but your availability there is uncertain; keep it provisional: {hard_title}.")
+                    else:
+                        parts.append(f"The next quality-eligible slot is {hard_slot}: {hard_title}.")
+            elif status == "PROVISIONAL_ALTERNATE_SAME_DAY" and hard:
+                parts.append(f"The preferred window is not quality-eligible yet; {hard_slot} is the first viable alternative, but you marked that availability uncertain, so it remains provisional: {hard_title}.")
+            elif hard:
+                parts.append(f"The next quality candidate is {hard_slot}: {hard_title}.")
+            if uncertain and not (hard and str(resolution.get("selected_hard_availability") or "") == "UNCERTAIN"):
+                parts.append(f"Your {uncertain} availability is uncertain, so Nova does not treat that window as confirmed.")
+        elif profile in {"REST", "NO_TRAINING"}:
+            parts.append("Your note indicates that the target window is for rest/no training, so learned rhythm must not create a workout there.")
+        elif profile == "EASY":
+            parts.append("Your note asks to keep the target window easy; the plan should preserve that rather than manufacture quality.")
+        elif status == "AVAILABILITY_ONLY":
+            if uncertain:
+                parts.append(f"Your {uncertain} availability is uncertain; those opportunities remain provisional rather than being treated as unavailable or confirmed.")
+
+    # Concrete action, without the old repeated 'Nova current decision is TRAIN' boilerplate.
+    if not parts:
+        if hard_i == 0 and hard:
+            parts.append(f"Next up: {str(hard.get('slot') or '').strip()}: {str(hard.get('title') or 'quality session').strip()}.")
+        elif hard_i is not None and hard_i > 0 and hard:
+            parts.append(f"Use {str(first.get('slot') or 'the next opportunity').strip()} as an easy aerobic bridge; the next quality slot is {str(hard.get('slot') or '').strip()}: {str(hard.get('title') or 'quality session').strip()}.")
+        else:
+            parts.append(f"The listed opportunities remain easy/aerobic for now; the next one is {str(first.get('slot') or first.get('title') or 'the next session').strip()}.")
+
+    easy_line = _v135_specific_easy_line(first) if not _v106_session_is_hard(first) else None
+    if easy_line and not any("stays easy" in x.lower() or "easy aerobic bridge" in x.lower() for x in parts):
+        parts.append(easy_line)
+    if hard:
+        hard_main = _v4844_sentence_list(str(hard.get("main_set") or ""))
+        if hard_main:
+            parts.append(hard_main[0])
+        hard_why = [x for x in _v4844_sentence_list(str(hard.get("why") or "")) if "candidate quality session" not in x.lower()]
+        if hard_why:
+            parts.append(hard_why[0])
+    return " ".join(_v4844_dedupe_sentences(parts))[:1700].strip()
+
+
+def _v135_structured_request_audit(rows, recommendation):
+    first = next((r for r in (rows or []) if isinstance(r, dict) and isinstance(r.get("athlete_note_resolution"), dict)), None)
+    if not first:
+        return None
+    r = first.get("athlete_note_resolution") or {}
+    profile = str(r.get("profile") or "").upper()
+    if not (profile or r.get("preferred_dayparts") or r.get("uncertain_dayparts") or r.get("unavailable_dayparts") or r.get("available_dayparts")):
+        return None
+    kind = "TRAINING_INTENT" if profile else "AVAILABILITY"
+    if profile == "QUALITY":
+        kind = "QUALITY_TIMING_INTENT"
+    elif profile in {"REST", "NO_TRAINING"}:
+        kind = "REST_INTENT"
+    elif profile == "EASY":
+        kind = "EASY_INTENT"
+    status = str(r.get("status") or "")
+    satisfied = status not in {"", "UNRESOLVED"}
+    return {
+        "detected": True,
+        "kind": kind,
+        "satisfied": bool(satisfied),
+        "best_score": 100 if satisfied else 0,
+        "source": "ATHLETE_NOTE_INTERPRETATION",
+        "resolution_status": status,
+    }
+
+
+def _v4897_semantic_compile_snapshot(parsed, adaptive_roadmap=None, microcycle_ledger=None, power_achievements=None, record_audit=True, snapshot_question=None):
+    out = _v4897_semantic_compile_snapshot_r134(
+        parsed, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+        power_achievements=power_achievements, record_audit=record_audit,
+        snapshot_question=snapshot_question,
+    )
+    if not isinstance(out, dict) or not record_audit:
+        return out
+    structured = _v135_structured_request_audit(out.get("next_sessions"), out.get("recommendation"))
+    if not structured:
+        return out
+    audit = out.get("semantic_authority_audit") if isinstance(out.get("semantic_authority_audit"), dict) else {}
+    audit["athlete_request"] = structured
+    final_issues = audit.get("final_issues") if isinstance(audit.get("final_issues"), dict) else {}
+    if structured.get("satisfied"):
+        final_issues.pop("athlete_request", None)
+    else:
+        final_issues["athlete_request"] = [{"reason":"STRUCTURED_ATHLETE_INTENT_UNRESOLVED","sentence":""}]
+    audit["final_issues"] = final_issues
+    audit["final_pass"] = not bool(final_issues)
+    audit["pass"] = audit["final_pass"]
+    out["semantic_authority_audit"] = audit
+    return out
+
+
+# R135 parser hardening: clause-scoped availability with explicit clock-time parity.
+def _v135_availability_part_spans(text, future=True):
+    low = _v133_norm_note(text)
+    spans=[]
+    named={
+        "MORNING":r"\b(?:morning|mattina|stamattina|questa mattina|a\.?m\.?)\b",
+        "AFTERNOON":r"\b(?:afternoon|pomeriggio|questo pomeriggio)\b",
+        "EVENING":r"\b(?:evening|tonight|sera|stasera|questa sera)\b",
+    }
+    for part,pat in named.items():
+        for m in re.finditer(pat,low,re.I):
+            spans.append((m.start(),m.end(),part))
+    for m in re.finditer(r"\b(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*([ap])\.?m\.?\b",low,re.I):
+        hour=int(m.group(1))%12+(12 if m.group(3).lower()=="p" else 0)
+        part=_v133_daypart_from_minute(hour*60+int(m.group(2) or 0),future=future)
+        spans.append((m.start(),m.end(),part))
+    for m in re.finditer(r"(?:\b(?:at|from|after|alle|dalle|dopo)\s+)([01]?\d|2[0-3])(?::([0-5]\d))?\b(?!\s*[ap]\.?m\.?)",low,re.I):
+        part=_v133_daypart_from_minute(int(m.group(1))*60+int(m.group(2) or 0),future=future)
+        spans.append((m.start(),m.end(),part))
+    return sorted({(a,b,p) for a,b,p in spans},key=lambda x:(x[0],x[1]))
+
+
+def _v135_scoped_availability_parts(clause, trigger_re, future=True):
+    low=_v133_norm_note(clause)
+    part_spans=_v135_availability_part_spans(low,future=future)
+    if not part_spans:
+        return [],[]
+    triggers=list(re.finditer(trigger_re,low,re.I))
+    if not triggers:
+        return [],[p for _,_,p in part_spans]
+    chosen=[]
+    for trig in triggers:
+        after=[(a,b,p) for a,b,p in part_spans if a>=trig.end() and a-trig.end()<=100]
+        if after:
+            # A trigger followed by one or several dayparts scopes forward to all
+            # nearby named/clock windows ("not sure morning or afternoon").
+            chosen.extend(p for _,_,p in after)
+            continue
+        before=[(a,b,p) for a,b,p in part_spans if b<=trig.start() and trig.start()-b<=45]
+        if before:
+            # Natural wording often puts the daypart first: "afternoon maybe not".
+            nearest=max(before,key=lambda x:x[1])
+            chosen.append(nearest[2])
+    return list(dict.fromkeys(chosen)),list(dict.fromkeys(p for _,_,p in part_spans))
+
+
+def _v133_interpret_athlete_note(now=None, logs=None):
+    """Final R135 structured-note interpreter.
+
+    R133 owns the broad semantic categories. R135 re-scopes availability clauses so
+    named dayparts and clock-time wording are equivalent, while one uncertainty cue
+    cannot leak onto a different daypart mentioned earlier in the same sentence.
+    """
+    now=now or get_rome_now()
+    result=_v133_interpret_athlete_note_r134(now=now,logs=logs)
+    try:
+        rows=list(logs if logs is not None else load_daily_logs(80))
+    except Exception:
+        rows=[]
+    rows=[r for r in rows if str(r.get("note") or "").strip()]
+    rows.sort(key=lambda r:(str(r.get("logged_at_utc") or ""),str(r.get("local_date") or ""),str(r.get("local_time") or "")),reverse=True)
+    if not rows:return result
+    note=str(rows[0].get("note") or "").strip()
+    if not note:return result
+    # Carry an explicit date marker across comma/semicolon/sentence fragments.
+    clauses=[c.strip(" ,") for c in re.split(r"[.!?;,]+\s*",note) if c and c.strip(" ,")]
+    current_date=None
+    states_by_date={}
+    touched_by_date={}
+    pos_pat=r"\b(?:can train|can ride|can work out|available to train|available to ride|back on the trainer|back on the bike|posso allenarmi|posso pedalare|sono disponibile|torno sui rulli|torno sul trainer)\b"
+    neg_pat=r"\b(?:can't|cannot|won't be able|will not be able|not available|unavailable|no training|non posso|non riesco|non disponibile|niente allenamento)\b"
+    unc_pat=r"\b(?:don't know|do not know|not sure|unsure|might not|may not|maybe not|forse non|non so|non sono sicur[oa]|se riesco)\b"
+    for clause in clauses:
+        dt=_v133_target_date(clause,now)
+        if dt:current_date=dt
+        if not current_date:continue
+        future=current_date!=now.date().isoformat()
+        unc,unc_mentioned=_v135_scoped_availability_parts(clause,unc_pat,future=future)
+        neg,neg_mentioned=_v135_scoped_availability_parts(clause,neg_pat,future=future)
+        pos,pos_mentioned=_v135_scoped_availability_parts(clause,pos_pat,future=future)
+        has_unc=bool(re.search(unc_pat,_v133_norm_note(clause),re.I))
+        has_neg=bool(re.search(neg_pat,_v133_norm_note(clause),re.I))
+        has_pos=bool(re.search(pos_pat,_v133_norm_note(clause),re.I))
+        if not (has_unc or has_neg or has_pos):continue
+        state=states_by_date.setdefault(current_date,{"AVAILABLE":set(),"UNAVAILABLE":set(),"UNCERTAIN":set()})
+        touched=touched_by_date.setdefault(current_date,set())
+        mentioned=set((unc_mentioned if has_unc else [])+(neg_mentioned if has_neg else [])+(pos_mentioned if has_pos else []))
+        touched.update(mentioned)
+        # UNCERTAIN outranks embedded positive wording ("not sure if I can...").
+        state["UNCERTAIN"].update(unc)
+        state["UNAVAILABLE"].update(p for p in neg if p not in state["UNCERTAIN"])
+        state["AVAILABLE"].update(p for p in pos if p not in state["UNCERTAIN"] and p not in state["UNAVAILABLE"])
+    if not states_by_date:return result
+    targets=[dict(t) for t in (result.get("future_targets") or [])]
+    by_date={str(t.get("date") or ""):t for t in targets}
+    for ds,state in states_by_date.items():
+        t=by_date.get(ds)
+        if t is None:
+            t={"date":ds,"preferred_dayparts":[],"uncertain_dayparts":[],"unavailable_dayparts":[],"available_dayparts":[],"session_profile":None,"quality_preferred":False,"hard_blocked":False,"conditional":False,"confidence":"EXPLICIT"}
+            targets.append(t);by_date[ds]=t
+        touched=touched_by_date.get(ds,set())
+        base_available=[p for p in t.get("available_dayparts") or [] if p not in touched]
+        base_unavailable=[p for p in t.get("unavailable_dayparts") or [] if p not in touched]
+        base_uncertain=[p for p in t.get("uncertain_dayparts") or [] if p not in touched]
+        uncertain=set(state["UNCERTAIN"])
+        unavailable=set(state["UNAVAILABLE"])-uncertain
+        available=set(state["AVAILABLE"])-uncertain-unavailable
+        t["uncertain_dayparts"]=list(dict.fromkeys(base_uncertain+sorted(uncertain)))
+        t["unavailable_dayparts"]=list(dict.fromkeys(base_unavailable+sorted(unavailable)))
+        t["available_dayparts"]=list(dict.fromkeys(base_available+sorted(available)))
+        blocked=set(t["uncertain_dayparts"])|set(t["unavailable_dayparts"])
+        t["preferred_dayparts"]=[p for p in (t.get("preferred_dayparts") or []) if p not in blocked]
+    targets.sort(key=lambda t:str(t.get("date") or ""))
+    result["future_targets"]=targets
+    result["availability"]={"entries":[
+        {"date":t["date"],"daypart":part,"state":state}
+        for t in targets
+        for state,key in (("AVAILABLE","available_dayparts"),("UNAVAILABLE","unavailable_dayparts"),("UNCERTAIN","uncertain_dayparts"))
+        for part in t.get(key) or []
+    ]}
+    result["timing_preference"]={"entries":[{"date":t["date"],"preferred_dayparts":t.get("preferred_dayparts") or []} for t in targets if t.get("preferred_dayparts")]}
+    result["active"]=bool(result.get("active") or targets)
+    # Rebuild the structured narrative availability fragment from corrected state.
+    if targets:
+        t=targets[0]
+        interp_summary=(result.get("narrative_context") or {}).get("summary") or ""
+        # Preserve non-availability context but avoid carrying a stale wrong daypart.
+        prefix=[]
+        rec=result.get("recovery_context") or {}
+        if rec.get("state")=="NEGATIVE":prefix.append("your latest note reports reduced subjective recovery")
+        elif rec.get("state")=="POSITIVE":prefix.append("your latest note reports positive subjective recovery")
+        elif rec.get("state")=="MIXED":prefix.append("your latest note contains both fatigue and readiness signals")
+        if result.get("constraints"):
+            prefix.append("context includes "+"/".join(x.lower().replace("_"," ") for x in result.get("constraints") or []))
+        if t.get("session_profile"):
+            label="tomorrow" if t.get("date")== (now.date()+timedelta(days=1)).isoformat() else str(t.get("date"))
+            prefix.append(f"you prefer {str(t.get('session_profile')).lower()} {label}"+(" conditionally" if t.get("conditional") else ""))
+        if t.get("preferred_dayparts"):prefix.append("preferred timing is "+_v135_human_parts(t.get("preferred_dayparts")))
+        if t.get("uncertain_dayparts"):prefix.append("availability is uncertain in the "+_v135_human_parts(t.get("uncertain_dayparts")))
+        if t.get("unavailable_dayparts"):prefix.append("you are unavailable in the "+_v135_human_parts(t.get("unavailable_dayparts")))
+        if t.get("available_dayparts"):prefix.append("availability is confirmed in the "+_v135_human_parts(t.get("available_dayparts")))
+        if prefix:result["narrative_context"]={"material":True,"summary":"Your latest note matters here: "+"; ".join(prefix[:6])+"."}
+    return result
+
+
+# R135 conditional-intent parity: common conditional wording must not depend on
+# one narrow "if recovery/feel" phrase.
+_v133_interpret_athlete_note_r135_core = _v133_interpret_athlete_note
+
+def _v133_interpret_athlete_note(now=None, logs=None):
+    now=now or get_rome_now()
+    result=_v133_interpret_athlete_note_r135_core(now=now,logs=logs)
+    try:
+        rows=list(logs if logs is not None else load_daily_logs(80))
+    except Exception:
+        rows=[]
+    rows=[r for r in rows if str(r.get("note") or "").strip()]
+    rows.sort(key=lambda r:(str(r.get("logged_at_utc") or ""),str(r.get("local_date") or ""),str(r.get("local_time") or "")),reverse=True)
+    if not rows:return result
+    note=_v133_norm_note(rows[0].get("note"))
+    conditional=bool(re.search(
+        r"\b(?:if|provided|assuming|se|a patto che)\b[^.!?]{0,120}\b(?:sleep|slept|rest|feel|feeling|recover|recovery|ready|legs?|time|schedule|work|dorm|sonno|riposo|recuper|pront[oa]|gambe|tempo|lavoro|riesco|sto bene|mi sento)\b",
+        note,re.I,
+    ))
+    if not conditional:return result
+    target_date=_v133_target_date(note,now)
+    profile=_v133_session_profile(note)
+    if not target_date or not profile:return result
+    for t in result.get("future_targets") or []:
+        if str(t.get("date") or "")==target_date and str(t.get("session_profile") or "")==profile:
+            t["conditional"]=True
+    intent=result.get("training_intent") if isinstance(result.get("training_intent"),dict) else {}
+    if str(intent.get("target_date") or "")==target_date and str(intent.get("profile") or "")==profile:
+        intent["conditional"]=True
+        result["training_intent"]=intent
+    pref=result.get("session_preference") if isinstance(result.get("session_preference"),dict) else {}
+    for e in pref.get("entries") or []:
+        if str(e.get("date") or "")==target_date and str(e.get("profile") or "")==profile:
+            e["conditional"]=True
+    unc=result.get("uncertainty") if isinstance(result.get("uncertainty"),dict) else {"present":False,"signals":[]}
+    sig=list(unc.get("signals") or [])
+    if "CONDITIONAL_TRAINING_INTENT" not in sig:sig.append("CONDITIONAL_TRAINING_INTENT")
+    unc["present"]=True;unc["signals"]=sig;result["uncertainty"]=unc
+    return result
 
 
 if __name__ == "__main__":
