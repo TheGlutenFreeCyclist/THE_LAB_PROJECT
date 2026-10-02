@@ -98,7 +98,7 @@ app.config.update(
 )
 DAYS_BACK = 20
 SEASON_DAYS_BACK = 90
-APP_VERSION = "THE LAB · PRODUCT V4.9.11 WIP R135 · STRUCTURED NOTE AUTHORITY · CLEAN COACH CALL · R134 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.13 WIP R137 · NOTE LANGUAGE COVERAGE · SAFE ADHERENCE ATTRIBUTION · R136 BASELINE"
 ROME_TZ = ZoneInfo("Europe/Rome")
 BASELINE_SOURCE = "Garmin personal baselines"
 RECENT_BASELINE_DAYS = 14
@@ -31784,6 +31784,642 @@ def _v133_interpret_athlete_note(now=None, logs=None):
     unc["present"]=True;unc["signals"]=sig;result["uncertainty"]=unc
     return result
 
+
+
+# R136 · SAME-DAY NOTE AUTHORITY + PRESCRIPTION IDENTITY CONTINUITY
+# 1) Availability clauses without an explicit date inherit the Daily Note's own local date.
+# 2) Same-day unavailable learned slots are removed and the 3-slot Clock horizon is refilled.
+# 3) If R117's earliest eligible rhythm slot sits beyond the visible horizon, promote that
+#    already-authorized target into the visible Clock instead of erasing the hard workout.
+# 4) Every hard Nova prescription carries persistent identity/history; once an observed anchor
+#    is complete, the next hard prescription becomes the new primary anchor.
+R136_SCHEMA = "V4.9.12-R136-1"
+_v133_interpret_athlete_note_r135_final = _v133_interpret_athlete_note
+_build_planning_context_r135_final = build_planning_context
+_build_coach_clock_r135_final = build_coach_clock
+_build_nova_prescription_r135_final = build_nova_prescription
+_v4840_ledger_session_summary_r135_final = _v4840_ledger_session_summary
+_update_microcycle_ledger_from_snapshot_r135_final = update_microcycle_ledger_from_snapshot
+_v492_execution_quality_r135_final = _v492_execution_quality
+
+
+def _v136_note_rows(now=None, logs=None):
+    now = now or get_rome_now()
+    try:
+        rows = list(logs if logs is not None else load_daily_logs(80))
+    except Exception:
+        rows = []
+    rows = [r for r in rows if str(r.get("note") or "").strip()]
+    rows.sort(key=lambda r:(str(r.get("logged_at_utc") or ""),str(r.get("local_date") or ""),str(r.get("local_time") or "")), reverse=True)
+    return rows
+
+
+def _v136_clause_availability(note, default_date, now):
+    """Clause-scoped availability with implicit anchoring to the note date.
+
+    Explicit dates (today/tomorrow/weekday/date) override the implicit note date.
+    Named dayparts and explicit clock times share the same state model.
+    """
+    clauses=[c.strip(" ,") for c in re.split(
+        r"(?:[.!?;]+\s*|,\s*(?=(?:but|however|though|ma|per[oò])\b)|\s+\b(?:but|however|though|ma|per[oò])\b\s+)",
+        str(note or ""), flags=re.I,
+    ) if c and c.strip(" ,")]
+    if not clauses: clauses=[str(note or "")]
+    current_date = str(default_date or now.date().isoformat())
+    states_by_date={}
+    touched_by_date={}
+    pos_pat=r"\b(?:can\s+(?:train|ride|work\s*out)|available(?:\s+to\s+(?:train|ride|work\s*out))?|free\s+to\s+(?:train|ride|work\s*out)|back\s+(?:on|to)\s+(?:the\s+)?(?:trainer|bike)|posso\s+(?:allenarmi|allenare|pedalare)|sono\s+disponibile|torno\s+(?:sui|sul|in)\s+(?:rulli|trainer|bici))\b"
+    neg_pat=r"\b(?:can(?:not|'t)\s+(?:train|ride|work\s*out)|won't\s+be\s+able\s+to\s+(?:train|ride|work\s*out)|will\s+not\s+be\s+able\s+to\s+(?:train|ride|work\s*out)|not\s+available|unavailable|no\s+training|no\s+workout|non\s+posso\s+(?:allenarmi|allenare|pedalare)|non\s+riesco\s+(?:ad\s+)?(?:allenarmi|allenare|pedalare)|non\s+sono\s+disponibile|niente\s+allenamento)\b"
+    unc_pat=r"\b(?:don't\s+know|do\s+not\s+know|not\s+sure|unsure|might\s+not|may\s+not|maybe\s+not|forse\s+non|non\s+so|non\s+sono\s+sicur[oa]|se\s+riesco)\b"
+    for clause in clauses:
+        explicit_date=_v133_target_date(clause,now)
+        if explicit_date:
+            current_date=explicit_date
+        low=_v133_norm_note(clause)
+        has_unc=bool(re.search(unc_pat,low,re.I))
+        has_neg=bool(re.search(neg_pat,low,re.I))
+        has_pos=bool(re.search(pos_pat,low,re.I))
+        if not (has_unc or has_neg or has_pos):
+            continue
+        # Human availability dayparts use the scheduling convention where 17:xx
+        # still belongs to AFTERNOON. This is intentionally consistent for today
+        # and future notes; it avoids taxonomy changing the athlete's meaning.
+        unc,unc_mentioned=_v135_scoped_availability_parts(clause,unc_pat,future=True)
+        neg,neg_mentioned=_v135_scoped_availability_parts(clause,neg_pat,future=True)
+        pos,pos_mentioned=_v135_scoped_availability_parts(clause,pos_pat,future=True)
+        if not (unc or neg or pos):
+            if re.search(r"\b(?:all\s+day|whole\s+day|tutto\s+il\s+giorno|intera\s+giornata|today|oggi)\b",low,re.I):
+                if has_unc: unc=["ALL_DAY"]
+                elif has_neg: neg=["ALL_DAY"]
+                elif has_pos: pos=["ALL_DAY"]
+        state=states_by_date.setdefault(current_date,{"AVAILABLE":set(),"UNAVAILABLE":set(),"UNCERTAIN":set()})
+        touched=touched_by_date.setdefault(current_date,set())
+        mentioned=set((unc_mentioned if has_unc else [])+(neg_mentioned if has_neg else [])+(pos_mentioned if has_pos else []))
+        touched.update(mentioned)
+        # Uncertainty outranks embedded positive wording; explicit negative outranks positive.
+        state["UNCERTAIN"].update(unc)
+        state["UNAVAILABLE"].update(p for p in neg if p not in state["UNCERTAIN"])
+        state["AVAILABLE"].update(p for p in pos if p not in state["UNCERTAIN"] and p not in state["UNAVAILABLE"])
+    return states_by_date,touched_by_date
+
+
+def _v136_merge_availability(result, states_by_date, touched_by_date, now):
+    if not states_by_date:
+        return result
+    targets=[dict(t) for t in (result.get("future_targets") or [])]
+    by_date={str(t.get("date") or ""):t for t in targets}
+    for ds,state in states_by_date.items():
+        t=by_date.get(ds)
+        if t is None:
+            t={"date":ds,"preferred_dayparts":[],"uncertain_dayparts":[],"unavailable_dayparts":[],"available_dayparts":[],"session_profile":None,"quality_preferred":False,"hard_blocked":False,"conditional":False,"confidence":"EXPLICIT"}
+            targets.append(t);by_date[ds]=t
+        touched=touched_by_date.get(ds,set())
+        base_available=[p for p in t.get("available_dayparts") or [] if p not in touched]
+        base_unavailable=[p for p in t.get("unavailable_dayparts") or [] if p not in touched]
+        base_uncertain=[p for p in t.get("uncertain_dayparts") or [] if p not in touched]
+        uncertain=set(state["UNCERTAIN"])
+        unavailable=set(state["UNAVAILABLE"])-uncertain
+        available=set(state["AVAILABLE"])-uncertain-unavailable
+        t["uncertain_dayparts"]=list(dict.fromkeys(base_uncertain+sorted(uncertain)))
+        t["unavailable_dayparts"]=list(dict.fromkeys(base_unavailable+sorted(unavailable)))
+        t["available_dayparts"]=list(dict.fromkeys(base_available+sorted(available)))
+        blocked=set(t["uncertain_dayparts"])|set(t["unavailable_dayparts"])
+        t["preferred_dayparts"]=[p for p in (t.get("preferred_dayparts") or []) if p not in blocked]
+    targets.sort(key=lambda t:str(t.get("date") or ""))
+    result["future_targets"]=targets
+    result["availability"]={"entries":[
+        {"date":t["date"],"daypart":part,"state":state}
+        for t in targets
+        for state,key in (("AVAILABLE","available_dayparts"),("UNAVAILABLE","unavailable_dayparts"),("UNCERTAIN","uncertain_dayparts"))
+        for part in t.get(key) or []
+    ]}
+    result["timing_preference"]={"entries":[{"date":t["date"],"preferred_dayparts":t.get("preferred_dayparts") or []} for t in targets if t.get("preferred_dayparts")]}
+    result["active"]=bool(result.get("active") or targets)
+    # Rebuild concise narrative availability facts from the corrected state.
+    first=next((t for t in targets if str(t.get("date") or "")>=now.date().isoformat()),targets[0] if targets else None)
+    if first:
+        bits=[]
+        existing=str(((result.get("narrative_context") or {}).get("summary") or "")).strip()
+        rec=result.get("recovery_context") or {}
+        if rec.get("state")=="NEGATIVE":bits.append("your latest note reports reduced subjective recovery")
+        elif rec.get("state")=="POSITIVE":bits.append("your latest note reports positive subjective recovery")
+        elif rec.get("state")=="MIXED":bits.append("your latest note contains both fatigue and readiness signals")
+        if result.get("constraints"):bits.append("context includes "+"/".join(x.lower().replace("_"," ") for x in result.get("constraints") or []))
+        if first.get("session_profile"):
+            label="today" if first.get("date")==now.date().isoformat() else ("tomorrow" if first.get("date")== (now.date()+timedelta(days=1)).isoformat() else str(first.get("date")))
+            bits.append(f"you prefer {str(first.get('session_profile')).lower()} {label}"+(" conditionally" if first.get("conditional") else ""))
+        if first.get("preferred_dayparts"):bits.append("preferred timing is "+_v135_human_parts(first.get("preferred_dayparts")))
+        if first.get("uncertain_dayparts"):bits.append("availability is uncertain in the "+_v135_human_parts(first.get("uncertain_dayparts")))
+        if first.get("unavailable_dayparts"):bits.append("you are unavailable in the "+_v135_human_parts(first.get("unavailable_dayparts")))
+        if first.get("available_dayparts"):bits.append("availability is confirmed in the "+_v135_human_parts(first.get("available_dayparts")))
+        if bits:
+            result["narrative_context"]={"material":True,"summary":"Your latest note matters here: "+"; ".join(bits[:6])+"."}
+        elif existing:
+            result["narrative_context"]={"material":True,"summary":existing}
+    return result
+
+
+def _v133_interpret_athlete_note(now=None, logs=None):
+    now=now or get_rome_now()
+    result=_v133_interpret_athlete_note_r135_final(now=now,logs=logs)
+    rows=_v136_note_rows(now=now,logs=logs)
+    if not rows:
+        return result
+    row=rows[0]
+    note=str(row.get("note") or "").strip()
+    default_date=str(row.get("local_date") or now.date().isoformat())[:10]
+    states,touched=_v136_clause_availability(note,default_date,now)
+    return _v136_merge_availability(result,states,touched,now)
+
+
+def _v136_relevant_note_target(planning_context, now=None):
+    now=now or get_rome_now()
+    interp=(planning_context or {}).get("athlete_note_interpretation") or {}
+    today=now.date().isoformat()
+    targets=[]
+    for t in interp.get("future_targets") or []:
+        ds=str(t.get("date") or "")
+        if ds and ds>=today and (t.get("session_profile") or t.get("preferred_dayparts") or t.get("uncertain_dayparts") or t.get("unavailable_dayparts") or t.get("available_dayparts")):
+            targets.append(t)
+    targets.sort(key=lambda t:str(t.get("date") or ""))
+    return targets[0] if targets else None
+
+
+def _v135_target_from_context(planning_context):
+    return _v136_relevant_note_target(planning_context)
+
+
+def build_planning_context(now=None):
+    now=now or get_rome_now()
+    ctx=_build_planning_context_r135_final(now=now)
+    interp=ctx.get("athlete_note_interpretation") or _v133_interpret_athlete_note(now=now)
+    ctx["athlete_note_interpretation"]=interp
+    today=now.date().isoformat()
+    same=next((t for t in interp.get("future_targets") or [] if str(t.get("date") or "")==today),None)
+    if same:
+        existing=dict(ctx.get("daily_availability") or {})
+        blocked=list(dict.fromkeys(list(existing.get("blocked_dayparts") or [])+list(same.get("unavailable_dayparts") or [])))
+        available=list(dict.fromkeys(list(existing.get("available_dayparts") or [])+list(same.get("available_dayparts") or [])))
+        blocked=[p for p in blocked if p=="ALL_DAY" or p not in set(available)]
+        if blocked or available or same.get("uncertain_dayparts"):
+            ctx["daily_availability"]={
+                "active":bool(blocked or available),"date":today,"blocked_dayparts":blocked,
+                "available_dayparts":available,"uncertain_dayparts":list(same.get("uncertain_dayparts") or []),
+                "source":"DAILY_NOTE_STRUCTURED_AVAILABILITY","note_excerpt":interp.get("note_excerpt"),
+                "parse_policy":"R136_IMPLICIT_SAME_DAY_NOTE_DATE",
+            }
+    summary=((interp.get("narrative_context") or {}).get("summary") if isinstance(interp,dict) else None)
+    if summary:
+        base=str(ctx.get("summary") or "Training as planned")
+        # Remove stale generic R135 note sentence before appending the corrected one.
+        base=re.sub(r"\s*·\s*Your latest note matters here:[^.]*\.?$","",base).strip()
+        ctx["summary"]=(base+" · "+summary).strip(" ·")
+    return ctx
+
+
+def _v136_duration_hint(rhythm, dt):
+    try:
+        if not _v4895_rhythm_duration_reliable(rhythm):
+            return None
+    except Exception:
+        return None
+    cp=(rhythm or {}).get("clock_profile") or {}
+    mapping=cp.get("duration_min") or {}
+    value=mapping.get(dt.weekday(),mapping.get(str(dt.weekday())))
+    if value is None:value=(rhythm or {}).get("median_session_duration_min") or cp.get("overall_duration_min")
+    return round(float(value),1) if value is not None else None
+
+
+def _v136_rhythm_slot(candidate, rhythm, now):
+    dt=candidate.get("dt")
+    minute=dt.hour*60+dt.minute
+    if dt.date()==now.date():day="Today"
+    elif dt.date()==now.date()+timedelta(days=1):day="Tomorrow"
+    else:day=dt.strftime("%A")
+    second=str(candidate.get("period") or "").upper()=="SECOND"
+    when=_rhythm_format_minutes(minute)
+    period="RHYTHM_SECOND" if second else "RHYTHM"
+    label=(f"{day} · likely second session" if second else f"{day} · learned rhythm")+(f" · around {when}" if when else "")
+    dur=_v136_duration_hint(rhythm,dt)
+    return {
+        "date":dt.date().isoformat(),"period":period,
+        "window":"history-learned future second-session opportunity" if second else "history-learned opportunity",
+        "label":label,"restriction":"NONE","restriction_until":None,"is_race":False,"is_planned_training":False,
+        "event_title":None,"event_note":None,"training_environment":None,"training_demand":None,
+        "expected_duration_min":None,"expected_duration_max":None,"planning_item_id":None,
+        "source":"RHYTHM","timing_confidence":str((rhythm or {}).get("confidence") or "LOW"),
+        "start_minute":minute,"duration_hint_min":dur,"duration_hint_label":_rhythm_format_duration(dur),
+        "availability_state":"PREDICTED","availability_confirmed":False,
+    }
+
+
+def build_coach_clock(season_activities, now=None, planning_context=None, training_rhythm=None):
+    """R136 keeps the visible horizon at three usable opportunities after note filtering."""
+    now=now or get_rome_now()
+    planning_context=planning_context or build_planning_context(now)
+    rhythm=training_rhythm or build_training_rhythm(season_activities,now)
+    clock=_build_coach_clock_r135_final(season_activities,now=now,planning_context=planning_context,training_rhythm=rhythm)
+    rows=[dict(x) for x in (clock.get("next_slots") or []) if isinstance(x,dict)]
+    if len(rows)<3:
+        existing={(str(x.get("date") or ""),int(x.get("start_minute"))) for x in rows if x.get("date") and x.get("start_minute") is not None}
+        target=_v136_relevant_note_target(planning_context,now=now) or {}
+        target_date=str(target.get("date") or "")
+        unavailable=set(target.get("unavailable_dayparts") or [])
+        blackout=set(planning_context.get("blackout_dates") or [])
+        races=planning_context.get("race_by_date") or {}
+        plans=planning_context.get("training_by_date") or {}
+        for cand in _v4873_rhythm_candidate_slots(rhythm,now=now,horizon_days=10):
+            if len(rows)>=3:break
+            dt=cand.get("dt")
+            if not isinstance(dt,datetime):continue
+            key=(dt.date().isoformat(),dt.hour*60+dt.minute)
+            if key in existing or key[0] in blackout or key[0] in races or key[0] in plans:continue
+            if key[0]==target_date:
+                part=_v135_note_daypart(key[1])
+                if "ALL_DAY" in unavailable or part in unavailable:continue
+            row=_v136_rhythm_slot(cand,rhythm,now)
+            rows.append(row);existing.add(key)
+    rows.sort(key=lambda x:(str(x.get("date") or "9999-99-99"),int(x.get("start_minute") or 9999)))
+    clock=dict(clock or {})
+    clock["next_slots"]=rows[:3]
+    clock["next_slot_label"]=(rows[0].get("label") if rows else "No valid training opportunity")
+    clock["r136_horizon_refilled"]=True
+    return clock
+
+
+def _v136_promote_quality_target(clock, road):
+    """Promote R117 EARLIEST into the 3-slot visible horizon when needed.
+
+    The target is not invented here: it is the roadmap's already-authorized earliest
+    rhythm candidate after the recovery/spacing gate. Only a non-Calendar learned
+    slot may be replaced.
+    """
+    q=(road or {}).get("quality_window") or {}
+    raw=q.get("earliest_iso")
+    if not raw or q.get("spacing_policy")!="R117_HARD_CADENCE_PLUS_RECOVERY_HEURISTIC":
+        return clock
+    try:dt=datetime.fromisoformat(str(raw))
+    except Exception:return clock
+    rows=[dict(x) for x in (clock or {}).get("next_slots") or [] if isinstance(x,dict)]
+    target_key=(dt.date().isoformat(),dt.hour*60+dt.minute)
+    for row in rows:
+        try:key=(str(row.get("date") or ""),int(round(float(row.get("start_minute")))))
+        except Exception:continue
+        if key[0]==target_key[0] and abs(key[1]-target_key[1])<=2:return clock
+    if not rows:return clock
+    replace=None
+    for i in range(len(rows)-1,-1,-1):
+        row=rows[i]
+        if str(row.get("source") or "").upper()=="RHYTHM" and not row.get("is_race") and not row.get("is_planned_training"):
+            replace=i;break
+    if replace is None:return clock
+    old=rows[replace]
+    minute=target_key[1]
+    if dt.date()==get_rome_now().date():day="Today"
+    elif dt.date()==get_rome_now().date()+timedelta(days=1):day="Tomorrow"
+    else:day=dt.strftime("%A")
+    promoted=dict(old)
+    promoted.update({
+        "date":target_key[0],"period":"RHYTHM","slot":None,
+        "label":f"{day} · learned rhythm · around {_rhythm_format_minutes(minute)}",
+        "start_minute":minute,"source":"RHYTHM","timing_confidence":old.get("timing_confidence") or "PREDICTED",
+        "availability_state":"PREDICTED","availability_confirmed":False,"r136_quality_horizon_promoted":True,
+    })
+    rows[replace]=promoted
+    rows.sort(key=lambda x:(str(x.get("date") or "9999-99-99"),int(x.get("start_minute") or 9999)))
+    clock["next_slots"]=rows[:3]
+    clock["next_slot_label"]=clock["next_slots"][0].get("label") if clock["next_slots"] else "No valid training opportunity"
+    clock["r136_quality_target_promoted"]=str(raw)
+    return clock
+
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    _v136_promote_quality_target(coach_clock,adaptive_roadmap)
+    return _build_nova_prescription_r135_final(
+        nova_decision,coach_clock,adaptive_roadmap=adaptive_roadmap,microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger,power_model=power_model,ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range,training_definitions=training_definitions,
+    )
+
+
+def _v4840_ledger_session_summary(s):
+    out=_v4840_ledger_session_summary_r135_final(s)
+    if isinstance(s,dict):
+        out["nova_workout_id"]=s.get("nova_workout_id") or s.get("_tl_nova_workout_id")
+        out["nova_contract_id"]=s.get("nova_contract_id") or s.get("_tl_nova_contract_id")
+        out["nova_canonical_plan_id"]=s.get("nova_canonical_plan_id")
+        out["nova_workout_library_version"]=s.get("nova_workout_library_version") or s.get("_tl_nova_workout_library_version")
+    return out
+
+
+def _v136_prescription_fingerprint(row):
+    payload={k:(row or {}).get(k) for k in ("date","period","title","main_set","nova_workout_id","nova_contract_id","nova_canonical_plan_id")}
+    return hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True,default=str).encode("utf-8")).hexdigest()[:20]
+
+
+def _v136_is_hard_summary(row):
+    return bool((row or {}).get("hard_spacing_relevant") or str((row or {}).get("intensity_class") or "").lower() in {"tempo","threshold","vo2"} or str((row or {}).get("quality_relevance") or "").upper() in {"MEANINGFUL","ROUTINE_SUBTHRESHOLD"})
+
+
+def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=None):
+    """R136 archives every hard prescription and advances the anchor after observation."""
+    now=now or get_rome_now()
+    prior_anchor=_v4831_json_clone((ledger or {}).get("primary_anchor") or {}) if isinstance((ledger or {}).get("primary_anchor"),dict) else None
+    out=_update_microcycle_ledger_from_snapshot_r135_final(ledger,sessions,user_id=user_id,now=now)
+    if not isinstance(out,dict) or not out.get("available"):return out
+    hard=[]
+    for s in sessions or []:
+        if not isinstance(s,dict) or not _v136_is_hard_summary(s):continue
+        row=_v4840_ledger_session_summary(s)
+        row["recorded_at_local"]=now.isoformat(timespec="seconds")
+        row["prescription_fingerprint"]=_v136_prescription_fingerprint(row)
+        hard.append(row)
+    hist=[dict(x) for x in (out.get("prescription_history") or []) if isinstance(x,dict)]
+    seen={str(x.get("prescription_fingerprint") or _v136_prescription_fingerprint(x)) for x in hist}
+    for row in hard:
+        fp=row["prescription_fingerprint"]
+        if fp not in seen:
+            hist.append(row);seen.add(fp)
+    out["prescription_history"]=hist[-32:]
+    if prior_anchor and str(prior_anchor.get("status") or "").upper()=="HARD_ACTIVITY_OBSERVED":
+        ah=[dict(x) for x in (out.get("anchor_history") or []) if isinstance(x,dict)]
+        fp=_v136_prescription_fingerprint(prior_anchor)
+        if not any(_v136_prescription_fingerprint(x)==fp for x in ah):
+            prior_anchor["archived_at_local"]=now.isoformat(timespec="seconds");ah.append(prior_anchor)
+        out["anchor_history"]=ah[-16:]
+        candidate=hard[0] if hard else None
+        if candidate:
+            out["primary_anchor"]={**candidate,"source":"SNAPSHOT_PLAN","status":"PLANNED","strategy_goal":out.get("goal_label"),"strategy_objective":out.get("objective"),"prescription_lock":False,"prescription_note":"Versioned Nova prescription identity preserved for later adherence linking."}
+            out["continuity_state"]="ANCHOR PLANNED"
+    if out.get("ledger_id"):
+        payload=json.dumps(out,ensure_ascii=False,separators=(",",":"),default=_report_json_default)
+        _db_execute("UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?",(payload,_now_utc_text(),out["ledger_id"],_data_owner_user_id(user_id)))
+    return out
+
+
+def _v136_plan_signature(plan):
+    txt=str((plan or {}).get("main_set") or "")
+    prof=_v4845_primary_work_profile(txt)
+    m=re.search(r"\b(\d+)\s*[×x]\s*(\d+(?:\.\d+)?)\s*(?:min(?:ute)?s?|m)\b",prof.get("text") or txt,re.I)
+    reps=int(m.group(1)) if m else None
+    secs=round(float(m.group(2))*60) if m else (round(float(prof.get("interval_minutes") or 0)*60) if prof.get("interval_minutes") else None)
+    return {"reps":reps,"secs":secs,"power_low":prof.get("power_low"),"power_high":prof.get("power_high")}
+
+
+def _v136_candidate_prescriptions(ledger, block):
+    candidates=[]
+    for source,rows in (
+        ("PRIMARY_ANCHOR",[(ledger or {}).get("primary_anchor")]),
+        ("PRESCRIPTION_HISTORY",(ledger or {}).get("prescription_history") or []),
+        ("PLANNED_SESSIONS",(ledger or {}).get("planned_sessions") or []),
+        ("ANCHOR_HISTORY",(ledger or {}).get("anchor_history") or []),
+    ):
+        for row in rows or []:
+            if not isinstance(row,dict) or not str(row.get("main_set") or "").strip() or not _v136_is_hard_summary(row) and source!="PRIMARY_ANCHOR":continue
+            r=dict(row);r["_link_source"]=source;candidates.append(r)
+    # dedupe identical prescriptions
+    uniq={}
+    for row in candidates:uniq[_v136_prescription_fingerprint(row)]=row
+    return list(uniq.values())
+
+
+def _v136_link_prescription(block, ledger):
+    rep=(block or {}).get("repeatability") or {}
+    actual_reps=int(rep.get("reps") or 0);actual_secs=float(rep.get("interval_secs") or 0)
+    try:bd=date.fromisoformat(str((block or {}).get("date") or "")[:10])
+    except Exception:return None
+    ranked=[]
+    for plan in _v136_candidate_prescriptions(ledger,block):
+        sig=_v136_plan_signature(plan)
+        try:pd=date.fromisoformat(str(plan.get("date") or "")[:10]);delta=(bd-pd).days
+        except Exception:continue
+        if abs(delta)>2:continue
+        reps_match=bool(sig.get("reps") and actual_reps==sig.get("reps"))
+        secs_match=bool(sig.get("secs") and actual_secs and abs(actual_secs-float(sig.get("secs")))<=max(10.0,.08*float(sig.get("secs"))))
+        exact_date=delta==0
+        # Exact-date hard plans remain attributable even when execution diverges;
+        # adjacent-date links require both reps and work duration to match.
+        if not exact_date and not (reps_match and secs_match):continue
+        score=(8 if exact_date else (5 if abs(delta)==1 else 3))+(4 if reps_match else 0)+(4 if secs_match else 0)
+        if plan.get("nova_workout_id"):score+=2
+        ranked.append((score,abs(delta),plan,reps_match,secs_match))
+    if not ranked:return None
+    ranked.sort(key=lambda x:(-x[0],x[1]))
+    best=ranked[0]
+    if len(ranked)>1 and ranked[1][0]==best[0] and _v136_prescription_fingerprint(ranked[1][2])!=_v136_prescription_fingerprint(best[2]):
+        return None
+    confidence="EXACT_DATE" if best[1]==0 else ("HIGH" if best[1]==1 else "MODERATE")
+    return {"plan":best[2],"confidence":confidence,"date_delta_days":best[1],"reps_match":best[3],"duration_match":best[4],"source":best[2].get("_link_source")}
+
+
+def _v492_execution_quality(block,ledger=None):
+    out=_v492_execution_quality_r135_final(block,ledger)
+    adh=(out or {}).get("adherence") or {}
+    if not (out or {}).get("available") or adh.get("available"):
+        return out
+    link=_v136_link_prescription(block,ledger or {})
+    if not link:
+        if isinstance(adh,dict):adh["reason"]="NO_ATTRIBUTABLE_THE_LAB_PRESCRIPTION";out["adherence"]=adh
+        return out
+    plan=dict(link["plan"])
+    fake={"primary_anchor":{**plan,"source":"SNAPSHOT_PLAN","status":"HARD_ACTIVITY_OBSERVED","date":(block or {}).get("date"),"observed_activity":{"name":(block or {}).get("name")}}}
+    scored=_v492_execution_quality_r135_final(block,fake)
+    scored_adh=(scored or {}).get("adherence") or {}
+    if scored_adh.get("available"):
+        scored_adh["link_mode"]="R137_PRESCRIPTION_IDENTITY" if plan.get("nova_workout_id") or plan.get("nova_canonical_plan_id") else "R137_STRUCTURAL_NEAR_DATE"
+        scored_adh["link_confidence"]=link["confidence"]
+        scored_adh["link_source"]=link["source"]
+        scored_adh["planned_date"]=plan.get("date")
+        scored_adh["nova_workout_id"]=plan.get("nova_workout_id")
+        scored_adh["canonical_plan_id"]=plan.get("nova_canonical_plan_id")
+        scored["adherence"]=scored_adh
+        return scored
+    return out
+
+
+# Concise same-day availability coach call: operational consequence, no banner prose.
+_v106_recommendation_projection_r135_final = _v106_recommendation_projection
+def _v106_recommendation_projection(sessions):
+    text=_v106_recommendation_projection_r135_final(sessions)
+    rows=[x for x in (sessions or []) if isinstance(x,dict)]
+    first=rows[0] if rows else {}
+    res=first.get("athlete_note_resolution") if isinstance(first.get("athlete_note_resolution"),dict) else None
+    if res and str(res.get("status") or "")=="AVAILABILITY_ONLY" and res.get("unavailable_dayparts"):
+        parts=_v135_human_parts(res.get("unavailable_dayparts"))
+        prefix=f"Your note rules out the {parts}; that learned opportunity is removed from the plan."
+        return (prefix+" "+text).strip()[:1700]
+    return text
+
+
+# R137 · NOTE LANGUAGE COVERAGE + SAFE ADHERENCE ATTRIBUTION
+# Generalizes availability wording beyond the narrow R136 lexical set and prevents
+# same-date-only false adherence links. R136 persistence/horizon behavior remains.
+R137_SCHEMA = "V4.9.13-R137-1"
+_build_planning_context_r136_final = build_planning_context
+_v136_link_prescription_r136_final = _v136_link_prescription
+
+
+def _v137_availability_part_spans(text, future=True):
+    """Return named/clock scheduling windows with broader EN/IT wording parity."""
+    low=_v133_norm_note(text)
+    spans=list(_v135_availability_part_spans(low,future=future))
+    aliases={
+        "MORNING": r"\b(?:early\s+morning|before\s+lunch|prima\s+di\s+pranzo)\b",
+        "AFTERNOON": r"\b(?:after\s+lunch|dopo\s+pranzo|nel\s+pomeriggio|al\s+pomeriggio)\b",
+        "EVENING": r"\b(?:after\s+dinner|dopo\s+cena|dopocena|in\s+serata)\b",
+    }
+    for part,pat in aliases.items():
+        for m in re.finditer(pat,low,re.I):spans.append((m.start(),m.end(),part))
+    # Italian clock syntax: dopo le 17, alle ore 17:30, verso le 18, intorno alle 17.
+    for m in re.finditer(r"(?:\b(?:alle|dalle|dopo|verso)\s+(?:le\s+|ore\s+)?|\bintorno\s+alle\s+(?:ore\s+)?)([01]?\d|2[0-3])(?::([0-5]\d))?\b",low,re.I):
+        minute=int(m.group(1))*60+int(m.group(2) or 0)
+        spans.append((m.start(),m.end(),_v133_daypart_from_minute(minute,future=True)))
+    # "second session/workout/ride" is the athlete's later daily opportunity.
+    for m in re.finditer(r"\b(?:second\s+(?:session|workout|ride)|seconda\s+(?:seduta|sessione|uscita))\b",low,re.I):
+        spans.append((m.start(),m.end(),"AFTERNOON"))
+    return sorted({(a,b,p) for a,b,p in spans},key=lambda x:(x[0],x[1],x[2]))
+
+
+def _v137_scoped_parts(clause, trigger_re, future=True):
+    low=_v133_norm_note(clause)
+    spans=_v137_availability_part_spans(low,future=future)
+    if not spans:return [],[]
+    triggers=list(re.finditer(trigger_re,low,re.I))
+    if not triggers:return [],list(dict.fromkeys(p for _,_,p in spans))
+    chosen=[]
+    for trig in triggers:
+        overlap=[x for x in spans if not (x[1] <= trig.start() or x[0] >= trig.end())]
+        if overlap:
+            chosen.extend(x[2] for x in overlap);continue
+        after=[x for x in spans if x[0]>=trig.end() and x[0]-trig.end()<=120]
+        if after:
+            chosen.extend(x[2] for x in after);continue
+        before=[x for x in spans if x[1]<=trig.start() and trig.start()-x[1]<=70]
+        if before:chosen.append(max(before,key=lambda x:x[1])[2])
+    return list(dict.fromkeys(chosen)),list(dict.fromkeys(p for _,_,p in spans))
+
+
+def _v136_clause_availability(note, default_date, now):
+    """R137 generalized deterministic availability interpreter.
+
+    The state model is semantic (AVAILABLE / UNAVAILABLE / UNCERTAIN), while wording
+    variants are normalized into a broader set of ability, schedule and constraint cues.
+    Explicit date markers override the note-date default. Uncertainty always outranks
+    embedded positive language.
+    """
+    clauses=[c.strip(" ,") for c in re.split(
+        r"(?:[.!?;]+\s*|,\s*(?=(?:but|however|though|so|ma|per[oò]|quindi)\b)|\s+\b(?:but|however|though|so|ma|per[oò]|quindi)\b\s+)",
+        str(note or ""),flags=re.I,
+    ) if c and c.strip(" ,")]
+    if not clauses:clauses=[str(note or "")]
+    current_date=str(default_date or now.date().isoformat())
+    states_by_date={};touched_by_date={}
+
+    pos_pat=(
+        r"\b(?:can\s+(?:train|ride|work\s*out)|able\s+to\s+(?:train|ride|work\s*out)|"
+        r"available(?:\s+to\s+(?:train|ride|work\s*out))?|free(?:\s+to\s+(?:train|ride|work\s*out))?|"
+        r"can\s+make\s+it|back\s+(?:on|to)\s+(?:the\s+)?(?:trainer|bike)|"
+        r"posso\s+(?:allenarmi|allenare|pedalare)|riesco\s+(?:ad|a)\s+(?:allenarmi|allenare|pedalare)|"
+        r"sono\s+(?:disponibile|liber[oa])|torno\s+(?:sui|sul|in)\s+(?:rulli|trainer|bici))\b"
+    )
+    neg_pat=(
+        r"\b(?:can(?:not|'t)(?:\s+(?:train|ride|work\s*out))?|unable\s+to\s+(?:train|ride|work\s*out)|"
+        r"won't\s+be\s+able\s+to\s+(?:train|ride|work\s*out)|will\s+not\s+be\s+able\s+to\s+(?:train|ride|work\s*out)|"
+        r"can't\s+make\s+it|won't\s+make\s+it|not\s+available|unavailable|no\s+(?:second\s+)?(?:training|workout|ride|session)|"
+        r"no\s+chance\s+to\s+(?:train|ride|work\s*out)|busy|occupied|in\s+meetings?|working|"
+        r"non\s+posso(?:\s+(?:allenarmi|allenare|pedalare))?|non\s+riesco\s+(?:ad|a)?\s*(?:allenarmi|allenare|pedalare)|"
+        r"non\s+sono\s+disponibile|indisponibile|niente\s+(?:allenamento|seduta|sessione|uscita)|"
+        r"nessuna\s+(?:seduta|sessione|uscita)|niente\s+seconda\s+(?:seduta|sessione|uscita)|occupat[oa]|impegnat[oa]|riunioni?|lavoro)\b"
+    )
+    unc_pat=(
+        r"\b(?:don't\s+know|do\s+not\s+know|not\s+sure|unsure|might|may|maybe|perhaps|probably|"
+        r"could\s+(?:train|ride|work\s*out|make\s+it)|should\s+be\s+free|hope\s+I\s+can|"
+        r"forse|probabilmente|non\s+so|non\s+sono\s+sicur[oa]|vediamo\s+se|se\s+riesco|"
+        r"potrei|dovrei\s+(?:essere\s+liber[oa]|riuscire))\b"
+    )
+    # Phrases expressing inability only until a stated time actually make the post-time
+    # window available, not unavailable (e.g. "can't train until after 5 pm").
+    until_available=r"\b(?:can(?:not|'t)|cannot|non\s+posso)\b[^.!?;]{0,50}\b(?:until\s+after|until|fino\s+a|fino\s+alle)\b"
+
+    for clause in clauses:
+        explicit_date=_v133_target_date(clause,now)
+        if explicit_date:current_date=explicit_date
+        low=_v133_norm_note(clause)
+        future=True  # human scheduling convention: 17:xx remains AFTERNOON for note semantics
+        has_unc=bool(re.search(unc_pat,low,re.I))
+        has_neg=bool(re.search(neg_pat,low,re.I))
+        has_pos=bool(re.search(pos_pat,low,re.I))
+        until_mode=bool(re.search(until_available,low,re.I))
+        if not (has_unc or has_neg or has_pos):continue
+        unc,unc_mentioned=_v137_scoped_parts(clause,unc_pat,future=future)
+        neg,neg_mentioned=_v137_scoped_parts(clause,neg_pat,future=future)
+        pos,pos_mentioned=_v137_scoped_parts(clause,pos_pat,future=future)
+        if until_mode and neg:
+            # Coarse daypart model: the named/clock window represents the first usable
+            # post-constraint opportunity, so treat that bucket as available.
+            pos=list(dict.fromkeys(pos+neg));neg=[];has_pos=True;has_neg=False
+        if not (unc or neg or pos):
+            if re.search(r"\b(?:all\s+day|whole\s+day|tutto\s+il\s+giorno|intera\s+giornata|today|oggi)\b",low,re.I):
+                if has_unc:unc=["ALL_DAY"]
+                elif has_neg:neg=["ALL_DAY"]
+                elif has_pos:pos=["ALL_DAY"]
+        state=states_by_date.setdefault(current_date,{"AVAILABLE":set(),"UNAVAILABLE":set(),"UNCERTAIN":set()})
+        touched=touched_by_date.setdefault(current_date,set())
+        mentioned=set((unc_mentioned if has_unc else [])+(neg_mentioned if has_neg else [])+(pos_mentioned if has_pos else []))
+        touched.update(mentioned)
+        state["UNCERTAIN"].update(unc)
+        state["UNAVAILABLE"].update(p for p in neg if p not in state["UNCERTAIN"])
+        state["AVAILABLE"].update(p for p in pos if p not in state["UNCERTAIN"] and p not in state["UNAVAILABLE"])
+    return states_by_date,touched_by_date
+
+
+def build_planning_context(now=None):
+    ctx=_build_planning_context_r136_final(now=now)
+    da=ctx.get("daily_availability") if isinstance(ctx.get("daily_availability"),dict) else None
+    if da and da.get("source")=="DAILY_NOTE_STRUCTURED_AVAILABILITY":
+        da["parse_policy"]="R137_GENERALIZED_NOTE_AVAILABILITY"
+    return ctx
+
+
+def _v136_link_prescription(block, ledger):
+    """R137 attribution: date proximity alone can never identify an unrelated workout."""
+    rep=(block or {}).get("repeatability") or {}
+    actual_reps=int(rep.get("reps") or 0);actual_secs=float(rep.get("interval_secs") or 0)
+    try:bd=date.fromisoformat(str((block or {}).get("date") or "")[:10])
+    except Exception:return None
+    ranked=[]
+    for plan in _v136_candidate_prescriptions(ledger,block):
+        sig=_v136_plan_signature(plan)
+        try:pd=date.fromisoformat(str(plan.get("date") or "")[:10]);delta=(bd-pd).days
+        except Exception:continue
+        if abs(delta)>2:continue
+        reps_match=bool(sig.get("reps") and actual_reps==sig.get("reps"))
+        secs_match=bool(sig.get("secs") and actual_secs and abs(actual_secs-float(sig.get("secs")))<=max(10.0,.08*float(sig.get("secs"))))
+        explicit_identity=bool(
+            ((block or {}).get("nova_workout_id") and (block or {}).get("nova_workout_id")==plan.get("nova_workout_id")) or
+            ((block or {}).get("nova_canonical_plan_id") and (block or {}).get("nova_canonical_plan_id")==plan.get("nova_canonical_plan_id"))
+        )
+        exact_date=delta==0
+        # Adjacent dates require full structural agreement. Same-date execution may
+        # deviate enough for adherence to be LOW, but must still share at least one
+        # primary structural dimension unless an explicit identity is present.
+        if explicit_identity:
+            attributable=True
+        elif exact_date:
+            attributable=bool(reps_match or secs_match)
+        else:
+            attributable=bool(reps_match and secs_match)
+        if not attributable:continue
+        score=(16 if explicit_identity else 0)+(8 if exact_date else (5 if abs(delta)==1 else 3))+(4 if reps_match else 0)+(4 if secs_match else 0)
+        if plan.get("nova_workout_id"):score+=2
+        ranked.append((score,abs(delta),plan,reps_match,secs_match,explicit_identity))
+    if not ranked:return None
+    ranked.sort(key=lambda x:(-x[0],x[1],_v136_prescription_fingerprint(x[2])))
+    best=ranked[0]
+    if len(ranked)>1 and ranked[1][0]==best[0] and _v136_prescription_fingerprint(ranked[1][2])!=_v136_prescription_fingerprint(best[2]):
+        return None
+    confidence="EXACT_IDENTITY" if best[5] else ("EXACT_DATE" if best[1]==0 and best[3] and best[4] else ("HIGH" if best[3] and best[4] and best[1]<=1 else "MODERATE"))
+    return {"plan":best[2],"confidence":confidence,"date_delta_days":best[1],"reps_match":best[3],"duration_match":best[4],"source":best[2].get("_link_source")}
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
