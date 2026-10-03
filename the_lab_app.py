@@ -33462,3 +33462,289 @@ def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=N
 
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.19 WIP R143 · RACE-SAFE TYPE RHYTHM + CYCLE-SAFE PRESCRIPTION CONTINUITY · R142 BASELINE"
+
+
+# R144 · MONOTONIC ACTIVITY TRUTH + PRESCRIPTION LIFECYCLE + CAUSAL NOTE SCOPE
+# R143 live QA exposed three interacting continuity defects:
+# 1) a previously RESOLVED repeated-work activity could degrade to RAW_FALLBACK when it
+#    fell outside the bounded original-file probe's first three recent activities;
+# 2) replanning the same future slot could leave multiple equally-valid prescription
+#    identities in history with no ACTIVE/SUPERSEDED lifecycle;
+# 3) retrospective explanatory wording in a Daily Note could leak a completed daypart
+#    into current availability ("...that's why I did 2 hours this morning").
+R144_SCHEMA = "V4.9.20-R144-1"
+
+_build_previous_training_blocks_r143_final = build_previous_training_blocks
+_v125_enrich_bounded_laps_r143_final = _v125_enrich_bounded_laps
+_v136_clause_availability_r143_final = _v136_clause_availability
+_v133_interpret_athlete_note_r143_final = _v133_interpret_athlete_note
+_build_planning_context_r143_final = build_planning_context
+_update_microcycle_ledger_from_snapshot_r143_final = update_microcycle_ledger_from_snapshot
+_v139_causally_eligible_r143_final = _v139_causally_eligible
+
+
+def _v144_prior_resolved_truth_index(owner_user_id=None):
+    """Return prior Snapshot canonical truths keyed by activity id.
+
+    Activity Truth is monotonic unless new evidence is contradictory. A prior RESOLVED
+    source may be reused when the current lightweight fetch only exposes RAW_FALLBACK /
+    UNRESOLVED data. CONFLICT is never overwritten.
+    """
+    try:
+        prior = load_latest_report(include_payload=True, owner_user_id=owner_user_id)
+    except Exception:
+        prior = None
+    pdata = (prior or {}).get("data") if isinstance(prior, dict) else None
+    if not isinstance(pdata, dict):
+        return {}, None
+    idx = {}
+    for b in pdata.get("previous_training_blocks") or []:
+        if not isinstance(b, dict):
+            continue
+        aid = str(b.get("activity_id") or "").strip()
+        truth = b.get("activity_truth") if isinstance(b.get("activity_truth"), dict) else {}
+        if aid and str(truth.get("status") or "").upper() == "RESOLVED" and isinstance(b.get("repeatability"), dict):
+            idx[aid] = _v4831_json_clone(b)
+    # Evidence Ledger survives beyond the short previous_training_blocks surface.
+    ledger = pdata.get("evidence_ledger") if isinstance(pdata.get("evidence_ledger"), dict) else {}
+    for e in ledger.get("events") or []:
+        if not isinstance(e, dict):
+            continue
+        aid = str(e.get("activity_id") or "").strip()
+        rep = e.get("repeatability") if isinstance(e.get("repeatability"), dict) else None
+        if not aid or aid in idx or str(e.get("activity_truth_status") or "").upper() != "RESOLVED" or not rep:
+            continue
+        idx[aid] = {
+            "activity_id": aid,
+            "date": e.get("date"),
+            "name": e.get("name"),
+            "repeatability": _v4831_json_clone(rep),
+            "interval_structure_source": e.get("activity_truth_source") or rep.get("source"),
+            "activity_truth": {
+                "status": "RESOLVED",
+                "source": e.get("activity_truth_source") or rep.get("source"),
+                "confidence": "PERSISTED",
+                "repeated_work_count": rep.get("reps"),
+                "nominal_work_secs": rep.get("interval_secs"),
+                "corrections": [],
+                "lap_path": None,
+                "lap_candidates_seen": None,
+                "source_lap_probe": None,
+                "raw_icu_work_count": None,
+                "downstream_conflict": None,
+            },
+        }
+    return idx, (prior or {}).get("generated_at_local")
+
+
+def _v144_restore_resolved_truth(block, prior_block, prior_snapshot_at=None):
+    if not isinstance(block, dict) or not isinstance(prior_block, dict):
+        return block
+    current = block.get("activity_truth") if isinstance(block.get("activity_truth"), dict) else {}
+    prior = prior_block.get("activity_truth") if isinstance(prior_block.get("activity_truth"), dict) else {}
+    cur_status = str(current.get("status") or "").upper()
+    prior_status = str(prior.get("status") or "").upper()
+    # Explicit contradictions are stronger than cached history and must fail closed.
+    if cur_status == "CONFLICT" or prior_status != "RESOLVED" or cur_status == "RESOLVED":
+        return block
+    if cur_status not in {"RAW_FALLBACK", "UNRESOLVED", "LEGACY_UNSPECIFIED", ""}:
+        return block
+    if not isinstance(prior_block.get("repeatability"), dict):
+        return block
+    out = dict(block)
+    out["activity_truth"] = _v4831_json_clone(prior)
+    out["activity_truth"]["persistence_source"] = "PRIOR_RESOLVED_SNAPSHOT"
+    out["activity_truth"]["persisted_from_snapshot_at_local"] = prior_snapshot_at
+    out["repeatability"] = _v4831_json_clone(prior_block.get("repeatability"))
+    out["interval_structure_source"] = prior_block.get("interval_structure_source") or prior.get("source") or out.get("interval_structure_source")
+    for key in ("intervals", "work_interval_evidence", "partial_work_evidence"):
+        if key in prior_block and prior_block.get(key) is not None:
+            out[key] = _v4831_json_clone(prior_block.get(key))
+    wb = dict(out.get("wbal") or {}) if isinstance(out.get("wbal"), dict) else None
+    if wb is not None:
+        wb["canonical_structure_source"] = out.get("interval_structure_source")
+        wb["canonical_repeated_work_count"] = prior.get("repeated_work_count") or (out.get("repeatability") or {}).get("reps")
+        out["wbal"] = wb
+    out["truth_continuity"] = {
+        "schema": R144_SCHEMA,
+        "state": "RESTORED_PRIOR_RESOLVED",
+        "prior_source": prior.get("source"),
+        "current_weak_status": cur_status or None,
+        "prior_snapshot_at_local": prior_snapshot_at,
+        "rule": "Previously resolved canonical activity structure is monotonic unless contradictory evidence appears.",
+    }
+    return out
+
+
+def _v144_probe_candidate(activities, details, prior_resolved_ids=None, scan_limit=18):
+    prior_resolved_ids = set(str(x) for x in (prior_resolved_ids or []))
+    ordered = sorted(
+        (a for a in activities or [] if isinstance(a, dict) and a.get("id")),
+        key=lambda a: str(a.get("start_date_local") or ""), reverse=True,
+    )
+    for a in ordered[:max(3, int(scan_limit or 18))]:
+        aid = str(a.get("id") or "")
+        if aid in prior_resolved_ids or not _v4887_is_cycling_activity(a):
+            continue
+        d = (details or {}).get(aid) or a
+        truth = _v79_activity_interval_truth(d)
+        if str(truth.get("status") or "").upper() == "RESOLVED":
+            continue
+        native = d.get("icu_intervals") or []
+        work = [r for r in native if isinstance(r, dict) and str(r.get("type") or "").upper() == "WORK"]
+        if len(work) < 3:
+            continue
+        secs = [_num(r.get("moving_time") or r.get("elapsed_time")) for r in work]
+        valid = [v for v in secs if v is not None and v >= 120]
+        if len(valid) < 3:
+            continue
+        med = statistics.median(valid)
+        if sum(abs(v - med) <= max(15, med * .12) for v in valid) < 2:
+            continue
+        return a
+    return None
+
+
+def _v125_enrich_bounded_laps(activities, details, user_id=None):
+    """R144: preserve the one-file network bound, but not the first-three recency bug."""
+    out = details if isinstance(details, dict) else {}
+    prior_idx, _ = _v144_prior_resolved_truth_index(owner_user_id=user_id)
+    target = _v144_probe_candidate(activities, out, prior_resolved_ids=prior_idx.keys(), scan_limit=18)
+    if target is None:
+        return out
+    # Reuse the proven R125 fetch/parser implementation on exactly one selected activity.
+    return _v125_enrich_bounded_laps_r143_final([target], out, user_id=user_id)
+
+
+def build_previous_training_blocks(recent_activities, limit=3, activity_details=None):
+    blocks = _build_previous_training_blocks_r143_final(recent_activities, limit=limit, activity_details=activity_details)
+    prior_idx, prior_at = _v144_prior_resolved_truth_index()
+    restored = []
+    for b in blocks or []:
+        aid = str((b or {}).get("activity_id") or "")
+        restored.append(_v144_restore_resolved_truth(b, prior_idx.get(aid), prior_snapshot_at=prior_at) if aid in prior_idx else b)
+    return restored
+
+
+def _v144_note_scope_boundaries(note):
+    """Insert deterministic clause boundaries around causal/explanatory joins.
+
+    This separates an availability constraint from a retrospective explanation without
+    discarding a second explicit availability statement after the connector.
+    """
+    text = str(note or "")
+    patterns = [
+        r"\s+(?:and\s+)?that(?:'|’)s\s+why\s+",
+        r"\s+which\s+is\s+why\s+",
+        r"\s+because\s+",
+        r"\s+as\s+a\s+result\s+",
+        r"\s+therefore\s+",
+        r"\s+(?:e\s+)?per\s+questo\s+",
+        r"\s+ecco\s+(?:il\s+motivo\s+)?perch[eé]\s+",
+        r"\s+perch[eé]\s+",
+    ]
+    for pat in patterns:
+        text = re.sub(pat, "; ", text, flags=re.I)
+    return text
+
+
+def _v136_clause_availability(note, default_date, now):
+    return _v136_clause_availability_r143_final(_v144_note_scope_boundaries(note), default_date, now)
+
+
+def _v133_interpret_athlete_note(now=None, logs=None):
+    out = _v133_interpret_athlete_note_r143_final(now=now, logs=logs)
+    if isinstance(out, dict):
+        out["availability_scope_policy"] = R144_SCHEMA + ":CAUSAL_CLAUSE_SCOPE"
+    return out
+
+
+def build_planning_context(now=None):
+    ctx = _build_planning_context_r143_final(now=now)
+    da = ctx.get("daily_availability") if isinstance(ctx.get("daily_availability"), dict) else None
+    if da and da.get("source") == "DAILY_NOTE_STRUCTURED_AVAILABILITY":
+        da["parse_policy"] = "R144_CAUSAL_CLAUSE_AVAILABILITY"
+    return ctx
+
+
+def _v144_prescription_slot_key(row):
+    row = row or {}
+    return (str(row.get("date") or "")[:10], str(row.get("period") or ""), str(row.get("slot") or ""))
+
+
+def _v144_mark_prescription_lifecycle(out, sessions, now):
+    if not isinstance(out, dict):
+        return out
+    current = []
+    for s in sessions or []:
+        if not isinstance(s, dict) or not _v136_is_hard_summary(s):
+            continue
+        row = _v4840_ledger_session_summary(s)
+        fp = _v136_prescription_fingerprint(row)
+        current.append((fp, _v144_prescription_slot_key(row), row))
+    if not current:
+        return out
+    current_fps = {x[0] for x in current}
+    current_by_slot = {x[1]: x for x in current}
+    hist = [dict(x) for x in (out.get("prescription_history") or []) if isinstance(x, dict)]
+    changed = False
+    for row in hist:
+        fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+        key = _v144_prescription_slot_key(row)
+        if fp in current_fps:
+            if row.get("prescription_status") != "ACTIVE":
+                row["prescription_status"] = "ACTIVE"; changed = True
+            row.pop("superseded_at_local", None)
+            row.pop("superseded_by_fingerprint", None)
+            row.pop("superseded_by_workout_id", None)
+        elif key in current_by_slot:
+            replacement = current_by_slot[key]
+            if row.get("prescription_status") != "SUPERSEDED" or not row.get("superseded_at_local"):
+                row["prescription_status"] = "SUPERSEDED"
+                row["superseded_at_local"] = now.isoformat(timespec="seconds")
+                row["superseded_by_fingerprint"] = replacement[0]
+                row["superseded_by_workout_id"] = replacement[2].get("nova_workout_id")
+                changed = True
+        elif not row.get("prescription_status"):
+            row["prescription_status"] = "HISTORICAL"
+            changed = True
+    out["prescription_history"] = hist[-32:]
+    # Surface lifecycle on the active future anchor too.
+    nca = out.get("next_cycle_anchor") if isinstance(out.get("next_cycle_anchor"), dict) else None
+    if nca:
+        nfp = _v136_prescription_fingerprint(nca)
+        nca["prescription_status"] = "ACTIVE" if nfp in current_fps else nca.get("prescription_status") or "HISTORICAL"
+        out["next_cycle_anchor"] = nca
+    out["prescription_lifecycle_schema"] = R144_SCHEMA
+    return out
+
+
+def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=None):
+    now = now or get_rome_now()
+    out = _update_microcycle_ledger_from_snapshot_r143_final(ledger, sessions, user_id=user_id, now=now)
+    out = _v144_mark_prescription_lifecycle(out, sessions, now)
+    if isinstance(out, dict) and out.get("ledger_id"):
+        payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
+        _db_execute("UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?", (payload, _now_utc_text(), out["ledger_id"], _data_owner_user_id(user_id)))
+    return out
+
+
+def _v139_causally_eligible(plan, block, explicit_identity=False):
+    if not _v139_causally_eligible_r143_final(plan, block, explicit_identity=explicit_identity):
+        return False
+    status = str((plan or {}).get("prescription_status") or "").upper()
+    act_dt = _v139_activity_dt(block)
+    if status == "SUPERSEDED":
+        superseded = _v139_parse_local_dt((plan or {}).get("superseded_at_local"))
+        if superseded is None:
+            return False
+        if act_dt is None or act_dt >= superseded:
+            return False
+    if status in {"CANCELLED", "WITHDRAWN"}:
+        ended = _v139_parse_local_dt((plan or {}).get("cancelled_at_local") or (plan or {}).get("withdrawn_at_local"))
+        if ended is None or act_dt is None or act_dt >= ended:
+            return False
+    return True
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.20 WIP R144 · MONOTONIC TRUTH + PRESCRIPTION LIFECYCLE + CAUSAL NOTE SCOPE · R143 BASELINE"
