@@ -34438,29 +34438,24 @@ def load_microcycle_ledger(plan, training_direction, season_activities, user_id=
 APP_VERSION = "THE LAB · PRODUCT V4.9.22 WIP R146 · PRESCRIPTION EXECUTION RECONCILIATION · R145 BASELINE"
 
 # ============================================================================
-# R147 · LOGICAL PRESCRIPTION SLOT + CAUSAL CHECKPOINT AUDIT
+# R148 · SAFE LOGICAL-SLOT RECONCILIATION
 # ============================================================================
-# Goals:
-# 1) A logical hard opportunity is date-scoped, not label/period-scoped. Learned
-#    rhythm labels may move between RHYTHM and RHYTHM_SECOND (or change wording)
-#    without creating a second ACTIVE prescription for the same hard day.
-# 2) Reconciliation/adherence candidate sets fail closed on genuinely different
-#    dates but collapse duplicate versions of the same logical hard slot to the
-#    latest versioned prescription.
-# 3) COMPLETED_CHECKPOINT_REPRESCRIBED is causal and prescription-specific. A
-#    historical formal validation cannot invalidate a newly ACTIVE checkpoint.
+# R147 is deliberately not the baseline: it globally replaced the legacy
+# prescription slot key. R148 starts from the live-stable R146 baseline and
+# keeps the legacy lifecycle untouched. Logical hard-day identity is applied
+# only at reconciliation/adherence boundaries and in a post-lifecycle cleanup.
 
-R147_SCHEMA = "V4.9.23-R147-1"
+R148_SCHEMA = "V4.9.24-R148-1"
 
-_v144_prescription_slot_key_r146_final = _v144_prescription_slot_key
-_v144_mark_prescription_lifecycle_r146_final = _v144_mark_prescription_lifecycle
+_update_microcycle_ledger_from_snapshot_r146_final = update_microcycle_ledger_from_snapshot
 _v146_active_prescriptions_r146_final = _v146_active_prescriptions
 _v136_candidate_prescriptions_r146_final = _v136_candidate_prescriptions
 _v4897_semantic_compile_snapshot_r146_final = _v4897_semantic_compile_snapshot
 
 
-def _v147_recorded_dt(row):
-    row = row or {}
+def _v148_safe_dt(row):
+    if not isinstance(row, dict):
+        return None
     for key in ("recorded_at_local", "created_at_local", "snapshot_generated_local", "planned_at_local", "fulfilled_at_local"):
         dt = _v139_parse_local_dt(row.get(key))
         if dt is not None:
@@ -34468,80 +34463,180 @@ def _v147_recorded_dt(row):
     return None
 
 
-def _v147_hard_date(row):
-    return str((row or {}).get("date") or (row or {}).get("planned_date") or "")[:10]
+def _v148_planned_date(row):
+    if not isinstance(row, dict):
+        return ""
+    return str(row.get("planned_date") or row.get("date") or "")[:10]
 
 
-def _v144_prescription_slot_key(row):
-    """R147 logical hard-slot identity.
+def _v148_identity(row):
+    if not isinstance(row, dict):
+        return ""
+    return str(_v146_plan_identity(row) or row.get("nova_canonical_plan_id") or row.get("canonical_plan_id") or "").strip()
 
-    Nova's canonical recommendation contract permits one hard prescription per
-    calendar day. Period/slot labels are projections of learned rhythm and may
-    legitimately drift between snapshots, so they are not part of prescription
-    identity.
+
+def _v148_logical_key(row):
+    """One canonical hard authority per planned calendar date.
+
+    Period/slot labels are learned projections and may drift between RHYTHM,
+    RHYTHM_SECOND, learned rhythm, and hard-rhythm wording. They are not identity.
     """
-    return (_v147_hard_date(row), "SINGLE_HARD_DAY_AUTHORITY")
+    day = _v148_planned_date(row)
+    return (day, "SINGLE_HARD_DAY_AUTHORITY") if day else None
 
 
-def _v144_mark_prescription_lifecycle(out, sessions, now):
-    out = _v144_mark_prescription_lifecycle_r146_final(out, sessions, now)
-    if isinstance(out, dict):
-        out["prescription_lifecycle_schema"] = R147_SCHEMA
-        out["logical_prescription_slot_policy"] = {
-            "schema": R147_SCHEMA,
-            "key": "PLANNED_DATE_SINGLE_HARD_AUTHORITY",
-            "rule": "Rhythm period/label changes do not create a second active hard prescription on the same planned date.",
-        }
-    return out
+def _v148_row_rank(row):
+    dt = _v148_safe_dt(row)
+    stamp = dt.timestamp() if dt is not None else float("-inf")
+    # Stable scalar tie-breakers only; never compare whole dicts.
+    ident = 1 if _v148_identity(row) else 0
+    fp = str((row or {}).get("prescription_fingerprint") or _v136_prescription_fingerprint(row or {}))
+    return (stamp, ident, fp)
 
 
-def _v147_latest_by_logical_slot(rows):
+def _v148_collapse_logical(rows, statuses=None):
     grouped = {}
     passthrough = []
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        date = _v147_hard_date(row)
-        if not date:
+        status = str(row.get("prescription_status") or "").upper()
+        if statuses is not None and status not in statuses:
             passthrough.append(row)
             continue
-        key = (date, "SINGLE_HARD_DAY_AUTHORITY")
-        dt = _v147_recorded_dt(row)
-        rank = dt.timestamp() if dt is not None else float("-inf")
-        # Prefer a row carrying an explicit prescription identity on exact ties.
-        ident = 1 if _v146_plan_identity(row) else 0
-        fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
-        candidate = (rank, ident, fp, row)
-        if key not in grouped or candidate[:3] > grouped[key][:3]:
-            grouped[key] = candidate
-    return passthrough + [x[3] for x in grouped.values()]
+        key = _v148_logical_key(row)
+        if key is None:
+            passthrough.append(row)
+            continue
+        rank = _v148_row_rank(row)
+        prior = grouped.get(key)
+        if prior is None or rank > prior[0]:
+            grouped[key] = (rank, row)
+    return passthrough + [v[1] for v in grouped.values()]
 
 
 def _v146_active_prescriptions(ledger):
-    # Start from R146's status/causality filtering, then collapse duplicate ACTIVE
-    # versions of the same logical hard day. This makes early-execution matching
-    # deterministic even before the next lifecycle write has cleaned old rows.
-    rows = _v146_active_prescriptions_r146_final(ledger)
-    return _v147_latest_by_logical_slot(rows)
+    """R148: R146 status/causality rules + logical hard-day authority."""
+    try:
+        rows = _v146_active_prescriptions_r146_final(ledger)
+    except Exception:
+        rows = []
+    return _v148_collapse_logical(rows, statuses=None)
 
 
 def _v136_candidate_prescriptions(ledger, block):
-    # The adherence linker must see the same logical-slot authority as execution
-    # reconciliation, otherwise duplicate ACTIVE versions can create a false tie.
-    rows = _v136_candidate_prescriptions_r146_final(ledger, block)
-    active_or_fulfilled = []
-    historical = []
+    """R148: adherence sees one live/fulfilled authority per planned hard day."""
+    try:
+        rows = _v136_candidate_prescriptions_r146_final(ledger, block)
+    except Exception:
+        return []
+    live, historical = [], []
     for row in rows or []:
-        status = str((row or {}).get("prescription_status") or "").upper()
-        if status in {"ACTIVE", "PLANNED", "FULFILLED", ""}:
-            active_or_fulfilled.append(row)
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("prescription_status") or "").upper()
+        if status in {"", "ACTIVE", "PLANNED", "FULFILLED"}:
+            live.append(row)
         else:
             historical.append(row)
-    return _v147_latest_by_logical_slot(active_or_fulfilled) + historical
+    return _v148_collapse_logical(live, statuses=None) + historical
 
 
-def _v147_validation_session(out):
-    for row in (out or {}).get("next_sessions") or []:
+def _v148_enforce_single_active_authority(out, now=None):
+    """Post-lifecycle cleanup without changing the legacy slot-key function."""
+    if not isinstance(out, dict):
+        return out
+    now = now or get_rome_now()
+    hist = [dict(x) for x in (out.get("prescription_history") or []) if isinstance(x, dict)]
+    by_key = {}
+    for idx, row in enumerate(hist):
+        status = str(row.get("prescription_status") or "").upper()
+        if status not in {"ACTIVE", "PLANNED", ""}:
+            continue
+        key = _v148_logical_key(row)
+        if key is None:
+            continue
+        rank = _v148_row_rank(row)
+        prior = by_key.get(key)
+        if prior is None or rank > prior[0]:
+            by_key[key] = (rank, idx)
+
+    winners = {idx for _, idx in by_key.values()}
+    changed = 0
+    for idx, row in enumerate(hist):
+        status = str(row.get("prescription_status") or "").upper()
+        key = _v148_logical_key(row)
+        if key is None or status not in {"ACTIVE", "PLANNED", ""}:
+            continue
+        if idx in winners:
+            if status != "ACTIVE":
+                row["prescription_status"] = "ACTIVE"
+                changed += 1
+            # A winner is a current authority; clear stale supersession metadata.
+            row.pop("superseded_at_local", None)
+            row.pop("superseded_by_fingerprint", None)
+            row.pop("superseded_by_workout_id", None)
+        else:
+            winner = hist[by_key[key][1]]
+            if status != "SUPERSEDED":
+                row["prescription_status"] = "SUPERSEDED"
+                changed += 1
+            row["superseded_at_local"] = row.get("superseded_at_local") or now.isoformat(timespec="seconds")
+            row["superseded_by_fingerprint"] = str(winner.get("prescription_fingerprint") or _v136_prescription_fingerprint(winner))
+            row["superseded_by_workout_id"] = _v146_plan_identity(winner)
+
+    out["prescription_history"] = hist[-32:]
+
+    # Anchor follows the winning logical authority but never overwrites a fulfilled
+    # execution record.
+    nca = out.get("next_cycle_anchor") if isinstance(out.get("next_cycle_anchor"), dict) else None
+    if nca:
+        nstatus = str(nca.get("prescription_status") or "").upper()
+        if nstatus != "FULFILLED":
+            key = _v148_logical_key(nca)
+            if key in by_key:
+                winner = hist[by_key[key][1]]
+                winner_fp = str(winner.get("prescription_fingerprint") or _v136_prescription_fingerprint(winner))
+                nfp = str(nca.get("prescription_fingerprint") or _v136_prescription_fingerprint(nca))
+                if nfp != winner_fp:
+                    # Preserve anchor-specific fields, but surface it as superseded.
+                    nca["prescription_status"] = "SUPERSEDED"
+                    nca["superseded_at_local"] = nca.get("superseded_at_local") or now.isoformat(timespec="seconds")
+                    nca["superseded_by_fingerprint"] = winner_fp
+                    nca["superseded_by_workout_id"] = _v146_plan_identity(winner)
+                else:
+                    nca["prescription_status"] = "ACTIVE"
+                out["next_cycle_anchor"] = nca
+
+    out["logical_prescription_slot_policy"] = {
+        "schema": R148_SCHEMA,
+        "key": "PLANNED_DATE_SINGLE_HARD_AUTHORITY",
+        "active_authorities": len(by_key),
+        "rows_superseded_by_cleanup": changed,
+        "rule": "Rhythm label/period drift cannot create a second active hard prescription for the same planned date.",
+    }
+    out["prescription_lifecycle_schema"] = R148_SCHEMA
+    return out
+
+
+def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=None):
+    """R148: preserve proven R146 update path, then normalize duplicate live authority."""
+    now = now or get_rome_now()
+    out = _update_microcycle_ledger_from_snapshot_r146_final(ledger, sessions, user_id=user_id, now=now)
+    out = _v148_enforce_single_active_authority(out, now=now)
+    if isinstance(out, dict) and out.get("ledger_id"):
+        payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
+        _db_execute(
+            "UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?",
+            (payload, _now_utc_text(), out["ledger_id"], _data_owner_user_id(user_id)),
+        )
+    return out
+
+
+def _v148_current_validation_session(snapshot):
+    if not isinstance(snapshot, dict):
+        return None
+    for row in snapshot.get("next_sessions") or []:
         if not isinstance(row, dict):
             continue
         if str(row.get("stimulus_role") or "").upper() == "VALIDATE" or str(row.get("stimulus_architecture_state") or "").upper() == "VALIDATION_REPLACES_MORE_TRAINING":
@@ -34549,45 +34644,35 @@ def _v147_validation_session(out):
     return None
 
 
-def _v147_checkpoint_is_currently_fulfilled(out, ledger):
-    """True only when the currently prescribed validation has execution proof."""
-    session = _v147_validation_session(out)
-    if not session:
+def _v148_current_validation_fulfilled(snapshot, ledger):
+    session = _v148_current_validation_session(snapshot)
+    if not session or not isinstance(ledger, dict):
         return False
-    planned_date = str(session.get("date") or "")[:10]
-    identity = str(session.get("nova_workout_id") or session.get("nova_contract_id") or "")
-    plan_id = str(session.get("nova_canonical_plan_id") or "")
+    day = str(session.get("date") or "")[:10]
+    ident = str(session.get("nova_workout_id") or session.get("nova_contract_id") or "").strip()
 
-    def same_plan(row):
+    def same(row):
         if not isinstance(row, dict):
             return False
-        if planned_date and _v147_hard_date(row) != planned_date:
+        if day and _v148_planned_date(row) != day:
             return False
-        rid = str(_v146_plan_identity(row) or "")
-        rpid = str(row.get("nova_canonical_plan_id") or row.get("canonical_plan_id") or "")
-        if identity and rid and rid != identity:
-            return False
-        if plan_id and rpid and rpid != plan_id:
-            # Plan hashes can legitimately change across harmless snapshot
-            # recompiles; identity+date remains the stronger contract identity.
-            if not (identity and rid == identity):
-                return False
-        return bool(identity or plan_id or planned_date)
+        rid = str(_v146_plan_identity(row) or "").strip()
+        return (not ident) or (not rid) or ident == rid
 
-    for row in (ledger or {}).get("prescription_history") or []:
-        if same_plan(row) and str(row.get("prescription_status") or "").upper() == "FULFILLED":
+    for row in ledger.get("prescription_history") or []:
+        if same(row) and str((row or {}).get("prescription_status") or "").upper() == "FULFILLED":
             return True
     for key in ("next_cycle_anchor", "primary_anchor"):
-        row = (ledger or {}).get(key)
-        if same_plan(row) and str((row or {}).get("prescription_status") or "").upper() == "FULFILLED":
+        row = ledger.get(key)
+        if same(row) and str((row or {}).get("prescription_status") or "").upper() == "FULFILLED":
             return True
-    for rec in (ledger or {}).get("prescription_execution_history") or []:
+    for rec in ledger.get("prescription_execution_history") or []:
         if not isinstance(rec, dict):
             continue
-        if planned_date and str(rec.get("planned_date") or "")[:10] != planned_date:
+        if day and str(rec.get("planned_date") or "")[:10] != day:
             continue
-        rid = str(rec.get("nova_workout_id") or "")
-        if identity and rid and rid != identity:
+        rid = str(rec.get("nova_workout_id") or "").strip()
+        if ident and rid and rid != ident:
             continue
         if rec.get("activity_id") or rec.get("actual_date"):
             return True
@@ -34595,6 +34680,7 @@ def _v147_checkpoint_is_currently_fulfilled(out, ledger):
 
 
 def _v4897_semantic_compile_snapshot(parsed, adaptive_roadmap=None, microcycle_ledger=None, power_achievements=None, record_audit=True, snapshot_question=None):
+    """R148: causal checkpoint audit with defensive shape handling."""
     out = _v4897_semantic_compile_snapshot_r146_final(
         parsed,
         adaptive_roadmap=adaptive_roadmap,
@@ -34605,24 +34691,31 @@ def _v4897_semantic_compile_snapshot(parsed, adaptive_roadmap=None, microcycle_l
     )
     if not isinstance(out, dict) or not record_audit:
         return out
-    audit = out.get("semantic_authority_audit") if isinstance(out.get("semantic_authority_audit"), dict) else None
-    if not audit:
+    audit = out.get("semantic_authority_audit")
+    if not isinstance(audit, dict):
         return out
-    final_issues = dict(audit.get("final_issues") or {})
-    cross = list(final_issues.get("cross_section") or [])
-    if cross and not _v147_checkpoint_is_currently_fulfilled(out, microcycle_ledger or {}):
-        cross = [x for x in cross if str((x or {}).get("reason") or "") != "COMPLETED_CHECKPOINT_REPRESCRIBED"]
-        if cross:
-            final_issues["cross_section"] = cross
+    raw_issues = audit.get("final_issues")
+    final_issues = dict(raw_issues) if isinstance(raw_issues, dict) else {}
+    cross_raw = final_issues.get("cross_section")
+    cross = list(cross_raw) if isinstance(cross_raw, (list, tuple)) else []
+    fulfilled = _v148_current_validation_fulfilled(out, microcycle_ledger or {})
+    if cross and not fulfilled:
+        kept = []
+        for item in cross:
+            reason = str(item.get("reason") or "") if isinstance(item, dict) else ""
+            if reason != "COMPLETED_CHECKPOINT_REPRESCRIBED":
+                kept.append(item)
+        if kept:
+            final_issues["cross_section"] = kept
         else:
             final_issues.pop("cross_section", None)
     audit["final_issues"] = final_issues
-    audit["checkpoint_completion_scope_schema"] = R147_SCHEMA
-    audit["checkpoint_completion_rule"] = "Only execution evidence for the currently prescribed validation can trigger COMPLETED_CHECKPOINT_REPRESCRIBED; historical formal validations are context only."
+    audit["checkpoint_completion_scope_schema"] = R148_SCHEMA
+    audit["checkpoint_completion_rule"] = "Only execution evidence for the current planned validation can trigger COMPLETED_CHECKPOINT_REPRESCRIBED; historical validations are descriptive context."
     audit["final_pass"] = not bool(final_issues)
     audit["pass"] = audit["final_pass"]
     out["semantic_authority_audit"] = audit
     return out
 
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.23 WIP R147 · LOGICAL PRESCRIPTION SLOT + CAUSAL CHECKPOINT AUDIT · R146 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.24 WIP R148 · SAFE LOGICAL-SLOT RECONCILIATION · R146 BASELINE"
