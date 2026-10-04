@@ -34436,3 +34436,193 @@ def load_microcycle_ledger(plan, training_direction, season_activities, user_id=
 
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.22 WIP R146 · PRESCRIPTION EXECUTION RECONCILIATION · R145 BASELINE"
+
+# ============================================================================
+# R147 · LOGICAL PRESCRIPTION SLOT + CAUSAL CHECKPOINT AUDIT
+# ============================================================================
+# Goals:
+# 1) A logical hard opportunity is date-scoped, not label/period-scoped. Learned
+#    rhythm labels may move between RHYTHM and RHYTHM_SECOND (or change wording)
+#    without creating a second ACTIVE prescription for the same hard day.
+# 2) Reconciliation/adherence candidate sets fail closed on genuinely different
+#    dates but collapse duplicate versions of the same logical hard slot to the
+#    latest versioned prescription.
+# 3) COMPLETED_CHECKPOINT_REPRESCRIBED is causal and prescription-specific. A
+#    historical formal validation cannot invalidate a newly ACTIVE checkpoint.
+
+R147_SCHEMA = "V4.9.23-R147-1"
+
+_v144_prescription_slot_key_r146_final = _v144_prescription_slot_key
+_v144_mark_prescription_lifecycle_r146_final = _v144_mark_prescription_lifecycle
+_v146_active_prescriptions_r146_final = _v146_active_prescriptions
+_v136_candidate_prescriptions_r146_final = _v136_candidate_prescriptions
+_v4897_semantic_compile_snapshot_r146_final = _v4897_semantic_compile_snapshot
+
+
+def _v147_recorded_dt(row):
+    row = row or {}
+    for key in ("recorded_at_local", "created_at_local", "snapshot_generated_local", "planned_at_local", "fulfilled_at_local"):
+        dt = _v139_parse_local_dt(row.get(key))
+        if dt is not None:
+            return dt
+    return None
+
+
+def _v147_hard_date(row):
+    return str((row or {}).get("date") or (row or {}).get("planned_date") or "")[:10]
+
+
+def _v144_prescription_slot_key(row):
+    """R147 logical hard-slot identity.
+
+    Nova's canonical recommendation contract permits one hard prescription per
+    calendar day. Period/slot labels are projections of learned rhythm and may
+    legitimately drift between snapshots, so they are not part of prescription
+    identity.
+    """
+    return (_v147_hard_date(row), "SINGLE_HARD_DAY_AUTHORITY")
+
+
+def _v144_mark_prescription_lifecycle(out, sessions, now):
+    out = _v144_mark_prescription_lifecycle_r146_final(out, sessions, now)
+    if isinstance(out, dict):
+        out["prescription_lifecycle_schema"] = R147_SCHEMA
+        out["logical_prescription_slot_policy"] = {
+            "schema": R147_SCHEMA,
+            "key": "PLANNED_DATE_SINGLE_HARD_AUTHORITY",
+            "rule": "Rhythm period/label changes do not create a second active hard prescription on the same planned date.",
+        }
+    return out
+
+
+def _v147_latest_by_logical_slot(rows):
+    grouped = {}
+    passthrough = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        date = _v147_hard_date(row)
+        if not date:
+            passthrough.append(row)
+            continue
+        key = (date, "SINGLE_HARD_DAY_AUTHORITY")
+        dt = _v147_recorded_dt(row)
+        rank = dt.timestamp() if dt is not None else float("-inf")
+        # Prefer a row carrying an explicit prescription identity on exact ties.
+        ident = 1 if _v146_plan_identity(row) else 0
+        fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+        candidate = (rank, ident, fp, row)
+        if key not in grouped or candidate[:3] > grouped[key][:3]:
+            grouped[key] = candidate
+    return passthrough + [x[3] for x in grouped.values()]
+
+
+def _v146_active_prescriptions(ledger):
+    # Start from R146's status/causality filtering, then collapse duplicate ACTIVE
+    # versions of the same logical hard day. This makes early-execution matching
+    # deterministic even before the next lifecycle write has cleaned old rows.
+    rows = _v146_active_prescriptions_r146_final(ledger)
+    return _v147_latest_by_logical_slot(rows)
+
+
+def _v136_candidate_prescriptions(ledger, block):
+    # The adherence linker must see the same logical-slot authority as execution
+    # reconciliation, otherwise duplicate ACTIVE versions can create a false tie.
+    rows = _v136_candidate_prescriptions_r146_final(ledger, block)
+    active_or_fulfilled = []
+    historical = []
+    for row in rows or []:
+        status = str((row or {}).get("prescription_status") or "").upper()
+        if status in {"ACTIVE", "PLANNED", "FULFILLED", ""}:
+            active_or_fulfilled.append(row)
+        else:
+            historical.append(row)
+    return _v147_latest_by_logical_slot(active_or_fulfilled) + historical
+
+
+def _v147_validation_session(out):
+    for row in (out or {}).get("next_sessions") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("stimulus_role") or "").upper() == "VALIDATE" or str(row.get("stimulus_architecture_state") or "").upper() == "VALIDATION_REPLACES_MORE_TRAINING":
+            return row
+    return None
+
+
+def _v147_checkpoint_is_currently_fulfilled(out, ledger):
+    """True only when the currently prescribed validation has execution proof."""
+    session = _v147_validation_session(out)
+    if not session:
+        return False
+    planned_date = str(session.get("date") or "")[:10]
+    identity = str(session.get("nova_workout_id") or session.get("nova_contract_id") or "")
+    plan_id = str(session.get("nova_canonical_plan_id") or "")
+
+    def same_plan(row):
+        if not isinstance(row, dict):
+            return False
+        if planned_date and _v147_hard_date(row) != planned_date:
+            return False
+        rid = str(_v146_plan_identity(row) or "")
+        rpid = str(row.get("nova_canonical_plan_id") or row.get("canonical_plan_id") or "")
+        if identity and rid and rid != identity:
+            return False
+        if plan_id and rpid and rpid != plan_id:
+            # Plan hashes can legitimately change across harmless snapshot
+            # recompiles; identity+date remains the stronger contract identity.
+            if not (identity and rid == identity):
+                return False
+        return bool(identity or plan_id or planned_date)
+
+    for row in (ledger or {}).get("prescription_history") or []:
+        if same_plan(row) and str(row.get("prescription_status") or "").upper() == "FULFILLED":
+            return True
+    for key in ("next_cycle_anchor", "primary_anchor"):
+        row = (ledger or {}).get(key)
+        if same_plan(row) and str((row or {}).get("prescription_status") or "").upper() == "FULFILLED":
+            return True
+    for rec in (ledger or {}).get("prescription_execution_history") or []:
+        if not isinstance(rec, dict):
+            continue
+        if planned_date and str(rec.get("planned_date") or "")[:10] != planned_date:
+            continue
+        rid = str(rec.get("nova_workout_id") or "")
+        if identity and rid and rid != identity:
+            continue
+        if rec.get("activity_id") or rec.get("actual_date"):
+            return True
+    return False
+
+
+def _v4897_semantic_compile_snapshot(parsed, adaptive_roadmap=None, microcycle_ledger=None, power_achievements=None, record_audit=True, snapshot_question=None):
+    out = _v4897_semantic_compile_snapshot_r146_final(
+        parsed,
+        adaptive_roadmap=adaptive_roadmap,
+        microcycle_ledger=microcycle_ledger,
+        power_achievements=power_achievements,
+        record_audit=record_audit,
+        snapshot_question=snapshot_question,
+    )
+    if not isinstance(out, dict) or not record_audit:
+        return out
+    audit = out.get("semantic_authority_audit") if isinstance(out.get("semantic_authority_audit"), dict) else None
+    if not audit:
+        return out
+    final_issues = dict(audit.get("final_issues") or {})
+    cross = list(final_issues.get("cross_section") or [])
+    if cross and not _v147_checkpoint_is_currently_fulfilled(out, microcycle_ledger or {}):
+        cross = [x for x in cross if str((x or {}).get("reason") or "") != "COMPLETED_CHECKPOINT_REPRESCRIBED"]
+        if cross:
+            final_issues["cross_section"] = cross
+        else:
+            final_issues.pop("cross_section", None)
+    audit["final_issues"] = final_issues
+    audit["checkpoint_completion_scope_schema"] = R147_SCHEMA
+    audit["checkpoint_completion_rule"] = "Only execution evidence for the currently prescribed validation can trigger COMPLETED_CHECKPOINT_REPRESCRIBED; historical formal validations are context only."
+    audit["final_pass"] = not bool(final_issues)
+    audit["pass"] = audit["final_pass"]
+    out["semantic_authority_audit"] = audit
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.23 WIP R147 · LOGICAL PRESCRIPTION SLOT + CAUSAL CHECKPOINT AUDIT · R146 BASELINE"
