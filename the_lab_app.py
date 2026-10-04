@@ -33748,3 +33748,691 @@ def _v139_causally_eligible(plan, block, explicit_identity=False):
 
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.20 WIP R144 · MONOTONIC TRUTH + PRESCRIPTION LIFECYCLE + CAUSAL NOTE SCOPE · R143 BASELINE"
+
+
+# R145 · VALIDATION CONTRACT IDENTITY + ENVELOPE FEASIBILITY
+# Validation workouts are deterministic contracts even when they do not come from the
+# canonical workout library. They therefore need a stable workout identity and a
+# completed duration-feasibility contract before execution can be marked READY.
+R145_SCHEMA = "V4.9.21-R145-1"
+_compile_nova_prescription_r144_final = compile_nova_prescription
+
+
+def _v145_duration_minutes(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    m = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*(?:min(?:ute)?s?|m)\b", str(value), re.I)
+    return float(m.group(1)) if m else None
+
+
+def _v145_validation_identity(session, prescription=None):
+    session = session or {}; prescription = prescription or {}
+    role = str(session.get("stimulus_role") or "").upper()
+    cid = str(session.get("nova_contract_id") or session.get("_tl_nova_contract_id") or prescription.get("contract_id") or "").strip()
+    wid = str(session.get("nova_workout_id") or prescription.get("workout_id") or "").strip()
+    if role == "VALIDATE" or cid.startswith("VALIDATION_") or wid.startswith("VALIDATION_") or str(prescription.get("source") or "").upper() == "VALIDATION_CONTRACT":
+        return wid or cid or "VALIDATION_CONTRACT_V1"
+    return None
+
+
+def _v145_validation_feasibility(session):
+    """Evaluate a deterministic validation composition against its declared envelope."""
+    sess = dict(session or {})
+    identity = _v145_validation_identity(sess)
+    if not identity:
+        return sess, None
+    comp = sess.get("session_composition") if isinstance(sess.get("session_composition"), dict) else {}
+    declared = _v145_duration_minutes(sess.get("duration"))
+    low = _num(comp.get("total_min_low"))
+    high = _num(comp.get("total_min_high"))
+    state = str(comp.get("state") or "").upper()
+    feasible = bool(state == "COMPLETE" and declared is not None and low is not None and high is not None and low - 0.25 <= declared <= high + 0.25)
+    available = bool(state == "COMPLETE" and declared is not None and low is not None and high is not None)
+    prior = dict(sess.get("session_duration_feasibility") or {}) if isinstance(sess.get("session_duration_feasibility"), dict) else {}
+    prior.update({
+        "available": available,
+        "state": "PASS" if feasible else ("FAIL" if available else "UNASSESSED"),
+        "declared_min": round(declared, 2) if declared is not None else None,
+        "min_required": round(low, 2) if low is not None else None,
+        "expected_duration_min": round(low, 2) if low is not None else None,
+        "expected_duration_max": round(high, 2) if high is not None else None,
+        "validation_contract_id": identity,
+        "schema": R145_SCHEMA,
+        "rule": "A deterministic validation workout is READY only when its complete session composition fits the declared duration envelope.",
+    })
+    sess["session_duration_feasibility"] = prior
+    sess["expected_duration_min"] = round(low, 2) if low is not None else None
+    sess["expected_duration_max"] = round(high, 2) if high is not None else None
+    sess["nova_workout_id"] = identity
+    sess["nova_contract_id"] = identity
+    return sess, feasible if available else None
+
+
+def _v145_rehash_plan(p):
+    sessions = [x for x in (p.get("sessions") or []) if isinstance(x, dict)]
+    canonical_payload = [{k:x.get(k) for k in ("date","start_minute","title","duration","intensity_class","main_set","nova_workout_id")} for x in sessions]
+    pid = "NOVA-" + hashlib.sha256(json.dumps(canonical_payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    p["canonical_plan_id"] = pid
+    for sess in sessions:
+        sess["nova_canonical_plan_id"] = pid
+    return pid
+
+
+def _v145_normalize_validation_contract(p):
+    out = dict(p or {})
+    sessions = []
+    validation_identity = None
+    validation_fail = False
+    for sess in out.get("sessions") or []:
+        if not isinstance(sess, dict):
+            sessions.append(sess); continue
+        s = dict(sess)
+        identity = _v145_validation_identity(s, out)
+        if identity:
+            validation_identity = validation_identity or identity
+            s, feasible = _v145_validation_feasibility(s)
+            if feasible is False:
+                validation_fail = True
+        sessions.append(s)
+    out["sessions"] = sessions
+    if validation_identity:
+        out["contract_id"] = validation_identity
+        out["workout_id"] = validation_identity
+        out["validation_contract_schema"] = R145_SCHEMA
+        # Validation is a deterministic contract, not a library selection.
+        wl = dict(out.get("workout_library") or {})
+        if str(out.get("source") or "").upper() == "VALIDATION_CONTRACT":
+            wl["version"] = None
+            wl["reason"] = wl.get("reason") or "NOT_APPLICABLE"
+        out["workout_library"] = wl
+        if validation_fail:
+            out["hard_prescription_available"] = False
+            out["execution_status"] = "BLOCKED_BY_VALIDATION_ENVELOPE"
+            out["status"] = "BLOCKED"
+            out["fail_closed_reason"] = "VALIDATION_DURATION_FEASIBILITY_FAILED"
+        elif any(_v145_validation_identity(x, out) and (x.get("session_duration_feasibility") or {}).get("state") == "PASS" for x in sessions if isinstance(x, dict)):
+            if int(out.get("hard_session_count") or 0) > 0:
+                out["execution_status"] = "READY"
+    pid = _v145_rehash_plan(out)
+    spa = dict(out.get("single_plan_authority") or {})
+    spa["plan_id"] = pid
+    if validation_identity:
+        spa["workout_id"] = validation_identity
+        spa["library_version"] = None
+    out["single_plan_authority"] = spa
+    return out
+
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, microcycle_ledger=None, coaching_contract=None, adaptive_roadmap=None, strength_pattern=None, training_rhythm=None, execution_model=None):
+    out = _compile_nova_prescription_r144_final(
+        prescription, coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+        recent_activities=recent_activities, undefined_training_intent=undefined_training_intent, power_model=power_model,
+        microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
+        strength_pattern=strength_pattern, training_rhythm=training_rhythm, execution_model=execution_model,
+    )
+    return _v145_normalize_validation_contract(out)
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.21 WIP R145 · VALIDATION IDENTITY + ENVELOPE FEASIBILITY · R144 BASELINE"
+
+
+# R146 · PRESCRIPTION EXECUTION RECONCILIATION
+# A prescribed workout is a versioned intent, not a calendar prison. If the athlete
+# executes that exact intent earlier/later after it was prescribed, reconcile the
+# completed activity back to the prescription, preserve planned vs actual dates, and
+# consume the prescription so the original future slot cannot be prescribed again.
+R146_SCHEMA = "V4.9.22-R146-1"
+
+from contextvars import ContextVar
+_V146_BLOCK_CONTEXT = ContextVar("the_lab_v146_recent_blocks", default=())
+_build_previous_training_blocks_r145_final = build_previous_training_blocks
+_load_microcycle_ledger_r145_final = load_microcycle_ledger
+_update_microcycle_ledger_from_snapshot_r145_final = update_microcycle_ledger_from_snapshot
+_compile_nova_prescription_r145_final = compile_nova_prescription
+_v136_link_prescription_r145_final = _v136_link_prescription
+_v492_execution_quality_r145_final = _v492_execution_quality
+
+
+def build_previous_training_blocks(recent_activities, limit=3, activity_details=None):
+    blocks = _build_previous_training_blocks_r145_final(recent_activities, limit=limit, activity_details=activity_details)
+    # ContextVar is request/task local, unlike a module global. The second history
+    # build performed by Snapshot contains the broad quality history and therefore
+    # becomes the reconciliation evidence source used immediately afterward.
+    try:
+        _V146_BLOCK_CONTEXT.set(tuple(_v4831_json_clone(x) for x in (blocks or []) if isinstance(x, dict)))
+    except Exception:
+        pass
+    return blocks
+
+
+def _v146_plan_identity(plan):
+    p = plan or {}
+    return str(p.get("nova_workout_id") or p.get("nova_contract_id") or p.get("workout_id") or "").strip() or None
+
+
+def _v146_block_identity(block):
+    b = block or {}
+    return str(b.get("nova_workout_id") or b.get("nova_contract_id") or b.get("workout_id") or "").strip() or None
+
+
+def _v146_activity_id(block):
+    return str((block or {}).get("activity_id") or (block or {}).get("id") or "").strip() or None
+
+
+def _v146_work_durations(block):
+    b = block or {}; vals = []
+    for row in b.get("work_interval_evidence") or []:
+        try:
+            sec = float((row or {}).get("secs") or 0)
+        except Exception:
+            sec = 0
+        if sec >= 30:
+            vals.append(sec)
+    if not vals:
+        rep = b.get("repeatability") if isinstance(b.get("repeatability"), dict) else {}
+        try:
+            reps = int(rep.get("reps") or 0); sec = float(rep.get("interval_secs") or 0)
+        except Exception:
+            reps = 0; sec = 0
+        if reps and sec:
+            vals.extend([sec] * reps)
+    if not vals:
+        for line in b.get("intervals") or []:
+            m = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*(?:m|min)\b", str(line), re.I)
+            if m:
+                vals.append(float(m.group(1)) * 60.0)
+    return vals
+
+
+def _v146_target_secs(plan):
+    p = plan or {}
+    v = _num(p.get("interval_minutes") or p.get("quality_reference_interval_min"))
+    if v:
+        return float(v) * 60.0
+    sig = _v136_plan_signature(p)
+    return float(sig.get("secs")) if sig.get("secs") else None
+
+
+def _v146_validation_plan(plan):
+    p = plan or {}
+    identity = str(_v146_plan_identity(p) or "").upper()
+    return bool(str(p.get("stimulus_role") or "").upper() == "VALIDATE" or identity.startswith("VALIDATION_") or "POWER TEST" in str(p.get("title") or "").upper())
+
+
+def _v146_causally_eligible(plan, block, explicit_identity=False):
+    # Stronger same-day rule than R139: when the activity has no clock time, a
+    # same-day prescription creation time cannot safely claim it structurally.
+    created = _v139_prescription_created_dt(plan)
+    bdate = str((block or {}).get("date") or "")[:10]
+    btime = str((block or {}).get("time") or "").strip()
+    if created is not None and bdate and not btime and not explicit_identity:
+        try:
+            if created.date() == date.fromisoformat(bdate):
+                return False
+        except Exception:
+            return False
+    return _v139_causally_eligible(plan, block, explicit_identity=explicit_identity)
+
+
+def _v146_match_plan_block(plan, block, allow_fulfilled=True):
+    p = plan or {}; b = block or {}
+    status = str(p.get("prescription_status") or "ACTIVE").upper()
+    if status in {"CANCELLED", "WITHDRAWN"}:
+        return None
+    if status == "SUPERSEDED":
+        # Historical adherence can still use a superseded prescription before
+        # supersession, but execution reconciliation must never fulfill it now.
+        if not allow_fulfilled:
+            return None
+    if status == "FULFILLED" and not allow_fulfilled:
+        return None
+    try:
+        pd = date.fromisoformat(str(p.get("date") or "")[:10]); bd = date.fromisoformat(str(b.get("date") or "")[:10])
+    except Exception:
+        return None
+    delta = (bd - pd).days
+    pident = _v146_plan_identity(p); bident = _v146_block_identity(b)
+    explicit = bool(pident and bident and pident == bident) or bool(p.get("nova_canonical_plan_id") and b.get("nova_canonical_plan_id") == p.get("nova_canonical_plan_id"))
+    if not explicit and not (-2 <= delta <= 2):
+        return None
+    if explicit and abs(delta) > 7:
+        return None
+    if not _v146_causally_eligible(p, b, explicit_identity=explicit):
+        return None
+    if explicit:
+        return {"score": 100, "basis": "EXPLICIT_PRESCRIPTION_IDENTITY", "confidence": "EXACT_IDENTITY", "date_delta_days": delta, "explicit_identity": True, "duration_match": True, "reps_match": True}
+
+    sig = _v136_plan_signature(p)
+    rep = b.get("repeatability") if isinstance(b.get("repeatability"), dict) else {}
+    try:
+        actual_reps = int(rep.get("reps") or 0); actual_secs = float(rep.get("interval_secs") or 0)
+    except Exception:
+        actual_reps = 0; actual_secs = 0
+    reps_match = bool(sig.get("reps") and actual_reps == int(sig.get("reps")))
+    secs_match = bool(sig.get("secs") and actual_secs and abs(actual_secs - float(sig.get("secs"))) <= max(10.0, 0.08 * float(sig.get("secs"))))
+    if sig.get("reps") and reps_match and secs_match:
+        score = 82 + (8 if delta == 0 else (5 if abs(delta) == 1 else 2))
+        return {"score": score, "basis": "REPEATED_WORK_STRUCTURE", "confidence": "EXACT_DATE" if delta == 0 else ("HIGH" if abs(delta) == 1 else "MODERATE"), "date_delta_days": delta, "explicit_identity": False, "duration_match": True, "reps_match": True}
+
+    target = _v146_target_secs(p)
+    durations = _v146_work_durations(b)
+    near = [x for x in durations if target and abs(float(x) - target) <= max(12.0, 0.08 * target)]
+    quality = bool(b.get("quality_relevant"))
+    name = str(b.get("name") or "").lower()
+    quality_basis = str(b.get("quality_basis") or "").upper()
+    validation_cue = bool(re.search(r"\b(?:test|tt|benchmark|all[- ]?out|maximal|checkpoint)\b", name, re.I) or quality_basis == "EXPLICIT_MAXIMAL_TEST")
+    repeated_conflict = bool(actual_reps > 1 and target and actual_secs and abs(actual_secs - target) <= max(12.0, 0.08 * target))
+    if _v146_validation_plan(p) and target and near and quality and not repeated_conflict and (validation_cue or len(durations) == 1):
+        score = 88 + (8 if delta == 0 else (5 if abs(delta) == 1 else 2)) + (2 if validation_cue else 0)
+        return {"score": score, "basis": "VALIDATION_SINGLE_EFFORT", "confidence": "EXACT_DATE" if delta == 0 else ("HIGH" if abs(delta) == 1 else "MODERATE"), "date_delta_days": delta, "explicit_identity": False, "duration_match": True, "reps_match": None}
+    if target and len(near) == 1 and quality and not repeated_conflict and not sig.get("reps"):
+        score = 70 + (8 if delta == 0 else (5 if abs(delta) == 1 else 2))
+        return {"score": score, "basis": "SINGLE_WORK_STRUCTURE", "confidence": "HIGH" if abs(delta) <= 1 else "MODERATE", "date_delta_days": delta, "explicit_identity": False, "duration_match": True, "reps_match": None}
+    return None
+
+
+def _v146_execution_timing(delta):
+    if delta < 0: return "EXECUTED_EARLY"
+    if delta > 0: return "EXECUTED_LATE"
+    return "EXECUTED_ON_TIME"
+
+
+def _v146_active_prescriptions(ledger):
+    rows = []
+    for source, seq in (
+        ("PRESCRIPTION_HISTORY", (ledger or {}).get("prescription_history") or []),
+        ("NEXT_CYCLE_ANCHOR", [(ledger or {}).get("next_cycle_anchor")]),
+        ("PRIMARY_ANCHOR", [(ledger or {}).get("primary_anchor")]),
+    ):
+        for row in seq or []:
+            if not isinstance(row, dict) or not str(row.get("main_set") or "").strip():
+                continue
+            status = str(row.get("prescription_status") or ("ACTIVE" if str(row.get("status") or "").upper() == "PLANNED" else "")).upper()
+            if status not in {"ACTIVE", "PLANNED", ""}:
+                continue
+            r = dict(row); r["_link_source"] = source
+            rows.append(r)
+    uniq = {}
+    for row in rows:
+        uniq[_v136_prescription_fingerprint(row)] = row
+    return list(uniq.values())
+
+
+def _v146_reconcile_prescription_execution(ledger, blocks, now=None):
+    now = now or get_rome_now()
+    out = _v4831_json_clone(ledger or {})
+    if not isinstance(out, dict) or not out.get("available"):
+        return out
+    plans = _v146_active_prescriptions(out)
+    candidates = []
+    for plan in plans:
+        for block in blocks or []:
+            if not isinstance(block, dict) or not block.get("quality_relevant"):
+                continue
+            match = _v146_match_plan_block(plan, block, allow_fulfilled=False)
+            if match:
+                candidates.append((int(match["score"]), abs(int(match["date_delta_days"])), _v136_prescription_fingerprint(plan), str(_v146_activity_id(block) or ""), plan, block, match))
+    if not candidates:
+        out["prescription_execution_reconciliation_schema"] = R146_SCHEMA
+        return out
+    candidates.sort(key=lambda x: (-x[0], x[1], x[2], x[3]))
+    used_plan = set(); used_activity = set(); matches = []
+    for _, _, pfp, aid, plan, block, match in candidates:
+        if pfp in used_plan or (aid and aid in used_activity):
+            continue
+        # Equal-score ambiguity for the same plan or same activity fails closed.
+        tied = [x for x in candidates if x[0] == match["score"] and ((x[2] == pfp and x[3] != aid) or (aid and x[3] == aid and x[2] != pfp))]
+        if tied:
+            continue
+        used_plan.add(pfp)
+        if aid: used_activity.add(aid)
+        matches.append((pfp, plan, block, match))
+    if not matches:
+        out["prescription_execution_reconciliation_schema"] = R146_SCHEMA
+        return out
+
+    hist = [dict(x) for x in (out.get("prescription_history") or []) if isinstance(x, dict)]
+    exec_hist = [dict(x) for x in (out.get("prescription_execution_history") or []) if isinstance(x, dict)]
+    for pfp, plan, block, match in matches:
+        delta = int(match.get("date_delta_days") or 0)
+        timing = _v146_execution_timing(delta)
+        aid = _v146_activity_id(block)
+        record = {
+            "schema": R146_SCHEMA,
+            "prescription_fingerprint": pfp,
+            "nova_workout_id": _v146_plan_identity(plan),
+            "canonical_plan_id": plan.get("nova_canonical_plan_id"),
+            "planned_date": str(plan.get("date") or "")[:10],
+            "planned_slot": plan.get("slot"),
+            "actual_date": str(block.get("date") or "")[:10],
+            "actual_time": block.get("time"),
+            "activity_id": aid,
+            "activity_name": block.get("name"),
+            "execution_timing": timing,
+            "date_delta_days": delta,
+            "match_basis": match.get("basis"),
+            "match_confidence": match.get("confidence"),
+            "reconciled_at_local": now.isoformat(timespec="seconds"),
+        }
+        for row in hist:
+            rfp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+            if rfp != pfp:
+                continue
+            row.update({
+                "prescription_status": "FULFILLED",
+                "execution_status": timing,
+                "planned_date": record["planned_date"],
+                "actual_date": record["actual_date"],
+                "actual_time": record["actual_time"],
+                "executed_activity_id": aid,
+                "executed_activity_name": block.get("name"),
+                "execution_match_basis": match.get("basis"),
+                "execution_match_confidence": match.get("confidence"),
+                "fulfilled_at_local": now.isoformat(timespec="seconds"),
+                "execution_reconciliation_schema": R146_SCHEMA,
+            })
+        if not any(str(x.get("prescription_fingerprint") or "") == pfp and str(x.get("activity_id") or "") == str(aid or "") for x in exec_hist):
+            exec_hist.append(record)
+        for key in ("next_cycle_anchor", "primary_anchor"):
+            row = out.get(key) if isinstance(out.get(key), dict) else None
+            if row and _v136_prescription_fingerprint(row) == pfp:
+                row.update({
+                    "prescription_status": "FULFILLED",
+                    "status": "HARD_ACTIVITY_OBSERVED",
+                    "execution_status": timing,
+                    "planned_date": record["planned_date"],
+                    "actual_date": record["actual_date"],
+                    "actual_time": record["actual_time"],
+                    "executed_activity_id": aid,
+                    "executed_activity_name": block.get("name"),
+                    "execution_match_basis": match.get("basis"),
+                    "execution_match_confidence": match.get("confidence"),
+                    "fulfilled_at_local": now.isoformat(timespec="seconds"),
+                    "execution_reconciliation_schema": R146_SCHEMA,
+                    "observed_activity": {"date": record["actual_date"], "time": record["actual_time"], "name": block.get("name"), "activity_id": aid, "source": "PRESCRIPTION_EXECUTION_RECONCILIATION"},
+                })
+                out[key] = row
+        if str((out.get("next_cycle_anchor") or {}).get("prescription_status") or "").upper() == "FULFILLED":
+            out["next_cycle_continuity_state"] = timing
+    out["prescription_history"] = hist[-32:]
+    out["prescription_execution_history"] = exec_hist[-24:]
+    out["prescription_execution_reconciliation_schema"] = R146_SCHEMA
+    out["last_execution_reconciliation_at_local"] = now.isoformat(timespec="seconds")
+    return out
+
+
+def load_microcycle_ledger(plan, training_direction, season_activities, user_id=None, now=None, read_only=False):
+    now = now or get_rome_now()
+    out = _load_microcycle_ledger_r145_final(plan, training_direction, season_activities, user_id=user_id, now=now, read_only=read_only)
+    blocks = list(_V146_BLOCK_CONTEXT.get() or ())
+    out = _v146_reconcile_prescription_execution(out, blocks, now=now)
+    if isinstance(out, dict) and out.get("ledger_id") and not read_only:
+        payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
+        _db_execute("UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?", (payload, _now_utc_text(), out["ledger_id"], _data_owner_user_id(user_id)))
+    return out
+
+
+def _v146_fulfilled_rows(ledger):
+    return [dict(x) for x in (ledger or {}).get("prescription_history") or [] if isinstance(x, dict) and str(x.get("prescription_status") or "").upper() == "FULFILLED"]
+
+
+def _v146_same_prescription_slot(session, fulfilled):
+    if not isinstance(session, dict) or not isinstance(fulfilled, dict):
+        return False
+    if str(session.get("date") or "")[:10] != str(fulfilled.get("planned_date") or fulfilled.get("date") or "")[:10]:
+        return False
+    sid = str(session.get("nova_workout_id") or session.get("nova_contract_id") or "").strip()
+    fid = str(fulfilled.get("nova_workout_id") or fulfilled.get("nova_contract_id") or "").strip()
+    if sid and fid:
+        return sid == fid
+    ss = _v4840_ledger_session_summary(session)
+    return _v136_prescription_fingerprint(ss) == str(fulfilled.get("prescription_fingerprint") or _v136_prescription_fingerprint(fulfilled))
+
+
+def _v146_easy_after_fulfillment(session, fulfilled):
+    s = dict(session or {})
+    ref = {
+        "prescription_fingerprint": fulfilled.get("prescription_fingerprint"),
+        "planned_date": fulfilled.get("planned_date") or fulfilled.get("date"),
+        "actual_date": fulfilled.get("actual_date"),
+        "activity_id": fulfilled.get("executed_activity_id"),
+        "execution_status": fulfilled.get("execution_status"),
+        "nova_workout_id": fulfilled.get("nova_workout_id"),
+    }
+    s.update({
+        "title": "Aerobic endurance · prescribed quality already completed",
+        "intensity": "EASY",
+        "intensity_class": "recovery",
+        "main_set": "Keep this opportunity Z1–Z2 and conversational. The quality prescription assigned to this slot was already completed; do not repeat it.",
+        "quality_relevance": "UNASSESSED",
+        "hard_spacing_relevant": False,
+        "provisional_quality": False,
+        "stimulus_role": None,
+        "stimulus_domain": None,
+        "stimulus_architecture_state": "FULFILLED_PRESCRIPTION_NOT_REPEATED",
+        "nova_workout_id": None,
+        "nova_contract_id": None,
+        "fulfilled_prescription_reference": ref,
+        "coherence_adjusted": True,
+    })
+    return s
+
+
+def _v146_apply_fulfilled_guard(prescription, ledger):
+    p = dict(prescription or {})
+    fulfilled = _v146_fulfilled_rows(ledger)
+    if not fulfilled:
+        return p
+    sessions = []; suppressed = []
+    for s in p.get("sessions") or []:
+        if not isinstance(s, dict):
+            sessions.append(s); continue
+        match = next((f for f in fulfilled if _v146_same_prescription_slot(s, f)), None)
+        if match and _v136_is_hard_summary(s):
+            sessions.append(_v146_easy_after_fulfillment(s, match))
+            suppressed.append({
+                "planned_date": match.get("planned_date") or match.get("date"),
+                "actual_date": match.get("actual_date"),
+                "activity_id": match.get("executed_activity_id"),
+                "nova_workout_id": match.get("nova_workout_id"),
+                "execution_status": match.get("execution_status"),
+            })
+        else:
+            sessions.append(s)
+    if not suppressed:
+        return p
+    p["sessions"] = sessions
+    hard_count = sum(1 for x in sessions if isinstance(x, dict) and _v136_is_hard_summary(x))
+    p["hard_session_count"] = hard_count
+    p["hard_prescription_available"] = bool(hard_count)
+    p["fulfilled_prescription_guard"] = {"schema": R146_SCHEMA, "suppressed": suppressed, "rule": "A fulfilled prescription cannot be re-issued in its original planned slot."}
+    if hard_count == 0:
+        p["status"] = "FULFILLED"
+        p["execution_status"] = "FULFILLED_NO_REPEAT_REQUIRED"
+        p["selected_slot_index"] = None
+        p["fail_closed_reason"] = None
+        p["workout_id"] = None
+    pid = _v145_rehash_plan(p)
+    spa = dict(p.get("single_plan_authority") or {})
+    spa["plan_id"] = pid
+    if hard_count == 0:
+        spa["workout_id"] = None
+        spa["library_version"] = None
+    p["single_plan_authority"] = spa
+    return p
+
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, microcycle_ledger=None, coaching_contract=None, adaptive_roadmap=None, strength_pattern=None, training_rhythm=None, execution_model=None):
+    out = _compile_nova_prescription_r145_final(
+        prescription, coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+        recent_activities=recent_activities, undefined_training_intent=undefined_training_intent, power_model=power_model,
+        microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
+        strength_pattern=strength_pattern, training_rhythm=training_rhythm, execution_model=execution_model,
+    )
+    return _v146_apply_fulfilled_guard(out, microcycle_ledger or {})
+
+
+def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=None):
+    now = now or get_rome_now()
+    fulfilled_before = {str(x.get("prescription_fingerprint") or _v136_prescription_fingerprint(x)): dict(x) for x in _v146_fulfilled_rows(ledger)}
+    out = _update_microcycle_ledger_from_snapshot_r145_final(ledger, sessions, user_id=user_id, now=now)
+    if not isinstance(out, dict):
+        return out
+    hist = [dict(x) for x in (out.get("prescription_history") or []) if isinstance(x, dict)]
+    for row in hist:
+        fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+        if fp in fulfilled_before:
+            keep = fulfilled_before[fp]
+            for key in ("prescription_status","execution_status","planned_date","actual_date","actual_time","executed_activity_id","executed_activity_name","execution_match_basis","execution_match_confidence","fulfilled_at_local","execution_reconciliation_schema"):
+                if key in keep:
+                    row[key] = keep[key]
+    out["prescription_history"] = hist[-32:]
+    # Preserve next-cycle fulfillment instead of allowing lifecycle code to reactivate it.
+    nca = out.get("next_cycle_anchor") if isinstance(out.get("next_cycle_anchor"), dict) else None
+    if nca:
+        nfp = _v136_prescription_fingerprint(nca)
+        if nfp in fulfilled_before:
+            nca.update(fulfilled_before[nfp])
+            nca["status"] = "HARD_ACTIVITY_OBSERVED"
+            out["next_cycle_anchor"] = nca
+    out["prescription_execution_reconciliation_schema"] = R146_SCHEMA
+    if out.get("ledger_id"):
+        payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
+        _db_execute("UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?", (payload, _now_utc_text(), out["ledger_id"], _data_owner_user_id(user_id)))
+    return out
+
+
+def _v136_link_prescription(block, ledger):
+    base = _v136_link_prescription_r145_final(block, ledger)
+    if base:
+        return base
+    ranked = []
+    for plan in _v136_candidate_prescriptions(ledger or {}, block):
+        match = _v146_match_plan_block(plan, block, allow_fulfilled=True)
+        if not match:
+            continue
+        score = int(match.get("score") or 0)
+        ranked.append((score, abs(int(match.get("date_delta_days") or 0)), _v136_prescription_fingerprint(plan), plan, match))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda x: (-x[0], x[1], x[2]))
+    best = ranked[0]
+    if len(ranked) > 1 and ranked[1][0] == best[0] and ranked[1][2] != best[2]:
+        return None
+    plan, match = best[3], best[4]
+    return {
+        "plan": plan,
+        "confidence": match.get("confidence"),
+        "date_delta_days": abs(int(match.get("date_delta_days") or 0)),
+        "signed_date_delta_days": int(match.get("date_delta_days") or 0),
+        "reps_match": match.get("reps_match"),
+        "duration_match": match.get("duration_match"),
+        "explicit_identity": match.get("explicit_identity"),
+        "source": plan.get("_link_source"),
+        "causal_guard": R146_SCHEMA,
+        "match_basis": match.get("basis"),
+        "execution_timing": _v146_execution_timing(int(match.get("date_delta_days") or 0)),
+    }
+
+
+def _v492_execution_quality(block, ledger=None):
+    out = _v492_execution_quality_r145_final(block, ledger)
+    link = _v136_link_prescription(block, ledger or {}) if isinstance(block, dict) else None
+    if not link:
+        return out
+    # R139/R145 scoring is repeat-structure centric. Validation contracts have no
+    # power minimum/cap: adherence is structural completion of the prescribed test.
+    if link.get("match_basis") == "VALIDATION_SINGLE_EFFORT":
+        adh = {
+            "available": True,
+            "label": "VERIFIED",
+            "score": 100,
+            "reason": "VALIDATION_CONTRACT_STRUCTURALLY_COMPLETED",
+            "link_mode": "R146_PRESCRIPTION_EXECUTION_RECONCILIATION",
+            "link_confidence": link.get("confidence"),
+            "link_source": link.get("source"),
+            "match_basis": link.get("match_basis"),
+            "execution_timing": link.get("execution_timing"),
+            "planned_date": (link.get("plan") or {}).get("date"),
+            "actual_date": (block or {}).get("date"),
+            "nova_workout_id": _v146_plan_identity(link.get("plan") or {}),
+            "canonical_plan_id": (link.get("plan") or {}).get("nova_canonical_plan_id"),
+            "causal_guard": R146_SCHEMA,
+        }
+        result = dict(out or {})
+        result["available"] = True
+        result["adherence"] = adh
+        return result
+    # Enrich ordinary repeated-work adherence with execution timing when linked.
+    if isinstance(out, dict) and isinstance(out.get("adherence"), dict) and out["adherence"].get("available"):
+        out["adherence"]["execution_timing"] = link.get("execution_timing")
+        out["adherence"]["match_basis"] = link.get("match_basis") or out["adherence"].get("match_basis")
+        out["adherence"]["actual_date"] = (block or {}).get("date")
+        out["adherence"]["causal_guard"] = R146_SCHEMA
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.22 WIP R146 · PRESCRIPTION EXECUTION RECONCILIATION · R145 BASELINE"
+
+# R146 boundary continuity: carry versioned prescription/execution memory across
+# a calendar-microcycle rollover before attempting reconciliation. This is essential
+# for Sunday -> Monday early execution even when no Sunday Snapshot is generated.
+def _v146_merge_prior_snapshot_memory(out, plan_id, user_id=None):
+    if not isinstance(out, dict) or not out.get("available"):
+        return out
+    try:
+        prior = load_latest_report(include_payload=True, owner_user_id=user_id)
+    except Exception:
+        prior = None
+    pdata = (prior or {}).get("data") if isinstance(prior, dict) else None
+    pleg = pdata.get("microcycle_ledger") if isinstance(pdata, dict) and isinstance(pdata.get("microcycle_ledger"), dict) else None
+    if not pleg or str(pleg.get("plan_id") or "") != str(plan_id or out.get("plan_id") or ""):
+        return out
+    hist = [dict(x) for x in (out.get("prescription_history") or []) if isinstance(x, dict)]
+    seen = {str(x.get("prescription_fingerprint") or _v136_prescription_fingerprint(x)) for x in hist}
+    prior_rows = [dict(x) for x in (pleg.get("prescription_history") or []) if isinstance(x, dict)]
+    pnext = pleg.get("next_cycle_anchor") if isinstance(pleg.get("next_cycle_anchor"), dict) else None
+    if pnext:
+        prior_rows.append(dict(pnext))
+    for row in prior_rows:
+        fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+        if fp and fp not in seen:
+            row["prescription_fingerprint"] = fp
+            hist.append(row); seen.add(fp)
+    out["prescription_history"] = hist[-32:]
+    ex = [dict(x) for x in (out.get("prescription_execution_history") or []) if isinstance(x, dict)]
+    ex_seen = {(str(x.get("prescription_fingerprint") or ""), str(x.get("activity_id") or "")) for x in ex}
+    for row in pleg.get("prescription_execution_history") or []:
+        if not isinstance(row, dict):
+            continue
+        key = (str(row.get("prescription_fingerprint") or ""), str(row.get("activity_id") or ""))
+        if key not in ex_seen:
+            ex.append(dict(row)); ex_seen.add(key)
+    if ex:
+        out["prescription_execution_history"] = ex[-24:]
+    out["prescription_memory_carryover"] = {
+        "schema": R146_SCHEMA,
+        "source_snapshot_at_local": (prior or {}).get("generated_at_local"),
+        "source_cycle_start": pleg.get("cycle_start"),
+        "source_cycle_end": pleg.get("cycle_end"),
+        "rows_carried": len(prior_rows),
+        "rule": "Versioned prescription/execution memory survives calendar-microcycle rollover for causal reconciliation and adherence.",
+    }
+    return out
+
+
+def load_microcycle_ledger(plan, training_direction, season_activities, user_id=None, now=None, read_only=False):
+    now = now or get_rome_now()
+    out = _load_microcycle_ledger_r145_final(plan, training_direction, season_activities, user_id=user_id, now=now, read_only=read_only)
+    out = _v146_merge_prior_snapshot_memory(out, str((plan or {}).get("id") or (out or {}).get("plan_id") or ""), user_id=user_id)
+    blocks = list(_V146_BLOCK_CONTEXT.get() or ())
+    out = _v146_reconcile_prescription_execution(out, blocks, now=now)
+    if isinstance(out, dict) and out.get("ledger_id") and not read_only:
+        payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
+        _db_execute("UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?", (payload, _now_utc_text(), out["ledger_id"], _data_owner_user_id(user_id)))
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.22 WIP R146 · PRESCRIPTION EXECUTION RECONCILIATION · R145 BASELINE"
