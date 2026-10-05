@@ -34436,3 +34436,356 @@ def load_microcycle_ledger(plan, training_direction, season_activities, user_id=
 
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.22 WIP R146 · PRESCRIPTION EXECUTION RECONCILIATION · R145 BASELINE"
+
+
+# R149 · CLOSED-LOOP VALIDATION COMPLETION
+# A fulfilled deterministic validation prescription is authoritative execution evidence.
+# Promote that execution into formal performance evidence when the same activity contains
+# the exact checkpoint-duration power evidence, close the validation question, and forbid
+# Nova from issuing another validation while the roadmap says that checkpoint is complete.
+R149_SCHEMA = "V4.9.25-R149-1"
+_v4896_build_performance_evidence_r149_base = _v4896_build_performance_evidence
+_build_nova_decision_r149_base = build_nova_decision
+
+
+def _v149_iso_dt(value):
+    if not value:
+        return None
+    try:
+        s = str(value).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ROME_TZ)
+        return dt
+    except Exception:
+        return None
+
+
+def _v149_validation_fulfillments(ledger):
+    led = ledger if isinstance(ledger, dict) else {}
+    hist = [x for x in (led.get("prescription_history") or []) if isinstance(x, dict)]
+    by_fp = {str(x.get("prescription_fingerprint") or _v136_prescription_fingerprint(x)): x for x in hist}
+    rows = []
+    seen = set()
+    for rec in led.get("prescription_execution_history") or []:
+        if not isinstance(rec, dict):
+            continue
+        basis = str(rec.get("match_basis") or "").upper()
+        wid = str(rec.get("nova_workout_id") or "").upper()
+        if basis != "VALIDATION_SINGLE_EFFORT" and not wid.startswith("VALIDATION_"):
+            continue
+        aid = str(rec.get("activity_id") or "").strip()
+        actual = str(rec.get("actual_date") or "")[:10]
+        fp = str(rec.get("prescription_fingerprint") or "")
+        if not aid or not actual:
+            continue
+        plan = by_fp.get(fp) or {}
+        # Execution history is the authority; a matching fulfilled row strengthens provenance.
+        if plan and str(plan.get("prescription_status") or "").upper() != "FULFILLED":
+            continue
+        key = (aid, actual, wid or str(plan.get("nova_workout_id") or plan.get("nova_contract_id") or "").upper())
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({"execution": dict(rec), "plan": dict(plan)})
+    # R146 may have reconciled the row but not yet carried an execution-history row.
+    for plan in hist:
+        if str(plan.get("prescription_status") or "").upper() != "FULFILLED":
+            continue
+        basis = str(plan.get("execution_match_basis") or "").upper()
+        wid = str(plan.get("nova_workout_id") or plan.get("nova_contract_id") or "").upper()
+        if basis != "VALIDATION_SINGLE_EFFORT" and not wid.startswith("VALIDATION_"):
+            continue
+        aid = str(plan.get("executed_activity_id") or "").strip()
+        actual = str(plan.get("actual_date") or "")[:10]
+        if not aid or not actual:
+            continue
+        key = (aid, actual, wid)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({
+            "execution": {
+                "prescription_fingerprint": plan.get("prescription_fingerprint"),
+                "nova_workout_id": plan.get("nova_workout_id") or plan.get("nova_contract_id"),
+                "canonical_plan_id": plan.get("nova_canonical_plan_id"),
+                "planned_date": plan.get("planned_date") or plan.get("date"),
+                "actual_date": actual,
+                "actual_time": plan.get("actual_time"),
+                "activity_id": aid,
+                "activity_name": plan.get("executed_activity_name"),
+                "execution_timing": plan.get("execution_status"),
+                "match_basis": basis,
+                "match_confidence": plan.get("execution_match_confidence"),
+                "reconciled_at_local": plan.get("fulfilled_at_local"),
+            },
+            "plan": dict(plan),
+        })
+    return rows
+
+
+def _v149_exact_checkpoint_observation(evidence, previous_blocks, activity_id, actual_date, target_secs):
+    tol = max(2.0, min(30.0, float(target_secs) * 0.05))
+    candidates = []
+    for ev in (evidence or {}).get("events") or []:
+        if not isinstance(ev, dict):
+            continue
+        if str(ev.get("activity_id") or "") != str(activity_id or ""):
+            continue
+        if str(ev.get("date") or "")[:10] != str(actual_date or "")[:10]:
+            continue
+        try:
+            sec = float(ev.get("secs") or 0)
+            watts = float(ev.get("watts"))
+        except Exception:
+            continue
+        if abs(sec - float(target_secs)) <= tol:
+            # Prefer an exact-duration PB/native observation over a broad interval row.
+            source_rank = 3 if str(ev.get("source") or "").upper() in {"MINUTE_POWER_CURVE", "INTERVALS_NATIVE_PB"} else 2
+            candidates.append((source_rank, -abs(sec-float(target_secs)), watts, dict(ev)))
+    if candidates:
+        candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+        ev = candidates[0][3]
+        return {
+            "secs": int(round(float(target_secs))),
+            "watts": round(float(ev.get("watts")), 1),
+            "previous_watts": _rhythm_num(ev.get("previous_watts")),
+            "delta_w": _rhythm_num(ev.get("delta_w")),
+            "pb_confirmed": bool((_rhythm_num(ev.get("delta_w")) or 0) > 0 or str(ev.get("kind") or "").upper() == "PB"),
+            "source_event": ev,
+        }
+    block = next((b for b in (previous_blocks or []) if isinstance(b, dict) and str(b.get("activity_id") or "") == str(activity_id or "") and str(b.get("date") or "")[:10] == str(actual_date or "")[:10]), None)
+    if not block or not bool(block.get("quality_relevant")):
+        return None
+    effort = _v4896_validation_interval_match(block, target_secs, mode="MAXIMAL")
+    if not effort:
+        return None
+    return {
+        "secs": int(round(float(target_secs))),
+        "watts": round(float(effort.get("watts")), 1),
+        "previous_watts": None,
+        "delta_w": None,
+        "pb_confirmed": False,
+        "source_event": None,
+    }
+
+
+def _v149_promote_reconciled_validation(evidence, training_direction, previous_blocks, microcycle_ledger, now=None):
+    out = _v4831_json_clone(evidence or {})
+    if not isinstance(out, dict):
+        return evidence
+    now = now or get_rome_now()
+    today = now.date() if isinstance(now, datetime) else now
+    goal = str((training_direction or {}).get("primary_goal") or out.get("goal_key") or "ENDURANCE_BASE").upper()
+    cfg = _V4873_ROADMAP_GOALS.get(goal) or _V4873_ROADMAP_GOALS["ENDURANCE_BASE"]
+    field = dict(cfg.get("field_test") or {})
+    try:
+        default_secs = int(round(float(field.get("seconds") or 0)))
+    except Exception:
+        default_secs = 0
+    if default_secs <= 0:
+        return out
+    existing_formal = [x for x in (out.get("events") or []) if isinstance(x, dict) and x.get("formal_validation")]
+    existing_keys = {(str(x.get("activity_id") or ""), str(x.get("date") or "")[:10], int(round(float(x.get("secs") or 0)))) for x in existing_formal}
+    promoted = []
+    events = [dict(x) for x in (out.get("events") or []) if isinstance(x, dict)]
+    for item in _v149_validation_fulfillments(microcycle_ledger):
+        rec = item.get("execution") or {}; plan = item.get("plan") or {}
+        aid = str(rec.get("activity_id") or "").strip(); actual = str(rec.get("actual_date") or "")[:10]
+        if not aid or not actual:
+            continue
+        pmin = _rhythm_num(plan.get("quality_reference_interval_min")) or _rhythm_num(plan.get("interval_minutes"))
+        target_secs = int(round(float(pmin) * 60.0)) if pmin is not None and pmin > 0 else default_secs
+        # A deterministic validation contract must match the goal's configured primary checkpoint.
+        if abs(float(target_secs) - float(default_secs)) > max(2.0, min(30.0, default_secs * 0.05)):
+            continue
+        key = (aid, actual, int(default_secs))
+        if key in existing_keys:
+            continue
+        obs = _v149_exact_checkpoint_observation(out, previous_blocks, aid, actual, default_secs)
+        if not obs:
+            continue
+        reference = _rhythm_num(plan.get("quality_reference_watts")) or _rhythm_num(plan.get("stimulus_reference_power_watts")) or _rhythm_num(obs.get("previous_watts"))
+        result = float(obs.get("watts"))
+        delta = round(result - float(reference), 1) if reference is not None else _rhythm_num(obs.get("delta_w"))
+        pb = bool(obs.get("pb_confirmed") or (delta is not None and delta > 0))
+        formal = {
+            "kind": "VALIDATION",
+            "source": "PRESCRIPTION_FULFILLMENT + EXECUTION_RECONCILIATION + EXACT_CHECKPOINT_EVIDENCE",
+            "date": actual,
+            "secs": int(default_secs),
+            "watts": round(result, 1),
+            "previous_watts": round(float(reference), 1) if reference is not None else None,
+            "delta_w": delta,
+            "activity_id": aid,
+            "activity_name": rec.get("activity_name") or plan.get("executed_activity_name"),
+            "tier": 3,
+            "tier_code": "FORMAL_VALIDATION",
+            "goal_key": goal,
+            "goal_relevant": True,
+            "exact_checkpoint_duration": True,
+            "activity_linked": True,
+            "quality_linked": True,
+            "stimulus_domain": str(field.get("stimulus_domain") or _v4896_duration_domain(default_secs)).upper(),
+            "progression_signal": False,
+            "formal_validation": True,
+            "validation_mode": str(field.get("mode") or "MAXIMAL").upper(),
+            "outcome": "VALIDATED_GAIN" if pb else "BENCHMARK_COMPLETED",
+            "pb_confirmed": pb,
+            "decoupling_pct": None,
+            "prescription_fingerprint": rec.get("prescription_fingerprint"),
+            "nova_workout_id": rec.get("nova_workout_id") or plan.get("nova_workout_id") or plan.get("nova_contract_id"),
+            "canonical_plan_id": rec.get("canonical_plan_id") or plan.get("nova_canonical_plan_id"),
+            "planned_date": rec.get("planned_date") or plan.get("planned_date") or plan.get("date"),
+            "execution_timing": rec.get("execution_timing") or plan.get("execution_status"),
+            "execution_match_basis": rec.get("match_basis") or plan.get("execution_match_basis"),
+            "execution_match_confidence": rec.get("match_confidence") or plan.get("execution_match_confidence"),
+            "reconciliation_schema": R149_SCHEMA,
+        }
+        formal["id"] = _v4896_event_id(formal)
+        events.append(formal); existing_keys.add(key); promoted.append(formal)
+    if not promoted:
+        return out
+    # Keep the same bounded evidence contract while making the newly fulfilled checkpoint authoritative.
+    dedup = {str(x.get("id") or _v4896_event_id(x)): x for x in events if isinstance(x, dict)}
+    events = sorted(dedup.values(), key=lambda x: (str(x.get("date") or ""), int(x.get("tier") or 0), float(x.get("watts") or 0)))[-24:]
+    formal_events = [x for x in events if x.get("formal_validation")]
+    latest = max(formal_events, key=lambda x: (str(x.get("date") or ""), float(x.get("watts") or 0)), default=None)
+    out["events"] = events
+    out["last_validation"] = dict(latest) if latest else out.get("last_validation")
+    out["latest_formal_validation"] = dict(latest) if latest else out.get("latest_formal_validation")
+    if latest and str(latest.get("date") or "") == today.isoformat():
+        out["display_event"] = dict(latest)
+        if latest.get("outcome") == "VALIDATED_GAIN":
+            out["summary"] = f"Formal checkpoint · {format_duration_label(int(latest.get('secs') or 0))} {float(latest.get('watts')):g} W · gain validated"
+        else:
+            out["summary"] = f"Formal checkpoint completed · {format_duration_label(int(latest.get('secs') or 0))} {float(latest.get('watts')):g} W"
+    out["reconciled_validation_promotion"] = {
+        "schema": R149_SCHEMA,
+        "count": len(promoted),
+        "latest_activity_id": (latest or {}).get("activity_id"),
+        "latest_date": (latest or {}).get("date"),
+        "latest_watts": (latest or {}).get("watts"),
+        "rule": "A causally fulfilled validation prescription plus exact checkpoint-duration evidence closes the validation question even when raw interval parsing is otherwise fallback-quality.",
+    }
+    if latest:
+        _v149_retire_represcribed_validation(microcycle_ledger, latest, now=now)
+    return out
+
+
+
+def _v149_retire_represcribed_validation(ledger, formal, now=None):
+    """Retire same-checkpoint active prescriptions created after a completed validation.
+
+    This is not a blanket ban on future testing: it only applies to the same primary
+    checkpoint inside the existing 21-day fresh-anchor window used by Question State.
+    """
+    if not isinstance(ledger, dict) or not isinstance(formal, dict):
+        return 0
+    now = now or get_rome_now()
+    actual_s = str(formal.get("date") or "")[:10]
+    try:
+        actual_d = date.fromisoformat(actual_s)
+    except Exception:
+        return 0
+    target_secs = _rhythm_num(formal.get("secs"))
+    wid = str(formal.get("nova_workout_id") or "").upper()
+    winner_fp = str(formal.get("prescription_fingerprint") or "")
+    changed = 0
+
+    def same_checkpoint(row):
+        if not isinstance(row, dict):
+            return False
+        rid = str(row.get("nova_workout_id") or row.get("nova_contract_id") or "").upper()
+        if wid and rid and rid != wid:
+            return False
+        if not (rid.startswith("VALIDATION_") or str(row.get("stimulus_role") or "").upper() == "VALIDATE"):
+            return False
+        rmin = _rhythm_num(row.get("quality_reference_interval_min")) or _rhythm_num(row.get("interval_minutes"))
+        rsecs = float(rmin) * 60.0 if rmin is not None and rmin > 0 else target_secs
+        if target_secs is not None and rsecs is not None and abs(float(rsecs)-float(target_secs)) > max(2.0, min(30.0, float(target_secs)*0.05)):
+            return False
+        try:
+            pd = date.fromisoformat(str(row.get("date") or row.get("planned_date") or "")[:10])
+        except Exception:
+            return False
+        return actual_d <= pd <= actual_d + timedelta(days=21)
+
+    hist = ledger.get("prescription_history") if isinstance(ledger.get("prescription_history"), list) else []
+    for row in hist:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("prescription_status") or "").upper()
+        fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+        if status not in {"ACTIVE", "PLANNED", ""} or fp == winner_fp or not same_checkpoint(row):
+            continue
+        row["prescription_status"] = "SUPERSEDED"
+        row["superseded_at_local"] = now.isoformat(timespec="seconds")
+        row["superseded_by_fingerprint"] = winner_fp or None
+        row["superseded_by_workout_id"] = formal.get("nova_workout_id")
+        row["supersession_reason"] = "COMPLETED_CHECKPOINT_ALREADY_FULFILLED"
+        row["supersession_schema"] = R149_SCHEMA
+        changed += 1
+    nca = ledger.get("next_cycle_anchor") if isinstance(ledger.get("next_cycle_anchor"), dict) else None
+    if nca and str(nca.get("prescription_status") or "").upper() in {"ACTIVE", "PLANNED", ""} and same_checkpoint(nca):
+        nfp = str(nca.get("prescription_fingerprint") or _v136_prescription_fingerprint(nca))
+        if nfp != winner_fp:
+            nca["prescription_status"] = "SUPERSEDED"
+            nca["status"] = "SUPERSEDED"
+            nca["superseded_at_local"] = now.isoformat(timespec="seconds")
+            nca["superseded_by_fingerprint"] = winner_fp or None
+            nca["superseded_by_workout_id"] = formal.get("nova_workout_id")
+            nca["supersession_reason"] = "COMPLETED_CHECKPOINT_ALREADY_FULFILLED"
+            nca["supersession_schema"] = R149_SCHEMA
+            ledger["next_cycle_anchor"] = nca
+            changed += 1
+    if changed:
+        ledger["completed_validation_cleanup"] = {
+            "schema": R149_SCHEMA,
+            "activity_id": formal.get("activity_id"),
+            "validation_date": actual_s,
+            "nova_workout_id": formal.get("nova_workout_id"),
+            "rows_superseded": changed,
+            "rule": "Once a primary validation is fulfilled, same-checkpoint active plans inside the existing fresh-anchor window are stale and cannot remain executable.",
+        }
+    return changed
+
+def _v4896_build_performance_evidence(training_direction, plan, power_achievements, performance_breakthrough,
+                                      activities, previous_blocks, microcycle_ledger, stored_evidence=None, now=None):
+    base = _v4896_build_performance_evidence_r149_base(
+        training_direction, plan, power_achievements, performance_breakthrough,
+        activities, previous_blocks, microcycle_ledger, stored_evidence=stored_evidence, now=now,
+    )
+    return _v149_promote_reconciled_validation(base, training_direction, previous_blocks, microcycle_ledger, now=now)
+
+
+def build_nova_decision(goal_key, question_state=None, scientific_progression=None, adaptive_roadmap=None, training_state=None, planning_context=None):
+    out = _build_nova_decision_r149_base(
+        goal_key, question_state=question_state, scientific_progression=scientific_progression,
+        adaptive_roadmap=adaptive_roadmap, training_state=training_state, planning_context=planning_context,
+    )
+    road = adaptive_roadmap if isinstance(adaptive_roadmap, dict) else {}
+    test_state = str(((road.get("test") or {}).get("state") or "")).upper()
+    if test_state == "COMPLETED" and (str(out.get("action") or "").upper() == "VALIDATE" or str(out.get("dimension") or "").upper() in {"REVALIDATION", "EXTENSION_OR_REVALIDATION"}):
+        out = dict(out)
+        out.update({
+            "action": "MAINTAIN",
+            "dimension": "NONE",
+            "question_state": None,
+            "question_exit_satisfied": None,
+            "reason": "The prescribed validation checkpoint is already complete. Absorb the result and let the next Snapshot choose the next unresolved adaptation question; do not repeat the checkpoint.",
+            "stage_code": None,
+            "candidate_architectures": [],
+            "selected_architecture": None,
+            "dose_contract": {"available": False, "reason": "VALIDATION_COMPLETED_ABSORB"},
+            "hard_session_allowed": False,
+        })
+        corr = list(out.get("corrections") or [])
+        if "R149_COMPLETED_VALIDATION_TO_ABSORB" not in corr:
+            corr.append("R149_COMPLETED_VALIDATION_TO_ABSORB")
+        out["corrections"] = corr
+        out["completed_validation_guard_schema"] = R149_SCHEMA
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.25 WIP R149 · CLOSED-LOOP VALIDATION COMPLETION · R146 BASELINE"
