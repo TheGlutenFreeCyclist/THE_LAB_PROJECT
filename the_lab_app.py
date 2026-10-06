@@ -35521,5 +35521,273 @@ def _v131_latest_severe_quality_guard(previous_blocks, performance_evidence=None
     }
 
 
+
+# R153 · PRESCRIPTION CONTINUITY LOCK
+# A future hard workout already issued to the athlete is a commitment, not a
+# suggestion to be regenerated on every Snapshot. Historical reinterpretation,
+# software-version changes, or a deterministic engine returning to an older
+# fingerprint are not sufficient reasons to replace it.
+R153_SCHEMA = "V4.9.29-R153-1"
+
+
+def _v153_parse_local(value):
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("Europe/Rome"))
+        return dt.astimezone(ZoneInfo("Europe/Rome"))
+    except Exception:
+        return None
+
+
+def _v153_plan_slot(row):
+    row = row or {}
+    return (str(row.get("date") or "")[:10], str(row.get("period") or ""))
+
+
+def _v153_is_training_plan(row):
+    if not isinstance(row, dict) or not str(row.get("main_set") or "").strip():
+        return False
+    status = str(row.get("prescription_status") or "").upper()
+    if status in {"FULFILLED", "CANCELLED"}:
+        return False
+    supersession_reason = str(row.get("supersession_reason") or "").upper()
+    if supersession_reason in {"COMPLETED_CHECKPOINT_ALREADY_FULFILLED", "WORKOUT_EXECUTED", "SAFETY_INVALIDATED"}:
+        return False
+    wid = str(row.get("nova_workout_id") or row.get("nova_contract_id") or "").upper()
+    if wid == "VALIDATION_CONTRACT_V1" or str(row.get("stimulus_role") or "").upper() == "VALIDATE":
+        return False
+    return _v136_is_hard_summary(row)
+
+
+def _v153_latest_issued_for_slot(ledger, slot_key):
+    rows = []
+    for row in (ledger or {}).get("prescription_history") or []:
+        if not _v153_is_training_plan(row) or _v153_plan_slot(row) != slot_key:
+            continue
+        issued = _v153_parse_local(row.get("recorded_at_local"))
+        if issued is None:
+            continue
+        rows.append((issued, dict(row)))
+    if not rows:
+        return None
+    rows.sort(key=lambda x: x[0])
+    return rows[-1][1]
+
+
+def _v153_material_hard_after(plan, ledger):
+    """Conservative unlock: any completed hard activity on/after issue date is new evidence."""
+    issued = _v153_parse_local((plan or {}).get("recorded_at_local"))
+    if issued is None:
+        return False
+    issue_day = issued.date()
+    for row in (ledger or {}).get("completed_hard_sessions") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            d = date.fromisoformat(str(row.get("date") or "")[:10])
+        except Exception:
+            continue
+        if d >= issue_day:
+            return True
+    return False
+
+
+def _v153_infer_original_dimension(plan):
+    wid = str((plan or {}).get("nova_workout_id") or (plan or {}).get("nova_contract_id") or "").upper()
+    if wid.startswith("P5D_"):
+        return "SPECIFIC_DOSE"
+    if wid == "RECOVERY_UNDER_LOAD_EVIDENCE_DOSE_V1":
+        return "RECOVERY_UNDER_LOAD"
+    return None
+
+
+def _v153_preserved_raw(plan, current_dimension):
+    plan = dict(plan or {})
+    original_dim = _v153_infer_original_dimension(plan)
+    return {
+        "title": str(plan.get("title") or "Previously issued quality session"),
+        "duration": str(plan.get("duration") or "Nova-selected duration"),
+        "intensity": str(plan.get("intensity") or "HARD"),
+        "main_set": str(plan.get("main_set") or ""),
+        "why": (
+            "This is the already-issued workout for this slot. No new completed hard-session evidence "
+            "or safety/recovery invalidation justifies changing its mechanics. Nova preserves the commitment "
+            "and will reassess the next adaptation question after this session is executed."
+        ),
+        "prescribed_power_low": plan.get("prescribed_power_low"),
+        "prescribed_power_high": plan.get("prescribed_power_high"),
+        "_tl_nova_deterministic": True,
+        # Keep current decision dimension for cross-module authority; original
+        # dimension is retained explicitly in continuity metadata.
+        "_tl_nova_dimension": str(current_dimension or original_dim or ""),
+        "_tl_nova_contract_id": plan.get("nova_contract_id") or plan.get("nova_workout_id"),
+        "_tl_nova_workout_id": plan.get("nova_workout_id") or plan.get("nova_contract_id"),
+        "_tl_nova_workout_library_version": plan.get("nova_workout_library_version") or NOVA_WORKOUT_LIBRARY_VERSION,
+        "_tl_prescription_continuity_lock": True,
+        "_tl_preserved_original_dimension": original_dim,
+    }
+
+
+_build_nova_prescription_r152_final = build_nova_prescription
+
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    out = _build_nova_prescription_r152_final(
+        nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger, power_model=power_model, ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range, training_definitions=training_definitions,
+    )
+    if not isinstance(out, dict) or str(out.get("status") or "").upper() != "PRESCRIBED":
+        return out
+    if str((nova_decision or {}).get("action") or "").upper() != "TRAIN":
+        return out
+    if str(out.get("workout_id") or "").upper() == "VALIDATION_CONTRACT_V1":
+        return out
+
+    idx = out.get("selected_slot_index")
+    slots = list((coach_clock or {}).get("next_slots") or [])
+    try:
+        slot = slots[int(idx)]
+    except Exception:
+        slot = None
+    if not isinstance(slot, dict):
+        return out
+    target_date = str(slot.get("date") or "")[:10]
+    target_period = str(slot.get("period") or "")
+    if not target_date or not target_period:
+        return out
+    try:
+        if date.fromisoformat(target_date) < get_rome_now().date():
+            return out
+    except Exception:
+        return out
+
+    prior = _v153_latest_issued_for_slot(microcycle_ledger or {}, (target_date, target_period))
+    if not prior or _v153_material_hard_after(prior, microcycle_ledger or {}):
+        return out
+
+    prior_wid = str(prior.get("nova_workout_id") or prior.get("nova_contract_id") or "").strip()
+    current_wid = str(out.get("workout_id") or out.get("contract_id") or "").strip()
+    raw = list(out.get("raw_sessions") or [])
+    try:
+        current_raw = raw[int(idx)] if isinstance(raw[int(idx)], dict) else {}
+    except Exception:
+        current_raw = {}
+    current_same = bool(
+        prior_wid and current_wid and prior_wid == current_wid and
+        str(prior.get("title") or "") == str(current_raw.get("title") or "")
+    )
+    if current_same:
+        out["prescription_continuity"] = {
+            "schema": R153_SCHEMA, "active": True, "state": "UNCHANGED_ALREADY_ISSUED",
+            "workout_id": prior_wid, "recorded_at_local": prior.get("recorded_at_local"),
+            "target_date": target_date, "target_period": target_period,
+        }
+        return out
+
+    # The core bug fixed by R153: never let a snapshot silently reactivate an
+    # older prescription or replace the newest issued plan solely because old
+    # evidence was reclassified by a software release.
+    preserved = _v153_preserved_raw(prior, out.get("dimension"))
+    if int(idx) >= len(raw):
+        return out
+    raw[int(idx)] = preserved
+    rejected = {
+        "workout_id": current_wid or None,
+        "contract_id": out.get("contract_id"),
+        "title": current_raw.get("title"),
+        "dimension": out.get("dimension"),
+        "source": out.get("source"),
+    }
+    original_dim = _v153_infer_original_dimension(prior)
+    out["raw_sessions"] = raw
+    out["workout_id"] = prior_wid
+    out["contract_id"] = prior.get("nova_contract_id") or prior_wid
+    out["source"] = "PRESCRIPTION_CONTINUITY_LOCK"
+    out["workout_library"] = {
+        "version": prior.get("nova_workout_library_version") or NOVA_WORKOUT_LIBRARY_VERSION,
+        "reason": "PRESERVE_NEWEST_ALREADY_ISSUED_FUTURE_WORKOUT",
+        "candidate_count": 0,
+    }
+    out["prescription_continuity"] = {
+        "schema": R153_SCHEMA,
+        "active": True,
+        "state": "LOCKED_ALREADY_ISSUED",
+        "policy": "NEWEST_ISSUED_FUTURE_HARD_WORKOUT_WINS_UNTIL_EXECUTED_OR_INVALIDATED",
+        "reason": "NO_NEW_COMPLETED_HARD_EVIDENCE; HISTORICAL_REINTERPRETATION_IS_NOT_A_REPLAN_TRIGGER",
+        "target_date": target_date,
+        "target_period": target_period,
+        "preserved_workout_id": prior_wid,
+        "preserved_title": prior.get("title"),
+        "preserved_recorded_at_local": prior.get("recorded_at_local"),
+        "preserved_original_dimension": original_dim,
+        "current_next_dimension_after_commitment": out.get("dimension"),
+        "rejected_replan": rejected,
+        "unlock_conditions": [
+            "WORKOUT_EXECUTED_OR_FULFILLED",
+            "FINAL_SAFETY_OR_RECOVERY_GATE_BLOCKS_HARD_WORK",
+            "NEW_COMPLETED_HARD_SESSION_AFTER_ISSUE",
+            "TARGET_SLOT_EXPIRES_OR_MOVES",
+            "FORMAL_VALIDATION_REPLACES_TRAINING",
+        ],
+    }
+    return out
+
+
+_compile_nova_prescription_r152_continuity = compile_nova_prescription
+
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, microcycle_ledger=None, coaching_contract=None, adaptive_roadmap=None, strength_pattern=None, training_rhythm=None, execution_model=None):
+    out = _compile_nova_prescription_r152_continuity(
+        prescription, coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+        recent_activities=recent_activities, undefined_training_intent=undefined_training_intent, power_model=power_model,
+        microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
+        strength_pattern=strength_pattern, training_rhythm=training_rhythm, execution_model=execution_model,
+    )
+    continuity = (prescription or {}).get("prescription_continuity")
+    if isinstance(continuity, dict):
+        out["prescription_continuity"] = dict(continuity)
+        out["prescription_continuity_schema"] = R153_SCHEMA
+        for sess in out.get("sessions") or []:
+            if not isinstance(sess, dict):
+                continue
+            if str(sess.get("nova_workout_id") or "") == str(continuity.get("preserved_workout_id") or continuity.get("workout_id") or ""):
+                sess["prescription_continuity_lock"] = True
+                sess["prescription_continuity_schema"] = R153_SCHEMA
+                sess["prescription_continuity_reason"] = continuity.get("reason")
+    return out
+
+
+_update_microcycle_ledger_from_snapshot_r152_final = update_microcycle_ledger_from_snapshot
+
+
+def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=None):
+    out = _update_microcycle_ledger_from_snapshot_r152_final(ledger, sessions, user_id=user_id, now=now)
+    if not isinstance(out, dict):
+        return out
+    locked = next((s for s in (sessions or []) if isinstance(s, dict) and s.get("prescription_continuity_lock") and _v136_is_hard_summary(s)), None)
+    anchor = out.get("primary_anchor") if isinstance(out.get("primary_anchor"), dict) else None
+    if locked and anchor:
+        anchor["prescription_lock"] = True
+        anchor["prescription_lock_schema"] = R153_SCHEMA
+        anchor["prescription_note"] = "Already-issued future hard workout is sticky until execution or a material safety/training event invalidates it."
+        out["primary_anchor"] = anchor
+        out["continuity_state"] = "ANCHOR LOCKED"
+        out["prescription_continuity_schema"] = R153_SCHEMA
+        if out.get("ledger_id"):
+            payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
+            _db_execute(
+                "UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?",
+                (payload, _now_utc_text(), out["ledger_id"], _data_owner_user_id(user_id)),
+            )
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.29 WIP R153 · PRESCRIPTION CONTINUITY LOCK · R152 BASELINE"
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
