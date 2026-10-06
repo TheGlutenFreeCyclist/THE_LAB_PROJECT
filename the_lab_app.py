@@ -36469,5 +36469,238 @@ WATTS_SHAPE_POLICY = "OPTIONAL_POWER_FIELD_FAILS_LOCAL_NOT_SNAPSHOT"
 APP_VERSION = "THE LAB · PRODUCT V4.9.34 WIP R158 · WATTS DATA-SHAPE NORMALIZATION · R157 BASELINE"
 
 
+# R159 · CEILING-LIKE DOSE GUARD + COHERENT REENTRY
+# A repeated session must be compared with the best directly observed same-duration
+# power reference even when the current activity itself did not set that PB. The
+# previous guard incorrectly required the PB to belong to the same activity, which
+# made a 3x6 session at ~99% of the athlete's 6-min best look progressable despite
+# severe modeled demand. A newly-active dose/safety guard is also a material reason
+# to invalidate an already-issued future workout; continuity must never preserve a
+# prescription that the corrected guard now rejects.
+R159_SCHEMA = "V4.9.35-R159-1"
+
+
+def _v159_same_duration_best(performance_evidence, interval_secs):
+    secs = _num(interval_secs)
+    if secs is None:
+        return None
+    best = None
+    for row in ((performance_evidence or {}).get("events") or []):
+        if not isinstance(row, dict) or str(row.get("kind") or "").upper() != "PB":
+            continue
+        rsecs = _num(row.get("secs")); watts = _num(row.get("watts"))
+        if rsecs is None or watts is None or watts <= 0:
+            continue
+        if abs(float(rsecs) - float(secs)) > 8:
+            continue
+        if best is None or float(watts) > float(_num(best.get("watts")) or 0):
+            best = row
+    return dict(best) if isinstance(best, dict) else None
+
+
+_v131_latest_severe_quality_guard_r158_final = _v131_latest_severe_quality_guard
+
+def _v131_latest_severe_quality_guard(previous_blocks, performance_evidence=None, ledger=None):
+    out = _v131_latest_severe_quality_guard_r158_final(previous_blocks, performance_evidence, ledger)
+    out = dict(out or {})
+    out["schema"] = R159_SCHEMA
+    if out.get("active"):
+        return out
+
+    latest = next((b for b in (previous_blocks or []) if isinstance(b, dict) and b.get("quality_relevant") and isinstance(b.get("repeatability"), dict) and b.get("repeatability")), None)
+    if not latest:
+        return out
+    rep = latest.get("repeatability") or {}
+    reps = _num(rep.get("reps")); secs = _num(rep.get("interval_secs")); avg = _num(rep.get("avg_watts"))
+    if reps is None or secs is None or avg is None or reps < 2 or secs < 180:
+        return out
+
+    pb = _v159_same_duration_best(performance_evidence, secs)
+    pb_w = _num((pb or {}).get("watts"))
+    if pb_w is None or pb_w <= 0:
+        return out
+    ratio = float(avg) / float(pb_w)
+
+    decay = _num(rep.get("first_to_last_decay_pct"))
+    deg_label = str((((latest.get("execution_quality") or {}).get("degradation") or {}).get("label") or "")).upper()
+    strong = bool((decay is not None and decay <= 3.0) or deg_label in {"EXCELLENT", "GOOD", "STABLE"})
+    wbal = latest.get("wbal") or {}; meta = latest.get("metabolic_profile") or {}
+    dep = _num(wbal.get("max_depletion_pct")); min_pct = _num(wbal.get("min_wbal_pct"))
+    wbal_severe = bool((dep is not None and dep >= 90.0) or (min_pct is not None and min_pct <= 10.0))
+    metabolic_severe = str(meta.get("high_intensity_label") or "").upper() == "VERY HIGH" and str(meta.get("demand_label") or "").upper() in {"HIGH", "VERY HIGH"}
+    near_ceiling = ratio >= 0.95
+
+    # Preserve any structured athlete feedback already attached by R150/R152.
+    fb = latest.get("athlete_session_feedback") if isinstance(latest.get("athlete_session_feedback"), dict) else out.get("athlete_feedback")
+    out.update({
+        "activity_id": latest.get("activity_id"), "date": latest.get("date"), "name": latest.get("name"),
+        "reps": int(round(reps)), "interval_secs": int(round(secs)), "work_avg_watts": round(float(avg), 1),
+        "same_duration_pb_watts": round(float(pb_w), 1), "repeated_work_vs_pb_ratio": round(float(ratio), 3),
+        "pb_linked": True, "pb_link_mode": "SAME_DURATION_BEST_REFERENCE",
+        "pb_reference_activity_id": pb.get("activity_id") if pb else None,
+        "pb_reference_date": pb.get("date") if pb else None,
+        "pb_reference_source": pb.get("source") if pb else None,
+        "wbal_max_depletion_pct": round(float(dep), 1) if dep is not None else None,
+        "wbal_min_pct": round(float(min_pct), 1) if min_pct is not None else None,
+        "wbal_severe": wbal_severe, "metabolic_severe": metabolic_severe,
+        "strong_execution": strong,
+    })
+    if fb:
+        out["athlete_feedback"] = fb
+        out["athlete_reported_severe"] = bool(
+            fb.get("legacy_text_severe") or
+            (fb.get("post_session_state") is not None and int(fb.get("post_session_state")) <= 2) or
+            (fb.get("rpe") is not None and int(fb.get("rpe")) >= 9)
+        )
+    if strong and near_ceiling and (wbal_severe or metabolic_severe):
+        out["active"] = True
+        out["classification"] = "CEILING_LIKE_RECENT_QUALITY"
+        out["activation_basis"] = "SAME_DURATION_BEST_REFERENCE_PLUS_SEVERE_DEMAND"
+        out["rule"] = (
+            "A strong long-repeat session performed near the athlete's directly observed same-duration best "
+            "and carrying severe modeled demand is not progressed by making the same long structure harder. "
+            "Keep intensity available, reduce the next work-dose architecture, and defer recovery loading."
+        )
+        out["threshold_note"] = (
+            "Same-duration PB proximity uses the best directly observed power reference for that duration; "
+            "the PB does not need to have been set in the current activity. W'bal/demand thresholds remain "
+            "conservative product guardrails, not universal physiological limits."
+        )
+    return out
+
+
+def _v159_reentry_active(nova_decision, adaptive_roadmap):
+    nd = nova_decision or {}
+    road = adaptive_roadmap or {}
+    candidates = [
+        nd.get("dose_contract") if isinstance(nd, dict) else None,
+        ((road.get("scientific_progression") or {}).get("dose_contract")) if isinstance(road, dict) else None,
+    ]
+    if any(str((x or {}).get("stage") or "").upper() == "POST_SEVERE_INTENSITY_REENTRY" for x in candidates if isinstance(x, dict)):
+        return True
+    guards = [
+        nd.get("severe_session_guard") if isinstance(nd, dict) else None,
+        ((road.get("scientific_progression") or {}).get("severe_session_guard")) if isinstance(road, dict) else None,
+    ]
+    return any(isinstance(g, dict) and g.get("active") for g in guards)
+
+
+def _v159_apply_explicit_schedule(out, coach_clock, adaptive_roadmap, nova_decision):
+    if not isinstance(out, dict) or str(out.get("status") or "").upper() != "PRESCRIBED":
+        return out
+    target = _v154_explicit_quality_target(coach_clock, adaptive_roadmap, nova_decision)
+    if not target:
+        return out
+    try:
+        current_idx = int(out.get("selected_slot_index")); requested_idx = int(target.get("index"))
+    except Exception:
+        return out
+    raw = list(out.get("raw_sessions") or [])
+    if current_idx < 0 or requested_idx < 0 or current_idx >= len(raw) or requested_idx >= len(raw):
+        return out
+    hard_raw = raw[current_idx] if isinstance(raw[current_idx], dict) else None
+    if not hard_raw:
+        return out
+    if requested_idx != current_idx:
+        requested_easy = raw[requested_idx] if isinstance(raw[requested_idx], dict) else _v84_easy_raw(target.get("slot") or {}, nova_decision or {})
+        raw[current_idx] = requested_easy; raw[requested_idx] = hard_raw
+        out["raw_sessions"] = raw; out["selected_slot_index"] = requested_idx
+    slot = target.get("slot") or {}
+    out["quality_slot_match"] = {
+        "index": requested_idx, "target_kind": "ATHLETE_EXPLICIT", "target_iso": target.get("target_iso"),
+        "preferred_target_iso": target.get("preferred_iso"), "match_mode": "R159_ATHLETE_EXPLICIT_ELIGIBLE_OVERRIDE",
+        "target_date": slot.get("date"), "target_start_minute": slot.get("start_minute"),
+        "slot_label": slot.get("label"), "slot_date": slot.get("date"), "slot_start_minute": slot.get("start_minute"),
+    }
+    out["athlete_schedule_override"] = {
+        "schema": R159_SCHEMA, "active": True, "authority": "ATHLETE_EXPLICIT_ELIGIBLE_WINDOW",
+        "target_date": str(slot.get("date") or "")[:10], "target_period": str(slot.get("period") or ""),
+        "target_slot": slot.get("label"), "target_start_minute": slot.get("start_minute"),
+        "quality_window_state": str(((adaptive_roadmap or {}).get("quality_window") or {}).get("state") or ""),
+        "earliest_iso": target.get("earliest_iso"), "learned_preferred_iso": target.get("preferred_iso"),
+        "workout_id": out.get("workout_id") or out.get("contract_id"), "mechanics_changed": False,
+        "rule": "Safety and quality eligibility outrank the athlete. Once eligible, an explicit athlete date/daypart outranks learned rhythm preference; only timing moves, not workout mechanics.",
+    }
+    out["explicit_scheduling_schema"] = R159_SCHEMA
+    return out
+
+
+_build_nova_prescription_r158_final = build_nova_prescription
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    normal = _build_nova_prescription_r158_final(
+        nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger, power_model=power_model, ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range, training_definitions=training_definitions,
+    )
+    if not _v159_reentry_active(nova_decision, adaptive_roadmap):
+        return normal
+
+    # Regenerate once from the pre-continuity prescription engine. The R153 lock
+    # is intentionally bypassed only for an active severe-dose re-entry contract.
+    fresh = _build_nova_prescription_r152_final(
+        nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger, power_model=power_model, ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range, training_definitions=training_definitions,
+    )
+    if not isinstance(fresh, dict) or str(fresh.get("status") or "").upper() != "PRESCRIBED":
+        return normal
+    if str(fresh.get("workout_id") or fresh.get("contract_id") or "").upper() != "POST_SEVERE_INTENSITY_REENTRY_V1":
+        return normal
+
+    fresh = _v159_apply_explicit_schedule(fresh, coach_clock, adaptive_roadmap, nova_decision)
+    old_cont = (normal or {}).get("prescription_continuity") if isinstance(normal, dict) else None
+    old_wid = None
+    if isinstance(old_cont, dict):
+        old_wid = old_cont.get("preserved_workout_id") or old_cont.get("workout_id")
+    if not old_wid and isinstance(normal, dict):
+        old_wid = normal.get("workout_id") or normal.get("contract_id")
+    fresh["prescription_continuity"] = {
+        "schema": R159_SCHEMA,
+        "active": True,
+        "state": "PRIOR_WORKOUT_INVALIDATED_BY_SEVERE_DOSE_GUARD",
+        "reason": "CORRECTED_SAME_DURATION_PB_LINK_ACTIVATED_CEILING_LIKE_GUARD",
+        "invalidated_workout_id": old_wid,
+        "replacement_workout_id": fresh.get("workout_id") or fresh.get("contract_id"),
+        "workout_id": fresh.get("workout_id") or fresh.get("contract_id"),
+        "safety_replan": True,
+        "historical_reinterpretation_only": False,
+        "rule": "Prescription continuity cannot preserve a future workout that conflicts with an active severe-dose/safety guard. The replacement becomes the new issued commitment.",
+    }
+    fresh["prescription_continuity_schema"] = R159_SCHEMA
+    fresh["severe_guard_replan_schema"] = R159_SCHEMA
+    return fresh
+
+
+# Make the scientific state self-explanatory: one successful loaded-recovery exposure
+# is evidence, but it is not yet an established recovery-under-load capability.
+_v503_scientific_progression_r158_final = _v503_scientific_progression
+
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None, previous_blocks=None, performance_narrative=None, performance_evidence=None, aerobic_metabolic_range=None, evidence_ledger=None, question_state=None):
+    out = _v503_scientific_progression_r158_final(
+        goal_key, roadmap, ledger, session_progression, previous_blocks,
+        performance_narrative, performance_evidence, aerobic_metabolic_range,
+        evidence_ledger=evidence_ledger, question_state=question_state,
+    )
+    if not isinstance(out, dict):
+        return out
+    sig = out.get("signals") if isinstance(out.get("signals"), dict) else {}
+    successes = int(sig.get("recovery_under_load_successes") or 0)
+    established = bool(sig.get("active_load_recovery_seen"))
+    sig["recovery_load_established"] = established
+    sig["recovery_under_load_status"] = (
+        "ESTABLISHED" if established else
+        "ONE_SUCCESS_NOT_ESTABLISHED" if successes == 1 else
+        "EVIDENCE_PRESENT_NOT_ESTABLISHED" if successes > 0 else
+        "NOT_YET_OBSERVED"
+    )
+    out["signals"] = sig
+    out["schema"] = R159_SCHEMA
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.35 WIP R159 · CEILING-LIKE DOSE GUARD + COHERENT REENTRY · R158 BASELINE"
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
