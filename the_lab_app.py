@@ -28086,9 +28086,24 @@ def analyze():
         error = "THE LAB could not reach an external data service while refreshing the Snapshot. Your saved data remain safe; please try again."
     except requests.HTTPError as e:
         error = _safe_external_http_error(e)
-    except (json.JSONDecodeError, KeyError) as e:
+    except json.JSONDecodeError as e:
         _set_ai_usage_status(snapshot_ai_event_id, "pipeline_error", e.__class__.__name__)
-        error = "Nova returned a response THE LAB could not interpret. Your saved data remain safe; please try again."
+        try:
+            audit_event("SNAPSHOT_PIPELINE_JSON_ERROR", actor_user_id=user["id"], target_user_id=user["id"], details={"error_class":"JSONDecodeError","release":APP_VERSION})
+        except Exception:
+            pass
+        error = "THE LAB received malformed JSON while refreshing this Snapshot. Your saved data remain safe; please try again. If it repeats, send the latest audit or error screenshot."
+    except KeyError as e:
+        _set_ai_usage_status(snapshot_ai_event_id, "pipeline_error", e.__class__.__name__)
+        _missing = str(e.args[0] if getattr(e, "args", None) else "unknown")
+        _missing = re.sub(r"[^A-Za-z0-9_.:-]+", "_", _missing)[:80] or "unknown"
+        if re.search(r"(?:key|token|secret|password|auth|credential)", _missing, re.I):
+            _missing = "redacted_field"
+        try:
+            audit_event("SNAPSHOT_PIPELINE_KEY_ERROR", actor_user_id=user["id"], target_user_id=user["id"], details={"error_class":"KeyError","missing_field":_missing,"release":APP_VERSION})
+        except Exception:
+            pass
+        error = f"THE LAB hit an internal data-shape error (missing field: {_missing}). Your saved data remain safe. This is a product error, not a Nova coaching decision."
     except Exception as e:
         _set_ai_usage_status(snapshot_ai_event_id, "pipeline_error", e.__class__.__name__)
         error = "THE LAB could not complete this Snapshot. Your saved data remain safe; please try again."
@@ -36386,6 +36401,47 @@ def _v492_execution_quality(block, ledger=None):
 
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.32 WIP R156 · AUTHORITATIVE EXECUTION-HISTORY ADHERENCE · R155 BASELINE"
+
+
+# R157 · SNAPSHOT FAULT ISOLATION + ACTIONABLE PIPELINE ERRORS
+# Optional adherence repair must never take down the whole deterministic Snapshot.
+# R156 remains the preferred path; R155 is the local fallback if the repair layer
+# encounters an unexpected historical data shape.
+R157_SCHEMA = "V4.9.33-R157-1"
+_v492_execution_quality_r156_final = _v492_execution_quality
+
+def _v492_execution_quality(block, ledger=None):
+    try:
+        out = _v492_execution_quality_r156_final(block, ledger)
+        if isinstance(out, dict):
+            out.setdefault("fault_isolation_schema", R157_SCHEMA)
+        return out
+    except Exception as exc:
+        # Fail locally, never fail the Snapshot. The older scorer is intentionally
+        # retained as a safe fallback; it may report N/A but preserves all other data.
+        try:
+            fallback = _v492_execution_quality_r155_final(block, ledger)
+        except Exception:
+            fallback = {"available": False, "degradation": None, "adherence": {"available": False, "label": "N/A", "score": None, "reason": "ADHERENCE_MODULE_FAULT_ISOLATED"}}
+        if not isinstance(fallback, dict):
+            fallback = {"available": False, "degradation": None, "adherence": {"available": False, "label": "N/A", "score": None}}
+        fallback = dict(fallback)
+        fallback["adherence_repair_warning"] = {
+            "active": True,
+            "schema": R157_SCHEMA,
+            "error_class": exc.__class__.__name__,
+            "rule": "Adherence repair failed locally; Snapshot completion was preserved.",
+        }
+        adh = fallback.get("adherence")
+        if not isinstance(adh, dict):
+            adh = {"available": False, "label": "N/A", "score": None}
+            fallback["adherence"] = adh
+        adh.setdefault("reason", "ADHERENCE_REPAIR_FAULT_ISOLATED")
+        adh["fault_isolation_schema"] = R157_SCHEMA
+        fallback["fault_isolation_schema"] = R157_SCHEMA
+        return fallback
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.33 WIP R157 · SNAPSHOT FAULT ISOLATION + ACTIONABLE PIPELINE ERRORS · R156 BASELINE"
 
 
 if __name__ == "__main__":
