@@ -35789,5 +35789,492 @@ def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=N
 APP_VERSION = "THE LAB · PRODUCT V4.9.29 WIP R153 · PRESCRIPTION CONTINUITY LOCK · R152 BASELINE"
 
 
+# R154 · ATHLETE EXPLICIT SCHEDULING AUTHORITY
+# Safety and hard-session eligibility remain absolute. Once a quality window is
+# eligible, however, an explicit athlete date/daypart preference outranks the
+# descriptive "preferred" slot learned from historical rhythm. The already-issued
+# workout mechanics remain locked; only the eligible execution slot may move.
+R154_SCHEMA = "V4.9.30-R154-1"
+
+
+_build_coach_clock_r153_final = build_coach_clock
+
+
+def build_coach_clock(season_activities, now=None, planning_context=None, training_rhythm=None):
+    ctx = planning_context or build_planning_context(now)
+    out = _build_coach_clock_r153_final(
+        season_activities, now=now, planning_context=ctx, training_rhythm=training_rhythm
+    )
+    if isinstance(out, dict):
+        intent = ctx.get("future_note_intent") if isinstance(ctx.get("future_note_intent"), dict) else None
+        out["future_note_intent"] = _v4831_json_clone(intent) if intent else None
+        out["explicit_scheduling_schema"] = R154_SCHEMA
+    return out
+
+
+def _v154_slot_dt(row):
+    if not isinstance(row, dict):
+        return None
+    ds = str(row.get("date") or "")[:10]
+    try:
+        minute = int(round(float(row.get("start_minute"))))
+        d = date.fromisoformat(ds)
+        return datetime.combine(d, datetime.min.time(), tzinfo=ZoneInfo("Europe/Rome")) + timedelta(minutes=minute)
+    except Exception:
+        return None
+
+
+def _v154_iso_dt(value):
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("Europe/Rome"))
+        return dt.astimezone(ZoneInfo("Europe/Rome"))
+    except Exception:
+        return None
+
+
+def _v154_explicit_quality_target(coach_clock, adaptive_roadmap, nova_decision):
+    clock = coach_clock or {}
+    intent = clock.get("future_note_intent") if isinstance(clock.get("future_note_intent"), dict) else {}
+    if not intent.get("active") or not intent.get("quality_preferred"):
+        return None
+    if intent.get("hard_blocked") or intent.get("conditional"):
+        return None
+    if str(intent.get("session_profile") or "").upper() not in {"QUALITY", "HARD"}:
+        return None
+    if not bool((nova_decision or {}).get("hard_session_allowed")):
+        return None
+
+    road = adaptive_roadmap or {}
+    q = road.get("quality_window") if isinstance(road.get("quality_window"), dict) else {}
+    if str(q.get("state") or "").upper() != "OPEN":
+        return None
+    earliest = _v154_iso_dt(q.get("earliest_iso"))
+    target_date = str(intent.get("date") or "")[:10]
+    preferred = list(intent.get("preferred_dayparts") or [])
+    if not target_date:
+        return None
+
+    candidates = []
+    for i, slot in enumerate(list(clock.get("next_slots") or [])):
+        if not isinstance(slot, dict) or str(slot.get("date") or "")[:10] != target_date:
+            continue
+        if slot.get("is_race") or str(slot.get("restriction") or "NONE").upper() != "NONE":
+            continue
+        if not _v152_slot_matches_human_part(slot, preferred):
+            continue
+        dt = _v154_slot_dt(slot)
+        if dt is None:
+            continue
+        if earliest is not None and dt < earliest - timedelta(minutes=2):
+            continue
+        candidates.append((dt, i, slot))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0])
+    dt, idx, slot = candidates[0]
+    return {
+        "index": idx,
+        "slot": slot,
+        "target_iso": dt.isoformat(timespec="minutes"),
+        "intent": intent,
+        "earliest_iso": q.get("earliest_iso"),
+        "preferred_iso": q.get("preferred_iso"),
+    }
+
+
+_build_nova_prescription_r153_final = build_nova_prescription
+
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    out = _build_nova_prescription_r153_final(
+        nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap,
+        microcycle_ledger=microcycle_ledger, evidence_ledger=evidence_ledger,
+        power_model=power_model, ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions,
+    )
+    if not isinstance(out, dict) or str(out.get("status") or "").upper() != "PRESCRIBED":
+        return out
+    target = _v154_explicit_quality_target(coach_clock, adaptive_roadmap, nova_decision)
+    if not target:
+        return out
+    try:
+        current_idx = int(out.get("selected_slot_index"))
+        requested_idx = int(target.get("index"))
+    except Exception:
+        return out
+    raw = list(out.get("raw_sessions") or [])
+    if current_idx < 0 or requested_idx < 0 or current_idx >= len(raw) or requested_idx >= len(raw):
+        return out
+    hard_raw = raw[current_idx] if isinstance(raw[current_idx], dict) else None
+    if not hard_raw:
+        return out
+
+    # Keep the exact already-selected workout mechanics/identity and move only its
+    # scheduling slot. The prior selected slot gets the ordinary easy opportunity
+    # that was already present in the requested slot.
+    if requested_idx != current_idx:
+        requested_easy = raw[requested_idx] if isinstance(raw[requested_idx], dict) else _v84_easy_raw(target.get("slot") or {}, nova_decision or {})
+        raw[current_idx] = requested_easy
+        raw[requested_idx] = hard_raw
+        out["raw_sessions"] = raw
+        out["selected_slot_index"] = requested_idx
+
+    slot = target.get("slot") or {}
+    out["quality_slot_match"] = {
+        "index": requested_idx,
+        "target_kind": "ATHLETE_EXPLICIT",
+        "target_iso": target.get("target_iso"),
+        "preferred_target_iso": target.get("preferred_iso"),
+        "match_mode": "R154_ATHLETE_EXPLICIT_ELIGIBLE_OVERRIDE",
+        "target_date": slot.get("date"),
+        "target_start_minute": slot.get("start_minute"),
+        "slot_label": slot.get("label"),
+        "slot_date": slot.get("date"),
+        "slot_start_minute": slot.get("start_minute"),
+    }
+    prior_cont = dict(out.get("prescription_continuity") or {}) if isinstance(out.get("prescription_continuity"), dict) else {}
+    previous_target = prior_cont.get("target_date")
+    prior_cont.update({
+        "schema": R154_SCHEMA,
+        "active": True,
+        "state": "LOCKED_WORKOUT_RESCHEDULED_BY_ATHLETE" if prior_cont else "WORKOUT_SCHEDULED_BY_ATHLETE",
+        "reason": "EXPLICIT_ATHLETE_QUALITY_WINDOW_IS_ELIGIBLE_AND_OUTRANKS_LEARNED_PREFERRED_SLOT",
+        "target_date": str(slot.get("date") or "")[:10],
+        "target_period": str(slot.get("period") or ""),
+        "schedule_override_only": True,
+        "mechanics_changed": False,
+        "previous_target_date": previous_target,
+    })
+    out["prescription_continuity"] = prior_cont
+    out["athlete_schedule_override"] = {
+        "schema": R154_SCHEMA,
+        "active": True,
+        "authority": "ATHLETE_EXPLICIT_ELIGIBLE_WINDOW",
+        "target_date": str(slot.get("date") or "")[:10],
+        "target_period": str(slot.get("period") or ""),
+        "target_slot": slot.get("label"),
+        "target_start_minute": slot.get("start_minute"),
+        "quality_window_state": str(((adaptive_roadmap or {}).get("quality_window") or {}).get("state") or ""),
+        "earliest_iso": target.get("earliest_iso"),
+        "learned_preferred_iso": target.get("preferred_iso"),
+        "workout_id": out.get("workout_id") or out.get("contract_id"),
+        "mechanics_changed": False,
+        "rule": "Safety and quality eligibility outrank the athlete. Once eligible, an explicit athlete date/daypart outranks learned rhythm preference; only timing moves, not workout mechanics.",
+    }
+    out["explicit_scheduling_schema"] = R154_SCHEMA
+    return out
+
+
+_compile_nova_prescription_r153_final = compile_nova_prescription
+
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, microcycle_ledger=None, coaching_contract=None, adaptive_roadmap=None, strength_pattern=None, training_rhythm=None, execution_model=None):
+    out = _compile_nova_prescription_r153_final(
+        prescription, coach_clock, training_definitions=training_definitions,
+        ftp_anchor=ftp_anchor, recent_activities=recent_activities,
+        undefined_training_intent=undefined_training_intent, power_model=power_model,
+        microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract,
+        adaptive_roadmap=adaptive_roadmap, strength_pattern=strength_pattern,
+        training_rhythm=training_rhythm, execution_model=execution_model,
+    )
+    sched = (prescription or {}).get("athlete_schedule_override")
+    if not isinstance(out, dict) or not isinstance(sched, dict) or not sched.get("active"):
+        return out
+    out["athlete_schedule_override"] = dict(sched)
+    out["explicit_scheduling_schema"] = R154_SCHEMA
+    if isinstance((prescription or {}).get("prescription_continuity"), dict):
+        out["prescription_continuity"] = dict((prescription or {}).get("prescription_continuity"))
+        out["prescription_continuity_schema"] = R154_SCHEMA
+    wid = str(sched.get("workout_id") or out.get("workout_id") or "")
+    for sess in out.get("sessions") or []:
+        if not isinstance(sess, dict):
+            continue
+        if wid and str(sess.get("nova_workout_id") or sess.get("nova_contract_id") or "") == wid and _v136_is_hard_summary(sess):
+            sess["athlete_schedule_override"] = True
+            sess["athlete_schedule_authority"] = "ATHLETE_EXPLICIT_ELIGIBLE_WINDOW"
+            sess["athlete_schedule_schema"] = R154_SCHEMA
+            sess["prescription_continuity_lock"] = True
+            sess["prescription_continuity_schema"] = R154_SCHEMA
+            sess["prescription_continuity_reason"] = "WORKOUT_MECHANICS_LOCKED; EXECUTION_WINDOW_MOVED_BY_EXPLICIT_ATHLETE_INTENT"
+    return out
+
+
+_v135_resolution_from_rows_r153_final = _v135_resolution_from_rows
+
+
+def _v135_resolution_from_rows(rows, planning_context, road=None):
+    out = _v135_resolution_from_rows_r153_final(rows, planning_context, road)
+    if not isinstance(out, dict) or not out.get("active"):
+        return out
+    target = _v135_target_from_context(planning_context)
+    if not isinstance(target, dict):
+        return out
+    profile = str(out.get("profile") or target.get("session_profile") or "").upper()
+    if profile != "QUALITY" and not target.get("quality_preferred"):
+        return out
+    hard = next((r for r in (rows or []) if isinstance(r, dict) and _v106_session_is_hard(r)), None)
+    preferred = list(target.get("preferred_dayparts") or [])
+    target_date = str(target.get("date") or "")[:10]
+    q = (road or {}).get("quality_window") if isinstance((road or {}).get("quality_window"), dict) else {}
+    if hard and str(hard.get("date") or "")[:10] == target_date and _v152_slot_matches_human_part(hard, preferred):
+        out["status"] = "ALIGNED_QUALITY"
+        out["reason"] = "EXPLICIT_ATHLETE_WINDOW_ELIGIBLE_AND_OPEN" if str(q.get("state") or "").upper() == "OPEN" else out.get("reason")
+        out["requested_slot_label"] = hard.get("slot")
+        try:
+            out["requested_slot_spacing_hours"] = round(float(hard.get("since_last_hard_hours")), 1)
+        except Exception:
+            pass
+        out["selected_hard_slot"] = hard.get("slot")
+        out["selected_hard_date"] = hard.get("date")
+        out["selected_hard_daypart"] = _v135_note_daypart(hard.get("start_minute"))
+        out["selected_hard_availability"] = hard.get("availability_state")
+        out["aligned_preference"] = True
+        out["requested_slot_daypart_match"] = "HUMAN_TOLERANT" if _v135_note_daypart(hard.get("start_minute")) not in set(preferred) and preferred else "EXACT"
+        out["scheduling_authority"] = "ATHLETE_EXPLICIT_ELIGIBLE_WINDOW"
+    out["schema"] = R154_SCHEMA
+    return out
+
+
+_update_microcycle_ledger_r153_final = update_microcycle_ledger_from_snapshot
+
+
+def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=None):
+    now = now or get_rome_now()
+    out = _update_microcycle_ledger_r153_final(ledger, sessions, user_id=user_id, now=now)
+    if not isinstance(out, dict):
+        return out
+    moved = next((s for s in (sessions or []) if isinstance(s, dict) and s.get("athlete_schedule_override") and _v136_is_hard_summary(s)), None)
+    if not moved:
+        return out
+    current = _v4840_ledger_session_summary(moved)
+    current_fp = _v136_prescription_fingerprint(current)
+    wid = str(current.get("nova_workout_id") or current.get("nova_contract_id") or "")
+    hist = [dict(x) for x in (out.get("prescription_history") or []) if isinstance(x, dict)]
+    for row in hist:
+        fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+        row_wid = str(row.get("nova_workout_id") or row.get("nova_contract_id") or "")
+        if fp == current_fp:
+            row["prescription_status"] = "ACTIVE"
+            row["schedule_authority"] = "ATHLETE_EXPLICIT_ELIGIBLE_WINDOW"
+            row["schedule_override_schema"] = R154_SCHEMA
+            continue
+        if wid and row_wid == wid and str(row.get("prescription_status") or "").upper() == "ACTIVE":
+            row["prescription_status"] = "SUPERSEDED"
+            row["superseded_at_local"] = now.isoformat(timespec="seconds")
+            row["superseded_by_fingerprint"] = current_fp
+            row["superseded_by_workout_id"] = wid
+            row["supersession_reason"] = "ATHLETE_EXPLICIT_RESCHEDULE"
+            row["schedule_override_schema"] = R154_SCHEMA
+    out["prescription_history"] = hist[-32:]
+    anchor = {**current, "source": "SNAPSHOT_PLAN", "status": "PLANNED", "strategy_goal": out.get("goal_label"), "strategy_objective": out.get("objective")}
+    anchor["prescription_lock"] = True
+    anchor["prescription_lock_schema"] = R154_SCHEMA
+    anchor["prescription_note"] = "Workout mechanics preserved; eligible execution window moved by explicit athlete scheduling intent."
+    anchor["schedule_authority"] = "ATHLETE_EXPLICIT_ELIGIBLE_WINDOW"
+    out["primary_anchor"] = anchor
+    out["continuity_state"] = "ANCHOR RESCHEDULED BY ATHLETE"
+    out["explicit_scheduling_schema"] = R154_SCHEMA
+    if out.get("ledger_id"):
+        payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
+        _db_execute(
+            "UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?",
+            (payload, _now_utc_text(), out["ledger_id"], _data_owner_user_id(user_id)),
+        )
+    return out
+
+
+
+# R155 · MAIN-SET ADHERENCE + COPY ISOLATION QA
+# Adherence evaluates the prescribed main set, not harmless auxiliary work such as
+# warm-up openers. Extra intervals at a different duration remain visible to load/
+# metabolic analysis but do not reduce main-set adherence. Clipboard buttons remain
+# replacement-only: they copy exactly one explicit payload and never concatenate.
+R155_SCHEMA = "V4.9.31-R155-1"
+
+_v146_match_plan_block_r154_final = _v146_match_plan_block
+_v492_execution_quality_r154_final = _v492_execution_quality
+
+
+def _v155_plan_main_set_profile(plan):
+    p = plan or {}
+    sig = _v136_plan_signature(p)
+    try:
+        reps = int(sig.get("reps") or 0)
+    except Exception:
+        reps = 0
+    try:
+        secs = float(sig.get("secs") or 0)
+    except Exception:
+        secs = 0.0
+    prof = _v4845_primary_work_profile(str(p.get("main_set") or ""))
+    if not secs:
+        try:
+            secs = float(prof.get("interval_minutes") or 0) * 60.0
+        except Exception:
+            secs = 0.0
+    return {
+        "reps": reps,
+        "secs": secs,
+        "power_low": _num(prof.get("power_low")),
+        "power_high": _num(prof.get("power_high")),
+    }
+
+
+def _v155_main_set_evidence(block, plan):
+    profile = _v155_plan_main_set_profile(plan)
+    reps = int(profile.get("reps") or 0)
+    secs = float(profile.get("secs") or 0)
+    if reps < 2 or secs < 55:
+        return None
+    rows = []
+    for idx, row in enumerate((block or {}).get("work_interval_evidence") or []):
+        if not isinstance(row, dict):
+            continue
+        rs = _num(row.get("secs")); rw = _num(row.get("watts"))
+        if rs is None:
+            continue
+        rows.append({"index": idx, "secs": float(rs), "watts": float(rw) if rw is not None else None})
+    tol = max(12.0, 0.08 * secs)
+    main = [r for r in rows if abs(r["secs"] - secs) <= tol]
+    aux = [r for r in rows if abs(r["secs"] - secs) > tol]
+    return {**profile, "rows": rows, "main": main, "aux": aux, "tolerance_secs": tol}
+
+
+def _v146_match_plan_block(plan, block, allow_fulfilled=True):
+    # Preserve all R154/R146 matching first.
+    out = _v146_match_plan_block_r154_final(plan, block, allow_fulfilled=allow_fulfilled)
+    if out:
+        return out
+    p = plan or {}; b = block or {}
+    if _v146_validation_plan(p) or not b.get("quality_relevant"):
+        return None
+    status = str(p.get("prescription_status") or "ACTIVE").upper()
+    if status in {"CANCELLED", "WITHDRAWN"} or (status in {"SUPERSEDED", "FULFILLED"} and not allow_fulfilled):
+        return None
+    try:
+        pd = date.fromisoformat(str(p.get("date") or "")[:10]); bd = date.fromisoformat(str(b.get("date") or "")[:10])
+    except Exception:
+        return None
+    delta = (bd - pd).days
+    if abs(delta) > 2 or not _v146_causally_eligible(p, b, explicit_identity=False):
+        return None
+    ev = _v155_main_set_evidence(b, p)
+    if not ev or len(ev.get("main") or []) != int(ev.get("reps") or 0):
+        return None
+    score = 84 + (8 if delta == 0 else (5 if abs(delta) == 1 else 2))
+    return {
+        "score": score,
+        "basis": "PRESCRIBED_MAIN_SET_WITH_AUXILIARY_WORK_IGNORED",
+        "confidence": "EXACT_DATE" if delta == 0 else ("HIGH" if abs(delta) == 1 else "MODERATE"),
+        "date_delta_days": delta,
+        "explicit_identity": False,
+        "duration_match": True,
+        "reps_match": True,
+        "auxiliary_intervals_ignored": len(ev.get("aux") or []),
+        "adherence_scope": "PRESCRIBED_MAIN_SET_ONLY",
+    }
+
+
+def _v155_main_set_adherence(block, plan):
+    ev = _v155_main_set_evidence(block, plan)
+    if not ev:
+        return None
+    target_reps = int(ev.get("reps") or 0)
+    main = list(ev.get("main") or [])
+    if len(main) != target_reps:
+        return None
+    checks = [True]  # exact number of prescribed-duration main reps
+    detail = [f"main reps {len(main)}/{target_reps}", f"work {float(ev.get('secs') or 0)/60:g} min"]
+    lo, hi = ev.get("power_low"), ev.get("power_high")
+    if lo is not None and hi is not None:
+        pchecks = [r.get("watts") is not None and float(lo) <= float(r.get("watts")) <= float(hi) for r in main]
+        checks.extend(pchecks)
+        detail.append(f"power {sum(bool(x) for x in pchecks)}/{len(pchecks)} in {lo:g}–{hi:g} W")
+    aux_n = len(ev.get("aux") or [])
+    if aux_n:
+        detail.append(f"auxiliary intervals ignored {aux_n}")
+    score = round(100 * sum(bool(x) for x in checks) / len(checks)) if checks else None
+    label = "VERIFIED" if score is not None and score >= 95 else "HIGH" if score is not None and score >= 85 else "PARTIAL" if score is not None and score >= 70 else "LOW" if score is not None else "N/A"
+    watts = [float(r["watts"]) for r in main if r.get("watts") is not None]
+    degradation = None
+    if len(watts) >= 2:
+        first, last = watts[0], watts[-1]
+        decay = max(0.0, (first-last)/first*100.0) if first else 0.0
+        avg = statistics.mean(watts)
+        cv = statistics.pstdev(watts)/avg*100.0 if avg else 0.0
+        idx = round(max(decay, cv), 1)
+        lab = "EXCELLENT" if idx <= 1 else "STABLE" if idx <= 3 else "MODERATE FADE" if idx <= 6 else "HIGH FADE"
+        late = statistics.mean(watts[-2:]); early = statistics.mean(watts[:2])
+        degradation = {"index_pct": idx, "label": lab, "first_to_last_pct": round(decay,1), "cv_pct": round(cv,1), "late_retention_pct": round(late/early*100.0,1) if early else None}
+    return {
+        "adherence": {
+            "available": score is not None,
+            "score": score,
+            "label": label,
+            "checks_passed": sum(bool(x) for x in checks),
+            "checks_total": len(checks),
+            "detail": " · ".join(detail),
+            "recovery_rule": "RECOVERY_UNSCORED_UNLESS_EXPLICITLY_CONTRACTED",
+            "adherence_scope": "PRESCRIBED_MAIN_SET_ONLY",
+            "auxiliary_intervals_ignored": aux_n,
+            "auxiliary_policy": "WARMUP_OPENERS_AND_OTHER_NON_TARGET_DURATION_WORK_DO_NOT_REDUCE_MAIN_SET_ADHERENCE",
+            "schema": R155_SCHEMA,
+        },
+        "degradation": degradation,
+    }
+
+
+def _v492_execution_quality(block, ledger=None):
+    out = _v492_execution_quality_r154_final(block, ledger)
+    link = _v136_link_prescription(block, ledger or {}) if isinstance(block, dict) else None
+    if not link:
+        return out
+    plan = link.get("plan") or {}
+    main = _v155_main_set_adherence(block, plan)
+    if not main:
+        return out
+    result = dict(out or {})
+    result["available"] = True
+    if main.get("degradation"):
+        result["degradation"] = main["degradation"]
+    adh = dict(main.get("adherence") or {})
+    adh.update({
+        "link_mode": "R155_MAIN_SET_SCOPE",
+        "link_confidence": link.get("confidence"),
+        "link_source": link.get("source"),
+        "match_basis": link.get("match_basis"),
+        "execution_timing": link.get("execution_timing"),
+        "planned_date": plan.get("date"),
+        "actual_date": (block or {}).get("date"),
+        "nova_workout_id": _v146_plan_identity(plan),
+        "canonical_plan_id": plan.get("nova_canonical_plan_id"),
+        "causal_guard": R155_SCHEMA,
+    })
+    result["adherence"] = adh
+    result["adherence_scope"] = "PRESCRIBED_MAIN_SET_ONLY"
+    result["adherence_schema"] = R155_SCHEMA
+    return result
+
+
+# Athlete-facing clarification: adherence is scoped to the prescribed main set.
+if isinstance(HOME_PAGE, str):
+    HOME_PAGE = HOME_PAGE.replace(
+        " · recovery watts unscored</span>",
+        " · main-set only · warm-up/openers unscored</span>",
+    )
+
+# Clipboard contract QA. Both existing controls intentionally use replacement
+# semantics (Clipboard.writeText or a selected temporary textarea). Their data
+# attributes contain exactly one payload: canonical workout name OR access code.
+COPY_ISOLATION_SCHEMA = R155_SCHEMA
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.31 WIP R155 · MAIN-SET ADHERENCE + COPY ISOLATION QA · R154 BASELINE"
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
