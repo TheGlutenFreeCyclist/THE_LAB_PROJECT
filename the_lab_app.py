@@ -36276,5 +36276,117 @@ COPY_ISOLATION_SCHEMA = R155_SCHEMA
 APP_VERSION = "THE LAB · PRODUCT V4.9.31 WIP R155 · MAIN-SET ADHERENCE + COPY ISOLATION QA · R154 BASELINE"
 
 
+# R156 · EXECUTION-HISTORY AUTHORITATIVE ADHERENCE LINK
+# Once R146 reconciliation has explicitly linked a completed activity_id to a
+# prescription fingerprint/workout_id, adherence must consume that authoritative
+# execution link. Re-running a structural heuristic after reconciliation can only
+# lose information and incorrectly produce N/A for a fulfilled workout.
+R156_SCHEMA = "V4.9.32-R156-1"
+
+_v492_execution_quality_r155_final = _v492_execution_quality
+
+
+def _v156_execution_history_link(block, ledger=None):
+    b = block or {}; led = ledger or {}
+    aid = str(b.get("activity_id") or b.get("id") or "").strip()
+    if not aid:
+        return None
+    matches = []
+    for rec in led.get("prescription_execution_history") or []:
+        if not isinstance(rec, dict) or str(rec.get("activity_id") or "").strip() != aid:
+            continue
+        conf = str(rec.get("match_confidence") or "").upper()
+        rank = {"EXACT_IDENTITY": 5, "EXACT_DATE": 4, "HIGH": 3, "MODERATE": 2, "LOW": 1}.get(conf, 0)
+        matches.append((rank, dict(rec)))
+    if not matches:
+        return None
+    matches.sort(key=lambda x: -x[0])
+    rec = matches[0][1]
+    fp = str(rec.get("prescription_fingerprint") or "").strip()
+    wid = str(rec.get("nova_workout_id") or "").strip()
+    cid = str(rec.get("canonical_plan_id") or "").strip()
+    plans = [dict(x) for x in (led.get("prescription_history") or []) if isinstance(x, dict)]
+    plan = None
+    if fp:
+        for row in plans:
+            rfp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+            if rfp == fp:
+                plan = row; break
+    if plan is None and (wid or cid):
+        for row in reversed(plans):
+            if wid and str(_v146_plan_identity(row) or "") == wid:
+                plan = row; break
+            if cid and str(row.get("nova_canonical_plan_id") or "") == cid:
+                plan = row; break
+    if plan is None:
+        # Execution history is authoritative for identity, but main-set scoring still
+        # requires the actual prescribed mechanics. Do not invent them.
+        return None
+    return {
+        "plan": plan,
+        "execution": rec,
+        "confidence": rec.get("match_confidence") or "HIGH",
+        "match_basis": rec.get("match_basis") or "PRESCRIPTION_EXECUTION_HISTORY",
+        "execution_timing": rec.get("execution_timing"),
+        "source": "PRESCRIPTION_EXECUTION_HISTORY",
+    }
+
+
+def _v156_score_linked_main_set(block, link):
+    plan = (link or {}).get("plan") or {}
+    main = _v155_main_set_adherence(block, plan)
+    if not main:
+        return None
+    result = {
+        "available": True,
+        "degradation": main.get("degradation"),
+        "adherence": dict(main.get("adherence") or {}),
+        "adherence_scope": "PRESCRIBED_MAIN_SET_ONLY",
+        "adherence_schema": R156_SCHEMA,
+    }
+    adh = result["adherence"]
+    adh.update({
+        "link_mode": "R156_AUTHORITATIVE_EXECUTION_HISTORY",
+        "link_confidence": link.get("confidence"),
+        "link_source": link.get("source"),
+        "match_basis": link.get("match_basis"),
+        "execution_timing": link.get("execution_timing"),
+        "planned_date": plan.get("date"),
+        "actual_date": (block or {}).get("date"),
+        "nova_workout_id": _v146_plan_identity(plan),
+        "canonical_plan_id": plan.get("nova_canonical_plan_id"),
+        "prescription_fingerprint": plan.get("prescription_fingerprint") or _v136_prescription_fingerprint(plan),
+        "executed_activity_id": (block or {}).get("activity_id") or (block or {}).get("id"),
+        "causal_guard": R156_SCHEMA,
+        "schema": R156_SCHEMA,
+    })
+    return result
+
+
+def _v492_execution_quality(block, ledger=None):
+    out = _v492_execution_quality_r155_final(block, ledger)
+    adh = (out or {}).get("adherence") if isinstance(out, dict) else None
+    # Preserve every already-valid result. R156 only repairs false N/A after the
+    # ledger has already reconciled this exact activity to a prescription.
+    if isinstance(adh, dict) and adh.get("available"):
+        return out
+    link = _v156_execution_history_link(block, ledger or {}) if isinstance(block, dict) else None
+    if not link:
+        return out
+    repaired = _v156_score_linked_main_set(block, link)
+    if not repaired:
+        return out
+    # Preserve any richer degradation object produced upstream if main-set scoring
+    # did not compute one, otherwise prefer the main-set-only degradation.
+    if repaired.get("degradation") is None and isinstance(out, dict):
+        repaired["degradation"] = out.get("degradation")
+    repaired["execution_history_authority"] = True
+    repaired["execution_history_schema"] = R156_SCHEMA
+    return repaired
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.32 WIP R156 · AUTHORITATIVE EXECUTION-HISTORY ADHERENCE · R155 BASELINE"
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
