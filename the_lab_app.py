@@ -33271,9 +33271,6 @@ def _v117_hard_cadence_profile(activities, now=None):
     )
     return base
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
-
 
 # R143 · RACE-SAFE MULTIMODAL DAY COMPOSITION
 # R142 correctly excluded cycling race days from the cycling session-role learner,
@@ -35103,3 +35100,426 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
 
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.27 WIP R151 · SNAPSHOT GUIDE STRUCTURED FEEDBACK · R150 BASELINE"
+
+# R152 · ACTIONABLE AI ERRORS + COPY INVITE + CLOSED-LOOP IDENTITY REPAIR
+# - Surface safe provider-aware connection diagnostics instead of one generic BYOK error.
+# - Add one-tap copy to the shown-once invitation/access code.
+# - Never stamp the active hard-workout ID onto unrelated easy sessions.
+# - Reconstruct repeatability directly from Activity Truth-owned DEVICE_LAPS work rows.
+# - Resolve explicit same-day quality timing with a human daypart overlap and an explicit defer reason.
+R152_SCHEMA = "V4.9.28-R152-1"
+
+_safe_external_http_error_r151_final = _safe_external_http_error
+_build_previous_training_blocks_r151_final = build_previous_training_blocks
+_v135_resolution_from_rows_r151_final = _v135_resolution_from_rows
+_v106_recommendation_projection_r151_final = _v106_recommendation_projection
+_compile_nova_prescription_r151_final = compile_nova_prescription
+
+
+def _v152_sanitized_provider_detail(exc, submitted_key=None, limit=220):
+    """Return a short provider error detail without ever echoing credentials."""
+    response = getattr(exc, "response", None)
+    detail = ""
+    if response is not None:
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            err = payload.get("error")
+            if isinstance(err, dict):
+                status = str(err.get("status") or err.get("type") or err.get("code") or "").strip()
+                message = str(err.get("message") or "").strip()
+                detail = " · ".join(x for x in (status, message) if x)
+            elif err:
+                detail = str(err).strip()
+            if not detail:
+                detail = str(payload.get("message") or payload.get("detail") or "").strip()
+        if not detail:
+            try:
+                detail = str(response.text or "").strip()
+            except Exception:
+                detail = ""
+    if submitted_key:
+        detail = detail.replace(str(submitted_key), "[redacted]")
+    detail = re.sub(r"(?i)\b(?:AIza|sk-|AQ\.)[A-Za-z0-9._\-]{8,}\b", "[redacted]", detail)
+    detail = re.sub(r"(?i)(x-goog-api-key|api[_ -]?key|authorization)\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", detail)
+    detail = re.sub(r"\s+", " ", detail).strip()
+    return detail[:int(limit)] if detail else None
+
+
+def _v152_ai_connection_error(provider, model, exc, submitted_key=None):
+    provider = str(provider or "AI").upper()
+    label = _AI_PROVIDER_LABELS.get(provider, provider.title())
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    model = str(model or "").strip()
+    if isinstance(exc, AIProviderTransportError) or isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return _safe_external_network_error(exc, context=label)
+    detail = _v152_sanitized_provider_detail(exc, submitted_key=submitted_key)
+    suffix = f" Provider detail: {detail}" if detail else ""
+    if status == 400:
+        base = f"{label} rejected the connection test (HTTP 400). Check the API key format and whether model '{model}' is valid for this API/project."
+    elif status == 401:
+        base = f"{label} rejected authentication (HTTP 401). The API key is invalid, revoked, expired, or not accepted by this endpoint."
+    elif status == 402:
+        base = f"{label} requires billing/payment for this request (HTTP 402). Check billing on the project/account that owns this key."
+    elif status == 403:
+        base = f"{label} accepted the request but denied access (HTTP 403). Check API enablement, project/key restrictions, model access, and billing permissions."
+    elif status == 404:
+        base = f"{label} could not find or expose model '{model}' to this key (HTTP 404). Check the model name and model availability for this project."
+    elif status == 429:
+        base = f"{label} refused the test because quota or rate limits are unavailable/exhausted (HTTP 429). Check project quota and billing, or retry after the provider limit resets."
+    elif status is not None and 500 <= int(status) <= 599:
+        base = f"{label} is currently failing upstream (HTTP {status}). Your key may be fine; retry later before changing credentials."
+    elif status is not None:
+        base = f"{label} connection test failed (HTTP {status}). Check the provider project, key permissions, model access and billing."
+    elif isinstance(exc, ValueError):
+        msg = str(exc or "").strip()
+        base = msg if msg and len(msg) <= 240 else f"{label} connection test could not be completed."
+    else:
+        base = f"{label} connection test failed before a usable response was returned."
+    return (base + suffix)[:620]
+
+
+def _safe_external_http_error(exc):
+    response = getattr(exc, "response", None)
+    url = str(getattr(response, "url", "") or "")
+    if "generativelanguage.googleapis.com" in url:
+        return _v152_ai_connection_error("GEMINI", "configured model", exc)
+    if "api.anthropic.com" in url:
+        return _v152_ai_connection_error("ANTHROPIC", "configured model", exc)
+    if "api.openai.com" in url:
+        return _v152_ai_connection_error("OPENAI", "configured model", exc)
+    return _safe_external_http_error_r151_final(exc)
+
+
+def save_and_test_ai(user_id, provider, model, api_key=None):
+    """R152: preserve exact safe failure class/status so Setup tells the athlete what to fix."""
+    owner_id = _data_owner_user_id(user_id)
+    provider = str(provider or "").strip().upper()
+    if provider not in _AI_PROVIDER_LABELS:
+        raise ValueError("Choose Claude / Anthropic, OpenAI / GPT or Google Gemini")
+    model = (model or "").strip()[:120] or _AI_DEFAULT_MODELS[provider]
+    existing_rows = _db_execute("SELECT * FROM athlete_ai_integrations WHERE user_id=? LIMIT 1", (owner_id,), fetch=True)
+    existing = dict(existing_rows[0]) if existing_rows else None
+    submitted_key = (api_key or "").strip()
+    if submitted_key:
+        key_to_test = submitted_key
+        ciphertext = _encrypt_credential(submitted_key)
+    elif existing and existing.get("credential_ciphertext") and str(existing.get("provider") or "").upper() == provider:
+        key_to_test = _decrypt_credential(existing.get("credential_ciphertext"))
+        ciphertext = existing.get("credential_ciphertext")
+    else:
+        raise ValueError("AI API key is required the first time you connect this provider")
+    now_text = _now_utc_text()
+    try:
+        _test_ai_credentials(provider, key_to_test, model, owner_id)
+    except Exception as exc:
+        safe_error = _v152_ai_connection_error(provider, model, exc, submitted_key=key_to_test)
+        http_status = getattr(getattr(exc, "response", None), "status_code", None)
+        if existing:
+            _db_execute(
+                "UPDATE athlete_ai_integrations SET provider=?, model=?, status='error', last_checked_at_utc=?, last_error=?, updated_at_utc=? WHERE user_id=?",
+                (provider, model, now_text, safe_error, now_text, owner_id),
+            )
+        audit_event(
+            "AI_CONNECTION_FAILED", actor_user_id=owner_id, target_user_id=owner_id,
+            details={"provider": provider, "model": model, "error_type": exc.__class__.__name__, "http_status": http_status},
+        )
+        raise ValueError(safe_error) from exc
+    if existing:
+        _db_execute(
+            "UPDATE athlete_ai_integrations SET provider=?, model=?, credential_ciphertext=?, status='connected', last_checked_at_utc=?, last_error=NULL, updated_at_utc=? WHERE user_id=?",
+            (provider, model, ciphertext, now_text, now_text, owner_id),
+        )
+    else:
+        _db_execute(
+            "INSERT INTO athlete_ai_integrations (user_id, provider, model, credential_ciphertext, status, last_checked_at_utc, last_error, created_at_utc, updated_at_utc) VALUES (?, ?, ?, ?, 'connected', ?, NULL, ?, ?)",
+            (owner_id, provider, model, ciphertext, now_text, now_text, now_text),
+        )
+    audit_event("AI_CONNECTED", actor_user_id=owner_id, target_user_id=owner_id, details={"provider": provider, "model": model})
+    _refresh_setup_completed(owner_id)
+    return get_ai_integration(owner_id)
+
+
+# Owner Control Center: invitation/access code copy control.
+if isinstance(ADMIN_PAGE, str):
+    _v152_old_code = '<div class="ps-code">{{ new_code }}</div>'
+    _v152_new_code = '<div class="v152-code-copy-row"><div class="ps-code">{{ new_code }}</div><button class="ps-btn small v152-copy-code" type="button" data-v152-copy="{{ new_code|e }}" aria-label="Copy access code" title="Copy access code">⧉ <span>Copy</span></button></div>'
+    if _v152_old_code in ADMIN_PAGE:
+        ADMIN_PAGE = ADMIN_PAGE.replace(_v152_old_code, _v152_new_code, 1)
+    _v152_admin_css = '<style>.v152-code-copy-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.v152-code-copy-row .ps-code{flex:1 1 320px}.v152-copy-code{min-width:82px}.v152-copy-code.is-copied{opacity:.78}@media(max-width:560px){.v152-code-copy-row{align-items:stretch}.v152-copy-code{width:100%}}</style>'
+    _v152_admin_js = '''<script>(function(){function fallbackCopy(v){try{var t=document.createElement('textarea');t.value=v;t.setAttribute('readonly','');t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();var ok=document.execCommand('copy');t.remove();return ok;}catch(e){return false;}}document.querySelectorAll('[data-v152-copy]').forEach(function(btn){btn.addEventListener('click',async function(){var value=btn.getAttribute('data-v152-copy')||'';if(!value)return;var ok=false;try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(value);ok=true;}}catch(e){}if(!ok)ok=fallbackCopy(value);if(ok){var span=btn.querySelector('span'),old=span?span.textContent:'Copy';btn.classList.add('is-copied');if(span)span.textContent='Copied';setTimeout(function(){btn.classList.remove('is-copied');if(span)span.textContent=old;},1300);}});});})();</script>'''
+    if '</head>' in ADMIN_PAGE:
+        ADMIN_PAGE = ADMIN_PAGE.replace('</head>', _v152_admin_css + '</head>', 1)
+    if '</body>' in ADMIN_PAGE:
+        ADMIN_PAGE = ADMIN_PAGE.replace('</body>', _v152_admin_js + '</body>', 1)
+
+
+def _v152_truth_owned_repeatability(truth, detail=None):
+    """Build repeated-work metrics from the exact work rows already accepted by Activity Truth."""
+    truth = truth or {}
+    work = [dict(x) for x in (truth.get("work_rows") or []) if isinstance(x, dict)]
+    if len(work) < 3:
+        return None
+    work.sort(key=lambda x: int(x.get("_truth_pos") if x.get("_truth_pos") is not None else 10**9))
+    watts = []
+    for row in work:
+        w = _num(row.get("average_watts") or row.get("avg_watts") or row.get("power"))
+        if w is None:
+            return None
+        watts.append(float(w))
+    nominal = _num(truth.get("interval_secs"))
+    if nominal is None:
+        secs = [_num(x.get("moving_time") or x.get("elapsed_time")) for x in work]
+        secs = [float(x) for x in secs if x is not None and x > 0]
+        nominal = statistics.median(secs) if len(secs) >= 3 else None
+    if nominal is None or nominal < 55:
+        return None
+    nominal = int(round(float(nominal)))
+    seq = [dict(x) for x in (truth.get("sequence") or []) if isinstance(x, dict)]
+    seq.sort(key=lambda x: int(x.get("_truth_pos") if x.get("_truth_pos") is not None else 10**9))
+    recoveries, recovery_watts = [], []
+    work_pos = [int(x.get("_truth_pos")) for x in work if x.get("_truth_pos") is not None]
+    if len(work_pos) == len(work):
+        for left, right in zip(work_pos, work_pos[1:]):
+            between = [x for x in seq if x.get("_truth_pos") is not None and left < int(x.get("_truth_pos")) < right and str(x.get("type") or "").upper() != "WORK"]
+            seconds = sum(float(_num(x.get("moving_time") or x.get("elapsed_time")) or 0) for x in between)
+            if seconds > 0:
+                energy = sum(float(_num(x.get("moving_time") or x.get("elapsed_time")) or 0) * float(_num(x.get("average_watts") or x.get("avg_watts") or x.get("power")) or 0) for x in between)
+                recoveries.append(seconds)
+                recovery_watts.append(energy / seconds)
+    if not recoveries and _num(truth.get("recovery_median_secs")) is not None:
+        recoveries = [float(_num(truth.get("recovery_median_secs")))]
+    first, last = watts[0], watts[-1]
+    avg = statistics.mean(watts)
+    early = statistics.mean(watts[:2])
+    late = statistics.mean(watts[-2:])
+    change = ((last - first) / first * 100.0) if first else None
+    decay = max(0.0, -change) if change is not None else None
+    cv = statistics.pstdev(watts) / avg * 100.0 if len(watts) > 1 and avg else 0.0
+    rsec = int(round(statistics.median(recoveries))) if recoveries else None
+    rw = round(statistics.median(recovery_watts), 1) if recovery_watts else None
+    return {
+        "reps": len(watts), "interval_secs": nominal, "interval_label": format_duration_label(nominal),
+        "recovery_secs": rsec, "recovery_avg_watts": rw, "recovery_label": format_duration_label(rsec) if rsec else None,
+        "watts": [int(round(x)) for x in watts], "avg_watts": round(avg, 1), "min_watts": int(round(min(watts))),
+        "max_watts": int(round(max(watts))), "spread_watts": int(round(max(watts)-min(watts))),
+        "first_watts": int(round(first)), "last_watts": int(round(last)), "first_to_last_delta_watts": int(round(last-first)),
+        "first_to_last_change_pct": round(change, 1) if change is not None else None,
+        "first_to_last_decay_pct": round(decay, 1) if decay is not None else None,
+        "cv_pct": round(cv, 1), "early_rep_avg_watts": round(early, 1), "late_rep_avg_watts": round(late, 1),
+        "late_rep_retention_pct": round(late/early*100.0, 1) if early else None,
+        "source": str(truth.get("source") or "ACTIVITY_TRUTH"), "activity_truth_source": str(truth.get("source") or "ACTIVITY_TRUTH"),
+        "r152_truth_owned": True,
+    }
+
+
+def build_previous_training_blocks(recent_activities, limit=3, activity_details=None):
+    blocks = _build_previous_training_blocks_r151_final(recent_activities, limit=limit, activity_details=activity_details)
+    details = activity_details if isinstance(activity_details, dict) else {}
+    repaired = False
+    for block in blocks or []:
+        if not isinstance(block, dict) or block.get("repeatability"):
+            continue
+        summary = block.get("activity_truth") if isinstance(block.get("activity_truth"), dict) else {}
+        if str(summary.get("status") or "").upper() != "RESOLVED" or str(summary.get("source") or "").upper() != "DEVICE_LAPS":
+            continue
+        aid = str(block.get("activity_id") or "")
+        detail = details.get(aid)
+        if not isinstance(detail, dict):
+            continue
+        truth = _v79_activity_interval_truth(detail)
+        if str(truth.get("status") or "").upper() != "RESOLVED" or str(truth.get("source") or "").upper() != "DEVICE_LAPS":
+            continue
+        rep = _v152_truth_owned_repeatability(truth, detail)
+        if not rep or int(rep.get("reps") or 0) != int(truth.get("repeated_work_count") or rep.get("reps") or 0):
+            continue
+        block["repeatability"] = rep
+        block["interval_structure_source"] = "DEVICE_LAPS"
+        block["activity_truth"] = _v79_activity_truth_summary({**truth, "downstream_conflict": None})
+        block["r152_repeatability_repair"] = "ACTIVITY_TRUTH_OWNED_DEVICE_LAPS"
+        repaired = True
+    if repaired:
+        try:
+            _V146_BLOCK_CONTEXT.set(tuple(_v4831_json_clone(x) for x in (blocks or []) if isinstance(x, dict)))
+        except Exception:
+            pass
+    return blocks
+
+
+def _v152_slot_matches_human_part(row, preferred):
+    preferred = {str(x or "").upper() for x in (preferred or [])}
+    if not preferred or "ALL_DAY" in preferred:
+        return True
+    try:
+        minute = int(round(float((row or {}).get("start_minute"))))
+    except Exception:
+        return False
+    part = _v135_note_daypart(minute)
+    if part in preferred:
+        return True
+    return "EVENING" in preferred and 17*60 <= minute < 18*60
+
+
+def _v152_iso_for_row(row):
+    if not isinstance(row, dict):
+        return None
+    d = str(row.get("date") or "")[:10]
+    try:
+        minute = int(round(float(row.get("start_minute"))))
+        return f"{d}T{minute//60:02d}:{minute%60:02d}"
+    except Exception:
+        return None
+
+
+def _v135_resolution_from_rows(rows, planning_context, road=None):
+    out = _v135_resolution_from_rows_r151_final(rows, planning_context, road)
+    if not isinstance(out, dict) or not out.get("active"):
+        return out
+    target = _v135_target_from_context(planning_context)
+    if not isinstance(target, dict):
+        return out
+    target_date = str(target.get("date") or "")
+    preferred = set(target.get("preferred_dayparts") or [])
+    requested = next((r for r in (rows or []) if isinstance(r, dict) and str(r.get("date") or "") == target_date and _v152_slot_matches_human_part(r, preferred)), None)
+    if requested is not None:
+        out["requested_slot_label"] = requested.get("slot")
+        try:
+            out["requested_slot_spacing_hours"] = round(float(requested.get("since_last_hard_hours")), 1)
+        except Exception:
+            out["requested_slot_spacing_hours"] = None
+        out["requested_slot_daypart_match"] = "HUMAN_TOLERANT" if _v135_note_daypart(requested.get("start_minute")) not in preferred and preferred else "EXACT"
+    profile = str(out.get("profile") or "").upper()
+    hard = next((r for r in (rows or []) if isinstance(r, dict) and _v106_session_is_hard(r)), None)
+    q = (road or {}).get("quality_window") or {}
+    if profile == "QUALITY" and hard and requested is not None and str(hard.get("date") or "") != target_date:
+        req_iso = _v152_iso_for_row(requested)
+        hard_iso = _v152_iso_for_row(hard)
+        earliest_iso = str(q.get("earliest_iso") or "")[:16]
+        preferred_iso = str(q.get("preferred_iso") or "")[:16]
+        if req_iso and earliest_iso and req_iso == earliest_iso and hard_iso and preferred_iso and hard_iso == preferred_iso:
+            out["status"] = "QUALITY_DEFERRED_TO_PREFERRED_WINDOW"
+            out["reason"] = "QUALITY_WINDOW_PREFERRED_OVER_EARLIEST"
+        elif not out.get("reason"):
+            out["reason"] = "CANONICAL_QUALITY_SLOT_SELECTED_LATER"
+    elif str(out.get("status") or "").startswith("QUALITY_") and not out.get("reason"):
+        out["reason"] = "CURRENT_CANONICAL_PLAN_DOES_NOT_ALIGN_WITH_REQUESTED_WINDOW"
+    out["schema"] = R152_SCHEMA
+    return out
+
+
+def _v106_recommendation_projection(sessions):
+    text = _v106_recommendation_projection_r151_final(sessions)
+    rows = [x for x in (sessions or []) if isinstance(x, dict)]
+    resolution = (rows[0].get("athlete_note_resolution") if rows and isinstance(rows[0].get("athlete_note_resolution"), dict) else None)
+    if resolution and resolution.get("reason") == "QUALITY_WINDOW_PREFERRED_OVER_EARLIEST":
+        req = str(resolution.get("requested_slot_label") or "today's requested window").strip()
+        sel = str(resolution.get("selected_hard_slot") or "the preferred quality window").strip()
+        extra = f" {req} is the earliest quality window Nova considers eligible; it kept {sel} because that is the preferred quality window, not because your request was missed."
+        if extra.strip() not in str(text):
+            text = str(text).rstrip() + extra
+    return text
+
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, microcycle_ledger=None, coaching_contract=None, adaptive_roadmap=None, strength_pattern=None, training_rhythm=None, execution_model=None):
+    out = _compile_nova_prescription_r151_final(
+        prescription, coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+        recent_activities=recent_activities, undefined_training_intent=undefined_training_intent, power_model=power_model,
+        microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
+        strength_pattern=strength_pattern, training_rhythm=training_rhythm, execution_model=execution_model,
+    )
+    global_wid = str(out.get("workout_id") or out.get("contract_id") or "").strip()
+    for sess in out.get("sessions") or []:
+        if not isinstance(sess, dict):
+            continue
+        session_wid = str(sess.get("nova_workout_id") or sess.get("nova_contract_id") or "").strip()
+        if not session_wid and global_wid and _v106_session_is_hard(sess):
+            session_wid = global_wid
+        title = str(sess.get("title") or "Session").strip()
+        sess["canonical_workout_name"] = f"THE LAB · {session_wid} · {title}" if session_wid else f"THE LAB · {title}"
+        sess["workout_name_schema"] = R152_SCHEMA
+    out["structured_feedback_schema"] = R150_SCHEMA
+    out["workout_identity_schema"] = R152_SCHEMA
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.28 WIP R152 · ACTIONABLE AI ERRORS + COPY INVITE + CLOSED-LOOP IDENTITY REPAIR · R151 BASELINE"
+
+
+
+
+# R152 follow-through: a severe athlete report must not disappear merely because a newer
+# repeated-quality session exists. Scan recent repeatability blocks for a linked severe report.
+_v131_latest_severe_quality_guard_r151_final = _v131_latest_severe_quality_guard
+
+
+def _v131_latest_severe_quality_guard(previous_blocks, performance_evidence=None, ledger=None):
+    base = _v131_latest_severe_quality_guard_r151_final(previous_blocks, performance_evidence, ledger)
+    if isinstance(base, dict) and base.get("active"):
+        out = dict(base); out["schema"] = R152_SCHEMA
+        return out
+    now_day = get_rome_now().date()
+    candidates = []
+    for block in previous_blocks or []:
+        if not isinstance(block, dict) or not block.get("quality_relevant") or not isinstance(block.get("repeatability"), dict):
+            continue
+        fb = block.get("athlete_session_feedback") if isinstance(block.get("athlete_session_feedback"), dict) else None
+        if not fb:
+            continue
+        severe = bool(
+            fb.get("legacy_text_severe") or
+            (fb.get("post_session_state") is not None and int(fb.get("post_session_state")) <= 2) or
+            (fb.get("rpe") is not None and int(fb.get("rpe")) >= 9)
+        )
+        if not severe:
+            continue
+        try:
+            age_days = (now_day - date.fromisoformat(str(block.get("date") or "")[:10])).days
+        except Exception:
+            age_days = 999
+        if age_days < 0 or age_days > 14:
+            continue
+        rep = block.get("repeatability") or {}
+        reps = int(_num(rep.get("reps")) or 0); secs = int(_num(rep.get("interval_secs")) or 0)
+        decay = _num(rep.get("first_to_last_decay_pct")); cv = _num(rep.get("cv_pct"))
+        execution_score = _num(fb.get("execution_score"))
+        strong = bool(
+            (decay is not None and decay <= 3.0) or
+            str((((block.get("execution_quality") or {}).get("degradation") or {}).get("label") or "")).upper() in {"EXCELLENT","GOOD","STABLE"} or
+            (execution_score is not None and execution_score >= 8)
+        )
+        if not (strong and reps >= 2 and secs >= 180):
+            continue
+        candidates.append((str(block.get("date") or ""), block, fb, age_days))
+    if not candidates:
+        out = dict(base or {}); out["schema"] = R152_SCHEMA
+        return out
+    _, block, fb, age_days = sorted(candidates, key=lambda x: x[0], reverse=True)[0]
+    rep = block.get("repeatability") or {}
+    pb = _v131_pb_for_activity(performance_evidence, block.get("activity_id"), rep.get("interval_secs"))
+    pb_w = _num((pb or {}).get("watts")); avg = _num(rep.get("avg_watts"))
+    ratio = float(avg)/float(pb_w) if avg is not None and pb_w and pb_w > 0 else None
+    wbal = block.get("wbal") or {}; meta = block.get("metabolic_profile") or {}
+    return {
+        "schema": R152_SCHEMA, "active": True, "classification": "ATHLETE_REPORTED_SEVERE_RECENT_QUALITY",
+        "activity_id": block.get("activity_id"), "date": block.get("date"), "name": block.get("name"),
+        "reps": int(_num(rep.get("reps")) or 0), "interval_secs": int(_num(rep.get("interval_secs")) or 0),
+        "work_avg_watts": round(float(avg),1) if avg is not None else None,
+        "same_duration_pb_watts": round(float(pb_w),1) if pb_w is not None else None,
+        "repeated_work_vs_pb_ratio": round(ratio,3) if ratio is not None else None,
+        "pb_linked": bool(pb), "wbal_max_depletion_pct": _num(wbal.get("max_depletion_pct")),
+        "wbal_min_pct": _num(wbal.get("min_wbal_pct")),
+        "wbal_severe": bool((_num(wbal.get("max_depletion_pct")) or 0) >= 90 or (_num(wbal.get("min_wbal_pct")) is not None and _num(wbal.get("min_wbal_pct")) <= 10)),
+        "metabolic_severe": str(meta.get("high_intensity_label") or "").upper() == "VERY HIGH" and str(meta.get("demand_label") or "").upper() in {"HIGH","VERY HIGH"},
+        "validation_role": False, "strong_execution": True, "athlete_feedback": fb,
+        "athlete_reported_severe": True, "age_days": age_days,
+        "activation_basis": "STRUCTURED_SESSION_FEEDBACK" if fb.get("source") == "STRUCTURED_SESSION_FEEDBACK" else "LEGACY_TEXT_FALLBACK",
+        "rule": "A technically successful repeated session can still be too costly to progress automatically. A linked severe athlete report remains an active dose guard for 14 days even if a newer, different repeated-quality session exists.",
+        "threshold_note": "Athlete-reported cost is kept separate from measured execution. This guard preserves the adaptation purpose while preventing automatic extension of a recently severe architecture.",
+    }
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
