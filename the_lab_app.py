@@ -11690,12 +11690,13 @@ def _v491_power_podium_badges(goal_key=None, now=None, lookback_days=7, cycle_st
         else: groups.append([x])
     icons={1:"🥇",2:"🥈",3:"🥉"}; labels={1:"BEST",2:"2ND BEST",3:"3RD BEST"}; badges=[]
     for g in groups:
-        a,b=g[0],g[-1]; dur=format_duration_label(a["secs"]) if len(g)==1 else f"{a['secs']//60}–{b['secs']//60}min"; ws=[z["watts"] for z in g]; ds=[z["delta_w"] for z in g if z.get("delta_w") is not None]
+        a,b=g[0],g[-1]; dur=format_duration_label(a["secs"]) if len(g)==1 else f"{a['secs']//60}–{b['secs']//60}min"; ws=[_num(z.get("watts")) for z in g if _num(z.get("watts")) is not None]; ds=[z.get("delta_w") for z in g if z.get("delta_w") is not None]
+        if not ws: continue
         lab=bool(cycle_day and date.fromisoformat(a["date"])>=cycle_day); role=a.get("role"); aligned=bool(lab and role=="DIRECT"); transfer=bool(lab and role=="TRANSFER"); tr=_V501_GOAL_TRANSFER_RANGES.get(str(goal_key or "").upper())
         detail=(f"+{min(ds)}"+(f"–{max(ds)}" if max(ds)!=min(ds) else "")+" W vs prior best") if ds else f"{labels[a['rank']].lower()} {today.year} effort"
         if a["rank"]==1 and aligned: detail+=" · goal-aligned in current THE LAB block"
         elif a["rank"]==1 and transfer: detail+=" · race-useful transfer in current THE LAB block"
-        badges.append({"icon":icons[a["rank"]],"rank":a["rank"],"rank_label":labels[a["rank"]],"duration":dur,"secs":a["secs"],"secs_end":b["secs"],"watts":ws[0] if len(g)==1 else None,"watts_label":f"{ws[0]} W" if len(g)==1 else f"{min(ws)}–{max(ws)} W","detail":detail,"date":a["date"],"activity_id":a["activity_id"],"recent":date.fromisoformat(a["date"])>=cutoff,"lab_window_aligned":lab,"goal_aligned":aligned,"race_transfer":transfer,"transfer_code":tr[2] if transfer and tr else None,"points":[{"secs":z["secs"],"watts":z["watts"],"delta_w":z.get("delta_w")} for z in g]})
+        badges.append({"icon":icons[a["rank"]],"rank":a["rank"],"rank_label":labels[a["rank"]],"duration":dur,"secs":a["secs"],"secs_end":b["secs"],"watts":ws[0] if len(g)==1 else None,"watts_label":f"{ws[0]} W" if len(g)==1 else f"{min(ws)}–{max(ws)} W","detail":detail,"date":a["date"],"activity_id":a["activity_id"],"recent":date.fromisoformat(a["date"])>=cutoff,"lab_window_aligned":lab,"goal_aligned":aligned,"race_transfer":transfer,"transfer_code":tr[2] if transfer and tr else None,"points":[{"secs":z.get("secs"),"watts":z.get("watts"),"delta_w":z.get("delta_w")} for z in g if _num(z.get("watts")) is not None]})
     centers={"POWER_5":300,"VO2MAX":300,"POWER_20":1200,"TIME_TRIAL":1200,"POWER_1":60,"SPRINTER":60,"ENDURANCE_BASE":3600}; c=centers.get(str(goal_key or '').upper(),300)
     badges.sort(key=lambda x:(x["rank"],abs(x["secs"]-c),-x["secs"])); recent=[x for x in badges if x.get("recent")][:6]; badges=badges[:6]
     return {"available":bool(badges),"badges":badges,"recent_badges":recent,"scope_label":f"{today.year} YTD","method_note":"Per-activity Intervals power curves, sampled minute-by-minute; gold requires ≥3 W over the prior best. Silver/bronze are current YTD podium efforts. Direct and transfer bands stay distinct."}
@@ -11754,9 +11755,11 @@ def best_watts_for_durations(points, target_secs_list):
         if watts:
             results.append({"label": format_duration_label(target), "watts": round(watts)})
     if results:
-        max_watts = max(r["watts"] for r in results)
+        valid_watts=[_num(r.get("watts")) for r in results if _num(r.get("watts")) is not None]
+        max_watts = max(valid_watts) if valid_watts else None
         for r in results:
-            r["pct"] = round(100 * r["watts"] / max_watts) if max_watts else 0
+            rw=_num(r.get("watts"))
+            r["pct"] = round(100 * rw / max_watts) if rw is not None and max_watts else 0
     return results
 def get_best_watts():
     try:
@@ -12152,7 +12155,8 @@ def _v4873_reconcile_native_breakthrough(performance_breakthrough, power_achieve
                 matching = next((e for e in verified_events
                                  if int(e['secs'])==sec and str(e.get('date') or '')[:10]==str(row.get('date') or '')[:10]
                                  and (not e.get('activity_id') or str(e['activity_id'])==str(row.get('activity_id') or ''))),None)
-                dw = int(matching['watts']) if matching is not None else None
+                _mw=_num((matching or {}).get('watts'))
+                dw = int(round(_mw)) if _mw is not None else None
                 aw = ach.get("watts")
                 same = dw is not None and (aw is None or abs(int(aw) - dw) <= 1)
                 if same:
@@ -12165,7 +12169,9 @@ def _v4873_reconcile_native_breakthrough(performance_breakthrough, power_achieve
         for ev in verified_events:
             if str(ev.get('date'))[:10]!=str(row.get('date') or '')[:10]:continue
             if ev.get('activity_id') and str(ev['activity_id'])!=str(row.get('activity_id') or ''):continue
-            sec=int(ev['secs']);pw=int(ev['watts'])
+            _ev_sec=_num(ev.get('secs')); _ev_w=_num(ev.get('watts'))
+            if _ev_sec is None or _ev_w is None: continue
+            sec=int(_ev_sec);pw=int(round(_ev_w))
             if any(x.get('type') in {'BEST_POWER','THE_LAB_PB'} and int(x.get('secs') or 0)==sec
                    and abs(int(x.get('watts') or 0)-pw)<=1 for x in kept):continue
             label=f"{sec//60}-minute power PB" if sec%60==0 else f"{sec}-second power PB"
@@ -13566,7 +13572,7 @@ def _race_repeatability_from_block(block):
     ev=[x for x in (block.get("work_interval_evidence") or []) if _num((x or {}).get("secs")) is not None and _num((x or {}).get("watts")) is not None]
     groups={}
     for x in ev:
-        sec=float(x["secs"]);w=float(x["watts"])
+        sec=float(x["secs"]);w=float(x.get("watts"))
         if sec<8:continue
         bucket=max(5,int(round(sec/5.0)*5));groups.setdefault(bucket,[]).append((sec,w))
     viable=[(k,v) for k,v in groups.items() if len(v)>=3]
@@ -16321,7 +16327,7 @@ def _v4896_build_performance_evidence(training_direction, plan, power_achievemen
         if not isinstance(b,dict) or int(b.get("rank") or 0)!=1: continue
         for pt in b.get("points") or []:
             if pt.get("secs") is None or pt.get("watts") is None or (_rhythm_num(pt.get("delta_w")) or 0)<3: continue
-            raw.append({"kind":"PB","source":"MINUTE_POWER_CURVE","date":str(b.get("date") or "")[:10] or None,"secs":int(pt["secs"]),"watts":int(round(float(pt["watts"]))),"previous_watts":int(round(float(pt["watts"])-float(pt.get("delta_w") or 0))),"delta_w":int(round(float(pt.get("delta_w") or 0))),"activity_id":str(b.get("activity_id") or "") or None,"timing_proven":bool(b.get("date")),"scope_label":(power_achievements or {}).get("scope_label") or "YTD BEST","lab_window_aligned":bool(b.get("lab_window_aligned"))})
+            raw.append({"kind":"PB","source":"MINUTE_POWER_CURVE","date":str(b.get("date") or "")[:10] or None,"secs":int(pt["secs"]),"watts":int(round(float(pt.get("watts")))),"previous_watts":int(round(float(pt.get("watts"))-float(pt.get("delta_w") or 0))),"delta_w":int(round(float(pt.get("delta_w") or 0))),"activity_id":str(b.get("activity_id") or "") or None,"timing_proven":bool(b.get("date")),"scope_label":(power_achievements or {}).get("scope_label") or "YTD BEST","lab_window_aligned":bool(b.get("lab_window_aligned"))})
     for row in (performance_breakthrough or {}).get("activities") or []:
         if not isinstance(row, dict):
             continue
@@ -18052,7 +18058,7 @@ def build_data_text(recent_activities, wellness, season_stats, notes=None, feeli
     if best_watts:
         lines.append('\nREAL POWER CURVE (actual best efforts, last 42 days - use these as athlete-relative calibration. For ordinary training, do not casually prescribe sustained targets above the observed same-duration best. A roadmap-authorized maximal field test is the exception: the existing best is a pacing/reference anchor, not a ceiling, and the athlete must be free to beat it):')
         for p in best_watts:
-            lines.append('- {}: {}W'.format(p['label'], p['watts']))
+            if p.get('watts') is not None: lines.append('- {}: {}W'.format(p.get('label','—'), p.get('watts')))
     if vo2_trend and vo2_trend.get('available'):
         lines.append('\nVO2MAX TREND (MODEL ESTIMATES ONLY - longitudinal context, NOT a measured VO2max and NOT a primary readiness signal):')
         if vo2_trend.get('wearable_current_fresh') and vo2_trend.get('wearable_current') is not None:
@@ -18115,7 +18121,7 @@ def _v4876_compact_ai_base_evidence(recent_activities, wellness, season_stats, n
     if performance_breakthrough and performance_breakthrough.get("available"):
         t=performance_breakthrough_text(performance_breakthrough); sections.append(t); profile["base_performance_breakthrough_chars"]=len(t)
     if best_watts:
-        points=" | ".join(f"{p['label']}={p['watts']}W" for p in best_watts)
+        points=" | ".join(f"{p.get('label','—')}={p.get('watts')}W" for p in best_watts if p.get('watts') is not None)
         t=("REAL POWER CURVE · actual 42d bests: "+points+". Use as athlete-relative calibration; a roadmap-authorized maximal field test uses the same-duration best as a reference, not a ceiling.")
         sections.append(t); profile["base_power_curve_chars"]=len(t)
     if vo2_trend and vo2_trend.get("available"):
@@ -20877,7 +20883,7 @@ def _v4879_repeatability_stats(intervals, source=None):
         b=int(round(sec/15.0)*15); groups.setdefault(b,[]).append({"i":i,"secs":sec,"watts":float(w)})
     e=[x for x in groups.items() if len(x[1])>=3]
     if not e: return None
-    b,rows=max(e,key=lambda x:(len(x[1]),x[0])); watts=[x["watts"] for x in rows]; rec=[]; recw=[]
+    b,rows=max(e,key=lambda x:(len(x[1]),x[0])); watts=[x.get("watts") for x in rows]; rec=[]; recw=[]
     for a,z in zip(rows,rows[1:]):
         t=0; ej=0
         for it in seq[a["i"]+1:z["i"]]:
@@ -20899,7 +20905,14 @@ def _v491_session_progression(blocks):
         if best is None or score<best[0]: best=(score,old,q,odom)
     out.update({"available":True,"activity_id":cur.get("activity_id"),"date":cur.get("date"),"current":c})
     if not best: return out
-    old,q,odom=best[1],best[2],best[3]; n=min(c["reps"],q["reps"]); cw=c["watts"][:n]; pw=q["watts"][:n]
+    old,q,odom=best[1],best[2],best[3]
+    cw_all=[float(x) for x in (c.get("watts") or []) if _num(x) is not None]
+    pw_all=[float(x) for x in (q.get("watts") or []) if _num(x) is not None]
+    n=min(int(c.get("reps") or 0),int(q.get("reps") or 0),len(cw_all),len(pw_all))
+    if n < 2:
+        out["comparison_unavailable_reason"]="REPEATABILITY_WATTS_MISSING"
+        return out
+    cw=cw_all[:n]; pw=pw_all[:n]
     def m(v): return statistics.mean(v)
     def decay(v): return max(0,(v[0]-v[-1])/v[0]*100) if v and v[0] else 0
     cm,pm=m(cw),m(pw); cd,pd=decay(cw),decay(pw); cl,pl=m(cw[-2:]),m(pw[-2:]); badges=[]; pace_ok=cw[0]>=pw[0]-3 or cm>=pm+3
@@ -21341,11 +21354,13 @@ def _v125_latest_activity_feedback(blocks, achievements, evidence_ledger=None, n
     else:
         text='Intense session recorded. Detailed repetition structure is unavailable from the imported source.'
         verdict='STRUCTURE_UNAVAILABLE'
-    if pb:
+    pb_w=_num((pb or {}).get('watts')); pb_d=_num((pb or {}).get('delta_w'))
+    if pb and pb_w is not None:
         sec=int(pb.get('secs') or 0); duration=f'{sec//60}min' if sec%60==0 else f'{sec}s'
         scope=str(pb.get('scope_label') or 'tracked period')
-        headline=f"🏅 New {duration} best ({scope}): {int(pb['watts'])} W"
-        text=f"Verified new {scope} {duration} best: {int(pb['watts'])} W (+{int(pb['delta_w'])} W). " + text
+        headline=f"🏅 New {duration} best ({scope}): {int(round(pb_w))} W"
+        delta_txt=f" (+{int(round(pb_d))} W)" if pb_d is not None else ""
+        text=f"Verified new {scope} {duration} best: {int(round(pb_w))} W{delta_txt}. " + text
     else:
         headline='Latest completed quality session'
     ledger_matches=[r for r in ((evidence_ledger or {}).get('repeatability') or {}).get('events') or []
@@ -22758,7 +22773,7 @@ def build_aerobic_efficiency(season_activities, now=None):
             result["headline"] = f"Steady-Z2 power/HR ratio is stable ({trend:+.1f}% vs the prior baseline)."
     for x in sorted(selected, key=lambda z: z["date"], reverse=True)[:3]:
         result["latest_sessions"].append({
-            "date": x["date_iso"], "watts": round(x["watts"]), "hr": round(x["hr"]),
+            "date": x["date_iso"], "watts": round(x.get("watts")), "hr": round(x["hr"]),
             "ratio": round(x["ratio"], 3), "decoupling": round(x["decoupling"], 1) if x.get("decoupling") is not None else None,
             "duration_min": x["duration_min"], "environment": x["environment"],
         })
@@ -34867,7 +34882,7 @@ def _v150_repeatability_from_work_rows(intervals, source=None):
     selected=[r for r in rows if abs(r["secs"]-med)<=tol]
     if len(selected)<3:
         return None
-    watts=[r["watts"] for r in selected]
+    watts=[r.get("watts") for r in selected]
     rec=[];recw=[];seq=list(intervals or [])
     for a,z in zip(selected,selected[1:]):
         t=0.0;ej=0.0
@@ -36215,7 +36230,7 @@ def _v155_main_set_adherence(block, plan):
         detail.append(f"auxiliary intervals ignored {aux_n}")
     score = round(100 * sum(bool(x) for x in checks) / len(checks)) if checks else None
     label = "VERIFIED" if score is not None and score >= 95 else "HIGH" if score is not None and score >= 85 else "PARTIAL" if score is not None and score >= 70 else "LOW" if score is not None else "N/A"
-    watts = [float(r["watts"]) for r in main if r.get("watts") is not None]
+    watts = [float(r.get("watts")) for r in main if r.get("watts") is not None]
     degradation = None
     if len(watts) >= 2:
         first, last = watts[0], watts[-1]
@@ -36442,6 +36457,16 @@ def _v492_execution_quality(block, ledger=None):
         return fallback
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.33 WIP R157 · SNAPSHOT FAULT ISOLATION + ACTIONABLE PIPELINE ERRORS · R156 BASELINE"
+
+
+# R158 · WATTS DATA-SHAPE NORMALIZATION
+# Dynamic training evidence may expose power as optional or under another canonical
+# field upstream. No Snapshot path may subscript an optional `watts` key. Missing
+# power invalidates only that local comparison/point; it never invalidates the
+# athlete's saved report or the full deterministic Snapshot.
+R158_SCHEMA = "V4.9.34-R158-1"
+WATTS_SHAPE_POLICY = "OPTIONAL_POWER_FIELD_FAILS_LOCAL_NOT_SNAPSHOT"
+APP_VERSION = "THE LAB · PRODUCT V4.9.34 WIP R158 · WATTS DATA-SHAPE NORMALIZATION · R157 BASELINE"
 
 
 if __name__ == "__main__":
