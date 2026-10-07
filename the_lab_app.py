@@ -27839,7 +27839,13 @@ def analyze():
                 strategy_plan = get_active_training_strategy_plan(user["id"])
                 if not strategy_plan:
                     raise ValueError("Choose a Training Direction and primary goal before generating the Snapshot.")
-        recent_activities, season_activities, wellness, season_wellness, history_activities = fetch_intervals_data()
+        raw_recent_activities, raw_season_activities, wellness, season_wellness, raw_history_activities = fetch_intervals_data()
+        recent_activities, _v164_recent_reconciliation = _v164_reconcile_physical_sessions(raw_recent_activities)
+        season_activities, _v164_season_reconciliation = _v164_reconcile_physical_sessions(raw_season_activities)
+        history_activities, _v164_history_reconciliation = _v164_reconcile_physical_sessions(raw_history_activities)
+        physical_session_reconciliation = _v164_reconciliation_summary(
+            _v164_recent_reconciliation, _v164_season_reconciliation, _v164_history_reconciliation
+        )
         cycling_recent_activities = _v4887_filter_cycling(recent_activities)
         cycling_season_activities = _v4887_filter_cycling(season_activities)
         cycling_history_activities = _v4887_filter_cycling(history_activities)
@@ -27849,7 +27855,7 @@ def analyze():
         form_median = personal_form_median(season_wellness)
         fatigue_thresholds = personal_fatigue_thresholds(season_wellness)
         metrics = compute_metrics(wellness, form_thresholds, fatigue_thresholds, baseline_wellness=season_wellness)
-        planning_context = build_planning_context()
+        planning_context = _v164_reconcile_planning_context(build_planning_context(), season_activities, now=get_rome_now())
         metabolic_context = build_metabolic_context(recent_activities, season_wellness, planning_context, season_activities=season_activities)
         provider_metabolic_context = build_metabolic_context(cycling_recent_activities, season_wellness, planning_context, season_activities=cycling_season_activities)
         metrics = apply_health_override_to_metrics(metrics, planning_context)
@@ -28140,6 +28146,7 @@ def analyze():
         data = {
             **metrics, **season_stats, **analysis, **energy_bank,
             "coach_clock": coach_clock,
+            "physical_session_reconciliation": physical_session_reconciliation,
             "training_rhythm": training_rhythm,
             "athlete_execution_model": execution_model,
             "cross_modal_context": cross_modal_context,
@@ -28733,7 +28740,7 @@ def _v111_apply_stage_to_roadmap(roadmap, goal, facet_state, question_state, evi
         if isinstance(pn,dict):
             stage=road.get("stage") or {}; pn["current_focus"]=f"{stage.get('label')}: consolidate the current stage before advancing."
             pn["next_adaptation"]=(f"Close the next breadth gap: {missing[0]}." if missing else "Breadth is covered; finish the current transfer/validation gate rather than adding arbitrary variety.")
-            pn["story"]=(f"{goal.replace('_',' ')} is being progressed by evidence, not calendar age. " + (f"Covered: {', '.join(covered)}. Missing: {', '.join(missing)}." if missing else f"All configured breadth facets are represented: {', '.join(covered)}."))
+            pn["story"]=(f"{goal.replace('_',' ')} is being progressed by evidence, not calendar age. " + ((f"Covered: {', '.join(covered)}. Missing: {', '.join(missing)}.") if covered and missing else (f"No current-block breadth facets are confirmed yet. Missing: {', '.join(missing)}." if missing else f"All configured breadth facets are represented: {', '.join(covered)}.")))
     return road
 
 # Enlarge the canonical library with a deep, deterministic vocabulary. Entries
@@ -37296,6 +37303,477 @@ BASE_CSS += r"""
 R162_SCHEMA = "V4.9.38-R162-1"
 APP_VERSION = "THE LAB · PRODUCT V4.9.39 WIP R163 · RECENT PROGRESS + HUMAN WORKOUT COPY · R162 BASELINE"
 
+
+
+
+# R164 · PHYSICAL SESSION RECONCILIATION + COMPLETED EVENT FULFILLMENT
+# Multi-athlete correction discovered by beta QA. Activity providers may store two
+# recordings of the same physical ride (for example trainer/app + head-unit/power
+# meter dual recording). THE LAB must count the physical session once while
+# preserving both raw recordings as provenance. Calendar events already completed
+# must not remain authoritative future opportunities.
+R164_SCHEMA = "V4.9.40-R164-1"
+
+
+def _v164_activity_id(activity):
+    a = activity or {}
+    return str(a.get("id") or a.get("activity_id") or "").strip()
+
+
+def _v164_activity_duration_sec(activity):
+    start = _v4829_parse_activity_start(activity)
+    end = _v4829_activity_end(activity)
+    if start is None or end is None or end <= start:
+        return None
+    return max(0.0, float((end - start).total_seconds()))
+
+
+def _v164_generic_cycling_name(name):
+    n = re.sub(r"\s+", " ", str(name or "").strip().lower())
+    if not n:
+        return True
+    generic = {
+        "cycling", "indoor cycling", "virtual cycling", "bike", "bike ride",
+        "ride", "indoor ride", "virtual ride", "cycling activity", "activity",
+    }
+    if n in generic:
+        return True
+    return bool(re.fullmatch(r"(?:indoor|virtual)?\s*(?:cycling|ride)(?:\s+activity)?", n))
+
+
+def _v164_is_race_like(activity):
+    a = activity or {}
+    for key in ("sub_type", "type", "activity_type", "category"):
+        value = str(a.get(key) or "").strip().upper()
+        if value == "RACE" or value.endswith("_RACE"):
+            return True
+    name = re.sub(r"\s+", " ", str(a.get("name") or "").strip().lower())
+    if not name:
+        return False
+    # Training sessions explicitly described as simulations/rehearsals must not
+    # become races merely because the word "race" appears in the title.
+    if re.search(r"\brace\s+(?:simulation|sim|prep|preparation|rehearsal|workout|training)\b", name):
+        return False
+    if re.search(r"(?:^|\s|[-–—])race\s*:", name):
+        return True
+    if re.search(r"\b(?:zwift\s+racing\s+league|granfondo|gran\s+fondo|gara|criterium)\b", name):
+        return True
+    return False
+
+
+# Refresh the shared race classifier. Existing rhythm/day-composition functions
+# resolve this global at runtime, so all profiles gain the broader provider-safe
+# race recognition without duplicating logic in each subsystem.
+def _v141_is_race_activity(activity):
+    return _v164_is_race_like(activity)
+
+
+def _v164_recording_role(activity):
+    name = str((activity or {}).get("name") or "").lower()
+    if _v164_is_race_like(activity):
+        return "RACE"
+    if re.search(r"\b(?:warm\s*up|warmup)\b", name):
+        return "WARMUP"
+    if re.search(r"\b(?:cool\s*down|cooldown)\b", name):
+        return "COOLDOWN"
+    return "GENERAL"
+
+
+def _v164_dual_recording_match(a, b):
+    """Return high-confidence same-physical-session evidence, otherwise None.
+
+    Conservative by design: overlap must be near-total. Adjacent warm-up/race/
+    cooldown recordings remain separate even when they touch in time.
+    """
+    if not (_v4887_is_cycling_activity(a) and _v4887_is_cycling_activity(b)):
+        return None
+    aid, bid = _v164_activity_id(a), _v164_activity_id(b)
+    if aid and bid and aid == bid:
+        return {"confidence": "HIGH", "basis": ["SAME_ACTIVITY_ID"], "overlap_ratio": 1.0, "duration_ratio": 1.0, "start_delta_sec": 0}
+    sa, sb = _v4829_parse_activity_start(a), _v4829_parse_activity_start(b)
+    ea, eb = _v4829_activity_end(a), _v4829_activity_end(b)
+    if None in (sa, sb, ea, eb):
+        return None
+    da = max(0.0, (ea - sa).total_seconds()); db = max(0.0, (eb - sb).total_seconds())
+    if min(da, db) < 120.0 or max(da, db) <= 0:
+        return None
+    start_delta = abs((sa - sb).total_seconds())
+    overlap = max(0.0, (min(ea, eb) - max(sa, sb)).total_seconds())
+    overlap_ratio = overlap / min(da, db) if min(da, db) > 0 else 0.0
+    duration_ratio = min(da, db) / max(da, db) if max(da, db) > 0 else 0.0
+    role_a, role_b = _v164_recording_role(a), _v164_recording_role(b)
+    generic_a = _v164_generic_cycling_name((a or {}).get("name"))
+    generic_b = _v164_generic_cycling_name((b or {}).get("name"))
+    if role_a != role_b and {role_a, role_b} & {"WARMUP", "COOLDOWN", "RACE"} and not (generic_a or generic_b):
+        return None
+    near_total = start_delta <= 180.0 and overlap_ratio >= 0.93 and duration_ratio >= 0.90
+    # A generic provider recording (e.g. "Indoor Cycling") may start late or
+    # stop early while a platform-specific recording covers the same physical
+    # ride. Substantial containment is enough when one side is generic; this
+    # remains much stricter than merely occurring on the same day.
+    generic_partial = (
+        (generic_a or generic_b) and start_delta <= 900.0
+        and overlap_ratio >= 0.70 and duration_ratio >= 0.55
+    )
+    if not (near_total or generic_partial):
+        return None
+    return {
+        "confidence": "HIGH",
+        "basis": (["SAME_MODALITY", "START_NEAR_IDENTICAL", "NEAR_TOTAL_TIME_OVERLAP", "DURATION_MATCH"] if near_total
+                  else ["SAME_MODALITY", "GENERIC_PROVIDER_RECORDING", "SUBSTANTIAL_TIME_OVERLAP", "PARTIAL_DURATION_MATCH"]),
+        "overlap_ratio": round(overlap_ratio, 3),
+        "duration_ratio": round(duration_ratio, 3),
+        "start_delta_sec": int(round(start_delta)),
+    }
+
+
+def _v164_canonical_recording_score(activity):
+    a = activity or {}; score = 0.0
+    name = str(a.get("name") or "")
+    if not _v164_generic_cycling_name(name):
+        score += 4.0
+    if _v164_is_race_like(a):
+        score += 4.0
+    if re.search(r"\b(?:zwift|rouvy|mywhoosh|trainerroad|wahoo|garmin)\b", name, re.I):
+        score += 1.0
+    for key, weight in (("avg_watts", 1.2), ("weighted_average_watts", 1.0), ("normalized_power", 1.0), ("avg_hr", 0.6), ("icu_training_load", 0.4), ("load", 0.4), ("distance", 0.2)):
+        value = a.get(key)
+        if value not in (None, ""):
+            score += weight
+    if str(a.get("sub_type") or "").strip():
+        score += 0.5
+    return score
+
+
+def _v164_merge_recordings(cluster):
+    """Select one canonical activity and fill only missing non-identity fields."""
+    indexed = list(enumerate(cluster or []))
+    indexed.sort(key=lambda pair: (-_v164_canonical_recording_score(pair[1]), pair[0]))
+    canonical = dict(indexed[0][1]) if indexed else {}
+    raw = [dict(x) for x in (cluster or []) if isinstance(x, dict)]
+    canonical_id = _v164_activity_id(canonical)
+    for peer in raw:
+        if canonical_id and _v164_activity_id(peer) == canonical_id:
+            continue
+        for key, value in peer.items():
+            if key in {"id", "activity_id", "name", "start_date_local", "moving_time", "elapsed_time", "icu_training_load", "load", "calories", "distance"}:
+                continue
+            if canonical.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+                canonical[key] = copy.deepcopy(value)
+    ids = [_v164_activity_id(x) for x in raw if _v164_activity_id(x)]
+    names = [str(x.get("name") or "").strip() for x in raw]
+    starts = [_v4829_parse_activity_start(x) for x in raw]
+    start = min((x for x in starts if x is not None), default=None)
+    seed = "|".join(sorted(ids) or names) + "|" + (start.isoformat(timespec="minutes") if start else "")
+    canonical["_tl_physical_session_id"] = "ps_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
+    canonical["_tl_raw_activity_ids"] = ids
+    canonical["_tl_raw_recording_names"] = names
+    canonical["_tl_recording_count"] = len(raw)
+    canonical["_tl_dual_recording"] = len(raw) > 1
+    return canonical
+
+
+def _v164_reconcile_physical_sessions(activities):
+    rows = [dict(x) for x in (activities or []) if isinstance(x, dict)]
+    n = len(rows)
+    parent = list(range(n))
+    evidence = {}
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i, j):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[rj] = ri
+
+    # Restrict comparisons to same local date whenever timestamps are available.
+    for i in range(n):
+        if not _v4887_is_cycling_activity(rows[i]):
+            continue
+        si = _v4829_parse_activity_start(rows[i])
+        for j in range(i + 1, n):
+            if not _v4887_is_cycling_activity(rows[j]):
+                continue
+            sj = _v4829_parse_activity_start(rows[j])
+            if si is not None and sj is not None and si.date() != sj.date():
+                continue
+            match = _v164_dual_recording_match(rows[i], rows[j])
+            if not match:
+                continue
+            union(i, j)
+            evidence[(i, j)] = match
+
+    clusters = {}
+    for i in range(n):
+        clusters.setdefault(find(i), []).append(i)
+
+    reconciled = []
+    cluster_meta = []
+    for root, idxs in sorted(clusters.items(), key=lambda kv: min(kv[1])):
+        members = [rows[i] for i in idxs]
+        canonical = _v164_merge_recordings(members)
+        reconciled.append(canonical)
+        if len(idxs) <= 1:
+            continue
+        pair_evidence = [evidence[k] for k in evidence if k[0] in idxs and k[1] in idxs]
+        overlap = max((float(x.get("overlap_ratio") or 0) for x in pair_evidence), default=None)
+        duration_ratio = max((float(x.get("duration_ratio") or 0) for x in pair_evidence), default=None)
+        start_delta = min((int(x.get("start_delta_sec") or 0) for x in pair_evidence), default=None)
+        cluster_meta.append({
+            "physical_session_id": canonical.get("_tl_physical_session_id"),
+            "canonical_activity_id": _v164_activity_id(canonical) or None,
+            "raw_activity_ids": list(canonical.get("_tl_raw_activity_ids") or []),
+            "raw_names": list(canonical.get("_tl_raw_recording_names") or []),
+            "recording_count": len(idxs),
+            "confidence": "HIGH",
+            "basis": "TIME_OVERLAP + DURATION_MATCH + SAME_MODALITY",
+            "overlap_ratio": overlap,
+            "duration_ratio": duration_ratio,
+            "start_delta_sec": start_delta,
+        })
+
+    return reconciled, {
+        "schema": R164_SCHEMA,
+        "raw_activity_count": len(rows),
+        "physical_session_count": len(reconciled),
+        "recordings_collapsed": max(0, len(rows) - len(reconciled)),
+        "dual_recording_clusters": cluster_meta,
+        "rule": "High-confidence same-modality overlapping recordings are collapsed. Near-total overlap is sufficient; a generic provider recording may also be reconciled when it substantially overlaps a platform-specific recording. Raw recordings remain provenance; training dose and rhythm count the physical session once.",
+    }
+
+
+def _v164_reconciliation_summary(recent_meta, season_meta, history_meta):
+    return {
+        "schema": R164_SCHEMA,
+        "recent": copy.deepcopy(recent_meta or {}),
+        "season": copy.deepcopy(season_meta or {}),
+        "history": copy.deepcopy(history_meta or {}),
+        "dual_recording_detected": bool((recent_meta or {}).get("dual_recording_clusters") or (season_meta or {}).get("dual_recording_clusters") or (history_meta or {}).get("dual_recording_clusters")),
+        "provider_load_note": "Activity-derived THE LAB dose/rhythm is reconciled to physical sessions. Provider CTL/ATL/TSB remain provider-owned metrics and are not silently rewritten.",
+    }
+
+
+def _v164_activity_completed_before(activity, now):
+    end = _v4829_activity_end(activity)
+    if end is None:
+        return False
+    cutoff = (now or get_rome_now()).replace(tzinfo=None)
+    return end <= cutoff
+
+
+def _v164_title_tokens(text):
+    raw = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower())
+    stop = {"zwift", "virtual", "indoor", "cycling", "ride", "race", "workout", "training", "the", "a", "an", "of", "in", "on"}
+    return {x for x in raw.split() if len(x) >= 2 and x not in stop and not re.fullmatch(r"\d+", x)}
+
+
+def _v164_title_similarity(a, b):
+    ta, tb = _v164_title_tokens(a), _v164_title_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / max(1, len(ta | tb))
+
+
+def _v164_duration_compatible(item, activity):
+    dur = _v164_activity_duration_sec(activity)
+    if dur is None:
+        return True
+    mins = dur / 60.0
+    lo = _nutrition_number((item or {}).get("expected_duration_min"))
+    hi = _nutrition_number((item or {}).get("expected_duration_max"))
+    if lo is None and hi is None:
+        return True
+    if lo is None:
+        lo = hi
+    if hi is None:
+        hi = lo
+    if lo is None or hi is None:
+        return True
+    lo, hi = min(float(lo), float(hi)), max(float(lo), float(hi))
+    return mins >= max(1.0, lo * 0.65) and mins <= hi * 1.45
+
+
+def _v164_match_completed_planning_item(item, activities, now=None):
+    item = item or {}; now = now or get_rome_now()
+    kind = str(item.get("kind") or "").upper()
+    if kind not in {"RACE", "TRAINING"}:
+        return None
+    start_ds = str(item.get("start_date") or "")[:10]
+    end_ds = str(item.get("end_date") or start_ds)[:10]
+    # Auto-fulfilment is intentionally conservative for now: one-day events only.
+    if not start_ds or end_ds != start_ds:
+        return None
+    same_day = []
+    for a in activities or []:
+        st = _v4829_parse_activity_start(a)
+        if st is None or st.date().isoformat() != start_ds or not _v164_activity_completed_before(a, now):
+            continue
+        if not _v4887_is_cycling_activity(a):
+            continue
+        same_day.append(a)
+    if not same_day:
+        return None
+
+    title = str(item.get("title") or "")
+    candidates = []
+    for a in same_day:
+        if kind == "RACE" and not _v164_is_race_like(a):
+            continue
+        duration_ok = _v164_duration_compatible(item, a)
+        sim = _v164_title_similarity(title, (a or {}).get("name"))
+        if kind == "RACE":
+            if not duration_ok:
+                continue
+            score = 2.0 + sim
+        else:
+            # Planned training is matched only when identity evidence is strong;
+            # merely riding on the same day is not enough.
+            if sim < 0.45 or not duration_ok:
+                continue
+            score = sim
+        candidates.append((score, a, sim))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    # For races, one same-day completed race with duration compatibility is
+    # sufficient even when the calendar title is abbreviated (e.g. league code).
+    best = candidates[0]
+    return {
+        "planning_item_id": item.get("id"),
+        "kind": kind,
+        "title": title or None,
+        "activity_id": _v164_activity_id(best[1]) or None,
+        "activity_name": best[1].get("name"),
+        "date": start_ds,
+        "confidence": "HIGH" if (kind == "RACE" or best[2] >= 0.65) else "MODERATE",
+        "basis": "COMPLETED_SAME_DAY_RACE" if kind == "RACE" else "TITLE_AND_DURATION_MATCH",
+        "title_similarity": round(best[2], 3),
+    }
+
+
+def _v164_rebuild_planning_summary(ctx, now=None):
+    now = now or get_rome_now(); today = now.date(); parts = []
+    health = ctx.get("health_override") if isinstance(ctx.get("health_override"), dict) else None
+    if health:
+        parts.append(f'{health.get("kind")} override active through {health.get("until")}')
+    today_iso = today.isoformat()
+    if today_iso in set(ctx.get("blackout_dates") or []) and not health:
+        parts.append("No-training day active")
+    elif today_iso in set(ctx.get("no_intensity_dates") or []) and not health:
+        parts.append("No-intensity restriction active")
+    race = ctx.get("next_race") if isinstance(ctx.get("next_race"), dict) else None
+    if race:
+        parts.append(f'Race in {race.get("days_away")} day(s): {race.get("title") or "Race"}')
+    training = ctx.get("next_training") if isinstance(ctx.get("next_training"), dict) else None
+    if training:
+        try:
+            td = max(0, (date.fromisoformat(str(training.get("start_date"))[:10]) - today).days)
+        except Exception:
+            td = None
+        env = training.get("training_environment") or ATHLETE_FUELING_PROFILE["default_training_environment"]
+        demand = _training_profile_label(training.get("training_demand"))
+        when = f" in {td} day(s)" if td is not None else ""
+        parts.append(f'Planned {str(env).lower()} training{when}: {training.get("title") or "Training"} [{demand}]')
+    daily = ctx.get("daily_availability") if isinstance(ctx.get("daily_availability"), dict) else {}
+    if daily.get("active"):
+        blocked = ", ".join(str(x).lower().replace("_", " ") for x in (daily.get("blocked_dayparts") or []))
+        available = ", ".join(str(x).lower().replace("_", " ") for x in (daily.get("available_dayparts") or []))
+        msg = f"Daily Note availability: {blocked} unavailable today"
+        if available:
+            msg += f"; {available} explicitly available"
+        parts.append(msg)
+    intent = ctx.get("future_note_intent") if isinstance(ctx.get("future_note_intent"), dict) else {}
+    if intent.get("active"):
+        pref = ", ".join(str(x).lower() for x in (intent.get("preferred_dayparts") or [])) or "unspecified time"
+        msg = f"Daily Note future intent: {intent.get('date')} quality preferred {pref}" if intent.get("quality_preferred") else f"Daily Note future availability: {intent.get('date')} preferred {pref}"
+        uncertain = ", ".join(str(x).lower() for x in (intent.get("uncertain_dayparts") or []))
+        if uncertain:
+            msg += f"; {uncertain} availability uncertain"
+        parts.append(msg)
+    fulfilled = list(ctx.get("fulfilled_items") or [])
+    if fulfilled:
+        races = [x for x in fulfilled if str((x or {}).get("kind") or "").upper() == "RACE"]
+        if races:
+            parts.append("Today's planned race is already completed")
+        elif len(fulfilled) == 1:
+            parts.append("Today's planned training is already completed")
+        else:
+            parts.append(f"{len(fulfilled)} planned items are already completed today")
+    return " · ".join(parts) if parts else "Training as planned"
+
+
+def _v164_reconcile_planning_context(context, activities, now=None):
+    ctx = copy.deepcopy(context or {}); now = now or get_rome_now(); today = now.date()
+    fulfilled = []
+    matched_ids = set()
+    for item in list(ctx.get("upcoming_items") or []):
+        if not isinstance(item, dict):
+            continue
+        match = _v164_match_completed_planning_item(item, activities, now=now)
+        if match:
+            fulfilled.append(match)
+            if item.get("id"):
+                matched_ids.add(str(item.get("id")))
+    if not fulfilled:
+        ctx["event_fulfillment_schema"] = R164_SCHEMA
+        ctx["fulfilled_items"] = []
+        return ctx
+
+    def keep(item):
+        iid = str((item or {}).get("id") or "")
+        return not iid or iid not in matched_ids
+
+    ctx["upcoming_items"] = [x for x in (ctx.get("upcoming_items") or []) if keep(x)]
+    ctx["active_today"] = [x for x in (ctx.get("active_today") or []) if keep(x)]
+    for key in ("race_by_date", "training_by_date"):
+        mapping = dict(ctx.get(key) or {})
+        for ds, item in list(mapping.items()):
+            if not keep(item):
+                mapping.pop(ds, None)
+        ctx[key] = mapping
+
+    remaining = [x for x in (ctx.get("upcoming_items") or []) if isinstance(x, dict)]
+    races = [x for x in remaining if str(x.get("kind") or "").upper() == "RACE" and str(x.get("start_date") or "") >= today.isoformat()]
+    races.sort(key=lambda x: (str(x.get("start_date") or ""), str(x.get("created_at_utc") or "")))
+    if races:
+        r = dict(races[0]); rd = date.fromisoformat(str(r.get("start_date"))[:10]); rds = rd.isoformat()
+        conflict = "NO_TRAINING" if rds in set(ctx.get("blackout_dates") or []) else ("NO_INTENSITY" if rds in set(ctx.get("no_intensity_dates") or []) else None)
+        r.update({"days_away": (rd - today).days, "conflict": conflict}); ctx["next_race"] = r
+    else:
+        ctx["next_race"] = None
+    trainings = [x for x in remaining if str(x.get("kind") or "").upper() == "TRAINING" and str(x.get("end_date") or "") >= today.isoformat()]
+    trainings.sort(key=lambda x: (str(x.get("start_date") or ""), str(x.get("created_at_utc") or "")))
+    ctx["next_training"] = trainings[0] if trainings else None
+    ctx["fulfilled_items"] = fulfilled
+    ctx["event_fulfillment_schema"] = R164_SCHEMA
+    ctx["summary"] = _v164_rebuild_planning_summary(ctx, now=now)
+    return ctx
+
+
+_build_coach_clock_r163_final = build_coach_clock
+
+
+def build_coach_clock(season_activities, now=None, planning_context=None, training_rhythm=None):
+    now = now or get_rome_now()
+    ctx = planning_context or _v164_reconcile_planning_context(build_planning_context(now), season_activities, now=now)
+    out = _build_coach_clock_r163_final(season_activities, now=now, planning_context=ctx, training_rhythm=training_rhythm)
+    if not isinstance(out, dict):
+        return out
+    fulfilled_ids = {str((x or {}).get("planning_item_id") or "") for x in (ctx.get("fulfilled_items") or []) if (x or {}).get("planning_item_id")}
+    if fulfilled_ids:
+        rows = [dict(x) for x in (out.get("next_slots") or []) if str((x or {}).get("planning_item_id") or "") not in fulfilled_ids]
+        out["next_slots"] = rows[:3]
+        out["next_slot_label"] = rows[0].get("label") if rows else "No valid training opportunity"
+    out["completed_event_fulfillment"] = copy.deepcopy(ctx.get("fulfilled_items") or [])
+    out["physical_session_reconciliation_schema"] = R164_SCHEMA
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.40 WIP R164 · PHYSICAL SESSION RECONCILIATION + EVENT FULFILLMENT · R163 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
