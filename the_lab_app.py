@@ -2274,11 +2274,11 @@ BASE_CSS += r"""
 .v482-journey{margin:0 0 14px;padding:15px;border:1px solid rgba(69,215,232,.18);border-radius:17px;background:linear-gradient(145deg,rgba(69,215,232,.028),rgba(155,124,255,.025));overflow:hidden}.v482-journey-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:12px}.v482-journey-head>div{min-width:0}.v482-journey-head strong{display:block;font-family:var(--display);font-size:18px;line-height:1.2}.v482-journey-head small{display:block;margin-top:4px;color:#8497aa;font-size:10.5px;line-height:1.45}.v482-journey-head>b{flex:0 0 auto;display:inline-flex;align-items:center;min-height:28px;padding:0 9px;border:1px solid rgba(69,215,232,.20);border-radius:999px;color:#b8eff6;font-size:9px;letter-spacing:.05em}.v482-journey-grid{display:grid;grid-template-columns:minmax(0,1fr) 34px minmax(0,1fr) 34px minmax(0,1fr);align-items:stretch;gap:7px}.v482-journey-step{min-width:0;padding:12px;border:1px solid rgba(255,255,255,.065);border-radius:13px;background:rgba(255,255,255,.018)}.v482-journey-step.decision{border-color:rgba(155,124,255,.24);background:rgba(155,124,255,.035)}.v482-journey-step.now{border-color:rgba(69,215,232,.24);background:rgba(69,215,232,.035)}.v482-journey-step span{display:block;color:#8295a8;font-size:9.3px;font-weight:900;letter-spacing:.065em}.v482-journey-step strong{display:block;margin-top:6px;font-family:var(--display);font-size:19px;line-height:1.15;overflow-wrap:anywhere}.v482-journey-step small{display:block;margin-top:5px;color:#95a5b5;font-size:10px;line-height:1.45;overflow-wrap:anywhere}.v482-zone-mini{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.v482-zone-mini b{font-size:9.2px;font-weight:850;letter-spacing:.02em}.v482-zone-mini .low{color:#74e9ad}.v482-zone-mini .mod{color:#ffc66e}.v482-zone-mini .high{color:#ff8d94}.v482-journey-arrow{display:grid;place-items:center;color:#668296;font-size:22px;font-weight:300}.v482-journey-summary{margin:11px 0 0;padding-top:10px;border-top:1px solid rgba(255,255,255,.055);color:#b8c5d1;font-size:11.5px;line-height:1.55;overflow-wrap:anywhere}
 .v48-cycle-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}.v48-cycle-card{padding:15px}.v48-cycle-head{display:flex;align-items:center;gap:8px}.v48-cycle-head span{font-size:18px}.v48-cycle-head strong{font-size:10px;letter-spacing:.08em;color:#a9ecf5}.v48-cycle-card h3{margin:8px 0 6px;font-family:var(--display);font-size:20px;line-height:1.16}.v48-cycle-card p{margin:0;color:#b8c5d1;font-size:12px;line-height:1.62;overflow-wrap:anywhere}.v48-cycle-card.micro{border-color:rgba(155,124,255,.22)}.v48-cycle-card.micro .v48-cycle-head strong{color:#d4c7ff}.v48-cycle-card.ledger{grid-column:1/-1;border-color:rgba(69,215,232,.18)}.v48-cycle-card.ledger .v48-cycle-head strong{color:#8ceaf3}.v4840-ledger-meta{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}.v4840-ledger-meta b{padding:4px 8px;border:1px solid rgba(255,255,255,.09);border-radius:999px;background:rgba(255,255,255,.025);font-size:9px;letter-spacing:.05em;color:#c8d4df}
 .v48-season-context{padding:15px;margin-top:2px}.v48-season-context-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:12px}.v48-season-context-head>div{min-width:0}.v48-season-context-head strong{display:block;font-family:var(--display);font-size:20px}.v48-season-context-head small{display:block;margin-top:4px;color:#8497aa;font-size:10.5px;line-height:1.45}.v48-season-context-head b{flex:0 0 auto;display:inline-flex;align-items:center;min-height:29px;padding:0 9px;border:1px solid rgba(69,215,232,.20);border-radius:999px;color:#b9eff6;font-size:9px;letter-spacing:.05em}.v48-method{margin:12px 0 0;color:#73879b;font-size:9.8px;line-height:1.48;overflow-wrap:anywhere}
-.v4873-roadmap{margin:0 0 14px;padding:15px;border:1px solid rgba(69,215,232,.22);border-radius:17px;background:linear-gradient(145deg,rgba(69,215,232,.035),rgba(155,124,255,.025));overflow:hidden}.v4873-roadmap-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.v4873-roadmap-head>div{min-width:0}.v4873-roadmap-head span{display:block;color:#8fe8f2;font-size:9.5px;font-weight:900;letter-spacing:.08em}.v4873-roadmap-head h3{margin:5px 0 3px;font-family:var(--display);font-size:21px;line-height:1.15}.v4873-roadmap-head p{margin:0;color:#aebdca;font-size:11.5px;line-height:1.5}.v4873-roadmap-head>b{flex:0 0 auto;padding:6px 9px;border:1px solid rgba(69,215,232,.24);border-radius:999px;color:#d9fbff;background:rgba(69,215,232,.055);font-size:9px;letter-spacing:.055em;white-space:nowrap}.v4873-roadmap-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:12px}.v4873-roadmap-step{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px;padding:9px;border:1px solid rgba(255,255,255,.06);border-radius:12px;background:rgba(255,255,255,.015)}.v4873-roadmap-step>span{display:grid;place-items:center;width:23px;height:23px;border-radius:999px;border:1px solid rgba(116,128,143,.28);color:#8da1b5;font-size:9px;font-weight:900}.v4873-roadmap-step strong{display:block;font-size:10.5px;line-height:1.25}.v4873-roadmap-step small{display:block;margin-top:2px;color:#8194a7;font-size:8.9px;line-height:1.35}.v4873-roadmap-step.done{opacity:.66}.v4873-roadmap-step.now{border-color:rgba(255,176,32,.48);background:rgba(255,176,32,.055);box-shadow:inset 0 0 0 1px rgba(255,176,32,.06)}.v4873-roadmap-step.now>span{border-color:rgba(255,176,32,.55);color:#ffd88b}.v4873-roadmap-decisions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:9px}.v4873-decision{min-width:0;padding:11px;border:1px solid rgba(255,255,255,.065);border-radius:12px;background:rgba(255,255,255,.018)}.v4873-decision>span{display:block;color:#8da1b5;font-size:9px;font-weight:900;letter-spacing:.055em}.v4873-decision>strong{display:block;margin-top:5px;font-family:var(--display);font-size:16px;line-height:1.2}.v4873-decision>small{display:block;margin-top:4px;color:#9aaaba;font-size:10px;line-height:1.45}.v4873-decision.quality{border-color:rgba(69,215,232,.18)}.v4873-decision.test{border-color:rgba(155,124,255,.20)}.v4873-roadmap-now{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}.v4873-roadmap-now>div{min-width:0;padding:9px 10px;border-top:1px solid rgba(255,255,255,.055)}.v4873-roadmap-now span{display:block;color:#71869a;font-size:8.5px;font-weight:900;letter-spacing:.06em}.v4873-roadmap-now strong{display:block;margin-top:3px;color:#bbc8d4;font-size:10.5px;line-height:1.45}.v4873-coach-tests{margin-top:6px;border-top:1px solid rgba(255,255,255,.055);padding-top:7px}.v4873-coach-tests summary{cursor:pointer;color:#899cad;font-size:9.5px;font-weight:850;letter-spacing:.035em}.v4873-coach-tests>div{display:grid;gap:5px;margin-top:7px}.v4873-coach-tests span{color:#8fa0b1;font-size:9.5px;line-height:1.4}.v4873-coach-tests b{color:#c5d3df}
+.v4873-roadmap{margin:0 0 14px;padding:15px;border:1px solid rgba(69,215,232,.22);border-radius:17px;background:linear-gradient(145deg,rgba(69,215,232,.035),rgba(155,124,255,.025));overflow:hidden}.v4873-roadmap-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.v4873-roadmap-head>div{min-width:0}.v4873-roadmap-head span{display:block;color:#8fe8f2;font-size:9.5px;font-weight:900;letter-spacing:.08em}.v4873-roadmap-head h3{margin:5px 0 3px;font-family:var(--display);font-size:21px;line-height:1.15}.v4873-roadmap-head p{margin:0;color:#aebdca;font-size:11.5px;line-height:1.5}.v4873-roadmap-head>b{flex:0 0 auto;padding:6px 9px;border:1px solid rgba(69,215,232,.24);border-radius:999px;color:#d9fbff;background:rgba(69,215,232,.055);font-size:9px;letter-spacing:.055em;white-space:nowrap}.v163-recent-progress{margin-top:11px;padding:9px 10px;border:1px solid rgba(255,176,32,.20);border-radius:12px;background:linear-gradient(135deg,rgba(255,176,32,.045),rgba(69,215,232,.018))}.v163-recent-progress-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px}.v163-recent-progress-head span{color:#f2c66f;font-size:8.7px;font-weight:950;letter-spacing:.085em}.v163-recent-progress-head small{color:#71869a;font-size:8.5px}.v163-recent-progress-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.v163-progress-chip{min-width:0;display:flex;align-items:center;gap:8px;padding:8px 9px;border:1px solid rgba(255,255,255,.065);border-radius:10px;background:rgba(255,255,255,.018)}.v163-progress-icon{flex:0 0 auto;font-size:16px;line-height:1}.v163-progress-chip>div{min-width:0}.v163-progress-chip strong{display:block;color:#e8edf2;font-size:9.8px;line-height:1.3;overflow-wrap:anywhere}.v163-progress-chip small{display:block;margin-top:2px;color:#8194a7;font-size:8.3px;line-height:1.25}.v4873-roadmap-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:12px}.v4873-roadmap-step{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px;padding:9px;border:1px solid rgba(255,255,255,.06);border-radius:12px;background:rgba(255,255,255,.015)}.v4873-roadmap-step>span{display:grid;place-items:center;width:23px;height:23px;border-radius:999px;border:1px solid rgba(116,128,143,.28);color:#8da1b5;font-size:9px;font-weight:900}.v4873-roadmap-step strong{display:block;font-size:10.5px;line-height:1.25}.v4873-roadmap-step small{display:block;margin-top:2px;color:#8194a7;font-size:8.9px;line-height:1.35}.v4873-roadmap-step.done{opacity:.66}.v4873-roadmap-step.now{border-color:rgba(255,176,32,.48);background:rgba(255,176,32,.055);box-shadow:inset 0 0 0 1px rgba(255,176,32,.06)}.v4873-roadmap-step.now>span{border-color:rgba(255,176,32,.55);color:#ffd88b}.v4873-roadmap-decisions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:9px}.v4873-decision{min-width:0;padding:11px;border:1px solid rgba(255,255,255,.065);border-radius:12px;background:rgba(255,255,255,.018)}.v4873-decision>span{display:block;color:#8da1b5;font-size:9px;font-weight:900;letter-spacing:.055em}.v4873-decision>strong{display:block;margin-top:5px;font-family:var(--display);font-size:16px;line-height:1.2}.v4873-decision>small{display:block;margin-top:4px;color:#9aaaba;font-size:10px;line-height:1.45}.v4873-decision.quality{border-color:rgba(69,215,232,.18)}.v4873-decision.test{border-color:rgba(155,124,255,.20)}.v4873-roadmap-now{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}.v4873-roadmap-now>div{min-width:0;padding:9px 10px;border-top:1px solid rgba(255,255,255,.055)}.v4873-roadmap-now span{display:block;color:#71869a;font-size:8.5px;font-weight:900;letter-spacing:.06em}.v4873-roadmap-now strong{display:block;margin-top:3px;color:#bbc8d4;font-size:10.5px;line-height:1.45}.v4873-coach-tests{margin-top:6px;border-top:1px solid rgba(255,255,255,.055);padding-top:7px}.v4873-coach-tests summary{cursor:pointer;color:#899cad;font-size:9.5px;font-weight:850;letter-spacing:.035em}.v4873-coach-tests>div{display:grid;gap:5px;margin-top:7px}.v4873-coach-tests span{color:#8fa0b1;font-size:9.5px;line-height:1.4}.v4873-coach-tests b{color:#c5d3df}
 .v4873-milestones{margin:0 0 11px;padding:12px 13px;border:1px solid rgba(255,176,32,.34);border-radius:15px;background:linear-gradient(145deg,rgba(255,176,32,.065),rgba(155,124,255,.025));overflow:hidden}.v4873-milestone-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.v4873-milestone-head>div{min-width:0}.v4873-milestone-head span{display:block;color:#ffd078;font-size:9.5px;font-weight:950;letter-spacing:.075em}.v4873-milestone-head strong{display:block;margin-top:3px;font-family:var(--display);font-size:18px}.v4873-milestone-head small{max-width:260px;color:#8fa0b1;font-size:9px;line-height:1.35;text-align:right}.v4873-milestone-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:9px}.v4873-milestone{min-width:0;padding:8px 9px;border:1px solid rgba(255,255,255,.065);border-radius:11px;background:rgba(255,255,255,.018)}.v4873-milestone>span{display:block;color:#9eacb9;font-size:9px;font-weight:850}.v4873-milestone>strong{display:block;margin-top:2px;font-family:var(--display);font-size:19px;line-height:1}.v4873-milestone>b{display:block;margin-top:4px;color:#ffd078;font-size:9.5px}.v4873-milestone>small{display:block;margin-top:2px;color:#7d90a2;font-size:8.7px;line-height:1.35}.v4873-milestones>p{margin:8px 0 0;color:#74889b;font-size:8.8px;line-height:1.4}
 body.v27-report-mode .v48-strategy-form,.v10-preview-mode .v48-strategy-form{display:none!important}
 @media(max-width:980px){.v48-strategy-grid{grid-template-columns:1fr}.v48-goal-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:700px){.v48-plan-card,.v48-adherence-card,.v48-cycle-card,.v48-season-context{padding:14px}.v4873-roadmap{padding:12px}.v4873-roadmap-head p{font-size:10.8px;line-height:1.42}.v4873-roadmap-steps{grid-template-columns:1fr 1fr;gap:6px;margin-top:9px}.v4873-roadmap-step{padding:8px}.v4873-roadmap-step small{display:none}.v4873-roadmap-step.now small{display:block}.v4873-roadmap-decisions,.v4873-roadmap-now{grid-template-columns:1fr;gap:6px}.v4873-decision{padding:10px}.v4873-milestone-grid{grid-template-columns:1fr 1fr}.v482-journey{padding:14px}.v482-journey-grid{grid-template-columns:1fr}.v482-journey-arrow{height:18px;transform:rotate(90deg);font-size:18px}.v48-plan-summary,.v48-cycle-grid{grid-template-columns:1fr}.v48-choice-row{grid-template-columns:repeat(2,minmax(0,1fr))}.v48-goal-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.v48-adherence-number{font-size:38px}.v48-adherence-title strong{font-size:21px}.v48-score-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:700px){.v48-plan-card,.v48-adherence-card,.v48-cycle-card,.v48-season-context{padding:14px}.v4873-roadmap{padding:12px}.v163-recent-progress-grid{grid-template-columns:1fr}.v163-recent-progress-head small{display:none}.v4873-roadmap-head p{font-size:10.8px;line-height:1.42}.v4873-roadmap-steps{grid-template-columns:1fr 1fr;gap:6px;margin-top:9px}.v4873-roadmap-step{padding:8px}.v4873-roadmap-step small{display:none}.v4873-roadmap-step.now small{display:block}.v4873-roadmap-decisions,.v4873-roadmap-now{grid-template-columns:1fr;gap:6px}.v4873-decision{padding:10px}.v4873-milestone-grid{grid-template-columns:1fr 1fr}.v482-journey{padding:14px}.v482-journey-grid{grid-template-columns:1fr}.v482-journey-arrow{height:18px;transform:rotate(90deg);font-size:18px}.v48-plan-summary,.v48-cycle-grid{grid-template-columns:1fr}.v48-choice-row{grid-template-columns:repeat(2,minmax(0,1fr))}.v48-goal-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.v48-adherence-number{font-size:38px}.v48-adherence-title strong{font-size:21px}.v48-score-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:430px){.v4873-roadmap-head,.v4873-milestone-head{flex-direction:column}.v4873-roadmap-head>b{align-self:flex-start}.v4873-milestone-head small{text-align:left;max-width:none}.v4873-milestone-grid{grid-template-columns:1fr}.v482-journey-head{flex-direction:column}.v482-journey-head>b{align-self:flex-start}.v482-journey-step{padding:11px}.v48-adherence-top{gap:8px}.v48-adherence-number{font-size:34px}.v48-adherence-title strong{font-size:19px}.v48-goal span{min-height:52px;padding:8px;font-size:9.8px}.v48-goal b{font-size:16px}.v48-score-grid{grid-template-columns:1fr}.v48-season-context-head{flex-direction:column}.v48-season-context-head b{align-self:flex-start}}
 @media(max-width:360px){.v48-choice-row,.v48-goal-grid{grid-template-columns:1fr}.v48-plan-card,.v48-adherence-card,.v48-cycle-card,.v48-season-context{padding:12px}.v48-adherence-top{flex-direction:column}.v48-adherence-number{font-size:36px}}
 @media print{.v48-direction{break-inside:auto}.v48-strategy-grid,.v48-cycle-grid{grid-template-columns:1fr 1fr}.v48-strategy-form{display:none!important}.v48-plan-card,.v48-adherence-card,.v48-cycle-card,.v48-season-context{break-inside:avoid;page-break-inside:avoid}}
@@ -3351,6 +3351,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% if ar and ar.available %}
 <article class="v4873-roadmap">
 <div class="v4873-roadmap-head"><div><span>🧭 YOUR ROADMAP{% if ar.cycle_continuity %} · NEW CYCLE · previous checkpoint {{ ar.cycle_continuity.watts|round|int }} W{% endif %}</span><h3>{{ td.goal_emoji }} {{ td.goal_label }}</h3><p>{{ ar.performance_narrative.story if ar.performance_narrative is defined and ar.performance_narrative else ar.north_star }}</p></div>{% if ar.stage %}<b>{{ ar.stage.code }} · {{ ar.stage.label }}</b>{% endif %}</div>
+{% if data.recent_progress %}<div class="v163-recent-progress"><div class="v163-recent-progress-head"><span>RECENT PROGRESS</span><small>Latest earned evidence</small></div><div class="v163-recent-progress-grid">{% for win in data.recent_progress[:3] %}<div class="v163-progress-chip"><span class="v163-progress-icon" aria-hidden="true">{{ win.icon }}</span><div><strong>{{ win.label }}</strong><small>{{ win.date_display }}{% if win.detail %} · {{ win.detail }}{% endif %}</small></div></div>{% endfor %}</div></div>{% endif %}
 <div class="v4873-roadmap-steps">{% for step in ar.steps %}<div class="v4873-roadmap-step {{ step.state|lower }}"><span>{{ loop.index }}</span><div><div class="v4873-step-title"><strong>{{ step.label }}</strong><em>{{ step.state }}</em></div><small>{{ step.detail }}</small></div></div>{% endfor %}</div>
 <div class="v4873-roadmap-decisions">
 <div class="v4873-decision quality"><div class="v4873-decision-kicker"><span>⚡ NEXT QUALITY WINDOW</span><b>{{ ar.quality_window.state }}</b></div><strong class="v4873-decision-primary">{{ ar.quality_window.preferred or ar.quality_window.earliest or 'Adaptive' }}</strong><p>{{ ar.quality_window.headline }}</p></div>
@@ -3444,7 +3445,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% set n = data.nutrition_plan[loop.index0] if data.nutrition_plan and loop.index0 < (data.nutrition_plan|length) else none %}
 <article class="v4-card v4-session {{ s.intensity_class }} v23-session-card v23-col-{{ loop.index }}">
 <div class="v4-session-slot">{{ s.slot }}</div>
-<div class="v150-workout-title-row"><h3>{{ s.title|replace('Coach-selected session','Nova-selected session') }}</h3><button class="v150-copy-workout" type="button" data-copy-workout="{{ (s.canonical_workout_name or s.title)|e }}" aria-label="Copy workout name" title="Copy workout name">⧉<span>Copy</span></button></div>
+<div class="v150-workout-title-row"><h3>{{ s.title|replace('Coach-selected session','Nova-selected session') }}</h3><button class="v150-copy-workout" type="button" data-copy-workout="{{ s.title|replace('Coach-selected session','Nova-selected session')|e }}" aria-label="Copy workout name" title="Copy workout name">⧉<span>Copy</span></button></div>
 <div class="v4-session-meta"><span class="v4-session-pill">{{ s.duration|replace('Coach-selected duration','Nova-selected duration') }}</span><span class="v4-session-pill">{{ s.intensity }}</span>{% if s.provisional_quality %}<span class="v4-session-pill v4873-provisional-pill">⚡ CANDIDATE · REASSESS</span>{% endif %}{% if s.environment %}<span class="v4-session-pill {% if s.is_planned_training %}v24-plan-pill{% endif %}">{{ "🚴 " if s.is_planned_training else "" }}{{ s.environment }}</span>{% endif %}{% if s.planned_demand and s.planned_demand not in ["COACH","RACE"] %}<span class="v4-session-pill v24-plan-pill">PLAN {{ s.planned_demand }}</span>{% endif %}</div>
 <div class="v4-session-main">{{ s.main_set|replace('See coach recommendation.','See the recommendation above.') }}</div>
 <div class="v4-session-why"><strong>Why:</strong> {{ s.why }}</div>
@@ -6077,6 +6078,180 @@ def _v4900_final_output_integrity_guard(parsed, adaptive_roadmap=None, microcycl
         audit["pass"] = False
     out["semantic_authority_audit"] = audit
     return out
+def _v163_recent_progress_badges(snapshot, limit=3):
+    """Presentation-only recent earned progress for the Roadmap.
+
+    This projection never changes coaching state. It reads already-established
+    evidence from the current Snapshot, prefers one meaningful earned item per
+    event/date so the Roadmap does not duplicate the full trophy cabinet, and
+    returns at most ``limit`` compact badges for UI rendering.
+    """
+    if not isinstance(snapshot, dict):
+        return []
+    try:
+        limit = max(0, min(int(limit), 3))
+    except Exception:
+        limit = 3
+    if limit <= 0:
+        return []
+
+    road = snapshot.get("adaptive_roadmap") if isinstance(snapshot.get("adaptive_roadmap"), dict) else {}
+    qs = snapshot.get("question_state") if isinstance(snapshot.get("question_state"), dict) else {}
+    pe = snapshot.get("performance_evidence") if isinstance(snapshot.get("performance_evidence"), dict) else {}
+    current_goal = str(road.get("goal_key") or qs.get("goal_key") or "").strip().upper()
+    candidates = []
+
+    def clean_date(value):
+        raw = str(value or "").strip()
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+            return raw
+        return None
+
+    def duration_label(seconds):
+        try:
+            sec = int(round(float(seconds)))
+        except Exception:
+            return None
+        if sec <= 0:
+            return None
+        if sec % 3600 == 0:
+            hours = sec // 3600
+            return f"{hours}-hour"
+        if sec % 60 == 0:
+            mins = sec // 60
+            return f"{mins}-min"
+        return f"{sec}-sec"
+
+    def add(date_value, label, icon="🏅", priority=0, key=None, detail=None, activity_id=None):
+        earned_at = clean_date(date_value)
+        label = str(label or "").strip()
+        if not earned_at or not label:
+            return
+        candidates.append({
+            "earned_at": earned_at,
+            "label": label,
+            "icon": icon,
+            "priority": int(priority or 0),
+            "key": str(key or label).strip().lower(),
+            "detail": str(detail or "").strip() or None,
+            "activity_id": str(activity_id or "").strip() or None,
+        })
+
+    # Direct, date-proven performance achievements for the active goal.
+    for event in pe.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        event_goal = str(event.get("goal_key") or "").strip().upper()
+        if current_goal and event_goal and event_goal != current_goal:
+            continue
+        if current_goal and event.get("goal_relevant") is False:
+            continue
+        earned_at = clean_date(event.get("date"))
+        if not earned_at:
+            continue
+        kind = str(event.get("kind") or "").strip().upper()
+        try:
+            delta = float(event.get("delta_w")) if event.get("delta_w") is not None else None
+        except Exception:
+            delta = None
+        try:
+            watts = int(round(float(event.get("watts")))) if event.get("watts") is not None else None
+        except Exception:
+            watts = None
+        dlabel = duration_label(event.get("secs"))
+        activity_id = event.get("activity_id")
+
+        if kind == "VALIDATION" and str(event.get("outcome") or "").upper() == "VALIDATED_GAIN":
+            if dlabel:
+                gain = f" · +{int(round(delta))} W" if delta is not None and delta > 0 else ""
+                detail = f"{watts} W" if watts is not None else None
+                add(earned_at, f"{dlabel} power improved{gain}", "🏅", 120,
+                    key=f"validation:{dlabel}", detail=detail, activity_id=activity_id)
+            continue
+
+        try:
+            tier = int(event.get("tier") or 0)
+        except Exception:
+            tier = 0
+        recognized_pb = (
+            kind == "PB"
+            and (event.get("the_lab_recognized") is True or event.get("quality_linked") is True or tier >= 2)
+            and (event.get("timing_proven") is not False)
+        )
+        if recognized_pb and dlabel and delta is not None and delta > 0:
+            detail = f"{watts} W" if watts is not None else None
+            add(earned_at, f"{dlabel} power improved · +{int(round(delta))} W", "🏅", 100,
+                key=f"pb:{dlabel}", detail=detail, activity_id=activity_id)
+
+    # Evidence-gated dimensions that are actually completed/closed.
+    dimension_labels = {
+        "FRESH_CAPACITY": ("Fresh capacity validated", "✅"),
+        "REPEATABILITY": ("Repeatability consolidated", "✅"),
+        "SPECIFIC_DOSE": ("Specific dose established", "✅"),
+        "RECOVERY_UNDER_LOAD": ("Recovery under load established", "✅"),
+        "DURABILITY": ("Durability consolidated", "✅"),
+        "RACE_TRANSFER": ("Race transfer demonstrated", "✅"),
+        "VARIABLE_LOAD": ("Variable-load control established", "✅"),
+    }
+    dimensions = qs.get("dimensions") if isinstance(qs.get("dimensions"), dict) else {}
+    for code, item in dimensions.items():
+        if not isinstance(item, dict) or not item.get("exit_satisfied"):
+            continue
+        earned_at = clean_date(item.get("last_evidence_date"))
+        if not earned_at:
+            continue
+        code_u = str(code or "").strip().upper()
+        label, icon = dimension_labels.get(code_u, (code_u.replace("_", " ").title() + " established", "✅"))
+        # Concrete same-day validated power is more informative than the generic
+        # fresh-capacity closure; keep the latter only as a fallback candidate.
+        priority = 70 if code_u == "FRESH_CAPACITY" else 110
+        add(earned_at, label, icon, priority, key=f"dimension:{code_u}")
+
+    if not candidates:
+        return []
+
+    # Exact semantic duplicates collapse first, newest/strongest evidence wins.
+    candidates.sort(key=lambda x: (x["earned_at"], x["priority"]), reverse=True)
+    unique = []
+    seen_keys = set()
+    for item in candidates:
+        if item["key"] in seen_keys:
+            continue
+        seen_keys.add(item["key"])
+        unique.append(item)
+
+    # Avoid turning the Roadmap into a second trophy cabinet: first pass keeps
+    # only the strongest earned item for each date/event. If fewer than three
+    # distinct dates exist, a second pass may fill the remaining compact slots.
+    selected = []
+    seen_dates = set()
+    for item in unique:
+        if item["earned_at"] in seen_dates:
+            continue
+        selected.append(item)
+        seen_dates.add(item["earned_at"])
+        if len(selected) >= limit:
+            break
+    if len(selected) < limit:
+        selected_ids = {id(x) for x in selected}
+        for item in unique:
+            if id(item) in selected_ids:
+                continue
+            selected.append(item)
+            if len(selected) >= limit:
+                break
+
+    for item in selected:
+        try:
+            dt = datetime.strptime(item["earned_at"], "%Y-%m-%d")
+            item["date_display"] = dt.strftime("%d %b")
+        except Exception:
+            item["date_display"] = item["earned_at"]
+        item.pop("priority", None)
+        item.pop("key", None)
+        item.pop("activity_id", None)
+    return selected[:limit]
+
 def _v4891_prepare_snapshot_for_ui(data):
     if not isinstance(data, dict):
         return data
@@ -6199,6 +6374,7 @@ def _v4891_prepare_snapshot_for_ui(data):
             block.pop("work_interval_evidence", None)
     if isinstance(ui.get("previous_training_blocks"), list):
         ui["previous_training_blocks"] = ui["previous_training_blocks"][:3]
+    ui["recent_progress"] = _v163_recent_progress_badges(ui, limit=3)
     return ui
 def _v4873_ensure_milestone_mention(text, power_achievements, now=None):
     s = str(text or "").strip()
@@ -37118,7 +37294,7 @@ BASE_CSS += r"""
 # logic changes. Roadmap is promoted above Nova; redundant action/recommendation UI
 # is removed while all underlying payload fields and backend endpoints remain intact.
 R162_SCHEMA = "V4.9.38-R162-1"
-APP_VERSION = "THE LAB · PRODUCT V4.9.38 WIP R162 · ROADMAP-FIRST UI + QA CLEANUP · R161 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.39 WIP R163 · RECENT PROGRESS + HUMAN WORKOUT COPY · R162 BASELINE"
 
 
 if __name__ == "__main__":
