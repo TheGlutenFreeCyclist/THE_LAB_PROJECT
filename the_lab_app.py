@@ -27799,6 +27799,7 @@ def analyze():
     data = None
     chat_context_meta = None
     snapshot_ai_event_id = None
+    snapshot_fault_stage = "PRECHECK"
     try:
         user = current_user(touch=False)
         if not user:
@@ -27839,7 +27840,9 @@ def analyze():
                 strategy_plan = get_active_training_strategy_plan(user["id"])
                 if not strategy_plan:
                     raise ValueError("Choose a Training Direction and primary goal before generating the Snapshot.")
+        snapshot_fault_stage = "FETCH_INTERVALS"
         raw_recent_activities, raw_season_activities, wellness, season_wellness, raw_history_activities = fetch_intervals_data()
+        snapshot_fault_stage = "PHYSICAL_SESSION_RECONCILIATION"
         recent_activities, _v164_recent_reconciliation = _v164_reconcile_physical_sessions(raw_recent_activities)
         season_activities, _v164_season_reconciliation = _v164_reconcile_physical_sessions(raw_season_activities)
         history_activities, _v164_history_reconciliation = _v164_reconcile_physical_sessions(raw_history_activities)
@@ -27855,7 +27858,9 @@ def analyze():
         form_median = personal_form_median(season_wellness)
         fatigue_thresholds = personal_fatigue_thresholds(season_wellness)
         metrics = compute_metrics(wellness, form_thresholds, fatigue_thresholds, baseline_wellness=season_wellness)
+        snapshot_fault_stage = "PLANNING_RECONCILIATION"
         planning_context = _v164_reconcile_planning_context(build_planning_context(), season_activities, now=get_rome_now())
+        snapshot_fault_stage = "METABOLIC_CONTEXT"
         metabolic_context = build_metabolic_context(recent_activities, season_wellness, planning_context, season_activities=season_activities)
         provider_metabolic_context = build_metabolic_context(cycling_recent_activities, season_wellness, planning_context, season_activities=cycling_season_activities)
         metrics = apply_health_override_to_metrics(metrics, planning_context)
@@ -28143,6 +28148,7 @@ def analyze():
             microcycle_ledger = update_microcycle_ledger_from_snapshot(microcycle_ledger, analysis.get("next_sessions"), user_id=user["id"])
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
         nutrition_plan = build_nutrition_plan(analysis.get("next_sessions"), metabolic_context)
+        snapshot_fault_stage = "SNAPSHOT_COMPOSITION"
         data = {
             **metrics, **season_stats, **analysis, **energy_bank,
             "coach_clock": coach_clock,
@@ -28259,6 +28265,7 @@ def analyze():
         try:
             nova_replay_fixture = _v115_finalize_nova_replay_fixture(nova_replay_fixture, data)
             replay_bundle["nova_replay_fixture"] = nova_replay_fixture
+            snapshot_fault_stage = "SAVE_REPORT"
             saved_report_meta = save_latest_report(data, qa_replay_bundle=replay_bundle)
             chat_context_meta = get_latest_report_meta()
             _set_ai_usage_status(snapshot_ai_event_id, "committed")
@@ -28305,7 +28312,28 @@ def analyze():
         error = f"THE LAB hit an internal data-shape error (missing field: {_missing}). Your saved data remain safe. This is a product error, not a Nova coaching decision."
     except Exception as e:
         _set_ai_usage_status(snapshot_ai_event_id, "pipeline_error", e.__class__.__name__)
-        error = "THE LAB could not complete this Snapshot. Your saved data remain safe; please try again."
+        _fault_class = e.__class__.__name__
+        _fault_stage = str(snapshot_fault_stage or "UNKNOWN")[:80]
+        try:
+            app.logger.exception(
+                "SNAPSHOT_PIPELINE_FAILURE stage=%s release=%s error_class=%s",
+                _fault_stage, APP_VERSION, _fault_class,
+            )
+        except Exception:
+            pass
+        try:
+            audit_event(
+                "SNAPSHOT_PIPELINE_UNEXPECTED_ERROR",
+                actor_user_id=(user or {}).get("id") if isinstance(user, dict) else None,
+                target_user_id=(user or {}).get("id") if isinstance(user, dict) else None,
+                details={"error_class": _fault_class, "fault_stage": _fault_stage, "release": APP_VERSION},
+            )
+        except Exception:
+            pass
+        error = (
+            "THE LAB could not complete this Snapshot. Your saved data remain safe; please try again. "
+            f"Diagnostic: {_fault_stage} / {_fault_class}."
+        )
     return render_template_string(
         HOME_PAGE, days=DAYS_BACK, season_days=SEASON_DAYS_BACK,
         data=_v4891_prepare_snapshot_for_ui(data), error=error, css=BASE_CSS, logo=LOGO_B64, brand_wordmark=BRAND_WORDMARK_B64, favicon=FAVICON_B64,
@@ -37773,7 +37801,7 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
     return out
 
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.40 WIP R164 · PHYSICAL SESSION RECONCILIATION + EVENT FULFILLMENT · R163 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.41 WIP R165 · SNAPSHOT FAULT-STAGE TRACE · R164 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
