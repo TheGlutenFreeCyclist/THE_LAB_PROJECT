@@ -36702,5 +36702,223 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
 APP_VERSION = "THE LAB · PRODUCT V4.9.35 WIP R159 · CEILING-LIKE DOSE GUARD + COHERENT REENTRY · R158 BASELINE"
 
 
+# R160 · HARD-ONLY NOTE SCOPE
+# A statement such as "I can't do a hard session tomorrow" constrains intensity,
+# not the existence of training. Keep learned easy/endurance opportunities visible
+# while removing hard candidates for the explicitly constrained date/daypart.
+R160_SCHEMA = "V4.9.36-R160-1"
+_v133_interpret_athlete_note_r159_final = _v133_interpret_athlete_note
+_build_planning_context_r159_final = build_planning_context
+_v117_quality_candidates_r159_final = _v117_quality_candidates
+
+
+def _v160_hard_only_restriction(note, now=None):
+    now = now or get_rome_now()
+    low = _v133_norm_note(note)
+    hard_term = r"(?:hard|quality|intensity|intervals?|hiit|vo2|vo₂|threshold|tte|sprints?|qualit[aà]|intensit[aà]|intervalli?|soglia)"
+    neg = (
+        r"(?:can't|cannot|can not|won't be able(?: to)?|will not be able(?: to)?|"
+        r"unable to|not able to|not available for|unavailable for|don't want|do not want|no|non posso|non riesco|"
+        r"non potr[oò]|non sar[oò] in grado di|niente)"
+    )
+    hard_only = bool(
+        re.search(r"\b" + neg + r"\b[^.!?]{0,65}\b" + hard_term + r"\b", low, re.I)
+        or re.search(r"\b(?:no|niente)\s+" + hard_term + r"\b", low, re.I)
+    )
+    if not hard_only:
+        return None
+
+    # A genuine whole-training prohibition still outranks the hard-only rule.
+    whole_training = bool(re.search(
+        r"\b(?:can't|cannot|can not|won't be able(?: to)?|will not be able(?: to)?|unable to|not able to|"
+        r"non posso|non riesco|non potr[oò]|non sar[oò] in grado di)\b[^.!?]{0,45}"
+        r"\b(?:train|ride|cycle|work\s*out|exercise|allenarmi|pedalare|fare allenamento)\b"
+        r"|\b(?:no training|no ride|day off|rest day|niente allenamento|giorno di riposo)\b"
+        r"|\b(?:unavailable|not available|non disponibile)\b[^.!?]{0,25}\b(?:all day|tutto il giorno)\b",
+        low, re.I,
+    ))
+    if whole_training:
+        return None
+
+    target_date = _v133_target_date(note, now)
+    if not target_date:
+        return None
+    parts = list(dict.fromkeys(_v133_dayparts(note, future=(target_date != now.date().isoformat())) or []))
+    blocked_parts = parts or ["ALL_DAY"]
+    return {"date": target_date, "blocked_parts": blocked_parts, "source": "EXPLICIT_HARD_ONLY_RESTRICTION"}
+
+
+def _v160_rebuild_note_views(out, restriction, now):
+    if not isinstance(out, dict) or not restriction:
+        return out
+    ds = str(restriction.get("date") or "")
+    blocked_parts = list(restriction.get("blocked_parts") or ["ALL_DAY"])
+    blocked_set = set(blocked_parts)
+    targets = [dict(x) for x in (out.get("future_targets") or []) if isinstance(x, dict)]
+    target = next((x for x in targets if str(x.get("date") or "") == ds), None)
+    if target is None:
+        target = {
+            "date": ds, "preferred_dayparts": [], "uncertain_dayparts": [],
+            "unavailable_dayparts": [], "available_dayparts": [], "session_profile": None,
+            "quality_preferred": False, "hard_blocked": False, "conditional": False,
+            "confidence": "EXPLICIT",
+        }
+        targets.append(target)
+
+    # The legacy parser may have mistaken "can't do hard" for both QUALITY intent
+    # and ALL_DAY unavailability. Remove only those consequences. Do not erase a
+    # separately explicit whole-training restriction (handled above).
+    if str(target.get("session_profile") or "").upper() in {"QUALITY", "HARD", "VO2", "THRESHOLD", "TTE", "SPRINTS"}:
+        target["session_profile"] = None
+    target["quality_preferred"] = False
+    target["hard_blocked_dayparts"] = blocked_parts
+    target["hard_blocked"] = "ALL_DAY" in blocked_set
+    unavailable = list(target.get("unavailable_dayparts") or [])
+    if "ALL_DAY" in blocked_set:
+        unavailable = [p for p in unavailable if p != "ALL_DAY"]
+    else:
+        unavailable = [p for p in unavailable if p not in blocked_set]
+    target["unavailable_dayparts"] = unavailable
+    target["preferred_dayparts"] = [p for p in (target.get("preferred_dayparts") or []) if p not in blocked_set and "ALL_DAY" not in blocked_set]
+    target["hard_restriction_source"] = restriction.get("source")
+    targets.sort(key=lambda x: str(x.get("date") or ""))
+    out["future_targets"] = targets
+
+    # Rebuild projections from the normalized target state.
+    out["availability"] = {"entries": [
+        {"date": t.get("date"), "daypart": part, "state": state}
+        for t in targets
+        for state, key in (("AVAILABLE", "available_dayparts"), ("UNAVAILABLE", "unavailable_dayparts"), ("UNCERTAIN", "uncertain_dayparts"))
+        for part in (t.get(key) or [])
+    ]}
+    out["timing_preference"] = {"entries": [
+        {"date": t.get("date"), "preferred_dayparts": list(t.get("preferred_dayparts") or [])}
+        for t in targets if t.get("preferred_dayparts")
+    ]}
+    out["session_preference"] = {"entries": [
+        {"date": t.get("date"), "profile": t.get("session_profile"), "conditional": bool(t.get("conditional"))}
+        for t in targets if t.get("session_profile")
+    ]}
+    intent = out.get("training_intent") if isinstance(out.get("training_intent"), dict) else {}
+    if str(intent.get("target_date") or "") == ds and str(intent.get("profile") or "").upper() in {"QUALITY", "HARD", "VO2", "THRESHOLD", "TTE", "SPRINTS"}:
+        out["training_intent"] = {
+            "active": False, "profile": None, "target_date": ds, "conditional": False,
+            "source": "EXPLICIT_HARD_ONLY_RESTRICTION", "schema": R160_SCHEMA,
+        }
+
+    rec = out.get("recovery_context") if isinstance(out.get("recovery_context"), dict) else {}
+    bits = []
+    if rec.get("state") == "NEGATIVE":
+        bits.append("your latest note reports reduced subjective recovery")
+    elif rec.get("state") == "POSITIVE":
+        bits.append("your latest note reports positive subjective recovery")
+    elif rec.get("state") == "MIXED":
+        bits.append("your latest note contains both fatigue and readiness signals")
+    if out.get("constraints"):
+        bits.append("context includes " + "/".join(str(x).lower().replace("_", " ") for x in out.get("constraints") or []))
+    label = "today" if ds == now.date().isoformat() else ("tomorrow" if ds == (now.date()+timedelta(days=1)).isoformat() else ds)
+    if "ALL_DAY" in blocked_set:
+        bits.append(f"hard/intensity work is unavailable {label}; easy training availability is not ruled out")
+    else:
+        parts_text = _v135_human_parts(blocked_parts)
+        bits.append(f"hard/intensity work is unavailable {label} in the {parts_text}; other training opportunities remain possible")
+    out["narrative_context"] = {"material": True, "summary": "Your latest note matters here: " + "; ".join(bits) + "."}
+    out["hard_only_scope_schema"] = R160_SCHEMA
+    out["active"] = True
+    return out
+
+
+def _v133_interpret_athlete_note(now=None, logs=None):
+    now = now or get_rome_now()
+    out = _v133_interpret_athlete_note_r159_final(now=now, logs=logs)
+    try:
+        rows = list(logs if logs is not None else load_daily_logs(80))
+    except Exception:
+        rows = []
+    rows = [r for r in rows if str(r.get("note") or "").strip()]
+    rows.sort(key=lambda r: (str(r.get("logged_at_utc") or ""), str(r.get("local_date") or ""), str(r.get("local_time") or "")), reverse=True)
+    if not rows:
+        return out
+    note = str(rows[0].get("note") or "").strip()
+    restriction = _v160_hard_only_restriction(note, now=now)
+    return _v160_rebuild_note_views(out, restriction, now) if restriction else out
+
+
+def _v160_relevant_note_target(planning_context, now=None):
+    now = now or get_rome_now()
+    interp = (planning_context or {}).get("athlete_note_interpretation") or {}
+    today = now.date().isoformat()
+    targets = []
+    for t in interp.get("future_targets") or []:
+        ds = str(t.get("date") or "")
+        material = bool(
+            t.get("session_profile") or t.get("preferred_dayparts") or t.get("uncertain_dayparts") or
+            t.get("unavailable_dayparts") or t.get("available_dayparts") or t.get("hard_blocked") or
+            t.get("hard_blocked_dayparts")
+        )
+        if ds and ds >= today and material:
+            targets.append(t)
+    targets.sort(key=lambda t: str(t.get("date") or ""))
+    return targets[0] if targets else None
+
+
+def _v136_relevant_note_target(planning_context, now=None):
+    return _v160_relevant_note_target(planning_context, now=now)
+
+
+def _v135_target_from_context(planning_context):
+    return _v160_relevant_note_target(planning_context)
+
+
+def build_planning_context(now=None):
+    now = now or get_rome_now()
+    ctx = _build_planning_context_r159_final(now=now)
+    interp = _v133_interpret_athlete_note(now=now)
+    ctx["athlete_note_interpretation"] = interp
+    target = _v160_relevant_note_target(ctx, now=now)
+    if target:
+        ctx["future_note_intent"] = {
+            "schema": R160_SCHEMA, "active": True, "date": target.get("date"),
+            "preferred_dayparts": list(target.get("preferred_dayparts") or []),
+            "uncertain_dayparts": list(target.get("uncertain_dayparts") or []),
+            "unavailable_dayparts": list(target.get("unavailable_dayparts") or []),
+            "available_dayparts": list(target.get("available_dayparts") or []),
+            "quality_preferred": bool(target.get("quality_preferred")),
+            "hard_blocked": bool(target.get("hard_blocked")),
+            "hard_blocked_dayparts": list(target.get("hard_blocked_dayparts") or []),
+            "session_profile": target.get("session_profile"),
+            "conditional": bool(target.get("conditional")),
+            "source": "DAILY_NOTE_STRUCTURED_INTENT", "note_excerpt": interp.get("note_excerpt"),
+            "parse_policy": "R160_HARD_ONLY_INTENSITY_SCOPE",
+        }
+    summary = ((interp.get("narrative_context") or {}).get("summary") if isinstance(interp, dict) else None)
+    if summary:
+        base = str(ctx.get("summary") or "Training as planned")
+        base = re.sub(r"\s*·\s*Your latest note matters here:.*$", "", base).strip()
+        ctx["summary"] = (base + " · " + summary).strip(" ·")
+    return ctx
+
+
+def _v117_quality_candidates(training_rhythm, coach_clock, planning_context, now):
+    rows = [dict(x) for x in _v117_quality_candidates_r159_final(training_rhythm, coach_clock, planning_context, now)]
+    intent = (planning_context or {}).get("future_note_intent") or {}
+    target_date = str(intent.get("date") or "") if intent.get("active") else ""
+    blocked = set(intent.get("hard_blocked_dayparts") or [])
+    if not target_date or not blocked or "ALL_DAY" in blocked:
+        return rows
+    kept = []
+    for row in rows:
+        dt = row.get("dt")
+        if isinstance(dt, datetime) and dt.date().isoformat() == target_date:
+            part = _v135_note_daypart(dt.hour * 60 + dt.minute)
+            if part in blocked:
+                continue
+        kept.append(row)
+    return kept
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.36 WIP R160 · HARD-ONLY NOTE SCOPE · R159 BASELINE"
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
