@@ -36917,7 +36917,193 @@ def _v117_quality_candidates(training_rhythm, coach_clock, planning_context, now
     return kept
 
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.36 WIP R160 · HARD-ONLY NOTE SCOPE · R159 BASELINE"
+# R161 · CONTINUITY LINEAGE TRUTH
+# Prescription provenance must describe what actually changed. Reissuing the same
+# workout because its plan/fingerprint/context was rebuilt is NOT a workout
+# invalidation. A true replacement must name the latest previously issued hard
+# workout for the same target date, independent of period-label churn.
+R161_SCHEMA = "V4.9.37-R161-1"
+_build_nova_prescription_r160_final = build_nova_prescription
+
+
+def _v161_target_date(out, coach_clock):
+    match = (out or {}).get("quality_slot_match") if isinstance((out or {}).get("quality_slot_match"), dict) else {}
+    ds = str(match.get("slot_date") or match.get("target_date") or "")[:10]
+    if ds:
+        return ds
+    try:
+        idx = int((out or {}).get("selected_slot_index"))
+        slot = list((coach_clock or {}).get("next_slots") or [])[idx]
+        return str((slot or {}).get("date") or "")[:10]
+    except Exception:
+        return ""
+
+
+def _v161_latest_issued_for_date(ledger, target_date):
+    rows = []
+    for row in (ledger or {}).get("prescription_history") or []:
+        if not _v153_is_training_plan(row):
+            continue
+        if str((row or {}).get("date") or "")[:10] != str(target_date or "")[:10]:
+            continue
+        issued = _v153_parse_local((row or {}).get("recorded_at_local"))
+        if issued is None:
+            continue
+        rows.append((issued, dict(row)))
+    if not rows:
+        return None
+    rows.sort(key=lambda x: x[0])
+    return rows[-1][1]
+
+
+def _v161_origin_transition(ledger, target_date, current_wid):
+    rows = []
+    for row in (ledger or {}).get("prescription_history") or []:
+        if not isinstance(row, dict) or not _v153_is_training_plan(row):
+            continue
+        if str(row.get("date") or "")[:10] != str(target_date or "")[:10]:
+            continue
+        wid = str(row.get("nova_workout_id") or row.get("nova_contract_id") or "").strip()
+        if not wid or wid == current_wid:
+            continue
+        if str(row.get("superseded_by_workout_id") or "").strip() != current_wid:
+            continue
+        when = _v153_parse_local(row.get("superseded_at_local") or row.get("recorded_at_local"))
+        rows.append((when or datetime.min.replace(tzinfo=ZoneInfo("Europe/Rome")), dict(row)))
+    if not rows:
+        return None
+    rows.sort(key=lambda x: x[0])
+    row = rows[-1][1]
+    return {
+        "invalidated_workout_id": row.get("nova_workout_id") or row.get("nova_contract_id"),
+        "invalidated_fingerprint": row.get("prescription_fingerprint"),
+        "superseded_at_local": row.get("superseded_at_local"),
+        "replacement_workout_id": current_wid,
+    }
+
+
+def _v161_selected_raw(out):
+    try:
+        idx = int((out or {}).get("selected_slot_index"))
+        raw = list((out or {}).get("raw_sessions") or [])
+        return raw[idx] if 0 <= idx < len(raw) and isinstance(raw[idx], dict) else {}
+    except Exception:
+        return {}
+
+
+def _v161_mechanics_change_status(prior, current):
+    prior = prior or {}; current = current or {}
+    comparable = 0
+    for key in ("prescribed_power_low", "prescribed_power_high", "interval_minutes"):
+        a, b = prior.get(key), current.get(key)
+        if a is None or b is None:
+            continue
+        comparable += 1
+        if a != b:
+            return True
+    a_title, b_title = str(prior.get("title") or "").strip(), str(current.get("title") or "").strip()
+    if a_title and b_title:
+        comparable += 1
+        if a_title != b_title:
+            return True
+    return False if comparable >= 2 else None
+
+
+def _v161_normalize_continuity(out, coach_clock, microcycle_ledger, adaptive_roadmap):
+    if not isinstance(out, dict) or str(out.get("status") or "").upper() != "PRESCRIBED":
+        return out
+    cont = out.get("prescription_continuity") if isinstance(out.get("prescription_continuity"), dict) else None
+    if not cont:
+        return out
+    state = str(cont.get("state") or "").upper()
+    self_invalidation = bool(
+        cont.get("invalidated_workout_id") and cont.get("replacement_workout_id") and
+        str(cont.get("invalidated_workout_id")) == str(cont.get("replacement_workout_id"))
+    )
+    if state != "PRIOR_WORKOUT_INVALIDATED_BY_SEVERE_DOSE_GUARD" and not self_invalidation:
+        return out
+
+    current_wid = str(out.get("workout_id") or out.get("contract_id") or "").strip()
+    target_date = _v161_target_date(out, coach_clock)
+    prior = _v161_latest_issued_for_date(microcycle_ledger or {}, target_date) if target_date else None
+    prior_wid = str((prior or {}).get("nova_workout_id") or (prior or {}).get("nova_contract_id") or "").strip()
+    origin = _v161_origin_transition(microcycle_ledger or {}, target_date, current_wid) if target_date and current_wid else None
+
+    if prior and prior_wid == current_wid:
+        mechanics_changed = _v161_mechanics_change_status(prior, _v161_selected_raw(out))
+        out["prescription_continuity"] = {
+            "schema": R161_SCHEMA,
+            "active": True,
+            "state": "UNCHANGED_WORKOUT_ID_ALREADY_ISSUED",
+            "reason": "SAME_WORKOUT_ALREADY_ISSUED; RECOMPILE_OR_CONTEXT_REFRESH_IS_NOT_WORKOUT_INVALIDATION",
+            "workout_id": current_wid,
+            "target_date": target_date,
+            "prior_workout_id": prior_wid,
+            "prior_fingerprint": prior.get("prescription_fingerprint"),
+            "prior_recorded_at_local": prior.get("recorded_at_local"),
+            "invalidated_workout_id": None,
+            "replacement_workout_id": None,
+            "workout_identity_changed": False,
+            "mechanics_changed": mechanics_changed,
+            "mechanics_comparison": "PROVEN_CHANGED" if mechanics_changed is True else ("PROVEN_UNCHANGED" if mechanics_changed is False else "INSUFFICIENT_COMPARABLE_FIELDS"),
+            "safety_replan": False,
+            "historical_reinterpretation_only": False,
+            "severe_guard_active": bool(_v159_reentry_active({}, adaptive_roadmap)),
+            "origin_transition": origin,
+            "rule": "The same already-issued workout may be recompiled under a new plan/fingerprint/context without being called invalidated. A true invalidation requires a different prior workout identity.",
+        }
+        out["prescription_continuity_schema"] = R161_SCHEMA
+        return out
+
+    if prior and prior_wid and current_wid and prior_wid != current_wid:
+        fixed = dict(cont)
+        fixed.update({
+            "schema": R161_SCHEMA,
+            "active": True,
+            "state": "PRIOR_WORKOUT_INVALIDATED_BY_SEVERE_DOSE_GUARD",
+            "invalidated_workout_id": prior_wid,
+            "invalidated_fingerprint": prior.get("prescription_fingerprint"),
+            "invalidated_recorded_at_local": prior.get("recorded_at_local"),
+            "replacement_workout_id": current_wid,
+            "workout_id": current_wid,
+            "target_date": target_date,
+            "safety_replan": True,
+            "historical_reinterpretation_only": False,
+            "lineage_source": "LATEST_PREVIOUSLY_ISSUED_HARD_WORKOUT_ON_TARGET_DATE",
+        })
+        out["prescription_continuity"] = fixed
+        out["prescription_continuity_schema"] = R161_SCHEMA
+        return out
+
+    if self_invalidation:
+        out["prescription_continuity"] = {
+            "schema": R161_SCHEMA,
+            "active": True,
+            "state": "LINEAGE_UNRESOLVED_NO_PRIOR_DIFFERENT_WORKOUT",
+            "reason": "SELF_INVALIDATION_CLAIM_REMOVED; NO_DIFFERENT_PRIOR_WORKOUT_COULD_BE_PROVEN",
+            "workout_id": current_wid or None,
+            "target_date": target_date or None,
+            "invalidated_workout_id": None,
+            "replacement_workout_id": current_wid or None,
+            "safety_replan": False,
+            "historical_reinterpretation_only": False,
+            "origin_transition": origin,
+            "rule": "Never claim that a workout invalidated itself. If prior lineage cannot be proven, preserve the athlete-facing prescription and expose unresolved provenance instead of inventing a replacement event.",
+        }
+        out["prescription_continuity_schema"] = R161_SCHEMA
+    return out
+
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    out = _build_nova_prescription_r160_final(
+        nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger, power_model=power_model, ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range, training_definitions=training_definitions,
+    )
+    return _v161_normalize_continuity(out, coach_clock, microcycle_ledger, adaptive_roadmap)
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.37 WIP R161 · CONTINUITY LINEAGE TRUTH · R160 BASELINE"
 
 
 if __name__ == "__main__":
