@@ -3444,7 +3444,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% for s in data.next_sessions %}
 {% set n = data.nutrition_plan[loop.index0] if data.nutrition_plan and loop.index0 < (data.nutrition_plan|length) else none %}
 <article class="v4-card v4-session {{ s.intensity_class }} v23-session-card v23-col-{{ loop.index }}">
-<div class="v4-session-slot">{{ s.slot }}</div>
+<div class="v4-session-slot">{% if s.date %}{{ s.date[8:10] }}/{{ s.date[5:7] }}/{{ s.date[:4] }} · {% endif %}{{ s.slot }}</div>
 <div class="v150-workout-title-row"><h3>{{ s.title|replace('Coach-selected session','Nova-selected session') }}</h3><button class="v150-copy-workout" type="button" data-copy-workout="{{ s.title|replace('Coach-selected session','Nova-selected session')|e }}" aria-label="Copy workout name" title="Copy workout name">⧉<span>Copy</span></button></div>
 <div class="v4-session-meta"><span class="v4-session-pill">{{ s.duration|replace('Coach-selected duration','Nova-selected duration') }}</span><span class="v4-session-pill">{{ s.intensity }}</span>{% if s.provisional_quality %}<span class="v4-session-pill v4873-provisional-pill">⚡ CANDIDATE · REASSESS</span>{% endif %}{% if s.environment %}<span class="v4-session-pill {% if s.is_planned_training %}v24-plan-pill{% endif %}">{{ "🚴 " if s.is_planned_training else "" }}{{ s.environment }}</span>{% endif %}{% if s.planned_demand and s.planned_demand not in ["COACH","RACE"] %}<span class="v4-session-pill v24-plan-pill">PLAN {{ s.planned_demand }}</span>{% endif %}</div>
 <div class="v4-session-main">{{ s.main_set|replace('See coach recommendation.','See the recommendation above.') }}</div>
@@ -3548,8 +3548,9 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v23-recovery-head"><span>🍚</span><div><strong>POST-WORKOUT RECOVERY</strong><small>Your first recovery meal is scaled to the exercise and the time available before the next demand. Carbs and protein get specific targets when useful; fat stays at normal meal intake because there is no robust recovery-specific gram target.</small></div>{% if ir.get('active') %}<div class="v4864-recovery-now" title="Just-completed demanding activity · {{ ir.get('family') or ir.get('kind') }}"><span class="v4864-recovery-now-label">RECOVERY NOW</span><span class="v4863-protein-dose"><em>CARBS</em><b>{{ ir.get('post_cho') }}</b></span><span class="v4863-protein-dose" title="{{ ir.get('post_protein_basis') or 'Post-workout protein target' }}"><em>PROTEIN</em><b>{{ ir.get('post_protein') }}</b></span><span class="v4863-protein-dose" title="{{ ir.get('post_fat_basis') or 'No recovery-specific fat gram target' }}"><em>FAT</em><b>{{ ir.get('post_fat') or 'Normal meal' }}</b></span><small class="v4864-recovery-now-name">{{ ir.get('activity_name') }}{% if ir.get('metabolic_demand') %} · metabolic {{ ir.get('metabolic_demand') }} · glycogen {{ ir.get('glycogen_pressure') }}{% endif %}</small></div>{% endif %}</div>
 <div class="v23-recovery-grid">
 {% for n in data.nutrition_plan %}
+{% set dated_session = data.next_sessions[loop.index0] if data.next_sessions and loop.index0 < (data.next_sessions|length) else none %}
 <div class="v23-recovery-card">
-<div class="v23-recovery-slot">{{ n.slot }}</div>
+<div class="v23-recovery-slot">{% if dated_session and dated_session.date %}{{ dated_session.date[8:10] }}/{{ dated_session.date[5:7] }}/{{ dated_session.date[:4] }} · {% endif %}{{ n.slot }}</div>
 <h3>{{ n.title }}</h3>
 <div class="v23-recovery-demand"><span>SESSION DEMAND</span><b>{{ n.session_demand }}</b></div>
 <div class="v4863-recovery-macros"><span class="v4863-protein-dose"><em>CARBS</em><b>{{ n.post_cho }}</b></span><span class="v4863-protein-dose" title="{{ n.get('post_protein_basis') or 'No dedicated protein dose is needed for this session' }}"><em>PROTEIN</em><b>{{ n.get('post_protein') or 'Normal meal' }}</b></span><span class="v4863-protein-dose" title="{{ n.get('post_fat_basis') or 'No recovery-specific fat gram target' }}"><em>FAT</em><b>{{ n.get('post_fat') or 'Normal meal' }}</b></span></div>
@@ -38719,7 +38720,7 @@ def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_de
     return result
 
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.48 WIP R172 · RECOVERY-REOPENED QUALITY TIMING · R171 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.49 WIP R173 · ABSOLUTE SESSION DATE DISPLAY · R172 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
