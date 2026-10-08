@@ -3276,12 +3276,12 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% if is_preview %}
 <div class="v481-preflight is-preview" id="snapshot-input-direction"><div class="v481-preflight-head"><span>🧭</span><div><strong>TRAINING DIRECTION · PRE-SNAPSHOT</strong><small>In the live workspace this is chosen before the next Snapshot is generated.</small></div></div><div class="v481-preflight-grid"><label class="v481-preflight-field"><span>TRAINING MODEL</span><select disabled><option>PYRAMIDAL</option></select></label><label class="v481-preflight-field"><span>PRIMARY GOAL</span><select disabled><option>⏱️ 20' POWER</option></select></label></div></div>
 <a class="v4-preview-link" href="{{ url_for('home') if session.get('logged_in') else url_for('login') }}">{{ 'Back to live home' if session.get('logged_in') else 'Back to sign in' }}</a>
-<div class="v4878-snapshot-actions"><button class="v4878-guide-trigger" type="button" data-v4832-open="snapshot-guide-modal" aria-haspopup="dialog" aria-controls="snapshot-guide-modal" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20.5H7z"/><path d="M14 3.5v4h4M10 12h5M10 15.5h5"/></svg><span>Snapshot Guide</span></button><button class="v4-btn v4-btn-orange" style="width:100%;opacity:.55;cursor:not-allowed;" type="button" disabled aria-label="Generate Snapshot disabled in preview">GENERATE SNAPSHOT</button></div>
+<div class="v4878-snapshot-actions"><button class="v4878-guide-trigger" type="button" data-v4832-open="snapshot-guide-modal" aria-haspopup="dialog" aria-controls="snapshot-guide-modal" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20.5H7z"/><path d="M14 3.5v4h4M10 12h5M10.25.5h5"/></svg><span>Snapshot Guide</span></button><button class="v4-btn v4-btn-orange" style="width:100%;opacity:.55;cursor:not-allowed;" type="button" disabled aria-label="Generate Snapshot disabled in preview">GENERATE SNAPSHOT</button></div>
 {% else %}
 <a class="v4-preview-link" href="{{ url_for('preview') }}">UI Preview · free</a>
 <form method="post" action="{{ url_for('analyze') }}" id="snapshot-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <div class="v481-preflight" id="snapshot-input-direction"><div class="v481-preflight-head"><span>🧭</span><div><strong>TRAINING DIRECTION · PRE-SNAPSHOT</strong><small>Choose what you want THE LAB to evaluate in the next Snapshot.</small></div></div><div class="v481-preflight-grid"><label class="v481-preflight-field"><span>TRAINING MODEL</span><select name="distribution_target" required>{% for o in training_strategy_ui.distribution_options %}<option value="{{ o.key }}" {% if o.key == training_strategy_ui.distribution_target %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</select></label><label class="v481-preflight-field"><span>PRIMARY GOAL</span><select name="primary_goal" required><option value="" {% if not training_strategy_ui.primary_goal %}selected{% endif %} disabled>Choose goal…</option>{% for o in training_strategy_ui.goal_options %}{% if o.key!='VO2MAX' or training_strategy_ui.primary_goal=='VO2MAX' %}<option value="{{ o.key }}" {% if o.key == training_strategy_ui.primary_goal %}selected{% endif %}>{{ o.emoji }} {{ o.label }}</option>{% endif %}{% endfor %}</select></label></div><small class="v481-preflight-note">Changing either choice starts a new declared block. If the choices are unchanged, the current block continues. One click below saves the direction first, then generates the Snapshot.</small></div>
-<div class="v4878-snapshot-actions"><button class="v4878-guide-trigger" type="button" data-v4832-open="snapshot-guide-modal" aria-haspopup="dialog" aria-controls="snapshot-guide-modal" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20.5H7z"/><path d="M14 3.5v4h4M10 12h5M10 15.5h5"/></svg><span>Snapshot Guide</span></button><button class="v4-btn v4-btn-orange" style="width:100%;" type="submit" id="snapshot-btn" data-request-feedback="off">GENERATE SNAPSHOT</button></div>
+<div class="v4878-snapshot-actions"><button class="v4878-guide-trigger" type="button" data-v4832-open="snapshot-guide-modal" aria-haspopup="dialog" aria-controls="snapshot-guide-modal" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20.5H7z"/><path d="M14 3.5v4h4M10 12h5M10.25.5h5"/></svg><span>Snapshot Guide</span></button><button class="v4-btn v4-btn-orange" style="width:100%;" type="submit" id="snapshot-btn" data-request-feedback="off">GENERATE SNAPSHOT</button></div>
 <div class="loading-track" id="loading-track"><div class="loading-fill"></div></div>
 <p class="loading-label" id="loading-label"></p>
 </form>
@@ -38651,7 +38651,75 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
     return out
 
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.47 WIP R171 · FUTURE PLAN IDENTITY RESEAL + ADMIN QA ALIGNMENT · R170 BASELINE"
+# R172: recovery-aware re-entry into earlier already-eligible quality opportunities.
+# This wraps the native selector instead of bypassing any upstream health, recovery,
+# race, calendar, note, spacing, or prescription continuity authority.
+R172_SCHEMA = "V4.9.48-R172-1"
+_v117_select_quality_window_r171_final = _v117_select_quality_window
+
+
+def _v172_quality_earlier_slot(first, selected, candidates, cadence, extra_delay):
+    """Permit earlier quality only for comparably suitable slots after recovery normalizes.
+
+    The caller has already passed all hard gates and the native spacing check.
+    Rhythm is a preference, not an additional recovery hold. When role evidence is
+    absent or conflicting, retain the native result rather than invent authority.
+    """
+    if not isinstance(first, dict) or not isinstance(selected, dict) or first is selected:
+        return False
+    try:
+        # In the existing quality-window contract, zero added delay means the
+        # readiness-based recovery penalty has cleared (green readiness).
+        if float(extra_delay) != 0.0:
+            return False
+        early_dt, later_dt = first["dt"], selected["dt"]
+        if not isinstance(early_dt, datetime) or not isinstance(later_dt, datetime):
+            return False
+        if early_dt >= later_dt or (later_dt - early_dt) > timedelta(hours=48):
+            return False
+        # Explicit scheduling is higher authority than learned weekday rhythm.
+        if first.get("explicit") or selected.get("explicit"):
+            return False
+        # Only use genuinely learned per-day quality rates, never a default 0.5.
+        profile = cadence or {}
+        rates = profile.get("quality_rate_by_weekday") or {}
+        early_raw = rates.get(early_dt.weekday(), rates.get(str(early_dt.weekday())))
+        later_raw = rates.get(later_dt.weekday(), rates.get(str(later_dt.weekday())))
+        if early_raw is None or later_raw is None:
+            return False
+        early_rate, later_rate = float(early_raw), float(later_raw)
+        if not all(math.isfinite(x) and 0 <= x <= 1 for x in (early_rate, later_rate)):
+            return False
+        # Require a positive observed quality tendency at the earlier slot and
+        # absence of a meaningful quality-preference gap.
+        return early_rate >= 0.5 and later_rate - early_rate <= 0.25
+    except (TypeError, ValueError, KeyError, OverflowError):
+        return False
+
+
+def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_delay, second_hard=False):
+    result = _v117_select_quality_window_r171_final(
+        candidates, last_end, spacing, cadence, extra_delay, second_hard=second_hard
+    )
+    if not isinstance(result, tuple) or len(result) != 4:
+        return result
+    earliest_dt, selected_dt, reason, selected_row = result
+    if earliest_dt is None or selected_dt is None or earliest_dt >= selected_dt:
+        return result
+    # Mirror the native selector's spacing gate exactly: never use a candidate
+    # which was excluded by its lower bound.
+    try:
+        lower = (last_end + timedelta(hours=float((spacing or {}).get("earliest_hours") or 36) + extra_delay)) if last_end else None
+        valid = [r for r in candidates if isinstance(r, dict) and isinstance(r.get("dt"), datetime) and (lower is None or r["dt"] >= lower)]
+        first = next((r for r in valid if r["dt"] == earliest_dt), None)
+    except (TypeError, ValueError, OverflowError):
+        return result
+    if _v172_quality_earlier_slot(first, selected_row, candidates, cadence, extra_delay):
+        return earliest_dt, earliest_dt, "R172_RECOVERED_EARLIER_COMPARABLE_QUALITY_SLOT", first
+    return result
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.48 WIP R172 · RECOVERY-REOPENED QUALITY TIMING · R171 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
