@@ -37801,7 +37801,297 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
     return out
 
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.41 WIP R165 · SNAPSHOT FAULT-STAGE TRACE · R164 BASELINE"
+
+# R166 · OPTIONAL METRIC SHAPE SAFETY + MISSED HARD CARRY-FORWARD
+# Beta live traceback exposed an available aerobic-efficiency object with a missing
+# optional trend value. Separately, product review exposed a continuity gap: an
+# already-issued hard workout whose target date passes without attributable execution
+# should remain an unresolved coaching commitment and move to the next eligible hard
+# opportunity rather than silently disappearing. Calendar events themselves never move.
+R166_SCHEMA = "V4.9.42-R166-1"
+
+
+def _v166_text_number(value, decimals=1, signed=False, suffix=""):
+    try:
+        num = float(value)
+        if not math.isfinite(num):
+            return "n/a"
+    except (TypeError, ValueError):
+        return "n/a"
+    spec = f"+.{int(decimals)}f" if signed else f".{int(decimals)}f"
+    return format(num, spec) + str(suffix or "")
+
+
+# Local formatter hardening only: missing optional metrics degrade to n/a instead of
+# taking down the entire Snapshot.
+def aerobic_efficiency_text(ae):
+    if not ae or not ae.get("available"):
+        return "AEROBIC EFFICIENCY / DURABILITY: learning; insufficient comparable non-HEAT steady Z2 sessions."
+    recent_ratio = _v166_text_number(ae.get("recent_ratio"), 3)
+    baseline_ratio = _v166_text_number(ae.get("baseline_ratio"), 3)
+    trend = _v166_text_number(ae.get("trend_pct"), 1, signed=True, suffix="%")
+    recent_dec = _v166_text_number(ae.get("recent_decoupling"), 1, suffix="%")
+    baseline_dec = _v166_text_number(ae.get("baseline_decoupling"), 1, suffix="%")
+    return (
+        f"AEROBIC EFFICIENCY / DURABILITY ({ae.get('cohort_label')}): {ae.get('status')} | confidence {ae.get('confidence')}\n"
+        f"- Recent power/HR {recent_ratio} W/bpm vs prior {baseline_ratio} | change {trend}\n"
+        f"- Recent decoupling {recent_dec} vs prior {baseline_dec}. HEAT sessions excluded from this baseline."
+    )
+
+
+def _v166_row_date(row):
+    try:
+        return date.fromisoformat(str((row or {}).get("date") or (row or {}).get("planned_date") or "")[:10])
+    except Exception:
+        return None
+
+
+def _v166_execution_fingerprints(ledger):
+    out = set()
+    for row in (ledger or {}).get("prescription_execution_history") or []:
+        if not isinstance(row, dict):
+            continue
+        fp = str(row.get("prescription_fingerprint") or "").strip()
+        if fp:
+            out.add(fp)
+    return out
+
+
+def _v166_hard_after_planned_date(ledger, planned_day):
+    if not isinstance(planned_day, date):
+        return False
+    for row in (ledger or {}).get("completed_hard_sessions") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            d = date.fromisoformat(str(row.get("date") or "")[:10])
+        except Exception:
+            continue
+        if d >= planned_day:
+            return True
+    return False
+
+
+def _v166_is_missed_candidate(row, ledger, today):
+    if not isinstance(row, dict) or not _v153_is_training_plan(row):
+        return False
+    planned = _v166_row_date(row)
+    if planned is None or planned >= today:
+        return False
+    # Very old commitments must be re-decided from current evidence rather than
+    # dragged forward indefinitely.
+    if (today - planned).days > 14:
+        return False
+    status = str(row.get("prescription_status") or "").upper()
+    if status in {"FULFILLED", "SUPERSEDED", "CANCELLED", "WITHDRAWN"}:
+        return False
+    if row.get("superseded_by_fingerprint") or row.get("fulfilled_at_local") or row.get("executed_activity_id"):
+        return False
+    wid = str(row.get("nova_workout_id") or row.get("nova_contract_id") or "").upper()
+    if wid == "VALIDATION_CONTRACT_V1" or str(row.get("stimulus_role") or "").upper() == "VALIDATE":
+        return False
+    fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+    if fp in _v166_execution_fingerprints(ledger):
+        return False
+    # Any hard work on/after the planned date is material new evidence. Do not
+    # force a missed prescription through it merely because identity matching failed.
+    if _v166_hard_after_planned_date(ledger, planned):
+        return False
+    return True
+
+
+def _v166_latest_missed_hard(ledger, today):
+    rows = []
+    for row in (ledger or {}).get("prescription_history") or []:
+        if not _v166_is_missed_candidate(row, ledger, today):
+            continue
+        planned = _v166_row_date(row)
+        issued = _v153_parse_local(row.get("recorded_at_local"))
+        rows.append((planned, issued or datetime.min.replace(tzinfo=_runtime_timezone()), dict(row)))
+    if not rows:
+        return None
+    rows.sort(key=lambda x: (x[0], x[1]))
+    return rows[-1][2]
+
+
+def _v166_clock_today(coach_clock):
+    raw = str((coach_clock or {}).get("iso") or "")
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+    except Exception:
+        return get_rome_now().date()
+
+
+def _v166_target_slot(out, coach_clock):
+    try:
+        idx = int((out or {}).get("selected_slot_index"))
+        slot = list((coach_clock or {}).get("next_slots") or [])[idx]
+        if isinstance(slot, dict):
+            return idx, slot
+    except Exception:
+        pass
+    return None, None
+
+
+def _v166_carry_missed_hard(out, nova_decision, coach_clock, ledger):
+    if not isinstance(out, dict) or str(out.get("status") or "").upper() != "PRESCRIBED":
+        return out
+    if str((nova_decision or {}).get("action") or "").upper() != "TRAIN":
+        return out
+    today = _v166_clock_today(coach_clock)
+    missed = _v166_latest_missed_hard(ledger or {}, today)
+    if not missed:
+        return out
+    idx, slot = _v166_target_slot(out, coach_clock)
+    if idx is None or not isinstance(slot, dict):
+        return out
+    try:
+        target_day = date.fromisoformat(str(slot.get("date") or "")[:10])
+    except Exception:
+        return out
+    if target_day < today or slot.get("is_race") or str(slot.get("restriction") or "").upper() in {"NO_TRAINING", "NO_INTENSITY", "HEALTH"}:
+        return out
+    raw = list(out.get("raw_sessions") or [])
+    # At this pre-compile stage canonical hard raw sessions do not necessarily carry
+    # intensity_class/hard_spacing_relevant yet. The prescription-level hard flag is
+    # authoritative here; final safety compilation remains free to block execution.
+    if not bool(out.get("hard_prescription_available")):
+        return out
+    if idx < 0 or idx >= len(raw) or not isinstance(raw[idx], dict):
+        return out
+    missed_wid = str(missed.get("nova_workout_id") or missed.get("nova_contract_id") or "").strip()
+    if not missed_wid:
+        return out
+    preserved = _v153_preserved_raw(missed, out.get("dimension"))
+    preserved["why"] = (
+        "This hard workout was already issued but its target date passed without attributable execution. "
+        "It remains the unresolved coaching commitment and moves to the next eligible quality opportunity; "
+        "recovery, availability, races and final safety gates still outrank carry-forward."
+    )
+    preserved["_tl_prescription_continuity_lock"] = False
+    raw[idx] = preserved
+    old_current = str(out.get("workout_id") or out.get("contract_id") or "").strip() or None
+    old_date = str(missed.get("date") or missed.get("planned_date") or "")[:10]
+    fp = str(missed.get("prescription_fingerprint") or _v136_prescription_fingerprint(missed))
+    out["raw_sessions"] = raw
+    out["workout_id"] = missed_wid
+    out["contract_id"] = missed.get("nova_contract_id") or missed_wid
+    out["source"] = "MISSED_PRESCRIPTION_CARRY_FORWARD"
+    out["workout_library"] = {
+        "version": missed.get("nova_workout_library_version") or NOVA_WORKOUT_LIBRARY_VERSION,
+        "reason": "CARRY_UNEXECUTED_HARD_TO_NEXT_ELIGIBLE_SLOT",
+        "candidate_count": 0,
+    }
+    out["prescription_continuity"] = {
+        "schema": R166_SCHEMA,
+        "active": True,
+        "state": "MISSED_HARD_CARRIED_FORWARD",
+        "reason": "PRIOR_TARGET_DATE_PASSED_WITHOUT_ATTRIBUTABLE_EXECUTION",
+        "workout_id": missed_wid,
+        "carried_from_date": old_date,
+        "carried_from_fingerprint": fp,
+        "carried_to_date": target_day.isoformat(),
+        "carried_to_period": slot.get("period"),
+        "replaced_fresh_candidate_workout_id": old_current if old_current != missed_wid else None,
+        "mechanics_changed": False,
+        "calendar_events_shifted": False,
+        "rule": "An unexecuted issued hard workout remains unresolved and moves to the next eligible hard slot. Explicit Calendar events never shift; easy sessions are not accumulated as training debt. New hard evidence, safety/recovery, race priority or validation can invalidate the carry.",
+    }
+    out["prescription_continuity_schema"] = R166_SCHEMA
+    out["missed_prescription_carry_forward"] = dict(out["prescription_continuity"])
+    return out
+
+
+_build_nova_prescription_r165_final = build_nova_prescription
+
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    out = _build_nova_prescription_r165_final(
+        nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger, power_model=power_model, ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range, training_definitions=training_definitions,
+    )
+    return _v166_carry_missed_hard(out, nova_decision, coach_clock, microcycle_ledger or {})
+
+
+_update_microcycle_ledger_from_snapshot_r165_final = update_microcycle_ledger_from_snapshot
+
+
+def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=None):
+    now = now or get_rome_now()
+    out = _update_microcycle_ledger_from_snapshot_r165_final(ledger, sessions, user_id=user_id, now=now)
+    if not isinstance(out, dict):
+        return out
+    today = now.date()
+    hist = [dict(x) for x in (out.get("prescription_history") or []) if isinstance(x, dict)]
+    executed = _v166_execution_fingerprints(out)
+    changed = False
+    for row in hist:
+        planned = _v166_row_date(row)
+        status = str(row.get("prescription_status") or "").upper()
+        fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+        if planned is None or planned >= today:
+            continue
+        if status in {"FULFILLED", "SUPERSEDED", "CANCELLED", "WITHDRAWN"} or fp in executed:
+            continue
+        if not _v153_is_training_plan(row):
+            continue
+        if row.get("fulfilled_at_local") or row.get("executed_activity_id") or row.get("superseded_by_fingerprint"):
+            continue
+        if _v166_hard_after_planned_date(out, planned):
+            # A different completed hard session is material new evidence; this is
+            # not training debt to be carried blindly.
+            if row.get("prescription_status") != "EXPIRED_BY_NEW_HARD_EVIDENCE":
+                row["prescription_status"] = "EXPIRED_BY_NEW_HARD_EVIDENCE"
+                row["expired_at_local"] = now.isoformat(timespec="seconds")
+                row["expiry_reason"] = "NEW_COMPLETED_HARD_SESSION_ON_OR_AFTER_TARGET_DATE"
+                changed = True
+            continue
+        if row.get("prescription_status") != "MISSED_UNEXECUTED":
+            row["prescription_status"] = "MISSED_UNEXECUTED"
+            row["missed_at_local"] = now.isoformat(timespec="seconds")
+            row["missed_reason"] = "TARGET_DATE_PASSED_WITHOUT_ATTRIBUTABLE_EXECUTION"
+            changed = True
+
+    # Link a missed row to a newly issued same-workout future row when carry-forward
+    # has actually survived final safety compilation and entered prescription history.
+    future = [r for r in hist if (_v166_row_date(r) is not None and _v166_row_date(r) >= today and _v153_is_training_plan(r))]
+    for row in hist:
+        if str(row.get("prescription_status") or "").upper() != "MISSED_UNEXECUTED":
+            continue
+        wid = str(row.get("nova_workout_id") or row.get("nova_contract_id") or "").strip()
+        if not wid:
+            continue
+        candidates = [r for r in future if str(r.get("nova_workout_id") or r.get("nova_contract_id") or "").strip() == wid]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda r: (_v166_row_date(r), str(r.get("recorded_at_local") or "")))
+        target = candidates[0]
+        tfp = str(target.get("prescription_fingerprint") or _v136_prescription_fingerprint(target))
+        if row.get("carried_forward_to_fingerprint") != tfp:
+            row["carried_forward_to_date"] = str(target.get("date") or "")[:10]
+            row["carried_forward_to_fingerprint"] = tfp
+            row["carried_forward_to_workout_id"] = wid
+            changed = True
+        if target.get("carried_from_fingerprint") is None:
+            target["carried_from_fingerprint"] = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+            target["carry_forward_schema"] = R166_SCHEMA
+            changed = True
+    out["prescription_history"] = hist[-32:]
+    out["missed_prescription_policy_schema"] = R166_SCHEMA
+    out["missed_prescription_policy"] = {
+        "hard_only": True,
+        "max_carry_age_days": 14,
+        "calendar_events_shifted": False,
+        "rule": "Past unexecuted hard prescriptions are marked MISSED_UNEXECUTED and may carry to the next eligible hard slot. Easy work is not accumulated as debt; explicit Calendar events remain fixed.",
+    }
+    if changed and out.get("ledger_id"):
+        payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
+        _db_execute("UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?", (payload, _now_utc_text(), out["ledger_id"], _data_owner_user_id(user_id)))
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.42 WIP R166 · OPTIONAL METRIC SHAPE SAFETY + MISSED HARD CARRY-FORWARD · R165 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
