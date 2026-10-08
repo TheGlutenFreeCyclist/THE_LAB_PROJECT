@@ -38099,7 +38099,7 @@ def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=N
 # quality candidate, but it remains provisional until a later recovery check.
 # Separately, markedly suppressed rMSSD/HRV must surface as an autonomic watch;
 # persistence can suggest systemic stress/illness context but is never diagnostic.
-R167_SCHEMA = "V4.9.43-R167-1"
+R168_SCHEMA = "V4.9.44-R168-1"
 
 
 def _v167_num(value):
@@ -38158,7 +38158,7 @@ def _v167_training_maturity(coach_clock, adaptive_roadmap=None):
         score += 1; reasons.append("RHYTHM_CONFIDENCE")
     level = "HIGH" if score >= 4 else ("MODERATE" if score >= 2 else "LOW")
     return {
-        "schema": R167_SCHEMA,
+        "schema": R168_SCHEMA,
         "level": level,
         "score": score,
         "recent_days_per_week": days,
@@ -38262,25 +38262,25 @@ def _v167_autonomic_watch(season_wellness, metrics, now=None):
     now = now or get_rome_now(); today = now.date(); metrics = metrics or {}
     series = _v41_wellness_series(season_wellness or [], "hrv", 5, 350)
     if not series:
-        return {"schema": R167_SCHEMA, "active": False, "state": "NO_DATA"}
-    recent = [(d, float(v)) for d, v in series if today - timedelta(days=13) <= d <= today]
+        return {"schema": R168_SCHEMA, "active": False, "state": "NO_DATA"}
+    recent = [(x[0], float(x[1])) for x in series if today - timedelta(days=13) <= x[0] <= today]
     if not recent:
-        return {"schema": R167_SCHEMA, "active": False, "state": "NO_RECENT_DATA"}
+        return {"schema": R168_SCHEMA, "active": False, "state": "NO_RECENT_DATA"}
     latest_day, latest = recent[-1]
     resolved = ((metrics.get("personal_baselines") or {}).get("resolved") or {}) if isinstance((metrics.get("personal_baselines") or {}).get("resolved"), dict) else {}
     low = _v167_num(resolved.get("hrv_low")); high = _v167_num(resolved.get("hrv_high"))
     if low is None:
-        prior_vals = [v for d, v in series if today - timedelta(days=42) <= d < latest_day]
+        prior_vals = [float(x[1]) for x in series if today - timedelta(days=42) <= x[0] < latest_day]
         if len(prior_vals) >= 7:
             s = sorted(prior_vals)
             low = statistics.quantiles(s, n=4, method="inclusive")[0] if len(s) >= 4 else min(s)
             high = statistics.quantiles(s, n=4, method="inclusive")[2] if len(s) >= 4 else max(s)
     if low is None or low <= 0:
-        return {"schema": R167_SCHEMA, "active": False, "state": "BASELINE_LEARNING", "latest_ms": round(latest, 1)}
+        return {"schema": R168_SCHEMA, "active": False, "state": "BASELINE_LEARNING", "latest_ms": round(latest, 1)}
     ratio = latest / low
     below_pct = (1.0 - ratio) * 100.0
-    hrv7 = [(d, v) for d, v in series if today - timedelta(days=6) <= d <= today]
-    prior = [(d, v) for d, v in series if today - timedelta(days=34) <= d <= today - timedelta(days=7)]
+    hrv7 = [(x[0], float(x[1])) for x in series if today - timedelta(days=6) <= x[0] <= today]
+    prior = [(x[0], float(x[1])) for x in series if today - timedelta(days=34) <= x[0] <= today - timedelta(days=7)]
     gm7 = math.exp(statistics.mean(math.log(v) for _, v in hrv7)) if len(hrv7) >= 3 else None
     prior_gm = math.exp(statistics.mean(math.log(v) for _, v in prior)) if len(prior) >= 3 else None
     weekly_delta = ((gm7 / prior_gm - 1.0) * 100.0) if gm7 and prior_gm else None
@@ -38292,7 +38292,7 @@ def _v167_autonomic_watch(season_wellness, metrics, now=None):
     active = bool(latest < low and (severe_acute or repeated_low or trend_low))
     if not active:
         return {
-            "schema": R167_SCHEMA, "active": False, "state": "WITHIN_TREND_TOLERANCE",
+            "schema": R168_SCHEMA, "active": False, "state": "WITHIN_TREND_TOLERANCE",
             "latest_ms": round(latest, 1), "baseline_low_ms": round(low, 1),
         }
     # A depressed weekly mean can still be pulled down by one extreme morning.
@@ -38302,7 +38302,7 @@ def _v167_autonomic_watch(season_wellness, metrics, now=None):
     state = "AUTONOMIC_TREND_WATCH" if persistent else "ACUTE_AUTONOMIC_WATCH"
     illness_context = "MONITOR_IF_PERSISTENT_OR_SYMPTOMATIC" if persistent else "NOT_INFERRED_FROM_ONE_READING"
     return {
-        "schema": R167_SCHEMA,
+        "schema": R168_SCHEMA,
         "active": True,
         "state": state,
         "severity": "HIGH" if severe_acute else "MODERATE",
@@ -38391,7 +38391,7 @@ def build_physiological_state(metrics, training_state, aerobic_efficiency, metab
                 "One morning is not diagnostic; persistence should trigger trend and health-context monitoring."
             )
     out["systems"] = systems
-    out["autonomic_watch_schema"] = R167_SCHEMA
+    out["autonomic_watch_schema"] = R168_SCHEMA
     return out
 
 
@@ -38424,7 +38424,7 @@ def _v167_attach_future_quality_candidate(out, nova_decision, coach_clock, adapt
     )
     quality["_tl_provisional_quality"] = True
     out["future_quality_candidate"] = {
-        "schema": R167_SCHEMA,
+        "schema": R168_SCHEMA,
         "index": idx,
         "date": str(slots[idx].get("date") or "")[:10],
         "slot": slots[idx].get("label"),
@@ -38528,7 +38528,7 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
     return out
 
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.43 WIP R167 · ATHLETE-MATURITY FUTURE QUALITY + AUTONOMIC TREND WATCH · R166 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.44 WIP R168 · AUTONOMIC WELLNESS-SHAPE SAFETY · R167 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
