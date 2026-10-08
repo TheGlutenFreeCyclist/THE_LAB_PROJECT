@@ -38091,7 +38091,444 @@ def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=N
     return out
 
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.42 WIP R166 · OPTIONAL METRIC SHAPE SAFETY + MISSED HARD CARRY-FORWARD · R165 BASELINE"
+
+# R167 · ATHLETE-MATURITY-AWARE FUTURE QUALITY + AUTONOMIC TREND WATCH
+# General multi-athlete correction. A current recovery hold may block today's hard
+# work without turning every later Clock opportunity into definitive Z2. For
+# sufficiently established athletes, THE LAB can project one future canonical
+# quality candidate, but it remains provisional until a later recovery check.
+# Separately, markedly suppressed rMSSD/HRV must surface as an autonomic watch;
+# persistence can suggest systemic stress/illness context but is never diagnostic.
+R167_SCHEMA = "V4.9.43-R167-1"
+
+
+def _v167_num(value):
+    try:
+        x = float(value)
+        return x if math.isfinite(x) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _v167_clock_tz(coach_clock):
+    raw = str((coach_clock or {}).get("iso") or "")
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return dt.tzinfo or _runtime_timezone()
+    except Exception:
+        return _runtime_timezone()
+
+
+def _v167_slot_dt(slot, coach_clock):
+    if not isinstance(slot, dict):
+        return None
+    try:
+        d = date.fromisoformat(str(slot.get("date") or "")[:10])
+    except Exception:
+        return None
+    minute = _v167_num(slot.get("start_minute"))
+    if minute is None:
+        # Day-level Calendar/Rhythm opportunities remain comparable at midday for
+        # projection ranking only; this never grants execution authority.
+        minute = 12 * 60
+    return datetime.combine(d, datetime.min.time(), tzinfo=_v167_clock_tz(coach_clock)) + timedelta(minutes=int(round(minute)))
+
+
+def _v167_training_maturity(coach_clock, adaptive_roadmap=None):
+    rhythm = ((coach_clock or {}).get("rhythm") or {}) if isinstance((coach_clock or {}).get("rhythm"), dict) else {}
+    recent = rhythm.get("recent") if isinstance(rhythm.get("recent"), dict) else {}
+    established = rhythm.get("established") if isinstance(rhythm.get("established"), dict) else {}
+    q = ((adaptive_roadmap or {}).get("quality_window") or {}) if isinstance((adaptive_roadmap or {}).get("quality_window"), dict) else {}
+    score = 0
+    reasons = []
+    days = _v167_num(recent.get("days_per_week"))
+    hours = _v167_num(recent.get("hours_per_week"))
+    recent_days = int(recent.get("training_days") or 0)
+    established_days = int(established.get("training_days") or 0)
+    spacing_samples = int(q.get("spacing_samples") or 0)
+    if days is not None and days >= 4.0:
+        score += 1; reasons.append("RECENT_FREQUENCY_ESTABLISHED")
+    if hours is not None and hours >= 5.0:
+        score += 1; reasons.append("RECENT_VOLUME_ESTABLISHED")
+    if recent_days >= 8 or established_days >= 18:
+        score += 1; reasons.append("MULTI_WEEK_TRAINING_HISTORY")
+    if spacing_samples >= 6:
+        score += 1; reasons.append("HARD_SPACING_PERSONAL_HISTORY")
+    if str(rhythm.get("confidence") or "").upper() in {"MODERATE", "HIGH"}:
+        score += 1; reasons.append("RHYTHM_CONFIDENCE")
+    level = "HIGH" if score >= 4 else ("MODERATE" if score >= 2 else "LOW")
+    return {
+        "schema": R167_SCHEMA,
+        "level": level,
+        "score": score,
+        "recent_days_per_week": days,
+        "recent_hours_per_week": hours,
+        "recent_training_days": recent_days,
+        "established_training_days": established_days,
+        "hard_spacing_samples": spacing_samples,
+        "reasons": reasons,
+        "rule": "Training maturity is learned from repeated frequency/volume/rhythm and hard-spacing history, not from one absolute watt value or athlete identity.",
+    }
+
+
+def _v167_quality_rate_for_slot(coach_clock, slot):
+    try:
+        d = date.fromisoformat(str((slot or {}).get("date") or "")[:10])
+    except Exception:
+        return 0.0
+    rhythm = ((coach_clock or {}).get("rhythm") or {}) if isinstance((coach_clock or {}).get("rhythm"), dict) else {}
+    st = rhythm.get("session_type_rhythm") if isinstance(rhythm.get("session_type_rhythm"), dict) else {}
+    cycling = ((st.get("modalities") or {}).get("CYCLING") or {}) if isinstance(st.get("modalities"), dict) else {}
+    rates = cycling.get("learned_quality_rate_by_weekday") if isinstance(cycling.get("learned_quality_rate_by_weekday"), dict) else {}
+    raw = rates.get(d.weekday(), rates.get(str(d.weekday())))
+    return float(_v167_num(raw) or 0.0)
+
+
+def _v167_last_hard_dt(adaptive_roadmap, coach_clock):
+    q = ((adaptive_roadmap or {}).get("quality_window") or {}) if isinstance((adaptive_roadmap or {}).get("quality_window"), dict) else {}
+    raw = str(q.get("last_hard_end") or "")
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_v167_clock_tz(coach_clock))
+        return dt.astimezone(_v167_clock_tz(coach_clock))
+    except Exception:
+        return None
+
+
+def _v167_future_quality_slot(coach_clock, adaptive_roadmap, maturity):
+    if (maturity or {}).get("level") == "LOW":
+        return None
+    q = ((adaptive_roadmap or {}).get("quality_window") or {}) if isinstance((adaptive_roadmap or {}).get("quality_window"), dict) else {}
+    if str(q.get("state") or "").upper() != "RECOVERY HOLD":
+        return None
+    slots = list((coach_clock or {}).get("next_slots") or [])
+    if not slots:
+        return None
+    try:
+        now = datetime.fromisoformat(str((coach_clock or {}).get("iso") or "").replace("Z", "+00:00"))
+    except Exception:
+        now = get_rome_now()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=_v167_clock_tz(coach_clock))
+    today = now.date()
+    last_hard = _v167_last_hard_dt(adaptive_roadmap, coach_clock)
+    earliest = float(_v167_num(q.get("learned_earliest_hours")) or 36.0)
+    preferred = float(_v167_num(q.get("learned_preferred_hours")) or earliest)
+    delay = float(_v167_num(q.get("recovery_delay_hours")) or 0.0)
+    required = (earliest + delay) if (maturity or {}).get("level") == "HIGH" else (preferred + delay)
+    candidates = []
+    for idx, slot in enumerate(slots):
+        if not isinstance(slot, dict):
+            continue
+        try:
+            d = date.fromisoformat(str(slot.get("date") or "")[:10])
+        except Exception:
+            continue
+        if d <= today:
+            continue
+        restriction = str(slot.get("restriction") or "NONE").upper()
+        if slot.get("is_race") or restriction in {"NO_TRAINING", "NO_INTENSITY", "HEALTH"}:
+            continue
+        dt = _v167_slot_dt(slot, coach_clock)
+        if dt is None:
+            continue
+        hours_since = ((dt - last_hard).total_seconds() / 3600.0) if last_hard else None
+        if hours_since is not None and hours_since < required:
+            continue
+        rate = _v167_quality_rate_for_slot(coach_clock, slot)
+        explicit_bonus = 12.0 if str(slot.get("timing_confidence") or "").upper() == "EXPLICIT" else 0.0
+        # Prefer the athlete's learned quality rhythm when it is meaningfully
+        # established, while still penalising unnecessary delay.
+        delay_days = max(0, (d - today).days - 1)
+        score = rate * 100.0 + explicit_bonus - 6.0 * delay_days
+        candidates.append((score, -idx, idx, slot, hours_since, rate, required))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True, key=lambda x: (x[0], x[1]))
+    _, _, idx, slot, hours_since, rate, required = candidates[0]
+    return {
+        "index": idx,
+        "slot": dict(slot),
+        "hours_since_last_hard": round(hours_since, 1) if hours_since is not None else None,
+        "learned_quality_rate": round(rate, 3),
+        "required_spacing_hours": round(required, 1),
+    }
+
+
+def _v167_autonomic_watch(season_wellness, metrics, now=None):
+    now = now or get_rome_now(); today = now.date(); metrics = metrics or {}
+    series = _v41_wellness_series(season_wellness or [], "hrv", 5, 350)
+    if not series:
+        return {"schema": R167_SCHEMA, "active": False, "state": "NO_DATA"}
+    recent = [(d, float(v)) for d, v in series if today - timedelta(days=13) <= d <= today]
+    if not recent:
+        return {"schema": R167_SCHEMA, "active": False, "state": "NO_RECENT_DATA"}
+    latest_day, latest = recent[-1]
+    resolved = ((metrics.get("personal_baselines") or {}).get("resolved") or {}) if isinstance((metrics.get("personal_baselines") or {}).get("resolved"), dict) else {}
+    low = _v167_num(resolved.get("hrv_low")); high = _v167_num(resolved.get("hrv_high"))
+    if low is None:
+        prior_vals = [v for d, v in series if today - timedelta(days=42) <= d < latest_day]
+        if len(prior_vals) >= 7:
+            s = sorted(prior_vals)
+            low = statistics.quantiles(s, n=4, method="inclusive")[0] if len(s) >= 4 else min(s)
+            high = statistics.quantiles(s, n=4, method="inclusive")[2] if len(s) >= 4 else max(s)
+    if low is None or low <= 0:
+        return {"schema": R167_SCHEMA, "active": False, "state": "BASELINE_LEARNING", "latest_ms": round(latest, 1)}
+    ratio = latest / low
+    below_pct = (1.0 - ratio) * 100.0
+    hrv7 = [(d, v) for d, v in series if today - timedelta(days=6) <= d <= today]
+    prior = [(d, v) for d, v in series if today - timedelta(days=34) <= d <= today - timedelta(days=7)]
+    gm7 = math.exp(statistics.mean(math.log(v) for _, v in hrv7)) if len(hrv7) >= 3 else None
+    prior_gm = math.exp(statistics.mean(math.log(v) for _, v in prior)) if len(prior) >= 3 else None
+    weekly_delta = ((gm7 / prior_gm - 1.0) * 100.0) if gm7 and prior_gm else None
+    last4 = recent[-4:]
+    low_count = sum(1 for _, v in last4 if v < low)
+    severe_acute = ratio <= 0.80
+    repeated_low = len(last4) >= 3 and low_count >= 3
+    trend_low = bool(gm7 is not None and gm7 < low and weekly_delta is not None and weekly_delta <= -8.0)
+    active = bool(latest < low and (severe_acute or repeated_low or trend_low))
+    if not active:
+        return {
+            "schema": R167_SCHEMA, "active": False, "state": "WITHIN_TREND_TOLERANCE",
+            "latest_ms": round(latest, 1), "baseline_low_ms": round(low, 1),
+        }
+    # A depressed weekly mean can still be pulled down by one extreme morning.
+    # Escalate to persistent/trend watch only when at least two recent mornings
+    # are below the personal floor, or when 3/4 are low.
+    persistent = bool(repeated_low or (trend_low and low_count >= 2))
+    state = "AUTONOMIC_TREND_WATCH" if persistent else "ACUTE_AUTONOMIC_WATCH"
+    illness_context = "MONITOR_IF_PERSISTENT_OR_SYMPTOMATIC" if persistent else "NOT_INFERRED_FROM_ONE_READING"
+    return {
+        "schema": R167_SCHEMA,
+        "active": True,
+        "state": state,
+        "severity": "HIGH" if severe_acute else "MODERATE",
+        "latest_date": latest_day.isoformat(),
+        "latest_ms": round(latest, 1),
+        "baseline_low_ms": round(low, 1),
+        "baseline_high_ms": round(high, 1) if high is not None else None,
+        "below_personal_floor_pct": round(max(0.0, below_pct), 1),
+        "seven_day_geomean_ms": round(gm7, 1) if gm7 is not None else None,
+        "seven_day_vs_prior_pct": round(weekly_delta, 1) if weekly_delta is not None else None,
+        "low_readings_last4": low_count,
+        "persistent": persistent,
+        "illness_context": illness_context,
+        "message": (
+            "HRV/rMSSD is persistently suppressed relative to the athlete's own baseline. Accumulated load, recovery debt, heat, stress, measurement conditions or illness can all contribute; THE LAB should monitor symptoms and the next comparable mornings rather than diagnose the cause."
+            if persistent else
+            "Today's HRV/rMSSD is markedly below the athlete's own baseline. One morning is not diagnostic; repeat comparable measurements and cross-check load, resting HR, sleep and symptoms."
+        ),
+        "rule": "Personal longitudinal baseline first. A single extreme reading creates an acute watch; repeated suppression or a materially depressed 7-day level escalates to trend watch. Illness is a possible context only when the pattern persists or symptoms/other signals align, never a diagnosis from HRV alone.",
+    }
+
+
+_build_advanced_physiology_metrics_r166_final = build_advanced_physiology_metrics
+
+
+def build_advanced_physiology_metrics(season_activities, season_wellness, metrics, training_state, vo2_trend, feeling_trend=None, planning_context=None, now=None):
+    out = _build_advanced_physiology_metrics_r166_final(
+        season_activities, season_wellness, metrics, training_state, vo2_trend,
+        feeling_trend=feeling_trend, planning_context=planning_context, now=now,
+    )
+    if not isinstance(out, dict):
+        return out
+    watch = _v167_autonomic_watch(season_wellness, metrics, now=now)
+    out["autonomic_watch"] = watch
+    if not watch.get("active"):
+        return out
+    cards = [dict(c) for c in (out.get("cards") or []) if isinstance(c, dict)]
+    for card in cards:
+        if card.get("key") != "hrv_stability":
+            continue
+        card["icon"] = "⚠️"
+        card["status"] = "WATCH"
+        card["status_class"] = "orange"
+        detail = f"rMSSD {watch.get('latest_ms'):.0f} ms · {watch.get('below_personal_floor_pct'):.0f}% below personal floor"
+        if watch.get("seven_day_vs_prior_pct") is not None:
+            detail += f" · 7d {watch.get('seven_day_vs_prior_pct'):+.1f}% vs prior"
+        card["secondary"] = detail
+        card["explanation"] = watch.get("message")
+        card["learning"] = (
+            "Watch the next comparable morning measurements. If suppression persists or symptoms appear, keep training conservative and treat this as a health/recovery context rather than forcing intensity."
+        )
+        card["autonomic_watch"] = dict(watch)
+    out["cards"] = cards
+    out["groups"] = _v41_metric_groups(cards)
+    display, gaps = _v43_metric_display(cards)
+    out["display_sections"] = display
+    out["gap_cards"] = gaps
+    attention = sum(len(s.get("cards") or []) for s in display if s.get("key") == "attention")
+    active = sum(len(s.get("cards") or []) for s in display if s.get("key") == "active")
+    learning = sum(len(s.get("cards") or []) for s in display if s.get("key") == "learning")
+    data_needed = sum(1 for c in gaps if c.get("status") == "DATA NEEDED")
+    unavailable = sum(1 for c in gaps if c.get("status") == "UNAVAILABLE")
+    out["summary"] = f"{len(cards)} METRICS · {attention + active} ACTIVE · {learning} LEARNING · {data_needed} DATA NEEDED · {unavailable} UNAVAILABLE"
+    return out
+
+
+_build_physiological_state_r166_final = build_physiological_state
+
+
+def build_physiological_state(metrics, training_state, aerobic_efficiency, metabolic_context, heat_pattern=None, feeling_trend=None):
+    out = _build_physiological_state_r166_final(metrics, training_state, aerobic_efficiency, metabolic_context, heat_pattern=heat_pattern, feeling_trend=feeling_trend)
+    if not isinstance(out, dict):
+        return out
+    resolved = (((metrics or {}).get("personal_baselines") or {}).get("resolved") or {})
+    latest = _v167_num((metrics or {}).get("latest_hrv")); low = _v167_num(resolved.get("hrv_low")) if isinstance(resolved, dict) else None
+    if latest is None or low is None or low <= 0 or latest >= low * 0.80:
+        return out
+    systems = [dict(x) for x in (out.get("systems") or []) if isinstance(x, dict)]
+    for row in systems:
+        if row.get("label") == "AUTONOMIC":
+            row["icon"] = "⚠️"
+            row["status"] = "WATCH"
+            row["status_class"] = "orange"
+            row["reason"] = (
+                f"HRV/rMSSD is markedly below the personal range ({latest:.0f} vs lower reference {low:.0f} ms). "
+                "One morning is not diagnostic; persistence should trigger trend and health-context monitoring."
+            )
+    out["systems"] = systems
+    out["autonomic_watch_schema"] = R167_SCHEMA
+    return out
+
+
+_build_nova_prescription_r166_final = build_nova_prescription
+
+
+def _v167_attach_future_quality_candidate(out, nova_decision, coach_clock, adaptive_roadmap, evidence_ledger, power_model, ftp_anchor, aerobic_metabolic_range, training_definitions):
+    if not isinstance(out, dict):
+        return out
+    dec = nova_decision or {}; action = str(dec.get("action") or "").upper()
+    if action != "HOLD" or str((((adaptive_roadmap or {}).get("quality_window") or {}).get("state") or "")).upper() != "RECOVERY HOLD":
+        return out
+    maturity = _v167_training_maturity(coach_clock, adaptive_roadmap)
+    slot_info = _v167_future_quality_slot(coach_clock, adaptive_roadmap, maturity)
+    out["athlete_training_maturity"] = maturity
+    if not slot_info:
+        return out
+    idx = int(slot_info["index"]); slots = list((coach_clock or {}).get("next_slots") or [])
+    if idx < 0 or idx >= len(slots):
+        return out
+    goal = str(dec.get("goal_key") or (adaptive_roadmap or {}).get("goal_key") or "ENDURANCE_BASE").upper()
+    dim = str(dec.get("dimension") or "NONE").upper()
+    template, library_audit = _v109_select_workout_template(goal, dim, evidence_ledger=evidence_ledger, training_definitions=training_definitions, slot=slots[idx])
+    quality = _v109_render_library_workout(template, goal, dim, power_model=power_model, ftp_anchor=ftp_anchor, slot=slots[idx], aerobic_metabolic_range=aerobic_metabolic_range) if template else None
+    if not isinstance(quality, dict) or not str(quality.get("intensity") or "").upper().startswith("HARD"):
+        return out
+    quality = dict(quality)
+    quality["why"] = (
+        "Current recovery data blocks hard work now. This is the next evidence-aligned quality candidate for an established athlete, not permission to execute it yet; a later recovery check must reopen the quality window."
+    )
+    quality["_tl_provisional_quality"] = True
+    out["future_quality_candidate"] = {
+        "schema": R167_SCHEMA,
+        "index": idx,
+        "date": str(slots[idx].get("date") or "")[:10],
+        "slot": slots[idx].get("label"),
+        "workout_id": quality.get("_tl_nova_workout_id"),
+        "title": quality.get("title"),
+        "raw_quality": quality,
+        "library_audit": library_audit,
+        "maturity": maturity,
+        "hours_since_last_hard": slot_info.get("hours_since_last_hard"),
+        "learned_quality_rate": slot_info.get("learned_quality_rate"),
+        "required_spacing_hours": slot_info.get("required_spacing_hours"),
+        "state": "PROVISIONAL_PENDING_RECOVERY_RECHECK",
+        "rule": "A current recovery hold blocks immediate intensity but does not freeze all later opportunities as Z2. Established training maturity permits one evidence-aligned future hard candidate once personal spacing is satisfied; execution still requires a fresh recovery check.",
+    }
+    return out
+
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    out = _build_nova_prescription_r166_final(
+        nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger, power_model=power_model, ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range, training_definitions=training_definitions,
+    )
+    return _v167_attach_future_quality_candidate(
+        out, nova_decision, coach_clock, adaptive_roadmap, evidence_ledger,
+        power_model, ftp_anchor, aerobic_metabolic_range, training_definitions,
+    )
+
+
+_compile_nova_prescription_r166_final = compile_nova_prescription
+
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, microcycle_ledger=None, coaching_contract=None, adaptive_roadmap=None, strength_pattern=None, training_rhythm=None, execution_model=None):
+    out = _compile_nova_prescription_r166_final(
+        prescription, coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+        recent_activities=recent_activities, undefined_training_intent=undefined_training_intent,
+        power_model=power_model, microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract,
+        adaptive_roadmap=adaptive_roadmap, strength_pattern=strength_pattern,
+        training_rhythm=training_rhythm, execution_model=execution_model,
+    )
+    candidate = (prescription or {}).get("future_quality_candidate") if isinstance((prescription or {}).get("future_quality_candidate"), dict) else None
+    if not isinstance(out, dict) or not candidate:
+        return out
+    try:
+        idx = int(candidate.get("index")); sessions = [dict(x) for x in (out.get("sessions") or [])]
+    except Exception:
+        return out
+    if idx < 0 or idx >= len(sessions):
+        return out
+    raw = list((prescription or {}).get("raw_sessions") or [])
+    if idx >= len(raw):
+        return out
+    shadow_raw = [copy.deepcopy(x) for x in raw]
+    shadow_raw[idx] = copy.deepcopy(candidate.get("raw_quality") or {})
+    shadow = dict(prescription or {})
+    shadow.update({
+        "action": "TRAIN", "status": "PRESCRIBED", "selected_slot_index": idx,
+        "hard_prescription_available": True, "raw_sessions": shadow_raw,
+        "workout_id": candidate.get("workout_id"), "contract_id": candidate.get("workout_id"),
+        "source": "R167_FUTURE_QUALITY_PROJECTION",
+    })
+    shadow_road = copy.deepcopy(adaptive_roadmap or {})
+    qw = dict(shadow_road.get("quality_window") or {})
+    slot = list((coach_clock or {}).get("next_slots") or [])[idx] if idx < len(list((coach_clock or {}).get("next_slots") or [])) else {}
+    slot_dt = _v167_slot_dt(slot, coach_clock)
+    qw.update({
+        "state": "WATCH", "hard_session_allowed": True, "quality_window_eligible": True,
+        "slot_selection_reason": "FUTURE_RECOVERY_RECHECK_CANDIDATE",
+        "earliest": slot.get("label"), "preferred": slot.get("label"),
+        "earliest_iso": slot_dt.isoformat() if slot_dt else None,
+        "preferred_iso": slot_dt.isoformat() if slot_dt else None,
+    })
+    shadow_road["quality_window"] = qw
+    try:
+        shadow_out = _compile_nova_prescription_r166_final(
+            shadow, coach_clock, training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+            recent_activities=recent_activities, undefined_training_intent=undefined_training_intent,
+            power_model=power_model, microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract,
+            adaptive_roadmap=shadow_road, strength_pattern=strength_pattern,
+            training_rhythm=training_rhythm, execution_model=execution_model,
+        )
+        projected = dict((shadow_out.get("sessions") or [])[idx])
+    except Exception:
+        return out
+    projected["provisional_quality"] = True
+    projected["quality_window_state"] = "WATCH"
+    projected["future_recovery_recheck_required"] = True
+    projected["athlete_training_maturity"] = (candidate.get("maturity") or {}).get("level")
+    projected["why"] = (
+        "Quality candidate only: current recovery remains on hold. Execute this structure only if a later Snapshot/recovery check reopens the quality window."
+    )
+    sessions[idx] = projected
+    out["sessions"] = sessions
+    out["future_quality_projection"] = {
+        k: copy.deepcopy(v) for k, v in candidate.items() if k != "raw_quality"
+    }
+    out["execution_status"] = "EASY_NOW_WITH_PROVISIONAL_FUTURE_QUALITY"
+    out["projected_hard_session_count"] = 1
+    # Immediate execution authority remains unchanged: the current HOLD is still
+    # authoritative until a future Snapshot turns the candidate into an eligible hard.
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.43 WIP R167 · ATHLETE-MATURITY FUTURE QUALITY + AUTONOMIC TREND WATCH · R166 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
