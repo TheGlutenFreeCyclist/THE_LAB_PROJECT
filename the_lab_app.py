@@ -11154,7 +11154,7 @@ ADMIN_PAGE = """
 {% for u in users %}{% if u.role != 'admin' %}<article class="ps59-athlete-card"><div class="ps59-user-head"><div class="ps59-user-id"><strong>{{ u.username }}</strong><span>{{ u.email or '—' }}</span>{% if u.must_change_password %}<span class="ps-password-required">PASSWORD CHANGE REQUIRED</span>{% endif %}</div><div class="ps59-head-badges"><span class="ps-pill {{ u.status }}">{{ u.status|upper }}</span>{% if u.license %}<span class="ps-pill {{ u.license_effective_status }}">{{ u.license.license_type }} · {{ u.license_effective_status|upper }}</span>{% endif %}</div></div>
 <div class="ps59-status-grid"><div class="ps59-status"><span>SETUP</span><strong class="{{ 'good' if u.setup_complete and u.ai_ready else ('warn' if u.setup_complete else '') }}">{% if u.setup_complete and u.ai_ready %}READY{% elif u.setup_complete %}AI STANDBY{% else %}PENDING{% endif %}</strong></div><div class="ps59-status"><span>DOB / AGE</span><strong class="{{ 'good' if u.birth_date_ready else 'warn' }}">{% if u.birth_date_ready %}{{ u.birth_date_display }} · {{ u.age_years }}Y{% else %}DOB MISSING{% endif %}</strong></div><div class="ps59-status"><span>INTERVALS</span><strong class="{{ 'good' if u.intervals_status == 'connected' else 'warn' }}">{{ u.intervals_status|upper }}</strong></div><div class="ps59-status"><span>LAST LOGIN</span><strong>{{ u.last_login_at_utc|admin_dt if u.last_login_at_utc else 'NEVER' }}</strong></div><div class="ps59-status"><span>LAST SAVED REPORT</span><strong class="{{ 'warn' if u.snapshot_ai_newer_than_report else ('good' if u.report_generated else '') }}">{{ u.report_generated_at_utc|admin_dt if u.report_generated else 'NONE' }}</strong>{% if u.snapshot_ai_newer_than_report %}<small class="warn">Newer AI Snapshot call {{ u.last_snapshot_ai_at_utc|admin_dt }} · {{ u.last_snapshot_ai_status or 'UNKNOWN' }} · no newer saved report</small>{% endif %}</div></div>
 <div class="ps59-ai-box"><div class="ps59-ai-top"><div class="ps59-ai-mode"><span class="ps-pill {{ 'platform' if u.ai_access_mode == 'PLATFORM' else ('standard' if u.ai_access_mode == 'STANDARD' else 'byok') }}">{% if u.ai_access_mode == 'PLATFORM' %}THE LAB MANAGED · OWNER FUNDED{% elif u.ai_access_mode == 'STANDARD' %}THE LAB STANDARD · OWNER FUNDED{% else %}ATHLETE BYOK{% endif %}</span><small>{{ u.ai_provider|title }}{% if u.ai_model and u.ai_model != '—' %} · {{ u.ai_model }}{% endif %}</small></div><div class="ps59-ai-meta"><span class="ps59-mini {{ 'good' if u.personal_ai_ready else 'warn' }}">PERSONAL KEY · {{ 'READY' if u.personal_ai_ready else 'MISSING' }}</span><span class="ps59-mini {{ 'good' if u.qa_snapshot_sharing_enabled else '' }}">BETA QA · {{ 'ON' if u.qa_snapshot_sharing_enabled else 'OFF' }}</span>{% if u.owner_sponsored %}<span class="ps59-mini">TODAY · {{ u.ai_usage_today.quota_calls or 0 }}/{{ u.ai_usage_today.limit or '—' }}</span>{% endif %}</div></div></div>
-<div class="ps59-card-actions"><button class="ps-btn archive" type="button" data-ps59-open="account-{{ u.id }}">Account & license</button><button class="ps-btn archive" type="button" data-ps59-open="ai-{{ u.id }}">AI & limits</button>{% if u.qa_snapshot_sharing_enabled and u.qa_snapshot_sharing_version == '2026-10-remote-qa-v1' %}<form method="post" action="{{ url_for('admin_remote_python_qa', user_id=u.id) }}" style="display:contents" onsubmit="return confirm('Run a read-only live-data Python QA Snapshot for this athlete? The athlete report will not be overwritten.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn primary" type="submit">Run remote QA</button></form>{% endif %}{% if u.qa_snapshot_sharing_enabled and u.report_generated %}<form method="post" action="{{ url_for('admin_user_latest_content_audit', user_id=u.id) }}" style="display:contents"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn restore" type="submit">QA audit · MD</button></form>{% elif not u.qa_snapshot_sharing_enabled %}<span class="ps-btn disabled">QA sharing off</span>{% else %}<span class="ps-btn disabled">No report yet</span>{% endif %}</div>
+<div class="ps59-card-actions"><button class="ps-btn archive" type="button" data-ps59-open="account-{{ u.id }}">Account & license</button><button class="ps-btn archive" type="button" data-ps59-open="ai-{{ u.id }}">AI & limits</button>{% if u.qa_snapshot_sharing_enabled and u.qa_snapshot_sharing_version == '2026-10-remote-qa-v1' %}<form method="post" action="{{ url_for('admin_remote_python_qa', user_id=u.id) }}" style="display:contents" onsubmit="return confirm('Run a read-only live-data Python QA Snapshot for this athlete? The athlete report will not be overwritten.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn primary" type="submit">Run remote QA</button></form>{% endif %}{% if not (u.qa_snapshot_sharing_enabled and u.qa_snapshot_sharing_version == '2026-10-remote-qa-v1') %}<form method="post" action="{{ url_for('admin_request_remote_qa_consent', user_id=u.id) }}" style="display:contents"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn archive" type="submit">Request remote QA consent</button></form><span class="ps-pill">Remote QA · CONSENT REQUIRED</span>{% else %}<span class="ps-pill">Remote QA · READY</span>{% endif %}{% if u.qa_snapshot_sharing_enabled and u.report_generated %}<form method="post" action="{{ url_for('admin_user_latest_content_audit', user_id=u.id) }}" style="display:contents"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn restore" type="submit">QA audit · MD</button></form>{% elif not u.qa_snapshot_sharing_enabled %}<span class="ps-btn disabled">QA sharing off</span>{% else %}<span class="ps-btn disabled">No report yet</span>{% endif %}</div>
 </article>
 <div class="ps59-modal" id="account-{{ u.id }}" role="dialog" aria-modal="true" aria-labelledby="account-title-{{ u.id }}" hidden><div class="ps59-modal-backdrop" data-ps59-close></div><section class="ps59-modal-panel" tabindex="-1"><div class="ps59-modal-head"><div><div class="ps-muted">ATHLETE CONTROL</div><h2 id="account-title-{{ u.id }}">{{ u.username }}</h2></div><button class="ps59-modal-close" type="button" data-ps59-close aria-label="Close">×</button></div><div class="ps59-modal-section"><h3>Athlete identity · date of birth</h3><p>Required physiological context. Stored on the account; the raw birth date is not sent to the AI provider.</p><form method="post" action="{{ url_for('admin_update_birth_date', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="ps59-form-row"><label class="ps-field"><span>DATE OF BIRTH · REQUIRED</span><input name="birth_date" type="date" autocomplete="bday" max="{{ today_iso }}" value="{{ u.birth_date or '' }}" required></label><button class="ps-btn primary" type="submit">Save DOB</button></div></form></div>{% if u.license %}<div class="ps59-modal-section"><h3>License</h3><p>{{ u.license.license_type }} · {{ u.license_effective_status|upper }} · {{ 'Expires ' ~ u.license_expiry_display if u.license.expires_at_utc else 'No expiry' }}</p><form method="post" action="{{ url_for('admin_update_license', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label class="ps-field"><span>NEW EXPIRY · GG/MM/AAAA</span><input name="expires_on" type="date" min="{{ today_iso }}" autocomplete="off" value="{{ u.license_expiry_iso }}"></label><div class="ps59-account-actions"><button class="ps-btn primary" name="license_action" value="set" type="submit">Save date</button><button class="ps-btn" name="license_action" value="add_30" type="submit">+30 days</button><button class="ps-btn" name="license_action" value="add_90" type="submit">+90 days</button><button class="ps-btn restore" name="license_action" value="no_expiry" type="submit">No expiry</button></div></form></div>{% endif %}<div class="ps59-modal-section"><h3>Account actions</h3><p>Security and access controls for this athlete.</p><div class="ps59-account-actions"><form method="post" action="{{ url_for('admin_user_action', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="logout_all"><button class="ps-btn" type="submit">Log out all</button></form><form method="post" action="{{ url_for('admin_reset_password', user_id=u.id) }}" onsubmit="return confirm('Reset this athlete password? Every active session will be closed and a temporary password will be shown once.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn reset" type="submit">Reset password</button></form>{% if u.status == 'active' %}<form method="post" action="{{ url_for('admin_user_action', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="suspend"><button class="ps-btn warn" type="submit">Suspend</button></form><form method="post" action="{{ url_for('admin_user_action', user_id=u.id) }}" onsubmit="return confirm('Revoke this athlete access and every active session?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="revoke"><button class="ps-btn danger" type="submit">Revoke</button></form>{% else %}<form method="post" action="{{ url_for('admin_user_action', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="reactivate"><button class="ps-btn primary" type="submit">Reactivate</button></form><form method="post" action="{{ url_for('admin_user_visibility', user_id=u.id) }}" onsubmit="return confirm('Archive this inactive athlete from the main roster? Account, data, license history and audit trail are preserved.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="visibility" value="archive"><button class="ps-btn archive" type="submit">Archive</button></form>{% endif %}</div></div></section></div>
 <div class="ps59-modal" id="ai-{{ u.id }}" role="dialog" aria-modal="true" aria-labelledby="ai-title-{{ u.id }}" hidden><div class="ps59-modal-backdrop" data-ps59-close></div><section class="ps59-modal-panel" tabindex="-1"><div class="ps59-modal-head"><div><div class="ps-muted">AI ACCESS + COST CONTROL</div><h2 id="ai-title-{{ u.id }}">{{ u.username }}</h2></div><button class="ps59-modal-close" type="button" data-ps59-close aria-label="Close">×</button></div><div class="ps59-modal-section"><h3>AI mode</h3><p>Standard and Managed use owner-funded credentials. BYOK uses only the athlete's tested personal credential.</p><form method="post" action="{{ url_for('admin_update_ai_access', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label class="ps-field"><span>AI MODE</span><select name="ai_access_mode"><option value="BYOK" {% if u.ai_access_mode == 'BYOK' %}selected{% endif %}>Athlete personal key · BYOK</option><option value="STANDARD" {% if u.ai_access_mode == 'STANDARD' %}selected{% endif %}>THE LAB Standard · Gemini · owner funded</option><option value="PLATFORM" {% if u.ai_access_mode == 'PLATFORM' %}selected{% endif %}>THE LAB Managed · owner funded</option></select></label><button class="ps-btn primary" type="submit">Save AI mode</button></form></div><div class="ps59-modal-section"><h3>Owner-funded daily limit</h3><p>This cap applies to optional owner-funded AI Coach usage. Ordinary Nova-only Snapshot does not use this allowance. Leave blank for the lane default; BYOK does not use owner-funded calls.</p><div class="ps59-usage-line"><span>TODAY</span><strong>{{ u.ai_usage_today.quota_calls or 0 }} owner-funded call(s){% if u.ai_usage_today.limit is not none %} / {{ u.ai_usage_today.limit }} allowed{% endif %}</strong></div><form method="post" action="{{ url_for('admin_update_ai_limit', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="ps59-form-row"><label class="ps-field"><span>CALLS / LOCAL DAY · 1–100 · BLANK = DEFAULT</span><input name="owner_ai_daily_limit" type="number" min="1" max="100" step="1" value="{{ u.owner_ai_daily_limit_override if u.owner_ai_daily_limit_override is not none else '' }}" placeholder="Use lane default"></label><button class="ps-btn primary" type="submit">Save limit</button></div></form><p class="ps59-privacy-note">Managed keeps its premium sub-cap; any remaining custom allowance uses the configured Standard fallback. Switching to BYOK stops owner-funded consumption immediately.</p></div><div class="ps59-modal-section"><h3>Personal key</h3><p>{{ 'A tested personal key is already stored and can take over immediately.' if u.personal_ai_ready else 'No tested personal key is stored yet.' }}</p>{% if u.owner_sponsored %}<form style="margin-top:10px" method="post" action="{{ url_for('admin_update_ai_access', user_id=u.id) }}" onsubmit="return confirm('{% if u.personal_ai_ready %}Stop owner-funded AI for this athlete and switch to the already-tested personal API key?{% else %}Stop owner-funded AI for this athlete? Nova-only Snapshot stays available; only optional AI Coach chat is unavailable until the athlete adds a personal API key.{% endif %}');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="ai_access_mode" value="BYOK"><button class="ps-btn warn" type="submit">Require athlete API key</button></form>{% endif %}</div></section></div>
@@ -11772,6 +11772,12 @@ def home():
             ai_setup_reminder = bool(ai_reminder_state.get("needed") and dismissed_for != ai_reminder_state.get("fingerprint"))
         except Exception:
             return redirect(url_for("athlete_setup"))
+    if user.get("role") != "admin":
+        profile = get_athlete_profile(user["id"])
+        if not _r170_has_remote_consent(profile):
+            state = _r170_consent_queue(user["id"])
+            if not state or (state.get("requested_at_utc") and not state.get("responded_at_utc")):
+                return redirect(url_for("beta_qa_consent_gate"))
     latest_report_meta = get_latest_report_meta()
     return render_template_string(
         HOME_PAGE, days=DAYS_BACK, season_days=SEASON_DAYS_BACK,
@@ -27798,6 +27804,67 @@ def preview():
         app_version=APP_VERSION, clock_preview=get_clock_preview(), is_preview=True, report_mode=False, report_meta=None, download_mode=False,
         latest_report_meta=None, chat_context_meta=None,
     )
+# R170: explicit opt-in is required; admin cannot set athlete consent.
+# Pending requests/declines are tracked independently from the QA consent field.
+def _r170_consent_queue(user_id, action=None):
+    _db_execute("""CREATE TABLE IF NOT EXISTS beta_qa_consent_requests (
+        user_id TEXT PRIMARY KEY, requested_at_utc TEXT, responded_at_utc TEXT,
+        last_response TEXT)""")
+    if action == "REQUEST":
+        now = _now_utc_text()
+        _db_execute("""INSERT INTO beta_qa_consent_requests(user_id,requested_at_utc,responded_at_utc,last_response)
+            VALUES(?,?,NULL,NULL) ON CONFLICT(user_id) DO UPDATE SET
+            requested_at_utc=excluded.requested_at_utc, responded_at_utc=NULL, last_response=NULL""", (str(user_id), now))
+    elif action in {"DECLINED", "ACCEPTED"}:
+        _db_execute("""INSERT INTO beta_qa_consent_requests(user_id,requested_at_utc,responded_at_utc,last_response)
+            VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
+            responded_at_utc=excluded.responded_at_utc,last_response=excluded.last_response""",
+            (str(user_id), _now_utc_text(), _now_utc_text(), action))
+    rows = _db_execute("SELECT * FROM beta_qa_consent_requests WHERE user_id=?", (str(user_id),), fetch=True)
+    return dict(rows[0]) if rows else {}
+
+def _r170_has_remote_consent(profile):
+    return bool(profile.get("qa_snapshot_sharing_enabled") and profile.get("qa_snapshot_sharing_version") == BETA_QA_CONSENT_VERSION)
+
+@app.route("/beta-qa-consent", methods=["GET", "POST"])
+def beta_qa_consent_gate():
+    athlete = current_user(touch=False)
+    if not athlete:
+        return redirect(url_for("login"))
+    if athlete.get("role") == "admin":
+        return redirect(url_for("admin_control_center"))
+    if request.method == "POST":
+        choice = str(request.form.get("decision") or "").upper()
+        if choice == "ACCEPT":
+            set_beta_qa_snapshot_sharing(athlete["id"], True)
+            _r170_consent_queue(athlete["id"], "ACCEPTED")
+            return redirect(url_for("home"), code=303)
+        if choice == "DECLINE":
+            # Withholding consent never silently grants remote access.
+            set_beta_qa_snapshot_sharing(athlete["id"], False)
+            _r170_consent_queue(athlete["id"], "DECLINED")
+            return redirect(url_for("home"), code=303)
+        abort(400)
+    return render_template_string("""<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>THE LAB · Beta QA permission</title><style>{{ css }}</style></head><body class="product-sec"><main class="ps-wrap"><section class="ps-card" style="max-width:650px;margin:10vh auto;padding:24px"><h1>Beta testing · Diagnostic permission</h1><p>THE LAB is currently in beta. To investigate errors, the administrator can run an on-demand read-only Python diagnostic using your Intervals.icu training and wellness data and your THE LAB account data, and view/download the resulting diagnostic report.</p><p>No AI call is made, your saved Snapshot is not replaced, and no continuous background monitoring is enabled. You can withdraw this permission later in Settings.</p><p>Giving permission helps us troubleshoot problems without repeatedly asking you to run tests. If you decline, you may continue using available features, but admin remote diagnostics will remain disabled.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn primary" name="decision" value="ACCEPT" type="submit">Allow beta diagnostics</button> <button class="ps-btn" name="decision" value="DECLINE" type="submit">Not now</button></form></section></main></body></html>""", css=PRODUCT_SIMPLE_CSS)
+
+@app.route("/admin/users/<user_id>/request-remote-qa-consent", methods=["POST"])
+def admin_request_remote_qa_consent(user_id):
+    actor = require_admin()
+    if not actor:
+        return redirect(url_for("login"))
+    target = _get_user_by_id(user_id)
+    if not target or target.get("role") == "admin":
+        abort(404)
+    if str(target.get("status") or "").lower() != "active":
+        abort(403)
+    if _r170_has_remote_consent(get_athlete_profile(user_id)):
+        session["admin_notice"] = "Remote QA already authorized."
+    else:
+        _r170_consent_queue(user_id, "REQUEST")
+        audit_event("ADMIN_BETA_QA_CONSENT_REQUESTED", actor_user_id=actor["id"], target_user_id=user_id)
+        session["admin_notice"] = "Diagnostic permission prompt queued for the athlete's next app visit."
+    return redirect(url_for("admin_control_center"), code=303)
+
 @app.route("/admin/users/<user_id>/remote-python-qa", methods=["POST"])
 def admin_remote_python_qa(user_id):
     actor = require_admin()
@@ -28284,7 +28351,14 @@ def analyze():
                 data["qa_regression_blocked"] = True
                 data["qa_regression_issue_codes"] = _codes
         if not (data.get("cross_module_authority_audit") or {}).get("final_pass") and not qa_requested:
-            raise ValueError("Cross-module authority guard rejected this Snapshot; the previous saved report remains authoritative.")
+            _audit = data.get("cross_module_authority_audit") or {}
+            _issues = _audit.get("issues") or []
+            _codes = [re.sub(r"[^A-Z0-9_]+", "_", str(x.get("code") or "UNCLASSIFIED").upper())[:64] for x in _issues if isinstance(x, dict)]
+            _codes = list(dict.fromkeys(_codes)) or ["UNSPECIFIED_FAILURE"]
+            _identifier = "TL-CMAG-" + "+".join(_codes[:5])
+            audit_event("SNAPSHOT_AUTHORITY_REJECTED", actor_user_id=user["id"], target_user_id=user["id"],
+                        details={"diagnostic_code": _identifier, "issue_codes": _codes[:20], "release": APP_VERSION})
+            raise ValueError("Snapshot rejected [" + _identifier + "]. Your previous saved report remains authoritative. Share this code with THE LAB support.")
         if qa_requested:
             nova_replay_fixture = _v115_finalize_nova_replay_fixture(nova_replay_fixture, data)
             qa_report = _v4831_qa_report(data, qa_kind, replay_bundle.get("context_fingerprint"), source_report=None, ai_runtime=qa_ai_runtime)
@@ -28372,7 +28446,7 @@ def analyze():
             pass
         error = (
             "THE LAB could not complete this Snapshot. Your saved data remain safe; please try again. "
-            f"Diagnostic: {_fault_stage} / {_fault_class}."
+            f"Diagnostic: TL-PIPE-{_fault_stage}-{_fault_class}."
         )
     return render_template_string(
         HOME_PAGE, days=DAYS_BACK, season_days=SEASON_DAYS_BACK,
@@ -38568,7 +38642,7 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
     return out
 
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.45 WIP R169 · ADMIN REMOTE PYTHON QA · R168 BASELINE"
+APP_VERSION = "THE LAB · PRODUCT V4.9.46 WIP R170 · BETA QA CONSENT GATE + DIAGNOSTIC CODES · R169 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
