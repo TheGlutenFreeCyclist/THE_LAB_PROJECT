@@ -39511,5 +39511,111 @@ body.product-sec .ps-card h2{font-size:22px!important;}
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.56 WIP R180 · APPLICATION TYPOGRAPHY SYSTEM · R179 BASELINE"
 
+# R181 · AUXILIARY SHORT-HIGH-POWER OBSERVATION (NON-PUNITIVE)
+# Never make an extra effort into a second canonical hard session or adherence debt.
+# Intervals.icu has already measured *whole-activity* TL and zone seconds.  This
+# annotation is NOT a new training-load calculator, and MUST NOT double count TL.
+R181_SCHEMA = "V4.9.57-R181-1"
+_v492_execution_quality_r180_final = _v492_execution_quality
+
+
+def _v181_supplemental_effort(block, plan):
+    """Classify ONLY provider-detected short, elevated-power work after a valid main set.
+
+    Observed power relative to the canonical work prescription is a screening
+    heuristic; it never proves a maximal sprint, readiness, or an extra prescribed
+    stimulus. No inference from titles, athlete IDs, or missing power data.
+    """
+    if not isinstance(block, dict) or not isinstance(plan, dict):
+        return None
+    ev = _v155_main_set_evidence(block, plan)
+    if not ev or len(ev.get("main") or []) != int(ev.get("reps") or 0):
+        return None
+    rows = list(ev.get("rows") or [])
+    main = list(ev.get("main") or [])
+    if not main:
+        return None
+    last_main_index = max(int(x["index"]) for x in main)
+    watts_target = _num(ev.get("power_high"))
+    if watts_target is None or not math.isfinite(watts_target) or watts_target <= 0:
+        return None  # no individual reference; never invent a high-power threshold
+    threshold = 1.20 * watts_target  # detection heuristic, not an optimal dose
+    extra = []
+    for r in rows:
+        if int(r.get("index", -1)) <= last_main_index:
+            continue  # warmup openers are not post-session accelerations
+        secs = _num(r.get("secs"))
+        watts = _num(r.get("watts"))
+        if secs is None or watts is None or not math.isfinite(secs) or not math.isfinite(watts) or not (5 <= secs <= 45):
+            continue
+        if watts < threshold:
+            continue
+        extra.append({"seconds": round(secs, 1), "average_watts": round(watts, 1)})
+    if not extra:
+        return None
+    load = _num(block.get("load"))
+    if load is not None and not math.isfinite(load):
+        load = None
+    zone_summary = str(block.get("power_zone_summary") or "")
+    return {
+        "schema": R181_SCHEMA,
+        "available": True,
+        "state": "OBSERVED_EXTRA_SHORT_HIGH_POWER",
+        "source": "INTERVALS_NATIVE_WORK_INTERVAL_EVIDENCE",
+        "count": len(extra),
+        "total_seconds": round(sum(x["seconds"] for x in extra), 1),
+        "max_interval_average_watts": max(x["average_watts"] for x in extra),
+        "work_intervals": extra[:8],
+        "detected_after_canonical_main_set": True,
+        "main_set_adherence_unmodified": True,
+        "athlete_penalty": False,
+        "creates_workout": False,
+        "creates_hard_debt": False,
+        "activity_training_load": round(load, 1) if load is not None else None,
+        "whole_activity_load_in_provider_totals": load is not None,
+        "provider_power_zones_available": bool(zone_summary),
+        "additional_training_load_added": 0.0,
+        "load_rule": "Use whole-activity Intervals TL and power-zone seconds already ingested; NEVER add a separate sprint TL.",
+        "interpretation": "Extra brief high-power work observed, not a second prescribed workout or proof of maximal sprint.",
+        "recovery_rule": "Respect actual whole-activity load and new recovery observations before future hard work.",
+    }
+
+
+def _v492_execution_quality(block, ledger=None):
+    out = _v492_execution_quality_r180_final(block, ledger)
+    if not isinstance(out, dict):
+        return out
+    # Additional evidence is purely annotative. On incomplete provider data or
+    # unexpected shape, leave the authoritative adherence result untouched.
+    try:
+        link = _v156_execution_history_link(block, ledger or {})
+        if not link:
+            link = _v136_link_prescription(block, ledger or {})
+        plan = (link or {}).get("plan") if isinstance(link, dict) else None
+        if not isinstance(plan, dict):
+            return out
+        extra = _v181_supplemental_effort(block, plan)
+        if not extra:
+            return out
+        enriched = dict(out)
+        enriched["supplemental_effort"] = extra
+        return enriched
+    except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
+        # Fail closed for this optional observation, never erase the original
+        # main-set score or crash the saved Snapshot for an auxiliary segment.
+        return out
+
+
+# Athlete-facing, same Training History card; no extra workout card.
+_V181_HISTORY_ANCHOR = '<p class="v25-consideration">{{ b.consideration }}</p></article>'
+if isinstance(HOME_PAGE, str) and HOME_PAGE.count(_V181_HISTORY_ANCHOR) == 1:
+    HOME_PAGE = HOME_PAGE.replace(_V181_HISTORY_ANCHOR, """{% set extra=(b.get('execution_quality') or {}).get('supplemental_effort') or {} %}{% if extra.get('available') %}<div class="v181-extra-effort" role="note"><strong>EXTRA SHORT HIGH-POWER EFFORT · {{ extra.get('count') }} EFFORT(S) · {{ extra.get('total_seconds')|int }} S TOTAL</strong><span>Observed after the prescribed main set. Main-set adherence is unchanged; this is not another required workout. Whole-activity Intervals training load and power-zone data are used when available, with no double counting.</span></div>{% endif %}""" + _V181_HISTORY_ANCHOR)
+BASE_CSS += r"""
+.v181-extra-effort{display:flex;flex-direction:column;gap:5px;margin:12px 0;padding:12px 14px;border:1px solid rgba(79,198,219,.35);background:rgba(13,37,51,.65);border-radius:12px;overflow-wrap:anywhere}
+.v181-extra-effort strong{font:800 14px/1.35 Arial,Helvetica,sans-serif;letter-spacing:.015em;color:#83e9fa;text-transform:uppercase}
+.v181-extra-effort span{font:400 16px/1.5 Arial,Helvetica,sans-serif;color:#d5e7ee}
+"""
+APP_VERSION = "THE LAB · PRODUCT V4.9.57 WIP R181 · NON-PUNITIVE AUXILIARY INTENSITY ACCOUNTING · R180 BASELINE"
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
