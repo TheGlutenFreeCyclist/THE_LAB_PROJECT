@@ -39879,5 +39879,221 @@ BASE_CSS += r"""
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.58 WIP R182 · CAUSAL ADHERENCE + NATIVE AUXILIARY RECONCILIATION · R181 BASELINE"
 
+
+
+# R183 · WORKOUT ADHERENCE: INDEPENDENT STRUCTURAL AND POWER-BAND AXES
+# Do not combine one completed-set flag and N in-band checks into a pseudo-
+# percentage of the workout. Persist legacy binary check only under explicitly
+# deprecated evidence; do not leave LOW / 20% as generic adherence score/label.
+# No power tolerance, load uplift, workout completion credit, or new Roadmap
+# progression rule is introduced by this presentation/contract migration.
+R183_SCHEMA = "V4.9.59-R183-1"
+_v492_execution_quality_r182 = _v492_execution_quality
+
+
+def _v183_adherence_axes(block, plan, prior):
+    """Produce multi-axis outcome ONLY from an already attributed, evidenced main set."""
+    ev = _v155_main_set_evidence(block, plan)
+    if not ev or int(ev.get("reps") or 0) < 2:
+        return None
+    main = ev.get("main") or []
+    total = int(ev["reps"])
+    if len(main) != total:
+        return None  # no phantom completion when main set is incomplete
+    prescribed_secs = _num(ev.get("secs"))
+    if prescribed_secs is None or not math.isfinite(prescribed_secs) or prescribed_secs <= 0:
+        return None
+    low, high = _num(ev.get("power_low")), _num(ev.get("power_high"))
+    band_valid = (low is not None and high is not None and math.isfinite(low)
+                  and math.isfinite(high) and 0 < low <= high)
+    watts = []
+    for row in main:
+        x = _num(row.get("watts"))
+        watts.append(float(x) if x is not None and math.isfinite(x) and x > 0 else None)
+    known = [w for w in watts if w is not None]
+    missing = total - len(known)
+    within = sum(low <= w <= high for w in known) if band_valid else 0
+    above = sum(w > high for w in known) if band_valid else 0
+    below = sum(w < low for w in known) if band_valid else 0
+    if not band_valid:
+        state, label = "UNASSESSED", "NO PRESCRIBED POWER BAND"
+    elif missing:
+        state, label = "INCOMPLETE_EVIDENCE", "POWER EVIDENCE INCOMPLETE"
+    elif within == total:
+        state, label = "IN_TARGET", "IN TARGET"
+    elif above == total:
+        state, label = "ABOVE_TARGET", "ABOVE TARGET"
+    elif below == total:
+        state, label = "BELOW_TARGET", "BELOW TARGET"
+    else:
+        state, label = "MIXED_DEVIATION", "MIXED POWER DEVIATION"
+    structure = {"state": "COMPLETE", "complete": True, "completed_reps": total,
+                 "prescribed_reps": total, "completion_percent": 100,
+                 "prescribed_interval_seconds": float(prescribed_secs),
+                 "observed_interval_seconds": [round(float(x["secs"]), 1) for x in main],
+                 "duration_tolerance_seconds": float(ev["tolerance_secs"]),
+                 "scope": "PRESCRIBED_MAIN_SET_ONLY"}
+    power = {"state": state, "label": label, "available": band_valid and missing == 0,
+             "in_target_reps": within if band_valid else None,
+             "above_target_reps": above if band_valid else None,
+             "below_target_reps": below if band_valid else None,
+             "known_power_reps": len(known), "missing_power_reps": missing,
+             "prescribed_reps": total,
+             # An all-reps percentage is ONLY meaningful with complete power data.
+             "in_target_percent": round(100*within/total) if band_valid and not missing else None,
+             "observed_power_min_w": round(min(known), 1) if known else None,
+             "observed_power_max_w": round(max(known), 1) if known else None,
+             "prescribed_power_low_w": float(low) if band_valid else None,
+             "prescribed_power_high_w": float(high) if band_valid else None,
+             "observed_power_watts": [round(x, 1) if x is not None else None for x in watts],
+             "power_band_rule": "STRICT_OBSERVED_RANGE_NO_INVENTED_TOLERANCE"}
+    historical = {"score": prior.get("score"), "label": prior.get("label"),
+                  "checks_passed": prior.get("checks_passed"),
+                  "checks_total": prior.get("checks_total"),
+                  "interpretation": "DEPRECATED_BINARY_MIXED_CHECK_SCORE_NOT_WORKOUT_COMPLETION",
+                  "do_not_display_as_global_adherence": True}
+    return {"structure": structure, "power_band": power,
+            "historical_binary_check": historical,
+            "label": "MAIN SET COMPLETE · " + label,
+            "detail": (f"main set {total}/{total} completed · power {within}/{total} within target"
+                       if band_valid and not missing else
+                       f"main set {total}/{total} completed · power evidence {len(known)}/{total}"),
+            "presentation": "INDEPENDENT_STRUCTURE_AND_POWER",
+            "schema": R183_SCHEMA}
+
+
+def _v492_execution_quality(block, ledger=None):
+    out = _v492_execution_quality_r182(block, ledger)
+    if not isinstance(out, dict):
+        return out
+    old = out.get("adherence")
+    if not isinstance(old, dict) or not old.get("available"):
+        return out
+    try:
+        # Never invent a plan: use R156's explicit execution identity first,
+        # falling back only to the existing causally-guarded R136 plan matcher.
+        link = _v156_execution_history_link(block, ledger or {})
+        if not link:
+            link = _v136_link_prescription(block, ledger or {})
+        plan = (link or {}).get("plan") if isinstance(link, dict) else None
+        if not isinstance(plan, dict):
+            return out
+        axes = _v183_adherence_axes(block, plan, old)
+        if axes is None:
+            return out
+        updated = dict(out)
+        new_adh = dict(old)
+        # Legacy scalar score and LOW/HIGH label were *not* overall adherence.
+        # Put that historical binary tally ONLY inside a clearly typed legacy key.
+        for key in ("score", "label", "checks_passed", "checks_total", "binary_band_score_legacy"):
+            new_adh.pop(key, None)
+        new_adh.update(axes)
+        new_adh["score"] = None  # no ambiguous one-number global grading
+        new_adh["available"] = True
+        new_adh["score_semantics"] = "NO_GLOBAL_PERCENTAGE__INDEPENDENT_AXES"
+        new_adh["supplemental_effort_affects_main_set_scoring"] = False
+        new_adh["recovery"] = {"state": "NOT_GRADED_BY_THIS_CONTRACT",
+                               "reason": "Recovery demand belongs to the workout contract and whole-activity recovery model."}
+        # Remove older one-axis presentation alias to avoid contradictory labels.
+        new_adh.pop("structural_completion", None)
+        new_adh.pop("dose_band_status", None)
+        updated["adherence"] = new_adh
+        updated["adherence_schema"] = R183_SCHEMA
+        return updated
+    except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
+        # The scoring contract is optional and fails closed to the R182 scorer.
+        # The upstream activity and its measured load are never rewritten.
+        return out
+
+
+# Export/coach-readable history must consume the same multi-axis contract,
+# rather than serialize 'adherence=None' and let a downstream interpreter guess.
+_v4877_ai_previous_blocks_text_r182 = _v4877_ai_previous_blocks_text
+
+
+def _v4877_ai_previous_blocks_text(blocks):
+    raw = _v4877_ai_previous_blocks_text_r182(blocks)
+    if not blocks or not isinstance(raw, str):
+        return raw
+    lines = raw.splitlines()
+    if len(lines) != len(blocks) + 1:
+        return raw
+    for idx, b in enumerate(blocks):
+        adh = ((b or {}).get("execution_quality") or {}).get("adherence") or {}
+        if adh.get("schema") != R183_SCHEMA:
+            continue
+        structure = adh.get("structure") or {}
+        power = adh.get("power_band") or {}
+        old_token = ";adherence=None"
+        if old_token not in lines[idx+1]:
+            continue
+        typed = (f";main_set={structure.get('completed_reps')}/{structure.get('prescribed_reps')}"
+                 f";power_band={power.get('state')}"
+                 f";power_in_range={power.get('in_target_reps')}/{power.get('prescribed_reps')}"
+                 ";global_adherence_score=NOT_DEFINED")
+        lines[idx+1] = lines[idx+1].replace(old_token, typed, 1)
+    return "\n".join(lines)
+
+
+# The legacy narrative fallback must not consider missing global score (= None)
+# evidence of a high-quality session if no question-state ledger is available.
+# This adapter is applied only to legacy fallback and never changes stored data.
+_v4930_performance_narrative_state_r182 = _v4930_performance_narrative_state
+
+
+def _v4930_performance_narrative_state(roadmap, ledger, previous_blocks, training_direction=None,
+                                        performance_evidence=None, now=None,
+                                        evidence_ledger=None, question_state=None):
+    qs = (question_state or {}).get("dimensions") if isinstance(question_state, dict) else None
+    blocks = previous_blocks
+    if not qs and isinstance(previous_blocks, list):
+        blocks = []
+        for b in previous_blocks:
+            adh = ((b or {}).get("execution_quality") or {}).get("adherence") or {}
+            if adh.get("schema") == R183_SCHEMA:
+                # In older legacy logic a None score bypasses a quality guard.
+                # Supply the actual measured strict in-band percentage to that
+                # *temporary* legacy input, or 0 if watt evidence is incomplete.
+                percent = (adh.get("power_band") or {}).get("in_target_percent")
+                b = dict(b)
+                eq = dict(b.get("execution_quality") or {})
+                tmp = dict(adh)
+                tmp["score"] = percent if isinstance(percent, (int,float)) and math.isfinite(percent) else 0
+                eq["adherence"] = tmp
+                b["execution_quality"] = eq
+            blocks.append(b)
+    return _v4930_performance_narrative_state_r182(
+        roadmap, ledger, blocks, training_direction=training_direction,
+        performance_evidence=performance_evidence, now=now,
+        evidence_ledger=evidence_ledger, question_state=question_state)
+
+
+# Replace just the already rendered R182 Training History Jinja branch; no
+# global style changes, no fragment-sensitive JS edits.
+_R183_OLD_ADHERENCE_BRANCH = (
+    r"🎯 WORKOUT ADHERENCE · \{% if eq\.adherence\.get\('presentation'\) == 'STRUCTURE_AND_DOSE_SEPARATE' %\}.*?\{% endif %\}"
+)
+_R183_NEW_ADHERENCE_BRANCH = (
+    "🎯 WORKOUT ADHERENCE · {% if eq.adherence.get('schema') == 'V4.9.59-R183-1' %}"
+    "MAIN SET {{ eq.adherence.structure.completed_reps }}/{{ eq.adherence.structure.prescribed_reps }} COMPLETE"
+    " · POWER {{ eq.adherence.power_band.label }}"
+    "{% if eq.adherence.power_band.in_target_reps is not none %}"
+    " · {{ eq.adherence.power_band.in_target_reps }}/{{ eq.adherence.power_band.prescribed_reps }} IN TARGET{% endif %}"
+    "{% if eq.adherence.power_band.observed_power_min_w is not none and eq.adherence.power_band.prescribed_power_low_w is not none %}"
+    " · {{ eq.adherence.power_band.observed_power_min_w|round|int }}–{{ eq.adherence.power_band.observed_power_max_w|round|int }} W ACTUAL"
+    " VS {{ eq.adherence.power_band.prescribed_power_low_w|int }}–{{ eq.adherence.power_band.prescribed_power_high_w|int }} W TARGET{% endif %}"
+    "{% elif eq.adherence.get('presentation') == 'STRUCTURE_AND_DOSE_SEPARATE' %}"
+    "MAIN SET {{ eq.adherence.completed_main_reps }}/{{ eq.adherence.prescribed_main_reps }} COMPLETE"
+    " · {{ eq.adherence.dose_band_status }}"
+    "{% else %}{% if eq.adherence.score is not none %}{{ eq.adherence.score }}% · {% endif %}{{ eq.adherence.label }} · {{ eq.adherence.detail }}{% endif %}"
+)
+if isinstance(HOME_PAGE, str):
+    HOME_PAGE, R183_UI_PATCH_COUNT = re.subn(_R183_OLD_ADHERENCE_BRANCH, lambda m: _R183_NEW_ADHERENCE_BRANCH,
+                                             HOME_PAGE, count=1, flags=re.S)
+else:
+    R183_UI_PATCH_COUNT = 0
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.59 WIP R183 · INDEPENDENT MAIN-SET + POWER ADHERENCE CONTRACT · R182 BASELINE"
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
