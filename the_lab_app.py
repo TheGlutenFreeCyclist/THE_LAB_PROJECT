@@ -39422,7 +39422,94 @@ BASE_CSS += r"""
 
 """
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.55 WIP R179 · UNIFIED TRAINING TYPOGRAPHY · R178 BASELINE"
+
+LAB_R180_TYPOGRAPHY_CSS = r"""
+/* R180 · App-wide, semantic typography contract.
+   Reference: the existing Roadmap goal (5 MIN POWER), NOT a new ad hoc font.
+   Titles, statuses and headings uppercase; physiological units, paragraphs and
+   explanatory prose remain literal and accessible. No blanket <strong> changes. */
+:root{
+  --lab-heading-family:Arial,Helvetica,sans-serif;
+  --lab-heading-weight:850;
+  --lab-heading-xl:24px;
+  --lab-heading-lg:20px;
+  --lab-heading-md:17px;
+  --lab-caption-size:13px;
+  --lab-body-size:16px;
+}
+/* Distinguish structural headings from explanatory paragraphs and metric values. */
+html body :is(.v4-shell,.v38-science-page) :is(h1,h2,h3,h4,h5,h6),
+html body :is(.v4-shell,.v38-science-page) :is(.v4-control-title,.v4-section-title,.v4-title,.v4873-decision-primary,.v4873-step-title strong,.v4873-milestone-head strong,.v482-journey-head strong,.v482-journey-step>strong,.v48-season-context-head strong,.v38-mini-head>div>strong,.v38-category>strong),
+html body .v4878-guide-copy>strong,
+html body .v4832-modal-title>strong,
+html body .v481-preflight-head strong,
+html body .v179-training-harmony :is(.v178-volume-title,.v179-stage-label,.v179-stage-state,.v39-phase-label,.v39-phase-state,.v178-volume-primary>strong),
+html body .v43-state-head strong,
+html body .v35-phase-explain>strong{
+  font-family:var(--font)!important;
+  font-weight:var(--lab-heading-weight)!important;
+  text-transform:uppercase!important;
+  letter-spacing:.015em!important;
+  overflow-wrap:break-word;
+}
+/* One size ladder; the 5 MIN POWER Roadmap heading remains the reference. */
+html body .v4-shell .v4-title{font-size:clamp(30px,3vw,36px)!important;line-height:1.12!important}
+html body .v4-shell .v4-section-title,
+html body .v4-shell .v4873-roadmap-head h3{font-size:var(--lab-heading-xl)!important;line-height:1.22!important}
+html body .v4-shell :is(.v4-control-title,.v4-energy-card h3,.v4-clock-copy h3,.v4-readiness-copy h3,.v4-coach-call h2,.v4-session h3),
+html body .v4-shell .v178-volume-advice h3{font-size:var(--lab-heading-lg)!important;line-height:1.26!important}
+html body .v4-shell :is(.v35-head h3,.v178-volume-advice h4,.v4878-guide-copy>strong,.v35-phase-explain>strong){font-size:var(--lab-heading-md)!important;line-height:1.32!important}
+/* Secondary labels and stage states do not invent their own badge hierarchy. */
+html body .v179-training-harmony .v179-stage-state,
+html body .v179-training-harmony .v39-phase-state{font-size:18px!important;line-height:1.22!important}
+html body .v179-training-harmony .v178-volume-primary>strong{font-size:var(--lab-heading-md)!important;line-height:1.36!important}
+html body .v179-training-harmony .v178-volume-title{font-size:var(--lab-caption-size)!important}
+html body .v179-training-harmony .v179-stage-label{font-size:var(--lab-caption-size)!important}
+/* Actual coaching prose, not displayed as headings, uses the same size in
+   Training Plan, optional aerobic volume and safety advice. */
+html body .v179-training-harmony :is(.v4-session-main,.v4-session-why,.v178-volume-advice p,.v178-volume-primary p,.v178-volume-side p){font-size:var(--lab-body-size)!important;line-height:1.57!important;font-weight:400}
+/* Fuel quantities are readouts, not 40px headlines; preserve g/h notation. */
+html body .v179-training-harmony .v23-fuel-dose{
+  font-family:var(--font)!important;font-size:19px!important;
+  line-height:1.35!important;font-weight:700!important;
+  letter-spacing:0!important;overflow-wrap:break-word!important;
+  text-transform:none!important;
+}
+html body .v179-training-harmony .v23-fuel-copy{
+  font-size:14px!important;line-height:1.48!important;font-weight:700!important;
+  text-transform:uppercase!important;letter-spacing:.015em!important;
+}
+html body .v179-training-harmony :is(.v23-fuel-meta,.v4-session-slot,.v4-session-pill){font-size:14px!important}
+/* Labels, not explanatory paragraphs. Preserve sentence case in body copy. */
+html body .v4-shell :is(.v4-kicker,.v4-week-label,.v179-stage-label,.v35-head .v35-status,.v4873-roadmap-head>b),
+html body .v4-shell .v4-section-note strong{font-family:var(--font)!important;text-transform:uppercase!important}
+/* Subtitle lines are titles' secondary tier, not long-form paragraphs. */
+html body .v4-shell :is(.v4-section-note,.v4-subtitle),
+html body .v4-shell .v35-head-main>div>p{
+  font-family:var(--font)!important;font-size:14px!important;
+  line-height:1.48!important;letter-spacing:.018em!important;
+  font-weight:600!important;text-transform:uppercase!important;
+}
+/* Layout must wrap rather than shrink type. */
+html body .v4-shell :is(.v4-section-head,.v4865-subsection-head,.v178-volume-header,.v35-head,.v4873-roadmap-head){min-width:0}
+html body .v4-shell :is(.v4-section-title,.v4-control-title,.v179-stage-state,.v178-volume-advice h3,.v23-fuel-dose){min-width:0;white-space:normal!important;overflow-wrap:break-word}
+@media(max-width:760px){
+  :root{--lab-heading-xl:21px;--lab-heading-lg:19px;--lab-heading-md:16px}
+  html body .v4-shell .v4-title{font-size:30px!important}
+  html body .v179-training-harmony .v23-fuel-dose{font-size:18px!important}
+}
+@media print{
+  html body .v179-training-harmony .v23-fuel-dose{color:#111!important}
+}
+"""
+BASE_CSS += LAB_R180_TYPOGRAPHY_CSS
+PRODUCT_SIMPLE_CSS += r"""
+body.product-sec :is(h1,h2,h3,h4,h5,h6),body.product-sec :is(.ps-accordion-trigger strong,.ps-section-head strong){text-transform:uppercase!important;font-family:Arial,Helvetica,sans-serif!important;font-weight:850!important;letter-spacing:.015em!important;overflow-wrap:break-word;}
+body.product-sec .ps-head h1{font-size:clamp(26px,3vw,36px)!important;}
+body.product-sec .ps-card h2{font-size:22px!important;}
+"""
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.56 WIP R180 · APPLICATION TYPOGRAPHY SYSTEM · R179 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
