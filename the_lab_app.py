@@ -3440,7 +3440,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v4865-macro-copy"><h2>TRAINING PLAN</h2><p>Next sessions · recent blocks · training direction</p></div>
 </div>
 <div class="v4865-macro-panel" id="v4865-training-panel">
-<div class="v23-training-nutrition-stack">
+<div class="v23-training-nutrition-stack v179-training-harmony">
 <article class="v4-card v4-week v8-upcoming-card v23-upcoming-card">
 <div class="v4-section-head v35-upcoming-head">
 <div class="v8-section-heading"><span class="v4-icon v8-mini-icon">🚴</span><div><h2 class="v4-section-title">Upcoming Sessions</h2><p class="v4-section-note">Adapted to your training, recovery and availability.</p></div></div>
@@ -3477,7 +3477,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <section class="v4882-strength-nudge v178-volume-advice" role="note" aria-label="Optional aerobic volume development">
   <div class="v178-volume-header">
     <div class="v178-volume-title"><span aria-hidden="true">🚴</span><span>OPTIONAL AEROBIC VOLUME</span></div>
-    <div class="v178-volume-status">{{ data.aerobic_volume_advice.stage_label or 'OPTIONAL' }}</div>
+    <div class="v178-volume-status" aria-label="Aerobic volume stage"><span class="v179-stage-label">VOLUME STAGE</span><strong class="v179-stage-state">{{ data.aerobic_volume_advice.stage_label or 'OPTIONAL' }}</strong></div>
   </div>
   <div class="v178-volume-grid">
     <div class="v178-volume-main">
@@ -39333,7 +39333,96 @@ BASE_CSS += r'''
 @media print{.v178-volume-advice{break-inside:avoid;background:#fff;color:#111;border-color:#333}.v178-volume-advice p,.v178-volume-advice h3,.v178-volume-advice h4,.v178-volume-status{color:#111}}
 '''
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.54 WIP R178 · PLAN-SCOPED ACHIEVEMENTS + OPTIONAL VOLUME UI · R177 BASELINE"
+BASE_CSS += r"""
+
+/* R179: one training typography system, sourced from existing THE LAB phase state.
+   R178 layout and all physiology/authority rules remain untouched.
+   Shared sizing tokens avoid independent, competing panel typography. */
+.v179-training-harmony{
+  --v179-type-body:16px; --v179-type-meta:14px; --v179-type-eyebrow:13px;
+  --v179-type-state:18px; --v179-type-heading:22px;
+  --v179-type-line:1.62; --v179-type-muted:#b9cddd;
+  --v179-card-outline:rgba(96,166,191,.26);
+  font-family:var(--font); font-size:var(--v179-type-body);
+}
+/* Hierarchy shared by phase, workout, nutrition and optional volume. */
+.v179-training-harmony .v39-phase-label,
+.v179-training-harmony .v39-phase-confidence>span,
+.v179-training-harmony .v178-volume-title,
+.v179-training-harmony .v179-stage-label,
+.v179-training-harmony .v23-fuel-head,
+.v179-training-harmony .v4-week-label{
+  font-family:var(--font)!important;font-size:var(--v179-type-eyebrow)!important;
+  font-weight:850!important;line-height:1.35!important;
+  letter-spacing:.065em!important;text-transform:uppercase;
+}
+.v179-training-harmony .v39-phase-state,
+.v179-training-harmony .v179-stage-state{
+  display:block;font-family:var(--display)!important;
+  font-size:var(--v179-type-state)!important;font-weight:800!important;
+  line-height:1.18!important;letter-spacing:-.015em!important;
+  color:#f4f9ff!important;overflow-wrap:break-word;
+}
+.v179-training-harmony .v39-phase-confidence b{font-size:var(--v179-type-meta)!important;line-height:1.3!important}
+.v179-training-harmony .v4-session-slot,
+.v179-training-harmony .v4-session-pill,
+.v179-training-harmony .v23-fuel-meta,
+.v179-training-harmony .v23-fuel-copy,
+.v179-training-harmony .v4-week-chip{
+  font-family:var(--font);font-size:var(--v179-type-meta)!important;line-height:1.45!important;
+}
+.v179-training-harmony .v4-session-pill{padding:6px 10px}
+.v179-training-harmony .v4-session h3{font-family:var(--display);font-size:var(--v179-type-heading)!important;line-height:1.22}
+.v179-training-harmony .v4-session-main,
+.v179-training-harmony .v4-session-why,
+.v179-training-harmony .v178-volume-advice p,
+.v179-training-harmony .v178-volume-primary p,
+.v179-training-harmony .v23-fuel-copy{
+  font-family:var(--font);font-size:var(--v179-type-body)!important;
+  line-height:var(--v179-type-line)!important;
+}
+.v179-training-harmony .v4-session-why{color:var(--v179-type-muted)}
+.v179-training-harmony .v23-fuel-dose{font-family:var(--display);font-size:clamp(24px,2vw,28px);font-weight:800;line-height:1.12;overflow-wrap:break-word}
+.v179-training-harmony .v23-fuel-meta{color:#b2c5d5!important;letter-spacing:.025em}
+/* Reuse the existing TRAINING PHASE status hierarchy, not a conflicting amber pill. */
+.v179-training-harmony .v178-volume-header{gap:16px;align-items:center}
+.v179-training-harmony .v178-volume-title{color:#a7eaf7!important;gap:10px}
+.v179-training-harmony .v178-volume-title>span:first-child{font-size:22px;line-height:1.15}
+.v179-training-harmony .v178-volume-status{
+  flex:0 1 auto;min-width:215px;max-width:min(100%,330px);
+  display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:5px;
+  padding:12px 17px;background:rgba(155,108,255,.055);
+  border:1px solid rgba(155,108,255,.34);border-radius:16px;
+  color:#f4f9ff;text-align:left;box-sizing:border-box;
+}
+.v179-training-harmony .v179-stage-label{color:#aabbd1!important}
+.v179-training-harmony .v179-stage-state{margin:0!important;max-width:100%}
+.v179-training-harmony .v178-volume-advice{font-family:var(--font);margin-top:18px}
+.v179-training-harmony .v178-volume-advice h3{font-family:var(--display);font-size:var(--v179-type-heading)!important;font-weight:800;line-height:1.25;letter-spacing:-.018em}
+.v179-training-harmony .v178-volume-advice h4{font-family:var(--font);font-size:17px!important;line-height:1.35;font-weight:800;letter-spacing:0}
+.v179-training-harmony .v178-volume-primary>strong{font-family:var(--display);font-size:19px!important;font-weight:800;line-height:1.38}
+.v179-training-harmony .v178-volume-side{border-color:var(--v179-card-outline)}
+/* No label can force page overflow on 320px. Layout, not microscopic type, absorbs narrow widths. */
+@media(max-width:640px){
+ .v179-training-harmony .v178-volume-header{align-items:stretch}
+ .v179-training-harmony .v178-volume-status{width:100%;max-width:none;min-width:0}
+ .v179-training-harmony .v4-session-meta{gap:8px}
+ .v179-training-harmony .v39-phase-inner{gap:12px;flex-wrap:wrap}
+ .v179-training-harmony .v39-phase-confidence{min-width:72px}
+ .v179-training-harmony .v4-session h3{font-size:20px!important}
+}
+@media(max-width:360px){
+ .v179-training-harmony .v39-phase-button{padding:13px!important}
+ .v179-training-harmony .v4-session-pill{padding:6px 8px}
+}
+@media print{
+ .v179-training-harmony .v178-volume-status{background:#fff!important;border-color:#5e597f!important}
+ .v179-training-harmony .v179-stage-state{color:#111!important}
+}
+
+"""
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.55 WIP R179 · UNIFIED TRAINING TYPOGRAPHY · R178 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
