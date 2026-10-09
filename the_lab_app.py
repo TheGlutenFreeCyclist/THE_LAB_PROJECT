@@ -39617,5 +39617,267 @@ BASE_CSS += r"""
 """
 APP_VERSION = "THE LAB · PRODUCT V4.9.57 WIP R181 · NON-PUNITIVE AUXILIARY INTENSITY ACCOUNTING · R180 BASELINE"
 
+# R182 · CAUSAL SAME-WORKOUT REISSUE RESOLUTION + NATIVE AUXILIARY EVIDENCE
+# Resolve *equivalent* reissues only when they have the same session date and
+# identical canonical workout mechanics. Different prescriptions remain ambiguous.
+# Never infer that a newly issued prescription predates the executed activity.
+R182_SCHEMA = "V4.9.58-R182-1"
+_v146_reconcile_prescription_execution_r181 = _v146_reconcile_prescription_execution
+_v181_supplemental_effort_r181 = _v181_supplemental_effort
+
+
+def _v182_equivalence_key(plan):
+    if not isinstance(plan, dict):
+        return None
+    text = " ".join(str(plan.get("main_set") or "").split())
+    if not text:
+        return None
+    # Comparisons use immutable prescribed mechanics, NOT an athlete name or
+    # arbitrary power/interval tolerances that could merge different workouts.
+    def norm_number(value):
+        try:
+            return round(float(value), 5) if value is not None else None
+        except (TypeError, ValueError, OverflowError):
+            return str(value or "")
+    return (
+        str(plan.get("date") or "")[:10], text,
+        norm_number(plan.get("prescribed_power_low")),
+        norm_number(plan.get("prescribed_power_high")),
+        norm_number(plan.get("interval_minutes")),
+    )
+
+
+def _v182_issued_dt(plan):
+    try:
+        stamp = str(plan.get("recorded_at_local") or "").strip()
+        if not stamp:
+            return None
+        dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=ROME_TZ)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _v182_canonicalize_active_reissues(ledger, blocks):
+    """Return a cloned ledger with only provable superseded versions retired.
+
+    This is a reconciliation input normalizer, NOT a new recommendation engine.
+    A missing issue timestamp does not outrank a causally dated exact equivalent.
+    If two DIFFERENT workout IDs/contents plausibly match, leave them ambiguous.
+    """
+    out = _v4831_json_clone(ledger)
+    if not isinstance(out, dict) or not isinstance(blocks, (list, tuple)):
+        return out
+    actives = _v146_active_prescriptions(out)
+    retired = {}  # fingerprint -> newer fingerprint
+    for block in blocks:
+        if not isinstance(block, dict) or not block.get("quality_relevant"):
+            continue
+        groups = {}
+        for p in actives:
+            if str(p.get("date") or "")[:10] != str(block.get("date") or "")[:10]:
+                continue
+            key = _v182_equivalence_key(p)
+            if key is None or _v146_match_plan_block(p, block, allow_fulfilled=False) is None:
+                continue
+            groups.setdefault(key, []).append(p)
+        for rows in groups.values():
+            if len(rows) < 2:
+                continue
+            # No merging across genuinely different canonical workouts.
+            ids = {str(p.get("nova_workout_id") or p.get("nova_contract_id") or "").strip()
+                   for p in rows if p.get("nova_workout_id") or p.get("nova_contract_id")}
+            if len(ids) > 1:
+                continue
+            issued = [(dt, p) for p in rows if (dt := _v182_issued_dt(p)) is not None]
+            if not issued:
+                continue
+            issued.sort(key=lambda item: item[0], reverse=True)
+            # If two distinct prescriptions share the most recent timestamp,
+            # their issuance order is not provable. Fail closed.
+            latest = issued[0][0]
+            if sum(dt == latest and _v136_prescription_fingerprint(p) !=
+                   _v136_prescription_fingerprint(issued[0][1]) for dt, p in issued) > 0:
+                continue
+            winner = issued[0][1]
+            wfp = str(winner.get("prescription_fingerprint") or _v136_prescription_fingerprint(winner))
+            for p in rows:
+                pfp = str(p.get("prescription_fingerprint") or _v136_prescription_fingerprint(p))
+                if pfp != wfp:
+                    retired[pfp] = wfp
+    if not retired:
+        return out
+    for row in out.get("prescription_history") or []:
+        if not isinstance(row, dict):
+            continue
+        fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+        if fp in retired and str(row.get("prescription_status") or "ACTIVE").upper() in {"ACTIVE", "PLANNED", ""}:
+            row["prescription_status"] = "SUPERSEDED"
+            row["superseded_by_fingerprint"] = retired[fp]
+            row["superseded_reason"] = "R182_IDENTICAL_MECHANICS_LATER_ISSUANCE"
+    for field in ("primary_anchor", "next_cycle_anchor"):
+        row = out.get(field)
+        if not isinstance(row, dict):
+            continue
+        fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
+        if fp in retired:
+            row["prescription_status"] = "SUPERSEDED"
+            row["superseded_by_fingerprint"] = retired[fp]
+    out["equivalent_reissue_resolution"] = {
+        "schema": R182_SCHEMA, "retired_versions": len(retired),
+        "method": "IDENTICAL_DATE_MECHANICS_AND_UNIQUE_LATEST_ISSUANCE",
+        "different_workouts_still_fail_closed": True,
+    }
+    return out
+
+
+def _v146_reconcile_prescription_execution(ledger, blocks, now=None):
+    try:
+        normal = _v182_canonicalize_active_reissues(ledger, blocks)
+    except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
+        # An optional alias resolution must never introduce a new fatal Snapshot
+        # error. Existing R146 ambiguity handling remains fail-closed.
+        normal = ledger
+    return _v146_reconcile_prescription_execution_r181(normal, blocks, now=now)
+
+
+def _v181_supplemental_effort(block, plan):
+    """R181 canonical evidence first; R182 native W′bal boundaries if canonical omits the extra.
+
+    R182 requires four canonical reps in the original device-lap evidence plus
+    complete ordered native intervals before interpreting a post-main-set burst.
+    No training load, adherence score or recovered work is manufactured here.
+    """
+    prior = _v181_supplemental_effort_r181(block, plan)
+    if prior:
+        return prior
+    if not isinstance(block, dict) or not isinstance(plan, dict):
+        return None
+    ev = _v155_main_set_evidence(block, plan)
+    if not ev or len(ev.get("main") or []) != int(ev.get("reps") or 0) or int(ev.get("reps") or 0) < 2:
+        return None
+    # The main set comes from DEVICE_LAPS / canonical source; its four measured
+    # intervals are required independently of the native W′bal source.
+    wbal = block.get("wbal") or {}
+    if not isinstance(wbal, dict) or wbal.get("source") != "INTERVALS_NATIVE_INTERVALS":
+        return None
+    rows = wbal.get("rows") or []
+    if not isinstance(rows, list):
+        return None
+    target = float(ev.get("secs") or 0)
+    top = _num(ev.get("power_high"))
+    if not target or top is None or not math.isfinite(top) or top <= 0:
+        return None
+    ordered = []
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        secs = _num(row.get("duration_sec"))
+        watts = _num(row.get("average_watts"))
+        if secs is None or watts is None or not math.isfinite(secs) or not math.isfinite(watts) or secs <= 0:
+            continue
+        ordered.append((i, str(row.get("type") or "").upper(), float(secs), float(watts)))
+    # Native intervals may be split by threshold crossings. This 60% window
+    # links sequence position only, never scores watts or durations.
+    main = [r for r in ordered if r[1] == "WORK" and 0.60 * target <= r[2] <= 1.20 * target]
+    if len(main) != int(ev.get("reps") or 0):
+        return None  # contradictory provider structure -> no inferred sprint
+    last = main[-1][0]
+    extras = [{"seconds": round(r[2], 1), "average_watts": round(r[3], 1)}
+              for r in ordered if r[0] > last and r[1] == "WORK"
+              and 5 <= r[2] <= 45 and r[3] >= 1.20 * top]
+    if not extras:
+        return None
+    load = _num(block.get("load"))
+    if load is not None and not math.isfinite(load):
+        load = None
+    return {
+        "schema": R182_SCHEMA, "available": True,
+        "state": "OBSERVED_EXTRA_SHORT_HIGH_POWER",
+        "source": "INTERVALS_NATIVE_WBAL_INTERVAL_BOUNDARIES",
+        "count": len(extras), "total_seconds": round(sum(x["seconds"] for x in extras), 1),
+        "max_interval_average_watts": max(x["average_watts"] for x in extras),
+        "work_intervals": extras[:8], "detected_after_canonical_main_set": True,
+        "main_set_adherence_unmodified": True, "athlete_penalty": False,
+        "creates_workout": False, "creates_hard_debt": False,
+        "activity_training_load": round(load, 1) if load is not None else None,
+        "whole_activity_load_in_provider_totals": load is not None,
+        "provider_power_zones_available": bool(block.get("power_zone_summary")),
+        "additional_training_load_added": 0.0,
+        "load_rule": "Already included in measured whole-activity Intervals TL; never double count.",
+        "interpretation": "Observed short high-power interval, not a maximal-sprint certification.",
+        "recovery_rule": "Consider measured whole-activity demand and future recovery checks.",
+    }
+
+
+# R182 separates structural completion from dose-band compliance. The original
+# 20% binary R155 metric remains in the audit for compatibility, but the UI
+# must not present a complete 4/4 set slightly above the prescribed band as
+# "only 20% workout completed". No tolerance or new adherence penalty added.
+_v492_execution_quality_r181 = _v492_execution_quality
+
+
+def _v492_execution_quality(block, ledger=None):
+    out = _v492_execution_quality_r181(block, ledger)
+    if not isinstance(out, dict):
+        return out
+    adh = out.get("adherence") if isinstance(out.get("adherence"), dict) else None
+    if not adh or not adh.get("available"):
+        return out
+    try:
+        link = _v156_execution_history_link(block, ledger or {})
+        if not link:
+            return out
+        ev = _v155_main_set_evidence(block, link.get("plan") or {})
+        if not ev or len(ev.get("main") or []) != int(ev.get("reps") or 0):
+            return out
+        low, high = _num(ev.get("power_low")), _num(ev.get("power_high"))
+        watts = [float(r["watts"]) for r in ev["main"] if r.get("watts") is not None]
+        if low is None or high is None or len(watts) != len(ev["main"]):
+            return out
+        above = all(w > high for w in watts)
+        below = all(w < low for w in watts)
+        if not (above or below):
+            return out
+        status = "ABOVE TARGET" if above else "BELOW TARGET"
+        enriched = dict(out)
+        enriched_adh = dict(adh)
+        enriched_adh.update({
+            "structural_completion": "COMPLETE",
+            "completed_main_reps": len(ev["main"]),
+            "prescribed_main_reps": int(ev["reps"]),
+            "dose_band_status": status,
+            "observed_power_min_w": round(min(watts), 1),
+            "observed_power_max_w": round(max(watts), 1),
+            "prescribed_power_low_w": low,
+            "prescribed_power_high_w": high,
+            "binary_band_score_legacy": adh.get("score"),
+            "presentation": "STRUCTURE_AND_DOSE_SEPARATE",
+            "rule": "Completion is distinct from staying inside the prescribed power band; unplanned auxiliary sprint does not lower either score.",
+        })
+        enriched["adherence"] = enriched_adh
+        return enriched
+    except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
+        return out
+
+
+_R182_ADHERENCE_FRAGMENT = "🎯 WORKOUT ADHERENCE · {{ eq.adherence.score }}% · {{ eq.adherence.label }} · {{ eq.adherence.detail }}"
+if isinstance(HOME_PAGE, str) and HOME_PAGE.count(_R182_ADHERENCE_FRAGMENT) == 1:
+    HOME_PAGE = HOME_PAGE.replace(_R182_ADHERENCE_FRAGMENT,
+        "🎯 WORKOUT ADHERENCE · {% if eq.adherence.get('presentation') == 'STRUCTURE_AND_DOSE_SEPARATE' %}"
+        "MAIN SET {{ eq.adherence.completed_main_reps }}/{{ eq.adherence.prescribed_main_reps }} COMPLETE · "
+        "{{ eq.adherence.dose_band_status }} · "
+        "{{ eq.adherence.observed_power_min_w|round|int }}–{{ eq.adherence.observed_power_max_w|round|int }} W ACTUAL "
+        "VS {{ eq.adherence.prescribed_power_low_w|int }}–{{ eq.adherence.prescribed_power_high_w|int }} W PRESCRIBED"
+        "{% else %}{{ eq.adherence.score }}% · {{ eq.adherence.label }} · {{ eq.adherence.detail }}{% endif %}")
+
+# The existing evidence chips were 10.5px; a long adherence explanation must
+# be readable, wrap naturally and never rely on tiny type to fit a mobile card.
+BASE_CSS += r"""
+.v4894-evidence span{font-size:14px;line-height:1.4;white-space:normal;overflow-wrap:anywhere;max-width:100%}
+"""
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.58 WIP R182 · CAUSAL ADHERENCE + NATIVE AUXILIARY RECONCILIATION · R181 BASELINE"
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
