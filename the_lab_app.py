@@ -2921,6 +2921,12 @@ V4873_R2_ROADMAP_CSS = r"""
 .v4882-strength-nudge{margin:14px 0 2px;padding:10px 12px;border:1px solid rgba(120,220,255,.18);border-radius:13px;background:rgba(30,80,105,.10);max-width:760px}
 .v4882-strength-nudge-head{font-size:.69rem;font-weight:900;letter-spacing:.12em;color:#a9dff2;margin-bottom:4px}
 .v4882-strength-nudge p{margin:0;color:#b7c5d1;font-size:.82rem;line-height:1.42}
+/* R178: optional aerobic advice occupies the full desktop row; readable, responsive typography. */
+.v178-volume-advice{max-width:none;width:100%;box-sizing:border-box;padding:18px 22px;display:grid;gap:8px;min-width:0;background:linear-gradient(110deg,rgba(20,90,120,.16),rgba(70,55,110,.10));border-color:rgba(81,209,236,.28)}
+.v178-volume-advice .v4882-strength-nudge-head{font-size:.78rem;letter-spacing:.075em;line-height:1.5;margin:0;color:#9eeaff}
+.v178-volume-advice p{font-size:.91rem;line-height:1.55;margin:0;overflow-wrap:anywhere;color:#d1dfed}
+.v178-volume-advice .v178-volume-action{font-size:1rem;color:#fff;padding:10px 13px;border-radius:10px;border-left:3px solid #73ddea;background:rgba(56,126,156,.12)}
+@media(max-width:640px){.v178-volume-advice{padding:14px 13px;gap:9px}.v178-volume-advice p{font-size:.89rem}.v178-volume-advice .v178-volume-action{font-size:.94rem;padding:9px}}
 @media(max-width:760px){
  .v4873-roadmap{padding:14px}.v4873-roadmap-head{flex-direction:column;gap:10px}.v4873-roadmap-head>b{align-self:flex-start;max-width:100%}.v4873-roadmap-head h3{font-size:20px}.v4873-roadmap-head p{font-size:12.5px;line-height:1.55}
  .v4873-roadmap-steps{grid-template-columns:1fr 1fr;gap:8px}.v4873-roadmap-step{padding:10px}.v4873-roadmap-step small{display:block!important}
@@ -3468,14 +3474,38 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% endfor %}
 </div>
 {% if data.aerobic_volume_advice %}
-<div class="v4882-strength-nudge" role="note" aria-label="Optional aerobic volume development">
-<div class="v4882-strength-nudge-head">🌊 OPTIONAL AEROBIC VOLUME{% if data.aerobic_volume_advice.available %} · {{ data.aerobic_volume_advice.date[8:10] }}/{{ data.aerobic_volume_advice.date[5:7] }}/{{ data.aerobic_volume_advice.date[:4] }}{% endif %} · NOT A REQUIRED WORKOUT</div>
-<p><strong>VOLUME DEVELOPMENT · {{ data.aerobic_volume_advice.stage_label or "OPTIONAL" }}</strong></p>
-<p>{{ data.aerobic_volume_advice.purpose }}</p>
-<p><strong>{{ data.aerobic_volume_advice.headline }}</strong></p>
-<p>{{ data.aerobic_volume_advice.guidance }}</p>
-<p>{{ data.aerobic_volume_advice.continuity }}</p>
-</div>
+<section class="v4882-strength-nudge v178-volume-advice" role="note" aria-label="Optional aerobic volume development">
+  <div class="v178-volume-header">
+    <div class="v178-volume-title"><span aria-hidden="true">🚴</span><span>OPTIONAL AEROBIC VOLUME</span></div>
+    <div class="v178-volume-status">{{ data.aerobic_volume_advice.stage_label or 'OPTIONAL' }}</div>
+  </div>
+  <div class="v178-volume-grid">
+    <div class="v178-volume-main">
+      <h3>Build your aerobic endurance</h3>
+      <p>{{ data.aerobic_volume_advice.purpose }}</p>
+      {% if data.aerobic_volume_advice.available and data.aerobic_volume_advice.suggested_minutes %}
+        <div class="v178-volume-primary" aria-label="Optional easy-ride substitution">
+          {% if data.aerobic_volume_advice.recovery_hold_now %}
+            <strong>Recovery HOLD — no extra volume is authorized now.</strong>
+            <p>The longer ride is only a future option after a fresh recovery check.</p>
+          {% else %}
+            <strong>Replace one easy ride, don't add another.</strong>
+          {% endif %}
+          <p>On the indicated easy day{% if data.aerobic_volume_advice.date %} ({{ data.aerobic_volume_advice.date[8:10] }}/{{ data.aerobic_volume_advice.date[5:7] }}/{{ data.aerobic_volume_advice.date[:4] }}){% endif %}, you may <strong>replace</strong> the ~{{ data.aerobic_volume_advice.baseline_minutes }}-min easy ride with <strong>up to ~{{ data.aerobic_volume_advice.suggested_minutes }} min Z1–Z2</strong> — only if recovery and a genuinely free longer window allow it.</p>
+          <p>The canonical plan is unchanged; this does not reserve extra time.</p>
+        </div>
+      {% else %}
+        <div class="v178-volume-primary"><strong>{{ data.aerobic_volume_advice.headline }}</strong></div>
+      {% endif %}
+    </div>
+    <div class="v178-volume-side">
+      <h4>Before you extend</h4>
+      <p>{{ data.aerobic_volume_advice.guidance }}</p>
+      <h4>No training debt</h4>
+      <p>{{ data.aerobic_volume_advice.continuity }}</p>
+    </div>
+  </div>
+</section>
 {% endif %}
 {% if data.strength_suggestion %}<div class="v4882-strength-nudge"><div class="v4882-strength-nudge-head">🏋️ OPTIONAL STRENGTH IDEA</div><p>{{ data.strength_suggestion }}</p></div>{% endif %}
 </article>
@@ -11903,8 +11933,12 @@ def _v491_power_podium_badges(goal_key=None, now=None, lookback_days=7, cycle_st
         elif a["rank"]==1 and transfer: detail+=" · race-useful transfer in current THE LAB block"
         badges.append({"icon":icons[a["rank"]],"rank":a["rank"],"rank_label":labels[a["rank"]],"duration":dur,"secs":a["secs"],"secs_end":b["secs"],"watts":ws[0] if len(g)==1 else None,"watts_label":f"{ws[0]} W" if len(g)==1 else f"{min(ws)}–{max(ws)} W","detail":detail,"date":a["date"],"activity_id":a["activity_id"],"recent":date.fromisoformat(a["date"])>=cutoff,"lab_window_aligned":lab,"goal_aligned":aligned,"race_transfer":transfer,"transfer_code":tr[2] if transfer and tr else None,"points":[{"secs":z.get("secs"),"watts":z.get("watts"),"delta_w":z.get("delta_w")} for z in g if _num(z.get("watts")) is not None]})
     centers={"POWER_5":300,"VO2MAX":300,"POWER_20":1200,"TIME_TRIAL":1200,"POWER_1":60,"SPRINTER":60,"ENDURANCE_BASE":3600}; c=centers.get(str(goal_key or '').upper(),300)
+    # R178: power history remains available as baseline, but awards are earned
+    # only after an explicitly known active THE LAB plan start. No plan => no awards.
+    # A dated historical PB must never become a new plan achievement.
+    badges = [x for x in badges if cycle_day is not None and date.fromisoformat(x["date"]) >= cycle_day]
     badges.sort(key=lambda x:(x["rank"],abs(x["secs"]-c),-x["secs"])); recent=[x for x in badges if x.get("recent")][:6]; badges=badges[:6]
-    return {"available":bool(badges),"badges":badges,"recent_badges":recent,"scope_label":f"{today.year} YTD","method_note":"Per-activity Intervals power curves, sampled minute-by-minute; gold requires ≥3 W over the prior best. Silver/bronze are current YTD podium efforts. Direct and transfer bands stay distinct."}
+    return {"available":bool(badges),"badges":badges,"recent_badges":recent,"scope_label":f"{today.year} YTD","method_note":"Power-history baseline remains year-to-date; THE LAB awards only show dated efforts on or after the active plan start. Gold requires ≥3 W over prior best; ranks are relative to YTD history. No active plan, no plan awards."}
 def extract_power_curve_points(payload):
     array_results = []
     point_list_results = []
@@ -39236,10 +39270,11 @@ def _v176_progressive_volume_advice(sessions, coach_clock, execution_model,
         out["headline"] = ("Your recent overall cycling hours have grown quickly. "
                            "Consolidate the volume you already tolerate; no longer ride is requested.")
     elif target is not None:
-        out["headline"] = (f"Optional long easy opportunity: if you genuinely have the time and "
-                           f"feel recovered, consider gradually building toward ~{round(target)} min "
-                           f"rather than the usual ~{round(base)} min. "
-                           "This may require a separate longer free window, not the predicted slot.")
+        out["headline"] = (f"On the suggested easy day, you may REPLACE the existing ~{round(base)}-min "
+                           f"easy ride with one easy Z1–Z2 ride gradually approaching ~{round(target)} min "
+                           "ONLY if you genuinely have a long enough free window and recovery supports it. "
+                           "The extra time is NOT scheduled or presumed available. Do not add a second ride, "
+                           "change any hard session or count a skipped option as missed training.")
     else:
         out["headline"] = ("Keep easy riding consistent; no numeric duration increase is "
                            "justified by the current observations. Reassess after more completed rides.")
@@ -39271,7 +39306,34 @@ def _v176_progressive_volume_advice(sessions, coach_clock, execution_model,
     return out
 
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.53 WIP R177 · SNAPSHOT INCIDENTS + UI ACCESSIBILITY · R176 BASELINE"
+BASE_CSS += r'''
+/* R178 final: late cascade override from actual BASE_CSS, minimum 16px type across every viewport.
+   Scope confined to the optional-volume card: no global font downsizing or control changes. */
+.v178-volume-advice{display:block;width:100%;max-width:none;min-width:0;font-size:16px;margin:18px 0 3px;padding:clamp(18px,2.2vw,30px);border:1px solid rgba(86,209,235,.34);border-radius:18px;background:linear-gradient(112deg,rgba(20,64,85,.29),rgba(36,33,69,.22) 80%);box-sizing:border-box;color:#e0ebf5}
+.v178-volume-advice *{min-width:0}
+.v178-volume-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:0 0 20px}
+.v178-volume-title{display:flex;align-items:center;gap:10px;max-width:100%;font-size:17px;line-height:1.4;font-weight:900;letter-spacing:.018em;color:#a7eaf7;overflow-wrap:break-word}
+.v178-volume-title>span:first-child{font-size:23px;line-height:1.1}
+.v178-volume-status{font-size:16px;font-weight:800;line-height:1.4;letter-spacing:0;color:#ffdf91;border:1px solid rgba(255,210,122,.34);border-radius:999px;padding:6px 12px;max-width:100%;overflow-wrap:break-word}
+.v178-volume-grid{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr);gap:clamp(18px,2.7vw,40px);align-items:start;width:100%}
+.v178-volume-main,.v178-volume-side{min-width:0}
+.v178-volume-advice h3{margin:0 0 10px;color:#fff;font-size:clamp(21px,1.65vw,25px);line-height:1.3;letter-spacing:-.012em;font-weight:850}
+.v178-volume-advice h4{margin:0 0 8px;color:#a7eaf7;font-size:17px;line-height:1.4;font-weight:850}
+.v178-volume-advice p{margin:0;color:#d9e5f0;font-size:16px;line-height:1.62;overflow-wrap:break-word;hyphens:none}
+.v178-volume-primary{margin-top:18px;padding:18px 20px;border-left:4px solid #6fe0f0;border-radius:12px;background:rgba(48,128,151,.15)}
+.v178-volume-primary>strong{display:block;color:#fff;font-size:clamp(18px,1.55vw,21px)!important;line-height:1.42;font-weight:850;margin-bottom:8px}
+.v178-volume-primary p{color:#f0f5fa;font-size:16px;line-height:1.6}
+.v178-volume-primary p+p{margin-top:10px;color:#bad6e5}
+.v178-volume-side{padding:18px 20px;border:1px solid rgba(117,170,218,.20);border-radius:12px;background:rgba(4,14,27,.28)}
+.v178-volume-side p+p{margin-top:9px}
+.v178-volume-side h4:not(:first-child){margin-top:20px;padding-top:18px;border-top:1px solid rgba(131,180,202,.20)}
+@media(max-width:860px){.v178-volume-grid{grid-template-columns:minmax(0,1fr);gap:16px}.v178-volume-header{margin-bottom:16px}.v178-volume-side{padding:18px}}
+@media(max-width:400px){.v178-volume-advice{padding:16px}.v178-volume-primary{padding:16px}.v178-volume-side{padding:16px}.v178-volume-title,.v178-volume-status,.v178-volume-advice p,.v178-volume-primary p{font-size:16px}}
+@media(prefers-reduced-motion:reduce){.v178-volume-advice{scroll-behavior:auto}}
+@media print{.v178-volume-advice{break-inside:avoid;background:#fff;color:#111;border-color:#333}.v178-volume-advice p,.v178-volume-advice h3,.v178-volume-advice h4,.v178-volume-status{color:#111}}
+'''
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.54 WIP R178 · PLAN-SCOPED ACHIEVEMENTS + OPTIONAL VOLUME UI · R177 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
