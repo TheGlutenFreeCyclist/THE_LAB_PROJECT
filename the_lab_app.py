@@ -3463,6 +3463,16 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% endfor %}
 </div>
+{% if data.aerobic_volume_advice %}
+<div class="v4882-strength-nudge" role="note" aria-label="Optional aerobic volume development">
+<div class="v4882-strength-nudge-head">🌊 OPTIONAL AEROBIC VOLUME{% if data.aerobic_volume_advice.available %} · {{ data.aerobic_volume_advice.date[8:10] }}/{{ data.aerobic_volume_advice.date[5:7] }}/{{ data.aerobic_volume_advice.date[:4] }}{% endif %} · NOT A REQUIRED WORKOUT</div>
+<p><strong>VOLUME DEVELOPMENT · {{ data.aerobic_volume_advice.stage_label or "OPTIONAL" }}</strong></p>
+<p>{{ data.aerobic_volume_advice.purpose }}</p>
+<p><strong>{{ data.aerobic_volume_advice.headline }}</strong></p>
+<p>{{ data.aerobic_volume_advice.guidance }}</p>
+<p>{{ data.aerobic_volume_advice.continuity }}</p>
+</div>
+{% endif %}
 {% if data.strength_suggestion %}<div class="v4882-strength-nudge"><div class="v4882-strength-nudge-head">🏋️ OPTIONAL STRENGTH IDEA</div><p>{{ data.strength_suggestion }}</p></div>{% endif %}
 </article>
 {% if data.nova_daily_answer %}<article class="v4-card v4-coach-call" aria-label="Nova answer to Daily Note"><div class="v4-coach-kicker">NOVA · NO AI CALL</div><h2>Your Daily Note question</h2><p>{{ data.nova_daily_answer.answer }}</p></article>{% elif data.nova_daily_question_needs_ai %}<div class="v4-section-note" role="note">Your Daily Note question needs the separate AI Coach. Snapshot language AI is off; no provider call was made for this question.</div>{% endif %}
@@ -26432,8 +26442,20 @@ def _v4897_sentence_violation(sentence, truth, field_name=""):
     if re.search(r"\b(?:repeatability|late[- ]rep|repeatable power)\b[^.!?]{0,100}\b(?:validated|validation|checkpoint confirmed)\b",low,re.I) and not truth.get("formal_validation"): return "SESSION_PROGRESS_PROMOTED_TO_VALIDATION"
     if re.search(r"\b(?:competitive level|to be competitive|become more competitive|race[- ]effective)\b[^.!?]{0,120}\b(?:need|must|should|required|target)\b[^.!?]{0,60}\b\d{3}\s*w\b|\b(?:need|must|should|required|target)\b[^.!?]{0,60}\b\d{3}\s*w\b[^.!?]{0,100}\b(?:competitive level|to be competitive|race[- ]effective)\b",low,re.I): return "INVENTED_COMPETITIVE_WATT_TARGET"
     if truth.get("unlinked_pb"):
-        if re.search(r"\b(?:today|yesterday|this morning|last night|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:'s)?\b[^.!?]{0,80}\b(?:pb|best|\d{1,2}[- ]?min(?:ute)?|ftp)\b",low,re.I):
-            return "UNLINKED_PB_FALSE_TIMING"
+        # R174: a dated upcoming workout title such as "20-min power" is NOT
+        # historical PB evidence. Reject dated unlinked PB/best/FTP claims and
+        # observed-duration watt achievements, not mere duration words.
+        dated = re.search(r"\b(?:today|yesterday|this morning|last night|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:'s)?\b", low, re.I)
+        if dated:
+            context = low[dated.start():dated.start()+180]
+            explicit_record = bool(re.search(r"\b(?:pb|personal best|best|record|ftp)\b", context, re.I))
+            measured_result = bool(
+                re.search(r"\b\d{1,2}[- ]?min(?:ute)?s?\b", context, re.I)
+                and re.search(r"\b\d{2,4}\s*w\b", context, re.I)
+                and re.search(r"\b(?:averaged|produced|rode|held|achieved|hit|recorded|set|did|tested|was|were)\b", context, re.I)
+            )
+            if explicit_record or measured_result:
+                return "UNLINKED_PB_FALSE_TIMING"
         if re.search(r"\b(?:triggered|confirmed|proved|validated)\b[^.!?]{0,100}\b(?:ftp|pb|best|adaptation|capacity|block)\b",low,re.I):
             return "UNLINKED_PB_FALSE_CAUSALITY"
         if re.search(r"\b(?:\d{1,2})[- ]?min(?:ute)?\b[^.!?]{0,120}\b(?:signature|repeatability|adaptation|capacity|translation|translating)\b",low,re.I):
@@ -28319,6 +28341,10 @@ def analyze():
             "race_repeatability": race_repeatability,
             "metabolic_context": metabolic_context,
             "nutrition_plan": nutrition_plan,
+            "aerobic_volume_advice": _v176_progressive_volume_advice(
+                analysis.get("next_sessions"), coach_clock, execution_model, nova_decision,
+                cycling_history_activities, snapshot_day=get_rome_now().date()
+            ),
             "nutrition_reference": NUTRITION_REFERENCE,
             "race_carb_reference": RACE_CARB_REFERENCE,
             "training_legend": TRAINING_METRIC_LEGEND,
@@ -38721,6 +38747,480 @@ def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_de
 
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.49 WIP R173 · ABSOLUTE SESSION DATE DISPLAY · R172 BASELINE"
+
+
+# R174 · DAILY NOTE EVENT-TIME AUTHORITY
+# A historical note's relative dates are resolved against when it was logged,
+# never against the current Snapshot time. Expired targets are kept as audit
+# provenance but may not become tomorrow's availability/intensity restriction.
+R174_SCHEMA = "V4.9.50-R174-1"
+_v133_interpret_athlete_note_r173_final = _v133_interpret_athlete_note
+
+
+def _v174_note_event_anchor(row, now):
+    """Resolve the native Daily Log's local_date/local_time to a parsing clock.
+
+    The log's local_date is the highest-authority event date. Fall back to its
+    timestamp only when the local date is unavailable; current time only when
+    neither exists. Do not infer any athlete-specific location from the log.
+    """
+    event_day = None
+    try:
+        event_day = date.fromisoformat(str(row.get("local_date") or ""))
+    except (TypeError, ValueError):
+        pass
+    if event_day is None:
+        try:
+            utc = datetime.fromisoformat(str(row.get("logged_at_utc") or "").replace("Z", "+00:00"))
+            if utc.tzinfo is not None and now.tzinfo is not None:
+                event_day = utc.astimezone(now.tzinfo).date()
+            else:
+                event_day = utc.date()
+        except (TypeError, ValueError):
+            pass
+    if event_day is None or event_day > now.date() + timedelta(days=1):
+        return now
+    hour, minute = now.hour, now.minute
+    match = re.fullmatch(r"\s*([01]?\d|2[0-3]):([0-5]\d)\s*", str(row.get("local_time") or ""))
+    if match:
+        hour, minute = int(match.group(1)), int(match.group(2))
+    return now.replace(year=event_day.year, month=event_day.month, day=event_day.day,
+                       hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def _v174_refresh_expired_note_views(out, current_now):
+    """Keep future-target and its dependent projections synchronized."""
+    if not isinstance(out, dict):
+        return out
+    today = current_now.date().isoformat()
+    targets = [dict(t) for t in (out.get("future_targets") or []) if isinstance(t, dict)]
+    expired = [t for t in targets if str(t.get("date") or "") < today]
+    if not expired:
+        return out
+    current = [t for t in targets if str(t.get("date") or "") >= today]
+    out["future_targets"] = current
+    out["expired_note_targets"] = [
+        {"date": t.get("date"), "hard_blocked": bool(t.get("hard_blocked")),
+         "hard_blocked_dayparts": list(t.get("hard_blocked_dayparts") or []),
+         "source": t.get("hard_restriction_source") or "ATHLETE_NOTE"}
+        for t in expired
+    ]
+    out["availability"] = {"entries": [
+        {"date": t.get("date"), "daypart": part, "state": state}
+        for t in current
+        for state, key in (("AVAILABLE", "available_dayparts"),
+                           ("UNAVAILABLE", "unavailable_dayparts"),
+                           ("UNCERTAIN", "uncertain_dayparts"))
+        for part in (t.get(key) or [])
+    ]}
+    out["timing_preference"] = {"entries": [
+        {"date": t.get("date"), "preferred_dayparts": list(t.get("preferred_dayparts") or [])}
+        for t in current if t.get("preferred_dayparts")
+    ]}
+    out["session_preference"] = {"entries": [
+        {"date": t.get("date"), "profile": t.get("session_profile"),
+         "conditional": bool(t.get("conditional"))}
+        for t in current if t.get("session_profile")
+    ]}
+    intent = out.get("training_intent")
+    if isinstance(intent, dict) and str(intent.get("target_date") or "") < today:
+        if intent.get("target_date"):
+            out["training_intent"] = dict(intent, active=False, profile=None,
+                                          temporal_state="EXPIRED")
+    if not current:
+        # Avoid rendering an expired historical 'tomorrow' as a current order.
+        days = sorted({str(t.get("date") or "") for t in expired})
+        out["narrative_context"] = {
+            "material": True,
+            "summary": "Dated scheduling restrictions in the latest note have expired "
+                       "(" + ", ".join(days) + "); reassess training from current evidence.",
+        }
+    return out
+
+
+def _v133_interpret_athlete_note(now=None, logs=None):
+    now = now or get_rome_now()
+    try:
+        rows = list(logs if logs is not None else load_daily_logs(80))
+    except Exception:
+        rows = []
+    rows = [r for r in rows if isinstance(r, dict) and str(r.get("note") or "").strip()]
+    if not rows:
+        return _v133_interpret_athlete_note_r173_final(now=now, logs=rows)
+    rows.sort(key=lambda r: (str(r.get("logged_at_utc") or ""),
+                             str(r.get("local_date") or ""),
+                             str(r.get("local_time") or "")), reverse=True)
+    anchor = _v174_note_event_anchor(rows[0], now)
+    out = _v133_interpret_athlete_note_r173_final(now=anchor, logs=rows)
+    if not isinstance(out, dict):
+        return out
+    out["note_temporal_anchor"] = {
+        "schema": R174_SCHEMA,
+        "event_date": anchor.date().isoformat(),
+        "snapshot_date": now.date().isoformat(),
+        "source": "DAILY_LOG_EVENT_TIME" if anchor.date() != now.date() else "SAME_DAY_EVENT_TIME",
+    }
+    return _v174_refresh_expired_note_views(out, now)
+
+
+# R175: aerobically useful optional duration work must not create a second
+# executable session, hard-prescription debt, or an inferred availability promise.
+R175_SCHEMA = "V4.9.51-R175-1"
+
+
+def _v175_duration_minutes(row):
+    """Use actual compiled-session shape; optional missing duration fails closed."""
+    if not isinstance(row, dict):
+        return None
+    for key in ("duration", "expected_duration_min", "duration_hint_min"):
+        value = row.get(key)
+        if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
+            return float(value)
+        if isinstance(value, str):
+            m = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*min\b", value, re.I)
+            if m:
+                return float(m.group(1))
+            m = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*h(?:our)?s?\b", value, re.I)
+            if m:
+                return float(m.group(1)) * 60
+    return None
+
+
+def _v175_optional_volume_advice(sessions, coach_clock, execution_model, nova_decision):
+    """Suggest—not prescribe—one measured aerobic extension if a suitable slot exists.
+
+    Historical frequency/duration is a feasibility prior, not an upper training
+    limit or proof of free time. Hard sessions and their carry/continuity are never
+    edited. A failed/skipped easy extension is NEVER accumulated as training debt.
+    """
+    out = {"schema": R175_SCHEMA, "available": False,
+           "status": "NO_SUITABLE_OPTIONAL_WINDOW", "non_binding": True,
+           "creates_session": False, "counts_as_missed_workout": False,
+           "alters_hard_prescription": False}
+    rows = [x for x in (sessions or []) if isinstance(x, dict)]
+    candidates = []
+    for idx, sess in enumerate(rows):
+        if str(sess.get("intensity_class") or "").lower() not in {"recovery", "endurance"}:
+            continue
+        if (sess.get("hard_spacing_relevant") or sess.get("provisional_quality")
+                or str(sess.get("quality_relevance") or "").upper() == "MEANINGFUL"
+                or sess.get("is_race") or sess.get("is_planned_training")
+                or str(sess.get("restriction") or "NONE").upper() != "NONE"):
+            continue
+        day = str(sess.get("date") or "")[:10]
+        try:
+            date.fromisoformat(day)
+        except (ValueError, TypeError):
+            continue
+        baseline = _v175_duration_minutes(sess)
+        if baseline is None or baseline < 25:
+            continue
+        # An athlete's free time is never inferred from the absence of a Calendar event.
+        # Learned slots are potential opportunities, not committed appointments.
+        if str(sess.get("source") or "").upper() != "RHYTHM":
+            continue
+        candidates.append((baseline, -idx, idx, sess, day))
+    if not candidates:
+        return out
+    _, _, idx, sess, day = max(candidates, key=lambda x: (x[0], x[1]))
+    envelope = ((execution_model or {}).get("session_envelope") or {}) if isinstance(execution_model, dict) else {}
+    envelope = envelope if isinstance(envelope, dict) else {}
+    sample_count = _v167_num(envelope.get("duration_samples"))
+    upper = _v167_num(envelope.get("training_day_minutes_q75"))
+    baseline = _v175_duration_minutes(sess)
+    # Minimum evidence before assigning numeric progression. Do not invent a
+    # universal long-ride duration for sparse/new accounts.
+    reliable = bool(sample_count is not None and sample_count >= 8 and upper is not None and upper > 0)
+    next_hard_near = False
+    for other in rows[idx + 1:]:
+        if str(other.get("intensity_class") or "").lower() not in {"vo2", "threshold", "tempo"} and not other.get("provisional_quality"):
+            continue
+        try:
+            other_day = date.fromisoformat(str(other.get("date") or "")[:10])
+            gap = (other_day - date.fromisoformat(day)).days
+        except (ValueError, TypeError):
+            gap = 0
+        if 0 <= gap <= 1:
+            next_hard_near = True
+        break
+    # Never force another recovery-day commitment. The existing canonical easy
+    # duration remains valid; a range is merely a conditional athlete option.
+    additional = None
+    if reliable:
+        headroom = max(0.0, upper * 1.10 - baseline)
+        increment = min(20.0, baseline * 0.20, headroom)
+        if next_hard_near:
+            increment = min(increment, 10.0)
+        additional = int(increment // 5) * 5
+    decision = nova_decision if isinstance(nova_decision, dict) else {}
+    hold = str(decision.get("action") or "").upper() == "HOLD"
+    out.update({"available": True, "status": "CONDITIONAL_IDEA_ONLY",
+                "date": day, "slot": sess.get("slot"), "session_index": idx,
+                "baseline_minutes": round(baseline), "suggested_minutes": (
+                    round(baseline) + additional if additional and additional >= 5 else None),
+                "duration_sample_count": int(sample_count) if sample_count is not None else 0,
+                "training_day_q75_min": round(upper, 1) if upper is not None else None,
+                "evidence_level": "LEARNED" if reliable else "LEARNING",
+                "recovery_hold_now": hold, "next_day_quality_candidate": next_hard_near,
+                "athlete_availability_confirmed": False,
+                "basis": "FINAL_CANONICAL_EASY_SLOT_AND_LEARNED_DURATION_ENVELOPE"})
+    if out["suggested_minutes"]:
+        out["headline"] = (f"If you have time and feel recovered, consider up to ~{out['suggested_minutes']} min "
+                           f"of easy, conversational riding instead of ~{round(baseline)} min.")
+    else:
+        out["headline"] = ("An occasional longer easy ride could support aerobic development, "
+                           "but there is not enough reliable duration headroom to assign extra minutes.")
+    if hold:
+        out["guidance"] = ("Recovery is currently on HOLD. This is NOT permission to extend today: only consider "
+                           "the option on the named day if fresh morning recovery signals are clearly improved "
+                           "toward your usual range, you feel well, and easy effort/HR remain normal. "
+                           "If they are still poor, unknown, or symptoms appear, keep the original easy duration, "
+                           "shorten it, or rest. You can use a fresh Snapshot to reassess, but the suggestion "
+                           "does not depend on scheduling a new hard workout.")
+    else:
+        out["guidance"] = ("Only if the time is genuinely available and you feel well: stay Z1–Z2, "
+                           "keep the effort conversational, and stop/shorten if fatigue, symptoms, "
+                           "or unusual cardiovascular drift appear. The normal planned duration is sufficient.")
+    if next_hard_near:
+        out["guidance"] += (" A quality candidate is close afterward, so do not extend if it "
+                            "would compromise freshness for that session.")
+    out["purpose"] = ("Longer easy rides can gradually develop aerobic endurance and durability "
+                      "alongside a power-focused goal; this opportunity is a suggestion, "
+                      "not proof that more time is always better.")
+    out["continuity"] = ("This is optional aerobic development, not a required workout. "
+                         "Skipping it never creates missed-session debt or moves a hard workout; "
+                         "future duration suggestions learn from what you actually complete.")
+    return out
+
+
+# R176 · NON-BINDING LONGITUDINAL AEROBIC VOLUME DEVELOPMENT
+# This advisory observes completed physical rides only. It cannot carry a missed
+# duration forward or overwrite Nova's sealed executable/hard-workout plan.
+R176_SCHEMA = "V4.9.52-R176-1"
+
+
+def _v176_session_minutes(session):
+    """Native compact labels include '~2h30'; never silently drop the 30 minutes."""
+    if not isinstance(session, dict):
+        return None
+    for key in ("duration", "duration_hint_min", "expected_duration_min"):
+        raw = session.get(key)
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            if math.isfinite(raw) and 0 < raw < 24 * 60:
+                return float(raw)
+        if not isinstance(raw, str):
+            continue
+        hours = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*h(?:ours?)?\s*(?:(\d{1,2})\s*(?:m|min)?)?", raw, re.I)
+        if hours:
+            value = float(hours.group(1)) * 60 + (float(hours.group(2)) if hours.group(2) else 0)
+            if 0 < value < 24 * 60:
+                return value
+        mins = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*(?:min|minutes)\b", raw, re.I)
+        if mins:
+            value = float(mins.group(1))
+            if 0 < value < 24 * 60:
+                return value
+    return None
+
+
+def _v176_completed_volume_profile(activities, snapshot_day):
+    """Completed cycling facts: recurrent LONG EASY *single rides*, weekly ALL-load.
+
+    The upstream input is reconciled physical cycling history (Intervals native
+    moving_time seconds). Different short rides on the same day are NOT merged
+    into fictional long rides. Race/quality cannot earn easy-duration progression.
+    """
+    profile = {"schema": R176_SCHEMA, "available": False, "easy_ride_count": 0,
+               "recent_easy_days": 0, "repeated_duration_min": None,
+               "last_repeated_ride_date": None, "last_easy_ride_date": None,
+               "week_recent_hours": None, "week_prior_hours": None,
+               "growth_ratio": None, "growth_brake": False,
+               "source": "RECONCILED_COMPLETED_CYCLING_ACTIVITIES"}
+    if not isinstance(activities, (list, tuple)):
+        return profile
+    end = snapshot_day if isinstance(snapshot_day, date) else None
+    if end is None:
+        return profile
+    latest_start = end - timedelta(days=13)
+    prior_start = end - timedelta(days=41)
+    recent_total = prior_total = 0.0
+    latest_by_day = {}
+    ids_seen = set()
+    oldest = None
+    for row in activities:
+        if not isinstance(row, dict) or not _v4887_is_cycling_activity(row):
+            continue
+        stamp = str(row.get("start_date_local") or "")[:10]
+        try:
+            d = date.fromisoformat(stamp)
+        except (ValueError, TypeError):
+            continue
+        if d > end or d < prior_start:
+            continue
+        seconds = _v167_num(row.get("moving_time"))
+        if seconds is None or seconds <= 0:
+            seconds = _v167_num(row.get("elapsed_time"))
+        if seconds is None or not (20 * 60 <= seconds <= 18 * 3600):
+            continue
+        uid = str(row.get("id") or "")
+        # The pipeline already reconciles duplicate physical sessions; this
+        # additional defense prevents duplicate provider IDs from earning progress.
+        if uid and uid in ids_seen:
+            continue
+        if uid:
+            ids_seen.add(uid)
+        minutes = seconds / 60.0
+        oldest = min(oldest, d) if oldest else d
+        if d >= latest_start:
+            recent_total += minutes
+        else:
+            prior_total += minutes
+        if _v141_is_race_activity(row) or _v40_is_hard_candidate(row):
+            continue
+        intensity = _v40_normalized_intensity_factor(row)
+        if intensity is not None and intensity > 0.82:
+            continue
+        latest_by_day[d] = max(latest_by_day.get(d, 0.0), minutes)
+    last_easy = max(latest_by_day) if latest_by_day else None
+    ranked = sorted(latest_by_day.items(), key=lambda kv: kv[1], reverse=True)
+    # TWO distinct completed easy-ride days earn a duration step. Single spikes
+    # do not advance the anchor, and only the last six weeks count.
+    repeated = ranked[1][1] if len(ranked) >= 2 else None
+    repeated_day = max((d for d, m in latest_by_day.items() if repeated is not None and m >= 0.95 * repeated), default=None)
+    previous_hours = prior_total / 60.0 / 4.0
+    recent_hours = recent_total / 60.0 / 2.0
+    ratio = (recent_hours / previous_hours) if previous_hours >= 1.0 else None
+    # A clear rolling volume surge asks for consolidation rather than another
+    # progressive jump. This is a heuristic brake, not a universal optimum.
+    growth_brake = bool(ratio is not None and ratio > 1.15)
+    profile.update({"available": bool(latest_by_day), "easy_ride_count": len(latest_by_day),
+                    "recent_easy_days": len(latest_by_day),
+                    "repeated_duration_min": round(repeated, 1) if repeated else None,
+                    "last_repeated_ride_date": repeated_day.isoformat() if repeated_day else None,
+                    "last_easy_ride_date": last_easy.isoformat() if last_easy else None,
+                    "week_recent_hours": round(recent_hours, 2),
+                    "week_prior_hours": round(previous_hours, 2),
+                    "growth_ratio": round(ratio, 3) if ratio is not None else None,
+                    "growth_brake": growth_brake,
+                    "history_days_covered": (end - oldest).days + 1 if oldest else 0})
+    return profile
+
+
+def _v176_progressive_volume_advice(sessions, coach_clock, execution_model,
+                                      nova_decision, cycling_history_activities=None,
+                                      snapshot_day=None):
+    """Progress only on repeated completed aerobic rides, with fresh-load brakes.
+
+    A learned window does not establish athlete availability. Suggestions are
+    independent of roadmap goals and never join the hard/session carry ledger.
+    """
+    # Preserve R175's native guardrails and human-facing continuity contract.
+    out = _v175_optional_volume_advice(sessions, coach_clock, execution_model, nova_decision)
+    out = dict(out)
+    out["schema"] = R176_SCHEMA
+    out.update({"non_binding": True, "creates_session": False,
+                "counts_as_missed_workout": False, "alters_hard_prescription": False,
+                "progression_source": "COMPLETED_EASY_RIDES_NOT_PRESCRIPTION_HISTORY",
+                "stage": "NO_WINDOW", "stage_label": "NO OPTIONAL WINDOW"})
+    if not out.get("available"):
+        out.update({"stage_label": "LEARNING / NO CONFIRMED WINDOW",
+                    "purpose": "Aerobic volume matters alongside any cycling goal; the learned rhythm is a feasibility clue, not a limit on potential development.",
+                    "headline": "No suitable future easy-duration opportunity is currently identified. Do not add one to an existing hard session or assume free time.",
+                    "guidance": "When time and recovery allow, consider a separate easy longer ride; further guidance needs reliable completed activities and a suitable opportunity.",
+                    "continuity": "This is educational and entirely optional: no missed-volume debt, adherence penalty or hard-workout displacement."})
+        return out
+    if isinstance(snapshot_day, datetime):
+        snapshot_day = snapshot_day.date()
+    if not isinstance(snapshot_day, date):
+        # No silently invented 'today' in deterministic replay.
+        out.update({"stage": "TIME_UNKNOWN", "stage_label": "RECHECK DATE",
+                    "suggested_minutes": None})
+        return out
+    profile = _v176_completed_volume_profile(cycling_history_activities, snapshot_day)
+    out["completed_volume_evidence"] = profile
+    base = _v176_session_minutes((sessions or [])[out["session_index"]])
+    if base is None:
+        out.update({"stage": "UNUSABLE_DURATION", "stage_label": "DURATION UNKNOWN",
+                    "suggested_minutes": None})
+        return out
+    out["baseline_minutes"] = round(base)
+    hold = bool(out.get("recovery_hold_now"))
+    hard_near = bool(out.get("next_day_quality_candidate"))
+    earned = profile.get("repeated_duration_min")
+    if earned is None:
+        # When history is truncated or sparse, the R175 conservative cue may
+        # remain; it does not claim that duration has been earned/repeated.
+        out.update({"stage": "EXPLORATION", "stage_label": "START / REPEAT",
+                    "earned_minutes": None})
+        out["purpose"] = ("Aerobic volume can be developed alongside every cycling power goal. "
+                          "This is an initial optional exploration, NOT an achieved level or an obligation.")
+    else:
+        out["earned_minutes"] = round(earned)
+        recent = profile.get("last_repeated_ride_date")
+        stale = not recent or (snapshot_day - date.fromisoformat(recent)).days > 21
+        # Earned level is repeated. A longer isolated ride never unlocks a new
+        # step. After a long break we restart conservatively, without punishment.
+        level = max(base, earned) if not stale else base
+        increment = min(20.0, max(10.0 if level >= 60 else 5.0, level * 0.12), level * 0.20)
+        if hard_near:
+            increment = min(increment, 10.0)
+        step = int(increment // 5) * 5
+        if stale:
+            out.update({"stage": "REBUILD", "stage_label": "RESTART GENTLY",
+                        "suggested_minutes": round(base) + (step if step >= 5 else 0)})
+        elif profile.get("growth_brake"):
+            out.update({"stage": "CONSOLIDATE", "stage_label": "ABSORB RECENT VOLUME",
+                        "suggested_minutes": None})
+        else:
+            out.update({"stage": "PROGRESS", "stage_label": "REPEATED EXPOSURE",
+                        "suggested_minutes": round(level) + (step if step >= 5 else 0)})
+        out["purpose"] = ("Gradual aerobic-volume development is useful even when the primary "
+                          "goal is power. This step is based on repeated COMPLETED easy rides, "
+                          "not on the proposed plan, and it is never mandatory.")
+    target = out.get("suggested_minutes")
+    if target is not None and target <= base:
+        target = None
+        out["suggested_minutes"] = None
+    if out["stage"] == "CONSOLIDATE":
+        out["headline"] = ("Your recent overall cycling hours have grown quickly. "
+                           "Consolidate the volume you already tolerate; no longer ride is requested.")
+    elif target is not None:
+        out["headline"] = (f"Optional long easy opportunity: if you genuinely have the time and "
+                           f"feel recovered, consider gradually building toward ~{round(target)} min "
+                           f"rather than the usual ~{round(base)} min. "
+                           "This may require a separate longer free window, not the predicted slot.")
+    else:
+        out["headline"] = ("Keep easy riding consistent; no numeric duration increase is "
+                           "justified by the current observations. Reassess after more completed rides.")
+    if hold:
+        out["stage_before_recovery_guard"] = out["stage"]
+        out["stage"] = "RECOVERY_GATED"
+        out["stage_label"] = "HOLD · RECHECK BEFORE EXTRA VOLUME"
+        out["guidance"] = ("Today's recovery HOLD remains in force: this is NOT authorization "
+                           "to add volume now. For the named future day, only consider the extra "
+                           "time if genuinely available and fresh recovery indicators and symptoms "
+                           "clearly support easy training. With poor/unknown morning signals, "
+                           "use the original easy duration or shorten/rest. A new Snapshot is "
+                           "the reliable way to review the full plan; this optional suggestion "
+                           "never independently reopens hard workouts.")
+    else:
+        out["guidance"] = ("Only if there is genuinely enough time, you feel well and Z1–Z2 "
+                           "remains comfortably conversational. Shorten/stop for abnormal fatigue, "
+                           "symptoms or unexpectedly high HR. More hours are not automatically "
+                           "more benefit. No physiological optimal-volume ceiling is inferred.")
+    if hard_near:
+        out["guidance"] += (" A hard candidate follows within a day; protect freshness for "
+                            "that workout and skip the optional extension if needed.")
+    out["continuity"] = ("No missed-volume debt, no compliance penalty, no carry-forward and "
+                         "no hard-session rescheduling if this is skipped. Completed rides update "
+                         "the next assessment; unavailable time is NEVER inferred as disinterest.")
+    out["dose_policy"] = ("Repeat successful easy durations on distinct days before growing again; "
+                          "hold progression after a sharp rise in completed weekly hours, or if "
+                          "recovery worsens. There is no universal time cap or guaranteed payoff.")
+    return out
+
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.52 WIP R176 · LONGITUDINAL OPTIONAL AEROBIC VOLUME · R175 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
