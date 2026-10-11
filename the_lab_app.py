@@ -3356,6 +3356,17 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% set td = data.training_direction if data.training_direction is defined and data.training_direction else none %}
 {% set ar = data.adaptive_roadmap if data.adaptive_roadmap is defined and data.adaptive_roadmap else none %}
+{% if data.decision_change_latest is defined and data.decision_change_latest %}
+<section class="v187-decision-log" aria-label="Why Nova changed the plan">
+  {% set change=data.decision_change_latest %}
+  <div class="v187-decision-head"><strong>WHY NOVA CHANGED THE PLAN</strong><small>{{ change.at_local }} · recorded from two consecutive saved Snapshots</small></div>
+  <p>{{ change.explanation }}</p>
+  <div class="v187-comparison"><div><small>PREVIOUS</small><strong>{{ change.before.summary }}</strong></div><div><small>NOW</small><strong>{{ change.after.summary }}</strong></div></div>
+  {% if change.evidence_changes %}<p class="v187-evidence"><strong>CHANGED EVIDENCE</strong> · {{ change.evidence_changes|join(' · ') }}</p>{% endif %}
+  <small>Only recorded differences and authoritative gates are described. This is not proof of a clinical cause or of an unavailable prior report.</small>
+  {% if data.decision_change_history is defined and data.decision_change_history|length > 1 %}<details><summary>Earlier plan changes ({{ data.decision_change_history|length }})</summary>{% for item in data.decision_change_history|reverse %}<p><strong>{{ item.at_local }}</strong> · {{ item.explanation }}</p>{% endfor %}</details>{% endif %}
+</section>
+{% endif %}
 <section class="v162-roadmap-priority" aria-label="Training roadmap">
 {% if td %}
 {% if ar and ar.available %}
@@ -40609,6 +40620,278 @@ def build_adaptive_roadmap(training_direction, training_rhythm, activities, coac
     return updated
 
 APP_VERSION = 'THE LAB · PRODUCT V4.9.62 WIP R186 · PTO + SAME-DAY REPLAY QA · QUALITY WINDOW DISPLAY TRUTH · R185 BASELINE'
+
+
+
+# R187 · EXPLAINABLE REPLANNING + EXECUTED HARD SAFETY
+# The previous snapshot is read BEFORE latest_report is overwritten. The small,
+# owner-isolated, bounded change journal is stored IN the new snapshot payload,
+# so it survives subsequent latest-only report replacements and travels in
+# athlete-consented beta QA exports. Do not infer historical reason without data.
+R187_SCHEMA = "V4.9.63-R187-1"
+
+
+def _v187_hard_plan(data):
+    if not isinstance(data, dict):
+        return None
+    rows = [r for r in data.get("next_sessions") or [] if isinstance(r, dict)
+            and _v136_is_hard_summary(r) and not r.get("is_race")]
+    if not rows:
+        return None
+    row = rows[0]
+    return {"date": str(row.get("date") or "")[:10],
+            "period": str(row.get("period") or ""),
+            "slot": str(row.get("slot") or ""),
+            "start_minute": row.get("start_minute"),
+            "title": str(row.get("title") or ""),
+            "workout_id": str(row.get("nova_workout_id") or row.get("nova_contract_id") or ""),
+            "main_set": str(row.get("main_set") or ""),
+            "provisional": bool(row.get("provisional_quality"))}
+
+
+def _v187_evidence_state(data):
+    data = data if isinstance(data, dict) else {}
+    train = data.get("training_state") or {}
+    train = train if isinstance(train, dict) else {}
+    road = data.get("adaptive_roadmap") or {}
+    window = (road.get("quality_window") or {}) if isinstance(road, dict) else {}
+    decision = data.get("nova_decision") or {}
+    metrics = data.get("metrics") or {}
+    return {"training_state": str(train.get("state") or "UNKNOWN"),
+            "training_drivers": [str(v) for v in train.get("recovery_drivers") or []][:8],
+            "load_7d": train.get("load_7d"), "load_ratio": train.get("load_ratio"),
+            "atl_ctl": train.get("atl_ctl"),
+            "quality_window_state": str(window.get("state") or "UNKNOWN"),
+            "quality_preferred_iso": str(window.get("preferred_iso") or ""),
+            "quality_gate": str(window.get("spacing_policy") or ""),
+            "nova_action": str(decision.get("action") or "UNKNOWN"),
+            "quality_allowed": bool(decision.get("hard_session_allowed")),
+            "readiness": data.get("race_readiness_score"),
+            "activity_count_today": ((data.get("energy_today_sessions") if data.get("energy_today_sessions") is not None else None)),
+            "last_hard_end": str(window.get("last_hard_end") or "")}
+
+
+def _v187_plan_view(data):
+    plan = _v187_hard_plan(data)
+    status = _v187_evidence_state(data)
+    active = status["quality_window_state"] not in {"RECOVERY HOLD", "ON HOLD", "RACE PRIORITY", "LEARNING"} and status["quality_allowed"]
+    if not plan:
+        summary = "No future hard workout; easy/recovery only"
+    else:
+        summary = f"{plan['date']} · {plan['title']}" + (" (provisional)" if not active or plan["provisional"] else "")
+    return {"summary": summary, "plan": plan, "gate": status}
+
+
+def _v187_changed_metrics(old, current):
+    differences = []
+    labels = (("training_state", "Training state"), ("quality_window_state", "Quality gate"),
+              ("nova_action", "Nova action"), ("quality_allowed", "Hard permission"),
+              ("readiness", "Readiness"), ("load_7d", "7-day load"),
+              ("load_ratio", "Weekly load ratio"), ("atl_ctl", "Acute/chronic ratio"),
+              ("training_drivers", "Recovery drivers"))
+    for k, label in labels:
+        left, right = old.get(k), current.get(k)
+        if left == right or (left is None and right is None):
+            continue
+        differences.append(f"{label}: {left} → {right}")
+    return differences[:10]
+
+
+def _v187_decision_explanation(before, after, evidence_changes):
+    bg, ag = before["gate"], after["gate"]
+    former, current = before.get("plan"), after.get("plan")
+    hold = str(ag.get("quality_window_state") or "").upper() in {"ON HOLD", "RECOVERY HOLD"}
+    if hold and not str(bg.get("quality_window_state") or "").upper() in {"ON HOLD", "RECOVERY HOLD"}:
+        if str(ag.get("training_state") or "").upper() == "RECOVERY":
+            return ("Nova withdrew immediate quality because the deterministic recovery gate is now closed "
+                    "(Training State RECOVERY). Compare the recorded load/recovery evidence below; "
+                    "this journal does not claim which unseen input originally caused the change.")
+        return ("Nova withdrew immediate quality because the current quality/recovery gate is closed. "
+                "The evidence deltas below document the observed change, not an invented underlying cause.")
+    if former and current and former.get("date") == current.get("date") and former.get("workout_id") == current.get("workout_id") and former.get("start_minute") != current.get("start_minute"):
+        return ("Nova changed the timing of the hard workout while preserving its identity. "
+                "Check changed scheduling and recovery evidence; learned timing is not confirmed availability.")
+    if former and current and former.get("date") != current.get("date"):
+        return ("Nova rescheduled the hard opportunity. See the gate and evidence changes below; "
+                "a learned rhythm is a prediction, not confirmed athlete availability.")
+    if former and current and (former.get("workout_id") != current.get("workout_id") or former.get("main_set") != current.get("main_set")):
+        return ("Nova changed the workout structure. This record preserves both canonical workout "
+                "identities and the contemporaneous decision signals for review.")
+    if former and not current:
+        return "Nova removed the upcoming hard prescription; decision gates and observed evidence are shown below."
+    if not former and current:
+        return "Nova introduced a provisional hard candidate; its gate and evidence are recorded below."
+    return "Nova changed the quality permission or timing, while preserving the workout identity."
+
+
+def _v187_snapshot_journal(prior, incoming, now):
+    previous = (prior or {}).get("data") if isinstance(prior, dict) else None
+    previous = previous if isinstance(previous, dict) else None
+    old_history = previous.get("decision_change_history") if previous else None
+    history = [copy.deepcopy(v) for v in (old_history or []) if isinstance(v, dict)][-11:]
+    if previous is None:
+        return history, None
+    before = _v187_plan_view(previous)
+    after = _v187_plan_view(incoming)
+    bg, ag = before["gate"], after["gate"]
+    p1, p2 = before.get("plan"), after.get("plan")
+    keys = ("date", "period", "title", "workout_id", "main_set")
+    try:
+        shift = abs(float((p1 or {}).get("start_minute")) - float((p2 or {}).get("start_minute")))
+    except (TypeError, ValueError):
+        shift = 0.0
+    if ((tuple((p1 or {}).get(k) for k in keys) == tuple((p2 or {}).get(k) for k in keys))
+        and shift < 30.0
+        and (bg.get("quality_window_state"), bg.get("nova_action"), bg.get("quality_allowed")) ==
+            (ag.get("quality_window_state"), ag.get("nova_action"), ag.get("quality_allowed"))):
+        return history, None
+    changed = _v187_changed_metrics(bg, ag)
+    explanation = _v187_decision_explanation(before, after, changed)
+    stamp = (now or get_rome_now()).isoformat(timespec="seconds")
+    item = {"schema": R187_SCHEMA, "at_local": stamp,
+            "previous_snapshot_local": prior.get("generated_at_local"),
+            "before": before, "after": after,
+            "evidence_changes": changed,
+            "explanation": explanation,
+            "reason_scope": "EVIDENCE_DELTA_AND_AUTHORITY_GATE_NOT_HISTORICAL_CAUSAL_PROOF"}
+    # Stable id avoids duplicate entries on equivalent consecutive commits.
+    item["change_id"] = hashlib.sha256(json.dumps(
+        [prior.get("generated_at_utc"), before["summary"], after["summary"],
+         bg.get("quality_window_state"), ag.get("quality_window_state")],
+        sort_keys=True, default=str).encode()).hexdigest()[:20]
+    if not history or history[-1].get("change_id") != item["change_id"]:
+        history.append(item)
+    return history[-12:], item
+
+
+def _v187_no_executed_same_day_duplicate(data):
+    """Fail closed if a consumed hard contract is offered again ON ITS EXECUTION DATE.
+
+    A genuinely new later stimulus (including the distinct 2x12 after Craig's
+    completed 3x10) remains eligible to go through ordinary Nova recovery gates.
+    """
+    d = data if isinstance(data, dict) else {}
+    led = d.get("microcycle_ledger") or {}
+    done = {}
+    for row in led.get("prescription_history") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("prescription_status") or "").upper() != "FULFILLED" or not row.get("executed_activity_id"):
+            continue
+        when = str(row.get("actual_date") or "")[:10]
+        identity = str(row.get("nova_workout_id") or row.get("nova_contract_id") or "")
+        if when and identity:
+            done[(when, identity)] = row
+    for row in d.get("next_sessions") or []:
+        if not isinstance(row, dict) or not _v136_is_hard_summary(row):
+            continue
+        day = str(row.get("date") or "")[:10]
+        wid = str(row.get("nova_workout_id") or row.get("nova_contract_id") or "")
+        if wid and (day, wid) in done and not row.get("is_race"):
+            raise RuntimeError("R187_EXECUTED_SAME_DAY_HARD_REISSUE_BLOCKED")
+    # A fulfilled fingerprint MUST NEVER become eligible for missed-hard carry.
+    for row in led.get("prescription_history") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("prescription_status") or "").upper() == "MISSED_UNEXECUTED":
+            fp = str(row.get("prescription_fingerprint") or "")
+            if fp and any(str(d.get("prescription_fingerprint") or "") == fp
+                          for d in led.get("prescription_execution_history") or [] if isinstance(d, dict)):
+                raise RuntimeError("R187_EXECUTED_HARD_MISCLASSIFIED_AS_MISSED")
+    return True
+
+
+_save_latest_report_r186_final = save_latest_report
+
+
+def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None):
+    owner_id = _data_owner_user_id(owner_user_id)
+    # Explicit per-user lookup: beta snapshots must never inherit another athlete's journal.
+    previous = load_latest_report(include_payload=True, owner_user_id=owner_id)
+    current = data if isinstance(data, dict) else {}
+    _v187_no_executed_same_day_duplicate(current)
+    history, change = _v187_snapshot_journal(previous, current, now or get_rome_now())
+    current["decision_change_history"] = history
+    current["decision_change_latest"] = change or (history[-1] if history else None)
+    current["decision_change_policy"] = {
+        "schema": R187_SCHEMA, "bounded_entries": 12,
+        "previous_snapshot_available": bool(previous and isinstance(previous.get("data"), dict)),
+        "compare_before_overwrite": True,
+        "scope": "PER_ATHLETE_LATEST_REPORT",
+        "source": "TWO_CONSECUTIVE_PERSISTED_SNAPSHOTS",
+        "note": "Signals/gates establish when and what changed; unavailable prior reports cannot be reconstructed."
+    }
+    return _save_latest_report_r186_final(current, now=now, owner_user_id=owner_id,
+                                           qa_replay_bundle=qa_replay_bundle)
+
+BASE_CSS += r"""
+.v187-decision-log{margin:12px 0 18px;padding:16px 18px;border:1px solid var(--line,rgba(145,177,188,.35));border-radius:12px;overflow-wrap:anywhere}
+.v187-decision-head{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:baseline}
+.v187-decision-head strong{font:800 14px/1.45 Arial,Helvetica,sans-serif;letter-spacing:.015em}
+.v187-decision-head small,.v187-decision-log>small{font:400 13px/1.5 Arial,Helvetica,sans-serif;opacity:.78}
+.v187-decision-log p{font:400 16px/1.5 Arial,Helvetica,sans-serif;margin:10px 0}
+.v187-comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.v187-comparison>div{padding:10px;border:1px solid var(--line,rgba(145,177,188,.3));border-radius:9px;overflow-wrap:anywhere}
+.v187-comparison small,.v187-comparison strong{display:block}.v187-comparison small{font:800 12px/1.4 Arial,Helvetica,sans-serif;opacity:.8}
+.v187-comparison strong{font:700 15px/1.5 Arial,Helvetica,sans-serif}
+.v187-decision-log summary{font:700 14px/1.5 Arial,Helvetica,sans-serif;cursor:pointer;padding-top:8px}
+@media(max-width:620px){.v187-comparison{grid-template-columns:1fr}.v187-decision-log{padding:14px}}
+"""
+APP_VERSION = 'THE LAB · PRODUCT V4.9.63 WIP R187 · EXPLAINABLE PLAN CHANGES + EXECUTED HARD GUARD · R186 BASELINE'
+
+# R188 · Training History displays all measured workout-adherence evidence.
+# Never convert observed output into a post-hoc prescribed target. For an
+# open-paced workout, structural completion is graded separately from power
+# observations; numerical in-band compliance remains genuinely UNASSESSED.
+R188_SCHEMA = "V4.9.64-R188-1"
+R188_OLD_ADHERENCE = '''{% if adh.get('schema') == 'V4.9.59-R183-1' %}
+{% set structure=adh.get('structure') or {} %}{% set power=adh.get('power_band') or {} %}
+<div class="v184-adherence-head"><strong>MAIN SET {{ structure.get('completed_reps') }}/{{ structure.get('prescribed_reps') }} COMPLETE</strong><span class="v184-evidence-status {{ 'v184-good' if power.get('state') == 'IN_TARGET' else 'v184-watch' if power.get('state') in ('ABOVE_TARGET','BELOW_TARGET','MIXED_DEVIATION') else 'v184-neutral' }}">{{ power.get('label') or 'POWER NOT ASSESSED' }}</span></div>
+{% if power.get('available') and power.get('in_target_reps') is not none %}<div class="v184-adherence-detail">{{ power.get('in_target_reps') }}/{{ power.get('prescribed_reps') }} IN TARGET RANGE</div>{% endif %}
+{% if power.get('observed_power_min_w') is not none and power.get('prescribed_power_low_w') is not none %}<div class="v184-adherence-detail">{{ power.get('observed_power_min_w')|round|int }}–{{ power.get('observed_power_max_w')|round|int }} W ACTUAL · {{ power.get('prescribed_power_low_w')|int }}–{{ power.get('prescribed_power_high_w')|int }} W TARGET</div>{% endif %}
+'''
+R188_NEW_ADHERENCE = '''{% if adh.get('schema') == 'V4.9.59-R183-1' %}
+{% set structure=adh.get('structure') or {} %}{% set power=adh.get('power_band') or {} %}
+<div class="v188-adherence-axes">
+<div class="v188-structure">
+<span class="v188-axis-label">STRUCTURAL ADHERENCE</span>
+<div class="v184-adherence-head"><strong>MAIN SET {{ structure.get('completed_reps') }}/{{ structure.get('prescribed_reps') }} COMPLETE{% if structure.get('completion_percent') is not none %} · {{ structure.get('completion_percent')|round|int }}%{% endif %}</strong><span class="v184-evidence-status {{ 'v184-good' if structure.get('complete') else 'v184-watch' }}">{{ 'COMPLETED' if structure.get('complete') else 'INCOMPLETE' }}</span></div>
+<div class="v188-explain">Completion measures prescribed main-set reps and their duration, not whether watts met an unspecified target.</div>
+</div>
+<div class="v188-power">
+<span class="v188-axis-label">POWER EVIDENCE</span>
+{% set watts=power.get('observed_power_watts') or [] %}
+{% if watts %}<div class="v188-reps" aria-label="Observed power for each main-set interval">
+{% for watt in watts %}<div class="v188-rep"><span>REP {{ loop.index }}</span><strong>{{ watt|round|int if watt is not none else '—' }}{{ ' W' if watt is not none else '' }}</strong></div>{% endfor %}
+</div>{% else %}<div class="v188-explain">No reliable interval-power observations.</div>{% endif %}
+{% if power.get('prescribed_power_low_w') is not none and power.get('prescribed_power_high_w') is not none %}
+<div class="v188-band"><span class="v184-evidence-status {{ 'v184-good' if power.get('state') == 'IN_TARGET' else 'v184-watch' }}">{{ power.get('label') or 'POWER REVIEW' }}</span>
+<span>{{ power.get('prescribed_power_low_w')|round|int }}–{{ power.get('prescribed_power_high_w')|round|int }} W PRESCRIBED</span></div>
+{% if power.get('available') and power.get('in_target_reps') is not none %}<div class="v188-explain">{{ power.get('in_target_reps') }}/{{ power.get('prescribed_reps') }} reps in prescribed range. No invented power tolerance.</div>
+{% elif power.get('state') == 'INCOMPLETE_EVIDENCE' %}<div class="v188-explain">Observed power incomplete; in-range percentage unavailable.</div>{% endif %}
+{% else %}<div class="v188-explain">No numeric watt range was prescribed for this workout. Watts above are measured outputs; power-target adherence cannot be scored retrospectively.</div>{% endif %}
+</div>
+</div>
+'''
+R188_UI_PATCH_COUNT = HOME_PAGE.count(R188_OLD_ADHERENCE) if isinstance(HOME_PAGE,str) else 0
+if R188_UI_PATCH_COUNT != 1:
+    raise RuntimeError("R188_TRAINING_HISTORY_ADHERENCE_PATCH_ANCHOR_MISSING_OR_DUPLICATED")
+HOME_PAGE = HOME_PAGE.replace(R188_OLD_ADHERENCE, R188_NEW_ADHERENCE, 1)
+BASE_CSS += r"""
+/* R188 · Source-attributed evidence, not global adherence scoring. */
+.v25-blocks .v188-adherence-axes{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0}
+.v25-blocks .v188-structure,.v25-blocks .v188-power{min-width:0;display:grid;gap:5px}
+.v25-blocks .v188-power{padding-top:10px;border-top:1px solid var(--line,rgba(255,255,255,.15))}
+.v25-blocks .v188-axis-label{font-family:var(--display);font-weight:800;font-size:13px;line-height:1.35;letter-spacing:.035em;color:#c1d5e0}
+.v25-blocks .v188-explain{font-size:15px;line-height:1.5;color:#b4c5ce;overflow-wrap:anywhere}
+.v25-blocks .v188-reps{display:flex;flex-wrap:wrap;gap:7px 10px;min-width:0}
+.v25-blocks .v188-rep{display:flex;gap:5px;align-items:baseline;padding:4px 8px;border:1px solid var(--line,rgba(255,255,255,.15));border-radius:8px;max-width:100%;min-width:0}
+.v25-blocks .v188-rep span{font-size:12px;font-weight:800;color:#a8bdca;white-space:nowrap}
+.v25-blocks .v188-rep strong{font-size:15px;font-weight:800;color:#ebf7fb;white-space:nowrap}
+.v25-blocks .v188-band{display:flex;align-items:baseline;flex-wrap:wrap;gap:7px;font-size:15px;color:#d3e1e9}
+@media(max-width:520px){.v25-blocks .v188-reps{gap:7px}.v25-blocks .v188-rep{padding:5px 7px}}
+"""
+APP_VERSION = "THE LAB · PRODUCT V4.9.64 WIP R188 · OBSERVED POWER + STRUCTURAL ADHERENCE UI · R187 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
