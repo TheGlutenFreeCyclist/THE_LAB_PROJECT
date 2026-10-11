@@ -40543,5 +40543,72 @@ def build_training_rhythm(season_activities, now=None, scope='CYCLING'):
     return out
 
 
+
+# R186 · QUALITY-WINDOW PRESENTATION TRUTH
+# A scheduling lower bound is not a prescribed training appointment.
+# Keep earliest_* scientific fields unchanged for authority checks and audits;
+# surface the selected preferred candidate to athletes.
+R186_SCHEMA = 'V4.9.62-R186-1'
+
+
+def _v186_quality_window_headline(q):
+    if not isinstance(q, dict):
+        return None
+    if str(q.get('state') or '').upper() not in {'WATCH', 'OPEN'}:
+        return None
+    preferred = str(q.get('preferred') or '').strip()
+    if not preferred or not q.get('preferred_iso'):
+        return None
+    available = bool(q.get('availability_confirmed'))
+    title = ('Next quality window' if available else 'Provisional quality candidate')
+    text = f'{title}: {preferred}'
+    hours = q.get('preferred_spacing_hours')
+    if isinstance(hours, (int,float)) and math.isfinite(hours) and hours >= 0:
+        text += f' (~{hours:g} h after the last hard session)'
+    text += ('. Confirmed Calendar appointment; recovery and health restrictions still apply.'
+             if available else '. Selected from learned rhythm, NOT confirmed athlete availability; reassess recovery before execution.')
+    if q.get('pto_context'):
+        text += ' PTO temporarily allows alternate timing but never guarantees morning availability or intensity.'
+    cadence = q.get('hard_cadence') or {}
+    gap = cadence.get('dominant_gap_days') if isinstance(cadence,dict) else None
+    if isinstance(gap,(int,float)) and math.isfinite(gap) and gap > 0:
+        text += f' Observed hard-day cadence ~{gap:g} days; spacing is descriptive, not clearance.'
+    # A realized quality dose remains authoritative; keep original load warning.
+    former = str(q.get('headline') or '')
+    m = re.search(r'\bLoad so far:.*$', former, flags=re.I|re.S)
+    if m:
+        text += ' ' + m.group(0).strip()
+    return text
+
+
+_build_adaptive_roadmap_r185_final = build_adaptive_roadmap
+
+def build_adaptive_roadmap(training_direction, training_rhythm, activities, coach_clock=None,
+                           metrics=None, planning_context=None, power_achievements=None,
+                           power_model=None, ftp_anchor=None, training_state=None,
+                           performance_evidence=None, now=None):
+    road = _build_adaptive_roadmap_r185_final(
+        training_direction,training_rhythm,activities,coach_clock=coach_clock,
+        metrics=metrics,planning_context=planning_context,
+        power_achievements=power_achievements,power_model=power_model,
+        ftp_anchor=ftp_anchor,training_state=training_state,
+        performance_evidence=performance_evidence,now=now)
+    if not isinstance(road,dict):
+        return road
+    original = road.get('quality_window')
+    headline = _v186_quality_window_headline(original)
+    if headline is None:
+        return road
+    q = dict(original)
+    q['headline'] = headline
+    q['headline_schema'] = R186_SCHEMA
+    q['displayed_candidate_iso'] = q.get('preferred_iso')
+    q['earliest_is_diagnostic_only'] = bool(q.get('earliest_iso') and q.get('earliest_iso') != q.get('preferred_iso'))
+    updated = dict(road)
+    updated['quality_window'] = q
+    return updated
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.62 WIP R186 · PTO + SAME-DAY REPLAY QA · QUALITY WINDOW DISPLAY TRUTH · R185 BASELINE'
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
