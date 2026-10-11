@@ -40893,5 +40893,108 @@ BASE_CSS += r"""
 """
 APP_VERSION = "THE LAB · PRODUCT V4.9.64 WIP R188 · OBSERVED POWER + STRUCTURAL ADHERENCE UI · R187 BASELINE"
 
+# R189 · Recent Progress scope-and-time evidence gate.
+# A historic PB may remain a valid lifetime/YTD reference without being an
+# athlete-facing NEW achievement in the current coaching block. This wrapper
+# does not rewrite performance evidence, roadmap decisions or saved histories.
+R189_SCHEMA = 'V4.9.65-R189-1'
+R189_RECENT_PROGRESS_LOOKBACK_DAYS = 28
+_v163_recent_progress_badges_r188 = _v163_recent_progress_badges
+
+
+def _v189_recent_progress_reference(snapshot):
+    """Use the athlete's persisted Snapshot clock, not server/visitor wall clock."""
+    if not isinstance(snapshot, dict):
+        return None
+    clock = snapshot.get('coach_clock') or {}
+    candidates = [
+        (clock.get('iso') if isinstance(clock, dict) else None),
+        snapshot.get('snapshot_generated_at_local'),
+        snapshot.get('generated_at_local'),
+    ]
+    for value in candidates:
+        raw = str(value or '').strip()
+        try:
+            if len(raw) >= 10 and re.fullmatch(r'\d{4}-\d{2}-\d{2}', raw[:10]):
+                return date.fromisoformat(raw[:10])
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _v163_recent_progress_badges(snapshot, limit=3):
+    """No stale, pre-plan or unrecognized progress in the current Roadmap.
+
+    Keep old power/evidence ledgers unmodified for scientific reference and
+    historical power curves; gate ONLY the UI projection labeled RECENT PROGRESS.
+    In the absence of a trusted snapshot date or active block, fail closed.
+    """
+    if not isinstance(snapshot, dict):
+        return []
+    today = _v189_recent_progress_reference(snapshot)
+    td = snapshot.get('training_direction') or {}
+    qs = snapshot.get('question_state') or {}
+    if not isinstance(td, dict) or not isinstance(qs, dict) or today is None:
+        return []
+    plan_start = str(td.get('started_on') or '').strip()[:10]
+    scope_start = str(qs.get('scope_start') or '').strip()[:10]
+    pe_scope = snapshot.get('performance_evidence') or {}
+    evidence_start = str(pe_scope.get('effective_cycle_start') or '').strip()[:10] if isinstance(pe_scope, dict) else ''
+    try:
+        starts = [date.fromisoformat(d) for d in (plan_start, scope_start, evidence_start) if d]
+    except (TypeError, ValueError):
+        return []
+    if not starts:
+        return []
+    earliest = max([today-timedelta(days=R189_RECENT_PROGRESS_LOOKBACK_DAYS)] + starts)
+    if earliest > today:
+        return []
+
+    def in_window(value):
+        raw = str(value or '').strip()
+        try:
+            return bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}', raw)) and earliest <= date.fromisoformat(raw) <= today
+        except ValueError:
+            return False
+
+    pe = snapshot.get('performance_evidence') or {}
+    if not isinstance(pe, dict):
+        pe = {}
+    events = []
+    for ev in pe.get('events') or []:
+        if not isinstance(ev, dict) or not in_window(ev.get('date')):
+            continue
+        kind = str(ev.get('kind') or '').upper()
+        if kind == 'VALIDATION':
+            eligible = ev.get('formal_validation') is True and str(ev.get('outcome') or '').upper() == 'VALIDATED_GAIN'
+        elif kind == 'PB':
+            eligible = ev.get('the_lab_recognized') is True and ev.get('timing_proven') is True
+        else:
+            eligible = False
+        if eligible:
+            events.append(ev)
+
+    dims = (qs.get('dimensions') or {}) if isinstance(qs.get('dimensions'), dict) else {}
+    recent_dims = {
+        name: row for name, row in dims.items()
+        if isinstance(row, dict) and row.get('exit_satisfied') is True and in_window(row.get('last_evidence_date'))
+    }
+    # Isolated shallow containers: do not mutate persisted per-athlete history.
+    scoped = dict(snapshot)
+    scoped['performance_evidence'] = {**pe, 'events': events}
+    scoped['question_state'] = {**qs, 'dimensions': recent_dims}
+    return _v163_recent_progress_badges_r188(scoped, limit=limit)
+
+# Make the athlete-facing scope explicit; old earned evidence is historical data,
+# not a current trophy. Validate exact anchor to avoid silent UI regressions.
+R189_UI_LABEL_OLD = '<small>Latest earned evidence</small>'
+R189_UI_LABEL_NEW = '<small>Current block · last 28 days</small>'
+R189_UI_PATCH_COUNT = HOME_PAGE.count(R189_UI_LABEL_OLD) if isinstance(HOME_PAGE, str) else 0
+if R189_UI_PATCH_COUNT != 1:
+    raise RuntimeError('R189_RECENT_PROGRESS_LABEL_PATCH_ANCHOR_MISSING_OR_DUPLICATED')
+HOME_PAGE = HOME_PAGE.replace(R189_UI_LABEL_OLD, R189_UI_LABEL_NEW, 1)
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.65 WIP R189 · RECENT PROGRESS EVIDENCE TRUTH · R188 BASELINE'
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
