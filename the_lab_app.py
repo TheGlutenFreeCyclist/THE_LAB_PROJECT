@@ -40113,5 +40113,435 @@ else:
 BASE_CSS += R184_HISTORY_CSS
 APP_VERSION = "THE LAB · PRODUCT V4.9.60 WIP R184 · UNIFIED TRAINING HISTORY EVIDENCE UI · R183 BASELINE"
 
+# R185: defer direct-run startup until after R185 bindings are installed.
+
+
+# R185 · WORKING-LIFE-AWARE QUALITY CLOCK + EXPLICIT PTO CONTEXT + SAME-DAY CONTINUITY
+# PTO is a temporary opportunity context, not proof of availability or readiness.
+# Hard-time learning excludes tagged PTO deviations while physiology/load keeps ALL activity.
+R185_SCHEMA = "V4.9.61-R185-1"
+
+
+def _v185_pto_item(item):
+    """Only an explicitly labelled OTHER/PTO Calendar range is a vacation context.
+
+    Restriction type is never modified. E.g. OTHER 'photo shoot' or 'NO PTO'
+    must not silently change training scheduling.
+    """
+    title = str((item or {}).get('title') or '').strip().upper()
+    return bool(str((item or {}).get('kind') or '').upper() == 'OTHER'
+                and (title == 'PTO' or title.startswith('PTO ') or title.startswith('PTO·')
+                     or title.startswith('PTO:') or title.startswith('PTO-'))
+                and (item or {}).get('active', 1))
+
+
+def _v185_pto_dates(items, start=None, end=None):
+    out = set()
+    for item in items or []:
+        if not _v185_pto_item(item):
+            continue
+        try:
+            first = date.fromisoformat(str(item.get('start_date') or '')[:10])
+            last = date.fromisoformat(str(item.get('end_date') or item.get('start_date') or '')[:10])
+            if last < first:
+                first, last = last, first
+            lo = max(first, start) if start else first
+            hi = min(last, end) if end else last
+            if hi < lo:
+                continue
+            # Calendar windows are finite; cap absurdly long entries defensively.
+            for i in range(min((hi - lo).days + 1, 366)):
+                out.add((lo + timedelta(days=i)).isoformat())
+        except (ValueError, TypeError, OverflowError):
+            continue
+    return out
+
+
+def _v185_load_pto_dates(start, end):
+    try:
+        items = load_planning_items(active_only=True, limit=240)
+        return _v185_pto_dates(items, start=start, end=end)
+    except Exception:
+        # No PTO exception is better than inventing one when Calendar is unavailable.
+        return set()
+
+
+_build_planning_context_r184_final = build_planning_context
+
+
+def build_planning_context(now=None):
+    now = now or get_rome_now()
+    ctx = _build_planning_context_r184_final(now=now)
+    if not isinstance(ctx, dict):
+        return ctx
+    today = now.date()
+    days = _v185_load_pto_dates(today, today + timedelta(days=90))
+    out = dict(ctx)
+    out['pto_dates'] = sorted(days)
+    out['pto_today'] = today.isoformat() in days
+    out['pto_policy'] = {
+        'schema': R185_SCHEMA, 'calendar_kind': 'OTHER', 'title': 'PTO',
+        'availability_confirmed': False, 'intensity_guaranteed': False,
+        'rule': 'Vacation makes nonstandard clock opportunities plausible, not mandatory. ' 
+                'Health, Calendar restrictions, learned ability and recovery still govern. ' 
+                'After PTO, use the established non-PTO quality rhythm.'
+    }
+    if days:
+        out['summary'] = str(out.get('summary') or 'Training as planned') + (
+            ' · PTO active: temporary daypart flexibility, not confirmed availability.'
+            if out['pto_today'] else ' · Upcoming PTO: temporary daypart flexibility only.')
+    return out
+
+
+_v117_hard_cadence_profile_r184_final = _v117_hard_cadence_profile
+
+
+def _v117_hard_cadence_profile(activities, now=None):
+    """Preserve real last-hard/spacing while isolating holiday timing outliers.
+
+    Existing training loads, activities, last-hard end, spacing, and recovery are
+    untouched; only observed scheduling priors are conditioned on non-PTO days.
+    """
+    base = _v117_hard_cadence_profile_r184_final(activities, now=now)
+    if not isinstance(base, dict) or not activities:
+        return base
+    try:
+        now = now or get_rome_now()
+        excluded = _v185_load_pto_dates(now.date() - timedelta(days=100), now.date())
+        if not excluded:
+            return base
+        ordinary = [a for a in activities if str((a or {}).get('start_date_local') or '')[:10] not in excluded]
+        if len(ordinary) == len(activities):
+            return base
+        learned = _v117_hard_cadence_profile_r184_final(ordinary, now=now)
+        if not isinstance(learned, dict):
+            return base
+        # Never overwrite last_hard_day, gaps or spacing with a filtered history.
+        prior_keys = ('hard_daypart','hard_start_minute','time_confidence',
+                      'hard_week_profile','hard_week_confidence','preferred_hard_weekdays',
+                      'preferred_quality_weekdays','aerobic_biased_weekdays',
+                      'quality_rate_by_weekday','weekend_session_role','weekly_session_role',
+                      'weekday_quality_day_rate','weekend_quality_day_rate',
+                      'session_role_shift_detected')
+        out = dict(base)
+        for key in prior_keys:
+            if key in learned:
+                out[key] = learned[key]
+        out['pto_timing_excluded_days'] = len(excluded)
+        out['pto_timing_model'] = 'NON_PTO_OBSERVED_SCHEDULING_ONLY'
+        return out
+    except Exception:
+        return base
+
+
+_v117_quality_candidates_r184_final = _v117_quality_candidates
+
+
+def _v117_quality_candidates(training_rhythm, coach_clock, planning_context, now):
+    rows = _v117_quality_candidates_r184_final(training_rhythm, coach_clock, planning_context, now)
+    pto = set((planning_context or {}).get('pto_dates') or [])
+    if not pto:
+        return rows
+    out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            out.append(r)
+            continue
+        row = dict(r)
+        dt = row.get('dt')
+        if isinstance(dt, datetime) and dt.date().isoformat() in pto:
+            row['pto_context'] = True
+            row['pto_availability_confirmed'] = False
+            # PTO never upgrades a predicted rhythm opportunity to explicit.
+        out.append(row)
+    return out
+
+
+_v172_quality_earlier_slot_r184_final = _v172_quality_earlier_slot
+
+
+def _v172_quality_earlier_slot(first, selected, candidates, cadence, extra_delay):
+    """Earlier must be comparable by QUALITY DAYPART, not just same weekday.
+
+    PTO permits temporary earlier consideration at an existing, rhythm-supported
+    slot; it does not assert availability nor create a new slot.
+    """
+    if not _v172_quality_earlier_slot_r184_final(first, selected, candidates, cadence, extra_delay):
+        return False
+    try:
+        early = first['dt']; late = selected['dt']
+        is_pto = bool(first.get('pto_context'))
+        if is_pto:
+            return bool(str(first.get('authority') or '').upper() in {
+                'RHYTHM_PREDICTED', 'FUTURE_RHYTHM_PREDICTED',
+                'EXPLICIT_DAY_INFERRED_TIME'})
+        early_part = 'AM' if early.hour < 12 else 'PM'
+        late_part = 'AM' if late.hour < 12 else 'PM'
+        habitual = str((cadence or {}).get('hard_daypart') or '').upper()
+        confidence = str((cadence or {}).get('time_confidence') or 'LOW').upper()
+        if habitual in {'AM','PM'} and confidence in {'MODERATE','HIGH'}:
+            if early_part != habitual:
+                return False
+        if early_part != late_part:
+            return False
+        minute = (cadence or {}).get('hard_start_minute')
+        if minute is not None and confidence in {'MODERATE', 'HIGH'}:
+            minute = float(minute)
+            distance_early = abs((early.hour * 60 + early.minute) - minute)
+            distance_late = abs((late.hour * 60 + late.minute) - minute)
+            # A markedly less habitual time is not a comparable opportunity.
+            if distance_early > distance_late + 90:
+                return False
+        return True
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return False
+
+
+_v136_promote_quality_target_r184_final = _v136_promote_quality_target
+
+
+def _v136_promote_quality_target(clock, road):
+    """Promote SELECTED preferred eligible clock slot, never an inferior earliest."""
+    q = (road or {}).get('quality_window') or {}
+    pref = q.get('preferred_iso')
+    early = q.get('earliest_iso')
+    if not pref or pref == early:
+        return _v136_promote_quality_target_r184_final(clock, road)
+    try:
+        chosen = datetime.fromisoformat(str(pref))
+        matched = any(str((r or {}).get('date') or '') == chosen.date().isoformat()
+                      and (r or {}).get('start_minute') is not None
+                      and abs(float(r['start_minute']) - (chosen.hour*60+chosen.minute)) <= 2
+                      for r in (clock or {}).get('next_slots') or [])
+        if matched:
+            return clock
+        modified = dict(road or {})
+        qq = dict(q)
+        qq['earliest_iso'] = pref
+        modified['quality_window'] = qq
+        return _v136_promote_quality_target_r184_final(clock, modified)
+    except (TypeError, ValueError, KeyError):
+        return clock
+
+
+_v84_quality_slot_match_r184_final = _v84_quality_slot_match
+
+
+def _v84_quality_slot_match(clock, adaptive_roadmap=None):
+    out = _v84_quality_slot_match_r184_final(clock, adaptive_roadmap)
+    q = ((adaptive_roadmap or {}).get('quality_window') or {})
+    if (isinstance(out, dict)
+            and str(out.get('target_kind') or '').upper() == 'EARLIEST'
+            and q.get('preferred_iso') and q.get('earliest_iso')
+            and str(q.get('preferred_iso')) != str(q.get('earliest_iso'))):
+        # Never prescribe the wrong daypart solely because the selected target
+        # is absent from the 3-slot display; the R185 promoter runs first.
+        return _v84_quality_slot_match_r133(clock, adaptive_roadmap)
+    return out
+
+
+def _v185_slot_time_from_label(label):
+    """Historical persisted slot is a localized display string, not a time field.
+
+    If time cannot be proven, decline same-day re-timing rather than guessing.
+    """
+    m = re.search(r'\b(?:around|at)\s+(\d{1,2}):(\d{2})\s*(AM|PM)\b',
+                  str(label or ''), re.I)
+    if not m:
+        return None
+    h, minute = int(m.group(1)), int(m.group(2))
+    if h < 1 or h > 12 or minute > 59:
+        return None
+    return (h % 12) * 60 + (720 if m.group(3).upper() == 'PM' else 0) + minute
+
+
+def _v185_carry_same_day(out, decision, clock, ledger, now=None):
+    """Do not drop a previously issued AM hard commitment after AM is missed.
+
+    Requires a new, eligible PM hard slot from Nova. This does NOT authorize new
+    intensity by itself and cannot reassign races, validations or Calendar events.
+    """
+    if not isinstance(out, dict) or out.get('status') != 'PRESCRIBED' \
+            or not out.get('hard_prescription_available') \
+            or str((decision or {}).get('action') or '').upper() != 'TRAIN':
+        return out
+    now = now or get_rome_now()
+    idx, slot = _v166_target_slot(out, clock)
+    if idx is None or not isinstance(slot, dict) or slot.get('is_race') or slot.get('is_planned_training') \
+            or str(slot.get('source') or '').upper() == 'CALENDAR' \
+            or str(slot.get('restriction') or 'NONE').upper() != 'NONE':
+        return out
+    if str(slot.get('date') or '') != now.date().isoformat():
+        return out
+    try:
+        selected_min = int(round(float(slot.get('start_minute'))))
+        if selected_min <= now.hour*60+now.minute:
+            return out
+    except (TypeError, ValueError):
+        return out
+    rows = []
+    for r in (ledger or {}).get('prescription_history') or []:
+        if not isinstance(r, dict) or str(r.get('date') or '')[:10] != now.date().isoformat():
+            continue
+        if str(r.get('prescription_status') or '').upper() in {'SUPERSEDED','FULFILLED','CANCELLED','WITHDRAWN','EXPIRED_BY_NEW_HARD_EVIDENCE'}:
+            continue
+        if r.get('superseded_by_fingerprint') or r.get('executed_activity_id') or not _v153_is_training_plan(r):
+            continue
+        prior_min = _v185_slot_time_from_label(r.get('slot'))
+        if prior_min is None or selected_min <= prior_min + 60 or now.hour*60+now.minute < prior_min + 90:
+            continue
+        issued = _v153_parse_local(r.get('recorded_at_local'))
+        if issued is None or issued > now:
+            continue
+        if _v153_material_hard_after(r, ledger or {}):
+            continue
+        rows.append((issued, r, prior_min))
+    if not rows:
+        return out
+    rows.sort(key=lambda x:x[0], reverse=True)
+    _, prior, prior_min = rows[0]
+    preserved = _v153_preserved_raw(prior, out.get('dimension'))
+    raw = list(out.get('raw_sessions') or [])
+    if idx < 0 or idx >= len(raw) or not isinstance(raw[idx], dict):
+        return out
+    wid = str(prior.get('nova_workout_id') or prior.get('nova_contract_id') or '')
+    if not wid:
+        return out
+    raw[idx] = preserved
+    out['raw_sessions'] = raw
+    out['workout_id'] = wid
+    out['contract_id'] = prior.get('nova_contract_id') or wid
+    out['source'] = 'SAME_DAY_UNEXECUTED_HARD_CONTINUITY'
+    out['prescription_continuity'] = {
+        'schema': R185_SCHEMA, 'active': True, 'state': 'SAME_DAY_UNEXECUTED_MOVED_LATER',
+        'workout_id': wid, 'target_date': now.date().isoformat(),
+        'original_start_minute': prior_min, 'new_start_minute': selected_min,
+        'prior_recorded_at_local': prior.get('recorded_at_local'),
+        'new_hard_workouts_added': 0, 'availability_confirmed': bool(slot.get('availability_confirmed')),
+        'rule': 'Preserve a missed morning hard commitment at the next independently eligible same-day quality slot; ' 
+                'do not infer the ride was completed or impose a second hard session.'
+    }
+    out['prescription_continuity_schema'] = R185_SCHEMA
+    return out
+
+
+_build_nova_prescription_r184_final = build_nova_prescription
+
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None,
+                            evidence_ledger=None, power_model=None, ftp_anchor=None,
+                            aerobic_metabolic_range=None, training_definitions=None):
+    out = _build_nova_prescription_r184_final(
+        nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap,
+        microcycle_ledger=microcycle_ledger, evidence_ledger=evidence_ledger,
+        power_model=power_model, ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions)
+    return _v185_carry_same_day(out, nova_decision, coach_clock, microcycle_ledger or {})
+
+
+# The Calendar already owns native start/end dates and an editable OTHER title.
+# Make PTO discoverable; no new schema/table, persistent user values or routes.
+R185_PTO_HINT = ('<p class="v185-pto-hint" role="note"><strong>VACATION / PTO</strong> · '
+                 'Choose <strong>OTHER</strong>, enter <strong>PTO</strong> as title, '
+                 'and select the first and last day. This temporarily makes alternate '
+                 'training times possible; it does not confirm availability or force a hard workout. '
+                 'Outside PTO, Nova retains your normal learned quality schedule.</p>')
+_R185_PTO_ANCHOR = '<input class="v4-input" name="title" placeholder="Title · e.g. Zwift race or Granfondo Città di Livorno" required {% if is_preview %}disabled{% endif %}>'
+if isinstance(HOME_PAGE, str):
+    HOME_PAGE, R185_PTO_UI_PATCH_COUNT = re.subn(
+        re.escape(_R185_PTO_ANCHOR), lambda m: m.group(0) + R185_PTO_HINT,
+        HOME_PAGE, count=1)
+else:
+    R185_PTO_UI_PATCH_COUNT = 0
+BASE_CSS += '\n.v185-pto-hint{margin:10px 0 14px;color:var(--muted);font-size:14px;line-height:1.5}.v185-pto-hint strong{color:var(--text)}\n'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.61 WIP R185 · PTO-AWARE QUALITY CLOCK + SAME-DAY HARD CONTINUITY · R184 BASELINE'
+
+# R185 traceability: the selector's old R172 reason now describes two very
+# different contexts. A PTO-enabled morning is not a routine clock preference.
+_v117_select_quality_window_r185_before_reason = _v117_select_quality_window
+
+def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_delay, second_hard=False):
+    outcome = _v117_select_quality_window_r185_before_reason(
+        candidates, last_end, spacing, cadence, extra_delay, second_hard=second_hard)
+    if not isinstance(outcome, tuple) or len(outcome) != 4:
+        return outcome
+    early, chosen, reason, row = outcome
+    if reason == 'R172_RECOVERED_EARLIER_COMPARABLE_QUALITY_SLOT':
+        reason = ('R185_PTO_CONDITIONAL_EARLIER_QUALITY'
+                  if isinstance(row, dict) and row.get('pto_context')
+                  else 'R185_HABITUALLY_COMPARABLE_EARLIER_QUALITY')
+        return early, chosen, reason, row
+    return outcome
+
+
+_build_adaptive_roadmap_r184_final = build_adaptive_roadmap
+
+def build_adaptive_roadmap(training_direction, training_rhythm, activities, coach_clock=None,
+                           metrics=None, planning_context=None, power_achievements=None,
+                           power_model=None, ftp_anchor=None, training_state=None,
+                           performance_evidence=None, now=None):
+    road = _build_adaptive_roadmap_r184_final(
+        training_direction, training_rhythm, activities, coach_clock=coach_clock,
+        metrics=metrics, planning_context=planning_context, power_achievements=power_achievements,
+        power_model=power_model, ftp_anchor=ftp_anchor, training_state=training_state,
+        performance_evidence=performance_evidence, now=now)
+    if not isinstance(road, dict):
+        return road
+    q = road.get('quality_window')
+    if not isinstance(q, dict):
+        return road
+    pref = str(q.get('preferred_iso') or '')[:10]
+    if not pref or pref not in set((planning_context or {}).get('pto_dates') or []):
+        return road
+    qq = dict(q)
+    qq['pto_context'] = True
+    qq['pto_source'] = 'CALENDAR_OTHER_PTO'
+    qq['availability_confirmed'] = bool(qq.get('availability_confirmed'))  # PTO alone never marks explicit.
+    qq['pto_quality_rule'] = ('Vacation temporarily permits considering learned morning training slots ' 
+                              'as conditional quality opportunities, without erasing the non-PTO hard clock ' 
+                              'or overriding recovery, restrictions, races or athlete availability.')
+    out = dict(road)
+    out['quality_window'] = qq
+    return out
+
+# R185 scheduling priors: all holiday rides still count for physiological load,
+# recovery and activity truth. Vacation times are excluded only from the ordinary
+# life clock that estimates recurring workday/weekend opportunities.
+_build_training_rhythm_r184_final = build_training_rhythm
+
+def build_training_rhythm(season_activities, now=None, scope='CYCLING'):
+    now = now or get_rome_now()
+    full = _build_training_rhythm_r184_final(season_activities, now=now, scope=scope)
+    if not isinstance(full, dict) or str(scope or 'CYCLING').upper() != 'CYCLING':
+        return full
+    excluded = _v185_load_pto_dates(now.date() - timedelta(days=100), now.date())
+    if not excluded:
+        return full
+    ordinary = [a for a in season_activities or []
+                if str((a or {}).get('start_date_local') or '')[:10] not in excluded]
+    if len(ordinary) == len(season_activities or []) or len(ordinary) < 7:
+        return full
+    learned = _build_training_rhythm_r184_final(ordinary, now=now, scope=scope)
+    if not isinstance(learned, dict) or str(learned.get('state') or '').upper() == 'LEARNING':
+        return full
+    out = dict(full)
+    # Timing/frequency scheduling only: never remove holiday work from overall
+    # load, energy, completed workout history or medical/recovery assessment.
+    for key in ('clock_profile','weekday_scores','weekday_double_scores',
+                'likely_weekdays','pattern_strength','double_propensity',
+                'median_training_gap_days'):
+        if key in learned:
+            out[key] = copy.deepcopy(learned[key])
+    out['pto_working_life_clock'] = {
+        'schema': R185_SCHEMA,
+        'holiday_activities_excluded_from_timing': len(season_activities or []) - len(ordinary),
+        'available_non_pto_activities': len(ordinary),
+        'activity_loads_and_completed_history_preserved': True,
+        'rule': 'Only timing priors ignore explicit PTO exceptions; full real activity load and recovery remain authoritative.'
+    }
+    return out
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
