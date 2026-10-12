@@ -28155,6 +28155,7 @@ def analyze():
         coaching_contract = _v4840_owner_coaching_contract(user["id"])
         microcycle_ledger = load_microcycle_ledger(strategy_plan, training_direction, cycling_season_activities, user_id=user["id"], read_only=qa_requested)
         microcycle_ledger = _v4932_attach_dose_context(microcycle_ledger, cycling_history_activities, now=get_rome_now())
+        microcycle_ledger = _v190_block_dose_evidence(microcycle_ledger, cycling_history_activities, training_direction, now=get_rome_now())
         progression_training_blocks=_v492_attach_execution_quality(progression_training_blocks,microcycle_ledger);previous_training_blocks=progression_training_blocks[:8];session_progression=_v491_session_progression(progression_training_blocks)
         evidence_ledger=build_evidence_ledger(
             repeatability_history_blocks or progression_training_blocks, overlay_blocks=progression_training_blocks,
@@ -28438,6 +28439,8 @@ def analyze():
         # Trace the exact code path selected for this Snapshot (billing is verified
         # independently in the admin usage table; no zero-cost DB event is invented).
         data["snapshot_language_provider_calls"] = 1 if qa_kind == "LIVE" else 0
+        data["nova_reasoning_trace"] = _v190_reasoning_trace(data)
+        data["nova_explanation"] = _v190_human_explanation(data)
         if python_qa or not qa_requested:
             _daily_grounded = _v119_grounded_answer(snapshot_question, data)
             if _daily_grounded:
@@ -40995,6 +40998,332 @@ if R189_UI_PATCH_COUNT != 1:
 HOME_PAGE = HOME_PAGE.replace(R189_UI_LABEL_OLD, R189_UI_LABEL_NEW, 1)
 
 APP_VERSION = 'THE LAB · PRODUCT V4.9.65 WIP R189 · RECENT PROGRESS EVIDENCE TRUTH · R188 BASELINE'
+
+
+# ==========================================================================
+# R190 · DETERMINISTIC COACHING ACCOUNTABILITY
+#   1) Recover stable, objectively earned block-level dose progression across
+#      Monday microcycle reset. Current-week load itself NEVER carries over.
+#   2) Every Snapshot, including read-only QA, carries a source-attributed,
+#      structured explanation of the actual gates, evidence and projection.
+#   3) Before the latest-only overwrite, compare question/stage/plan decisions;
+#      preserve bounded transitions across future Snapshots per athlete.
+# No AI explanation, hidden inference or automatic rewriting of completed work.
+# ==========================================================================
+R190_SCHEMA = 'V4.9.66-R190-1'
+
+
+def _v190_block_dose_evidence(ledger, activities, direction, now=None):
+    """Close foundation from verified COMPLETE comparative weeks in active block.
+
+    The in-progress week is still the live dose-budget; this evidence concerns
+    whether a developmental foundation was EVER earned in the active block.
+    A new Monday is NOT counterevidence to a completed earlier progression.
+    """
+    if not isinstance(ledger, dict) or not ledger.get('available'):
+        return ledger
+    direction = direction if isinstance(direction, dict) else {}
+    now = now or get_rome_now()
+    day = now.date() if isinstance(now, datetime) else now
+    start = str(direction.get('started_on') or '')[:10]
+    goal = str(direction.get('primary_goal') or '').upper()
+    try:
+        block_start = date.fromisoformat(start)
+    except (TypeError, ValueError):
+        ledger['block_foundation_evidence'] = {'schema': R190_SCHEMA, 'status': 'UNAVAILABLE', 'reason_code': 'BLOCK_START_UNKNOWN'}
+        return ledger
+    key = 'SPECIFIC_DOSE' if goal in {'POWER_5','VO2MAX','POWER_1','SPRINTER'} else ('TIME_AT_PRESSURE' if goal in {'POWER_20','TIME_TRIAL'} else None)
+    if not key:
+        return ledger
+    # Consecutive completed Mon-Sun windows. Comparisons use same native zone
+    # evidence and same thresholds as _v82_question_record, but never conflate
+    # in-progress zero minutes with a revoked achievement.
+    latest_completed_sun = day - timedelta(days=day.weekday()+1)
+    first_monday = block_start - timedelta(days=block_start.weekday())
+    if first_monday < block_start:
+        first_monday += timedelta(days=7)
+    cursor = max(first_monday, latest_completed_sun-timedelta(days=7*25+6))
+    reviewed = []
+    max_weeks = 26  # time/CPU bounded, multi-athlete safe
+    while cursor+timedelta(days=6) <= latest_completed_sun and len(reviewed)<max_weeks:
+        sunday = cursor+timedelta(days=6)
+        dose = _v4932_intensity_dose(activities, cursor, now=sunday)
+        curr = dose.get('current') or {}; prev = dose.get('previous_comparable') or {}
+        prop = 'high_minutes' if key == 'SPECIFIC_DOSE' else 'moderate_minutes'
+        value = _rhythm_num(curr.get(prop)); base = _rhythm_num(prev.get(prop))
+        enough = bool(curr.get('zoned_sessions') and prev.get('zoned_sessions') and value is not None and base is not None)
+        threshold = max(3., 0.10*max(base or 0.,1.)) if key == 'SPECIFIC_DOSE' else max(5.,0.10*max(base or 0.,1.))
+        row={'window_start': cursor.isoformat(),'window_end':sunday.isoformat(),
+             'metric':prop,'current_min':value,'previous_min':base,
+             'current_zoned_sessions':curr.get('zoned_sessions'), 'previous_zoned_sessions':prev.get('zoned_sessions'),
+             'progression_threshold_min':round(threshold,2),
+             'evidence_sufficient':enough,
+             'progressed':bool(enough and value>=base+threshold)}
+        reviewed.append(row)
+        cursor += timedelta(days=7)
+    earned = [r for r in reviewed if r['progressed']]
+    ledger['block_foundation_evidence'] = {
+        'schema':R190_SCHEMA,'goal':goal,'dimension':key,'block_start':start,
+        'latest_completed_sunday':latest_completed_sun.isoformat(),
+        'completed_weeks_checked':len(reviewed), 'completed_weeks':reviewed,
+        'earned':bool(earned),'earned_windows':earned,
+        'reason_code': 'COMPLETED_MICROCYCLE_DOSE_PROGRESS_CONFIRMED' if earned else 'NO_COMPLETED_MICROCYCLE_PROGRESS_CONFIRMED',
+        'rule': 'The week-local load budget resets; within-block earned progression is not revoked merely by Monday rollover. Only complete windows supported by native cycling power-zone data count.'}
+    return ledger
+
+
+_build_question_state_r189_final = build_question_state
+
+def build_question_state(goal_key, evidence_ledger=None, performance_evidence=None, roadmap=None, microcycle_ledger=None, aerobic_metabolic_range=None, now=None):
+    out = _build_question_state_r189_final(goal_key, evidence_ledger, performance_evidence, roadmap, microcycle_ledger, aerobic_metabolic_range, now=now)
+    if not isinstance(out, dict):
+        return out
+    led = microcycle_ledger if isinstance(microcycle_ledger,dict) else {}
+    hist = led.get('block_foundation_evidence') or {}
+    dims = out.get('dimensions') or {}
+    key=hist.get('dimension')
+    current = dims.get(key) if isinstance(dims,dict) else None
+    # No inference from a prior displayed badge, inferred plan, or another goal.
+    valid = (isinstance(current,dict) and hist.get('schema')==R190_SCHEMA
+             and hist.get('goal')==str(goal_key or '').upper()
+             and hist.get('block_start')==out.get('scope_start')
+             and hist.get('earned') is True and bool(hist.get('earned_windows')))
+    if valid and not current.get('exit_satisfied'):
+        previous = {'state':current.get('state'),'exit_satisfied':current.get('exit_satisfied'),
+                    'reason':current.get('reason')}
+        witness = hist['earned_windows'][-1]
+        dims[key] = {
+            **current, 'state':'SUPPORTED', 'exit_satisfied':True,
+            'reason':f"Completed active-block dose progression was established in {witness['window_start']}–{witness['window_end']}; Monday's new incomplete dose window does not revoke it.",
+            'last_evidence_date':witness['window_end'],
+            'source':'COMPLETED_ACTIVE_BLOCK_NATIVE_POWER_ZONE_WINDOWS',
+            'foundation_continuity':{'schema':R190_SCHEMA,'reason_code':'WEEK_ROLLOVER_NOT_BLOCK_REGRESSION',
+                                     'live_week_record':previous,'completed_witness':copy.deepcopy(witness)} }
+        out['closed_dimensions'] = list(dict.fromkeys([*(out.get('closed_dimensions') or []),key]))
+        out['open_dimensions'] = [x for x in (out.get('open_dimensions') or []) if x!=key]
+    out['foundation_dose_accountability'] = copy.deepcopy(hist) if isinstance(hist,dict) else {}
+    return out
+
+
+def _v190_reasoning_trace(snapshot):
+    """Structured, truthful explanation of observed deterministic decisions.
+
+    All fields drawn from an explicit source allowlist, so no credentials,
+    comments, names or raw wellness records are copied into the diagnostic.
+    R115 remains the independent full-core replay for deep computational tests.
+    """
+    d=snapshot if isinstance(snapshot,dict) else {}
+    td=d.get('training_direction') or {}; qs=d.get('question_state') or {}
+    road=d.get('adaptive_roadmap') or {}; dec=d.get('nova_decision') or {}
+    sci=d.get('scientific_progression') or {}; led=d.get('microcycle_ledger') or {}
+    train=d.get('training_state') or {}; window=road.get('quality_window') or {}
+    if not isinstance(td,dict):td={}
+    if not isinstance(qs,dict):qs={}
+    if not isinstance(road,dict):road={}
+    if not isinstance(dec,dict):dec={}
+    if not isinstance(sci,dict):sci={}
+    if not isinstance(led,dict):led={}
+    if not isinstance(train,dict):train={}
+    if not isinstance(window,dict):window={}
+    dims=qs.get('dimensions') or {}
+    if not isinstance(dims,dict):dims={}
+    micro=led.get('dose_context') or {}; micro=micro if isinstance(micro,dict) else {}
+    block=led.get('block_foundation_evidence') or {}; block=block if isinstance(block,dict) else {}
+    fac=qs.get('facet_profile') or {}; fac=fac if isinstance(fac,dict) else {}
+    stage=road.get('stage') or {}; stage=stage if isinstance(stage,dict) else {}
+    effect=(d.get('next_sessions') or []); effect=effect if isinstance(effect,list) else []
+    sessions=[]
+    for s in effect[:8]:
+        if not isinstance(s,dict):continue
+        sessions.append({k:s.get(k) for k in ('date','period','start_minute','title','intensity_class','nova_workout_id',
+                       'nova_contract_id','provisional_quality','quality_window_state','prescribed_power_low','prescribed_power_high')})
+    questions=[]
+    for name, rec in sorted(dims.items()):
+        if not isinstance(rec,dict):continue
+        questions.append({'dimension':name,'state':rec.get('state'), 'exit_satisfied':rec.get('exit_satisfied'),
+                          'count':rec.get('evidence_count'),'last_evidence_date':rec.get('last_evidence_date'),
+                          'source':rec.get('source'),'reason':rec.get('reason'),
+                          'continuity_reason_code':(rec.get('foundation_continuity') or {}).get('reason_code')})
+    steps=[
+      {'id':'N190-01','module':'ACTIVITY_TRUTH_AND_MICROCYCLE_DOSE','rule':'V4.8.74-R66 + R190_BLOCK_FOUNDATION',
+       'inputs':{'window_start':micro.get('window_start'),'through_date':micro.get('through_date'),
+                 'current':micro.get('current'),'previous_comparable':micro.get('previous_comparable'),
+                 'block_start':block.get('block_start')},
+       'result':{'current_week_high_delta_min':micro.get('high_delta_minutes'),
+                 'earned_block_foundation':block.get('earned'),
+                 'earned_completed_windows':block.get('earned_windows'),
+                 'reason_code':block.get('reason_code')}},
+      {'id':'N190-02','module':'EVIDENCE_LEDGER_AND_QUESTION_STATE','rule':'R81_R82_R111_R190',
+       'inputs':{'goal':td.get('primary_goal'),'scope_start':qs.get('scope_start'),
+                 'evidence_schema':(d.get('evidence_ledger') or {}).get('schema'),
+                 'facet_missing':fac.get('missing')},
+       'result':{'dimensions':questions,'open_dimensions':qs.get('open_dimensions'),'closed_dimensions':qs.get('closed_dimensions')}},
+      {'id':'N190-03','module':'ROADMAP_EVIDENCE_GATE','rule':'R111_R115_STAGE_FOUNDATION_GATE',
+       'inputs':{'foundation':('SPECIFIC_DOSE' if str(td.get('primary_goal') or '').upper() in {'POWER_5','VO2MAX','POWER_1','SPRINTER'} else 'TIME_AT_PRESSURE'),
+                 'coverage_count':fac.get('coverage_count'),'required_count':fac.get('required_count')},
+       'result':{'stage_code':stage.get('code'),'stage_label':stage.get('label'),'stage_index':road.get('stage_index'),
+                 'stage_gate':road.get('stage_evidence_gate')}},
+      {'id':'N190-04','module':'SCIENTIFIC_PROGRESSION_AND_NOVA_DECISION','rule':'R82_R112_NOVA_AUTHORITY',
+       'inputs':{'train_state':train.get('state'),'drivers':train.get('recovery_drivers'),
+                 'dose_contract_stage':(sci.get('dose_contract') or {}).get('stage')},
+       'result':{'dimension':sci.get('dimension'),'stage_code':sci.get('roadmap_stage_code'),
+                 'decision_dimension':dec.get('dimension'),'action':dec.get('action'),
+                 'hard_allowed':dec.get('hard_session_allowed')}},
+      {'id':'N190-05','module':'COACH_CLOCK_AND_QUALITY_GATE','rule':'R117_R172_R185_R186',
+       'inputs':{'last_hard_end':window.get('last_hard_end'), 'spacing_policy':window.get('spacing_policy'),
+                 'training_state':train.get('state')},
+       'result':{'quality_state':window.get('state'),'preferred_iso':window.get('preferred_iso'),
+                 'slot_selection_reason':window.get('slot_selection_reason'),
+                 'selected_authority':window.get('selected_slot_authority'),
+                 'availability_confirmed':window.get('availability_confirmed')}},
+      {'id':'N190-06','module':'CANONICAL_PRESCRIPTION','rule':'R146_R155_R185_R187',
+       'inputs':{'prescription_status':(d.get('nova_prescription') or {}).get('status')},
+       'result':{'sessions':sessions, 'quality_slot_match':(d.get('nova_prescription') or {}).get('quality_slot_match')}},
+      {'id':'N190-07','module':'AUTHORITY_AND_OUTPUT_GUARDS','rule':'R79_R93_R115_R187',
+       'inputs':{'ai_calls':d.get('snapshot_language_provider_calls')},
+       'result':{'authority_final_pass':d.get('authority_final_pass'),
+                 'issues':[(v.get('code') if isinstance(v,dict) else str(v)) for v in ((d.get('cross_module_authority_audit') or {}).get('issues') or [])][:12],
+                 'checks':[(v.get('name'),v.get('pass')) for v in ((d.get('cross_module_authority_audit') or {}).get('checks') or []) if isinstance(v,dict)][:45]}}
+    ]
+    stamp=(d.get('coach_clock') or {}).get('iso') if isinstance(d.get('coach_clock'),dict) else None
+    trace={'schema':R190_SCHEMA,'clock_local':stamp,'goal':td.get('primary_goal'),
+           'decision_steps':steps,'meaning':'ACTUAL OBSERVED VALUES FROM NAMED DECISION LAYERS',
+           'limitations':'This records actual decisive states and supporting evidence; it is not a full interpreter call-stack or a causal explanation of historical unrecorded inputs. R115 replay provides full deterministic core inputs separately.',
+           'no_raw_personal_identifiers':True}
+    trace['trace_id']=hashlib.sha256(json.dumps(trace,sort_keys=True,default=str,ensure_ascii=True).encode()).hexdigest()[:24]
+    return trace
+
+
+def _v190_human_explanation(d):
+    d = d if isinstance(d,dict) else {}
+    road=d.get('adaptive_roadmap') or {}; qs=d.get('question_state') or {}
+    dims=qs.get('dimensions') or {}; stage=(road.get('stage') or {})
+    key='SPECIFIC_DOSE' if str((d.get('training_direction') or {}).get('primary_goal') or '').upper() in {'POWER_5','VO2MAX','POWER_1','SPRINTER'} else 'TIME_AT_PRESSURE'
+    foundation=dims.get(key) or {}; continuity=foundation.get('foundation_continuity') or {}
+    state=stage.get('label') or stage.get('code') or 'Assessing'
+    txt=f"Current roadmap stage: {state}. Current coaching question: {((d.get('scientific_progression') or {}).get('dimension') or 'assessing').replace('_',' ').title()}. "
+    if continuity.get('reason_code')=='WEEK_ROLLOVER_NOT_BLOCK_REGRESSION':
+        txt+='The new weekly microcycle reset its dose counter, but did NOT erase progression already demonstrated in the active training block. '
+    elif not foundation.get('exit_satisfied'):
+        txt+=f"{key.replace('_',' ').title()} is not yet demonstrated by the active-block evidence. "
+    window=road.get('quality_window') or {}
+    if str(window.get('state') or '').upper() in {'RECOVERY HOLD','ON HOLD'}:
+        txt+='Immediate quality is blocked by current recovery checks.'
+    elif window.get('preferred'):
+        txt+='The next quality opportunity is provisional; recovery must remain eligible.'
+    return txt
+
+
+def _v190_summary_state(d):
+    d=d if isinstance(d,dict) else {}
+    r=d.get('adaptive_roadmap') or {}; q=d.get('question_state') or {}; td=d.get('training_direction') or {}; win=r.get('quality_window') or {}
+    dims=q.get('dimensions') or {}
+    names=('FRESH_CAPACITY','SPECIFIC_DOSE','TIME_AT_PRESSURE','REPEATABILITY','RECOVERY_UNDER_LOAD','DURABILITY','RACE_TRANSFER','VARIABLE_LOAD')
+    return {'goal':td.get('primary_goal'),'block_start':q.get('scope_start'),
+            'stage':(r.get('stage') or {}).get('code'),'stage_label':(r.get('stage') or {}).get('label'),
+            'science_focus':(d.get('scientific_progression') or {}).get('dimension'),
+            'questions':{k:{'state':(dims.get(k) or {}).get('state'),'closed':(dims.get(k) or {}).get('exit_satisfied'),
+                            'source':(dims.get(k) or {}).get('source'), 'reason':(dims.get(k) or {}).get('reason')}
+                         for k in names if k in dims},
+            'quality_state':win.get('state'),'quality_at':win.get('preferred_iso'),
+            'hard_plan':_v187_hard_plan(d),
+            'reasoning_trace_id':(d.get('nova_reasoning_trace') or {}).get('trace_id')}
+
+
+def _v190_transition(previous,current,now=None):
+    old=_v190_summary_state(previous);new=_v190_summary_state(current)
+    if not old['goal'] or not new['goal'] or old['goal']!=new['goal'] or old['block_start']!=new['block_start']:
+        code='TRAINING_PLAN_SCOPE_CHANGED'
+        if old==new:return None
+    else:
+        changes=[]
+        if old['stage']!=new['stage']:changes.append('ROADMAP_STAGE_CHANGED')
+        for k in sorted(set(old['questions'])|set(new['questions'])):
+            b=old['questions'].get(k) or {};a=new['questions'].get(k) or {}
+            if b.get('closed')!=a.get('closed'):changes.append('QUESTION_EXIT_CHANGED:'+k)
+        if old['science_focus']!=new['science_focus']:changes.append('SCIENCE_FOCUS_CHANGED')
+        if (old['hard_plan'] or {}).get('workout_id')!=(new['hard_plan'] or {}).get('workout_id'):changes.append('WORKOUT_ID_CHANGED')
+        if old['quality_state']!=new['quality_state']:changes.append('QUALITY_GATE_CHANGED')
+        if old['quality_at']!=new['quality_at']:changes.append('QUALITY_TIME_CHANGED')
+        if not changes:return None
+        code=';'.join(changes)
+    doseprev=((previous.get('microcycle_ledger') or {}).get('dose_context') or {})
+    dosenew=((current.get('microcycle_ledger') or {}).get('dose_context') or {})
+    reason='TRAINING_DIRECTION_OR_BLOCK_SCOPE_CHANGED' if code=='TRAINING_PLAN_SCOPE_CHANGED' else 'DECISION_CHANGED_WITH_OBSERVED_EVIDENCE'
+    if 'ROADMAP_STAGE_CHANGED' in code and doseprev.get('window_start')!=dosenew.get('window_start'):
+        reason='MICROCYCLE_ROLLOVER_CHECK_FOUNDATION_CONTINUITY'
+    if 'QUALITY_GATE_CHANGED' in code:
+        reason='QUALITY_GATE_OR_RECOVERY_REEVALUATED'
+    record={'schema':R190_SCHEMA,'time_local':(now or get_rome_now()).isoformat(timespec='seconds'),
+            'reason_code':reason, 'change_codes':code.split(';'), 'previous':old,'current':new,
+            'delta_evidence':{'prior_dose_context':doseprev,'current_dose_context':dosenew},
+            'no_invented_cause':True}
+    record['transition_id']=hashlib.sha256(json.dumps([old,new],sort_keys=True,default=str).encode()).hexdigest()[:20]
+    return record
+
+
+_save_latest_report_r189_final=save_latest_report
+
+def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None):
+    owner_id=_data_owner_user_id(owner_user_id)
+    before=load_latest_report(include_payload=True,owner_user_id=owner_id)
+    prior=before.get('data') if isinstance(before,dict) else None
+    incoming=data if isinstance(data,dict) else {}
+    if 'nova_reasoning_trace' not in incoming:
+        incoming['nova_reasoning_trace']=_v190_reasoning_trace(incoming)
+    if 'nova_explanation' not in incoming:
+        incoming['nova_explanation']=_v190_human_explanation(incoming)
+    oldjournal=(prior or {}).get('nova_transition_history') or []
+    journal=[copy.deepcopy(row) for row in oldjournal if isinstance(row,dict)][-31:]
+    transition=_v190_transition(prior,incoming,now=now) if isinstance(prior,dict) else None
+    if transition and (not journal or journal[-1].get('transition_id')!=transition['transition_id']):
+        journal.append(transition)
+    incoming['nova_transition_history']=journal[-32:]
+    incoming['nova_transition_latest']=transition if transition else (journal[-1] if journal else None)
+    # Retain the full curated decision state of multiple consecutive snapshots,
+    # including decisions which did NOT change the workout. No recursion or raw
+    # athlete identifiers; neither passwords nor complete wellness inputs enter.
+    old_traces=(prior or {}).get('nova_reasoning_history') or []
+    trace_history=[copy.deepcopy(v) for v in old_traces if isinstance(v,dict)][-23:]
+    current_trace=incoming['nova_reasoning_trace']
+    if not trace_history or trace_history[-1].get('trace_id')!=current_trace.get('trace_id'):
+        trace_history.append(copy.deepcopy(current_trace))
+    incoming['nova_reasoning_history']=trace_history[-24:]
+    incoming['nova_observability_policy']={'schema':R190_SCHEMA,'per_athlete':True,
+        'bounded_transitions':32,'bounded_decision_traces':24,
+        'current_snapshot_trace_always_available':True,
+        'no_ai_calls_required':True,'source':'ACTUAL_SNAPSHOT_DECISION_STATES',
+        'historical_before_r190_incomplete':True}
+    return _save_latest_report_r189_final(incoming,now=now,owner_user_id=owner_id,qa_replay_bundle=qa_replay_bundle)
+
+# Render the current explanation even when no older snapshot is retained;
+# show the most recent material stage/question/quality change separately.
+R190_UI_ANCHOR = '<section class="v162-roadmap-priority" aria-label="Training roadmap">'
+R190_UI = """{% if data.nova_explanation is defined and data.nova_explanation %}
+<section class="v190-why" aria-label="Nova explains her decision"><div class="v190-heading"><strong>WHY NOVA DECIDED THIS</strong><small>Evidence · Roadmap · Recovery</small></div>
+<p>{{ data.nova_explanation }}</p>
+{% if data.nova_transition_latest is defined and data.nova_transition_latest %}{% set tr=data.nova_transition_latest %}
+<div class="v190-change"><strong>LATEST RECORDED CHANGE · {{ tr.reason_code|replace('_',' ') }}</strong>
+<span>{{ tr.previous.stage_label or tr.previous.stage or '?' }} → {{ tr.current.stage_label or tr.current.stage or '?' }}</span>
+<small>{{ tr.time_local }} · {{ tr.change_codes|join(' · ') }}</small></div>{% endif %}
+<details><summary>Decision evidence and diagnostic reference</summary><small>Trace {{ data.nova_reasoning_trace.trace_id if data.nova_reasoning_trace is defined else 'unavailable' }} · Full deterministic evidence is available in the Content Audit. A coaching stage is not a diagnosis.</small></details>
+</section>{% endif %}
+""" + R190_UI_ANCHOR
+assert HOME_PAGE.count(R190_UI_ANCHOR)==1, 'R190 missing roadmap panel anchor'
+HOME_PAGE=HOME_PAGE.replace(R190_UI_ANCHOR,R190_UI,1)
+BASE_CSS+=r"""
+.v190-why{border:1px solid rgba(108,164,184,.35);border-radius:14px;padding:16px;margin:14px 0 18px;overflow-wrap:anywhere}
+.v190-heading{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+.v190-heading strong{font:800 14px/1.4 Arial,sans-serif;letter-spacing:.04em}
+.v190-heading small,.v190-why details small{opacity:.7;font:400 12px/1.5 Arial,sans-serif}
+.v190-why p{font:400 15px/1.6 Arial,sans-serif;margin:11px 0}
+.v190-change{padding:10px 12px;border:1px solid rgba(108,164,184,.25);border-radius:9px;display:grid;gap:4px}
+.v190-change strong{font:800 12px/1.4 Arial,sans-serif}.v190-change span{font:700 15px/1.5 Arial,sans-serif}
+.v190-change small{opacity:.72;font:400 12px/1.5 Arial,sans-serif}
+.v190-why details{margin-top:9px}.v190-why summary{cursor:pointer;font-size:13px;font-weight:700}
+@media(max-width:390px){.v190-why{padding:12px}}
+"""
+APP_VERSION = 'THE LAB · PRODUCT V4.9.66 WIP R190 · AUDITABLE NOVA DECISIONS + BLOCK EVIDENCE CONTINUITY · R189 BASELINE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
