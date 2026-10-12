@@ -10122,7 +10122,7 @@ def product_csrf_protection():
 def enforce_required_password_change():
     allowed = {
         "force_password_change", "logout", "login",
-        "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker",
+        "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker", "healthz",
     }
     if request.endpoint in allowed:
         return
@@ -10134,7 +10134,7 @@ def enforce_required_password_change():
         return redirect(url_for("force_password_change"))
 @app.before_request
 def automatic_storage_housekeeping():
-    if request.endpoint in {"login", "activate", "force_password_change", "athlete_setup", "product_waiting_room", "owner_workspace_hub", "owner_snapshot", "preview", "session_csrf", "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker"}:
+    if request.endpoint in {"login", "activate", "force_password_change", "athlete_setup", "product_waiting_room", "owner_workspace_hub", "owner_snapshot", "preview", "session_csrf", "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker", "healthz"}:
         return
     if str(request.endpoint or "").startswith("admin_"):
         return
@@ -11203,7 +11203,7 @@ ADMIN_PAGE = """
 @media(max-width:760px){.ps59-admin-summary{grid-template-columns:1fr}.ps59-user-head,.ps59-ai-top,.ps59-owner-card,.ps59-hidden-row{display:block}.ps59-owner-dob{display:grid;grid-template-columns:1fr;margin-top:10px}.ps59-owner-dob .ps-btn{width:100%}.ps59-head-badges,.ps59-ai-meta,.ps59-owner-meta{justify-content:flex-start;margin-top:9px}.ps59-status-grid{grid-template-columns:1fr 1fr;overflow:visible}.ps59-card-actions{display:grid;grid-template-columns:1fr}.ps59-card-actions .ps-btn{width:100%}.ps59-form-row{grid-template-columns:1fr}.ps59-form-row .ps-btn{width:100%}.ps59-account-actions{display:grid;grid-template-columns:1fr}.ps59-account-actions form,.ps59-account-actions .ps-btn{width:100%}.ps59-modal{padding:11px}.ps59-modal-panel{padding:17px;max-height:90vh}.ps59-hidden-row form{margin-top:9px}}
 @media(max-width:360px){.ps59-status-grid{grid-template-columns:1fr}.ps59-head-badges{gap:5px}.ps59-mini{white-space:normal}.ps59-ai-mode .ps-pill{white-space:normal}}
 </style></head><body class="product-sec"><main class="ps-wrap">
-<header class="ps-head"><div><div class="ps-muted">OWNER ONLY · PRODUCT CONTROL</div><h1>THE LAB Control Center</h1><p>Manage beta access, AI sponsorship and product QA. Athlete Snapshot audits are available only when that athlete has explicitly opted in to beta QA sharing.</p></div><div class="ps-head-actions"><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('owner_snapshot') }}">MY SNAPSHOT</a><a class="ps-nav-btn ps-nav-logout" href="{{ url_for('logout') }}">Log out</a></div></header>
+<header class="ps-head"><div><div class="ps-muted">OWNER ONLY · PRODUCT CONTROL</div><h1>THE LAB Control Center</h1><p>Manage beta access, AI sponsorship and product QA. Athlete Snapshot audits are available only when that athlete has explicitly opted in to beta QA sharing.</p></div><div class="ps-head-actions"><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('admin_system_diagnostics') }}">SYSTEM DIAGNOSTICS</a><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('owner_snapshot') }}">MY SNAPSHOT</a><a class="ps-nav-btn ps-nav-logout" href="{{ url_for('logout') }}">Log out</a></div></header>
 {% if notice %}<div class="ps-note" style="margin-bottom:16px">{{ notice }}</div>{% endif %}{% if error %}<div class="ps-error" style="margin-bottom:16px">{{ error }}</div>{% endif %}{% if new_code %}<section class="ps-card" style="margin-bottom:16px"><h2>New one-time access code</h2><p>Copy it now. Only its protected hash is stored in the database.</p><div class="ps-code">{{ new_code }}</div></section>{% endif %}{% if reset_credential %}<section class="ps-card ps-reset-card" style="margin-bottom:16px"><div class="ps-section-head"><div><div class="ps-muted">PASSWORD RESET · SHOWN ONCE</div><h2>Temporary password for {{ reset_credential.username }}</h2></div><span class="ps-pill reset">RESET REQUIRED</span></div><p>Send this temporary password securely to the athlete. Existing sessions were closed. After login, THE LAB forces the athlete to create a new password before any workspace or Settings screen can open.</p><div class="ps-code">{{ reset_credential.temporary_password }}</div></section>{% endif %}
 <div class="ps59-admin-summary"><section class="ps-card"><h2>Create invitation</h2><form method="post" action="{{ url_for('admin_create_code') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label class="ps-field"><span>LICENSE TYPE</span><select name="license_type"><option>BETA</option><option>TRIAL</option><option>LIFETIME</option></select></label><label class="ps-field"><span>EXPIRES ON · OPTIONAL · GG/MM/AAAA</span><input name="expires_on" type="date" min="{{ today_iso }}" autocomplete="off" aria-label="Invitation expiry date"></label><label class="ps-field"><span>NOTE · OPTIONAL</span><input name="note" maxlength="500" placeholder="e.g. Zwift beta tester"></label><button class="ps-btn primary" type="submit">Generate access code</button></form></section><section class="ps-card"><h2>Product storage</h2><p><strong>{{ storage.used_human }}</strong> / {{ storage.limit_human }} · {{ '%.2f'|format(storage.pct) }}%</p><p class="ps-muted">{{ storage.backend }} · {{ storage.message }}</p><p class="ps-muted">Security records: {{ storage.counts.security_records }} · Total database records: {{ storage.counts.total_records }}</p></section></div>
 <section class="ps-card" style="margin-top:16px"><div class="ps59-roster-head"><div><h2>Athletes</h2><p class="ps-muted">One card per active roster athlete. Detailed controls stay inside focused panels instead of expanding the roster horizontally.</p></div><span class="ps-count">{{ athlete_count }}</span></div><div class="ps59-athlete-grid">
@@ -41346,6 +41346,130 @@ BASE_CSS+=r"""
 @media(max-width:390px){.v190-why{padding:12px}}
 """
 APP_VERSION = 'THE LAB · PRODUCT V4.9.67 WIP R191 · QUESTION STATE AUDIT ORDER + BREADTH SAFETY · R190 BASELINE'
+
+
+
+# R192 · Operations before algorithms: diagnostic self-service + inert uptime probe.
+# Neither route modifies training / Nova decisions, creates a database table,
+# calls a third-party provider or triggers Snapshot generation.
+_R192_DIAGNOSTIC_ACTIONS = (
+    "SNAPSHOT_INCIDENT",
+    "SNAPSHOT_AUTHORITY_REJECTED",
+    "SNAPSHOT_PIPELINE_UNEXPECTED_ERROR",
+    "SNAPSHOT_REPORT_SAVED",
+)
+_R192_SAFE_FIELDS = (
+    "code", "stage", "severity", "release", "correlation_id",
+    "error_class", "diagnostic_code", "issue_codes", "recoverable",
+    "retryable", "generated_at_utc", "app_version",
+)
+
+def _r192_clean_details(value):
+    """Explicit allowlist: exclude user IDs, IPs, prompts, tokens and raw stack traces."""
+    try:
+        raw = value if isinstance(value, dict) else json.loads(value or '{}')
+    except (ValueError, TypeError):
+        raw = {}
+    if not isinstance(raw, dict):
+        return {}
+    clean = {}
+    for key in _R192_SAFE_FIELDS:
+        val = raw.get(key)
+        if isinstance(val, str):
+            clean[key] = val[:220]
+        elif isinstance(val, bool) or val is None:
+            if val is not None:
+                clean[key] = val
+        elif key == 'issue_codes' and isinstance(val, list):
+            clean[key] = [str(v)[:90] for v in val[:16] if isinstance(v, str)]
+    return clean
+
+def _r192_diagnostic_events(owner_id, query=''):
+    """Owner's own Snapshot audits; no other athlete's data without QA consent."""
+    q = str(query or '').strip()[:90]
+    placeholders = ', '.join('?' for _ in _R192_DIAGNOSTIC_ACTIONS)
+    sql = (
+        'SELECT created_at_utc, action, details_json FROM audit_log '
+        'WHERE (actor_user_id=? OR target_user_id=?) '
+        'AND action IN (' + placeholders + ')'
+    )
+    params = [str(owner_id), str(owner_id), *_R192_DIAGNOSTIC_ACTIONS]
+    if q:
+        sql += ' AND (details_json LIKE ? OR action LIKE ?)'
+        params.extend(['%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%',
+                       '%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'])
+        # Explicit SQL ESCAPE keeps diagnostic searches literal and bounded.
+        sql = sql.replace('details_json LIKE ? OR action LIKE ?', "details_json LIKE ? ESCAPE '\\' OR action LIKE ? ESCAPE '\\'")
+    sql += ' ORDER BY created_at_utc DESC LIMIT 100'
+    rows = _db_execute(sql, tuple(params), fetch=True)
+    events = []
+    for row in rows:
+        details = _r192_clean_details(row.get('details_json'))
+        event = {
+            'created_at_utc': str(row.get('created_at_utc') or '')[:40],
+            'action': str(row.get('action') or '')[:80],
+            'details': details,
+        }
+        event['diagnostic_json'] = json.dumps(event, ensure_ascii=False, indent=2)
+        events.append(event)
+    return events
+
+R192_DIAGNOSTICS_PAGE = """
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>System Diagnostics · THE LAB</title>
+<style>{{ product_css }}</style><style>
+.r192-tools{display:flex;gap:9px;flex-wrap:wrap;align-items:end;margin:18px 0}.r192-tools input{width:min(440px,100%);min-height:43px;background:#081523;color:#eef7fe;border:1px solid #315071;border-radius:10px;padding:10px}.r192-tools label{display:grid;gap:5px;font-size:12px;font-weight:700;color:#a8c1d2}.r192-tools button,.r192-tools a,.r192-copy{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:8px 14px;border:1px solid #345b75;border-radius:11px;background:#122b41;color:#d4eefc;text-decoration:none;cursor:pointer;font-size:13px;font-weight:750}.r192-events{display:grid;gap:12px}.r192-event{padding:17px;border:1px solid #33506a;border-radius:15px;background:linear-gradient(160deg,#111e2e,#0a1725)}.r192-event-head{display:flex;justify-content:space-between;align-items:center;gap:9px;flex-wrap:wrap}.r192-event h2{font-size:16px;margin:0}.r192-event p{color:#b5c7d8;line-height:1.5;margin:9px 0}.r192-error{border-color:#93465d}.r192-event pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#a6defa;background:#061421;border:1px solid #31465e;border-radius:10px;padding:12px;font-size:12px;line-height:1.5}.r192-event details{margin-top:11px}.r192-event summary{cursor:pointer;color:#c5e2f7;font-size:13px}.r192-muted{color:#91afc6}.r192-code{font-size:12px;color:#d6edff}.r192-banner{padding:13px;border-radius:12px;border:1px solid #2a5669;background:#122638;margin:15px 0;font-size:13px;color:#d7edfb}.r192-copy-status{font-size:12px;color:#aeeacc}.r192-scope{font-size:12px;color:#a7bdcf}
+</style></head><body class="product-sec"><main class="ps-wrap">
+<header class="ps-head"><div><div class="ps-muted">OWNER ONLY · READ-ONLY AUDITS</div><h1>System Diagnostics</h1><p>Snapshot incident tracking from Product Neon, without opening a SQL console.</p></div><div class="ps-head-actions"><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('admin_control_center') }}">CONTROL CENTER</a></div></header>
+<div class="r192-banner">Product Neon · {{ 'Available' if available else 'Temporarily unavailable' }} · Current source: {{ app_version }}<div class="r192-scope">Only your own Snapshot audit events are shown. Other athletes require separate consent-protected QA workflows. Limited to 100 most recent matches.</div></div>
+{% if problem %}<div class="ps-error">Diagnostic query unavailable ({{ problem }}). This does not imply a training data or report failure.</div>{% endif %}
+<form class="r192-tools" method="get" action="{{ url_for('admin_system_diagnostics') }}"><label>SEARCH INCIDENT ID, RELEASE OR ERROR CODE<input type="search" name="q" maxlength="90" value="{{ query }}" placeholder="SNP-... or TL-CMAG-..."></label><button type="submit">Search</button><a href="{{ url_for('admin_system_diagnostics') }}">Clear</a><a href="{{ url_for('admin_system_diagnostics', q=query, format='json') }}">Export safe JSON</a></form>
+{% if events %}<div class="r192-events">{% for item in events %}
+<article class="r192-event {{ 'r192-error' if item.action != 'SNAPSHOT_REPORT_SAVED' else '' }}"><div class="r192-event-head"><h2>{{ '✓ ' if item.action == 'SNAPSHOT_REPORT_SAVED' else '⚠ ' }}{{ item.action|replace('_', ' ') }}</h2><span class="r192-muted">{{ item.created_at_utc }}</span></div>
+<p><strong>{{ item.details.diagnostic_code or item.details.code or 'Snapshot saved' }}</strong>{% if item.details.stage %} · Stage: {{ item.details.stage }}{% endif %}{% if item.details.error_class %} · Exception: {{ item.details.error_class }}{% endif %}</p>
+{% if item.details.correlation_id %}<div class="r192-code">Incident: {{ item.details.correlation_id }}</div>{% endif %}
+<details><summary>Open diagnostic details</summary><pre id="r192-event-{{ loop.index }}">{{ item.diagnostic_json }}</pre><button class="r192-copy" type="button" data-copy-id="r192-event-{{ loop.index }}">Copy diagnostic</button> <span class="r192-copy-status" aria-live="polite"></span></details>
+</article>{% endfor %}</div>{% else %}<section class="ps-card"><h2>No matching Snapshot events</h2><p class="r192-muted">No events in this scope and query window. Try a different incident ID or clear the search.</p></section>{% endif %}
+</main><script>document.querySelectorAll('[data-copy-id]').forEach(function(b){b.addEventListener('click',async function(){var n=document.getElementById(b.getAttribute('data-copy-id'));if(!n)return;var s=b.parentElement.querySelector('.r192-copy-status');try{await navigator.clipboard.writeText(n.textContent);if(s)s.textContent='Copied';}catch(e){if(s)s.textContent='Select and copy the text above';}});});</script></body></html>
+"""
+
+@app.route('/healthz', methods=['GET', 'HEAD'])
+def healthz():
+    """Inert liveness only. It deliberately does NOT contact Product/Personal Neon or AI."""
+    return Response(status=204, headers={
+        'Cache-Control': 'no-store, max-age=0',
+        'X-Robots-Tag': 'noindex, nofollow',
+    })
+
+@app.route('/admin/diagnostics', methods=['GET'])
+def admin_system_diagnostics():
+    admin = require_admin()
+    if not admin:
+        return redirect(url_for('login'))
+    query = (request.args.get('q') or '').strip()[:90]
+    available, events, problem = True, [], None
+    try:
+        events = _r192_diagnostic_events(admin['id'], query)
+    except Exception as exc:
+        available, problem = False, type(exc).__name__
+        app.logger.exception('Admin diagnostics read failed')
+    if request.args.get('format') == 'json':
+        out = jsonify({'app_version': APP_VERSION, 'source': 'Product Neon',
+                       'owner_scoped': True, 'available': available,
+                       'error_class': problem, 'query': query, 'events': [
+                           {k: v for k,v in event.items() if k != 'diagnostic_json'} for event in events
+                       ]})
+        out.headers['Content-Disposition'] = 'attachment; filename="the-lab-diagnostics.json"'
+    else:
+        out = Response(render_template_string(
+            R192_DIAGNOSTICS_PAGE, product_css=PRODUCT_SIMPLE_CSS,
+            events=events, query=query, available=available, problem=problem,
+            app_version=APP_VERSION,
+        ), mimetype='text/html')
+    out.headers['Cache-Control'] = 'no-store, private'
+    out.headers['X-Robots-Tag'] = 'noindex, nofollow'
+    return out
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.68 WIP R192 · ADMIN SELF-DIAGNOSTICS + INERT HEALTH PROBE · R191 BASELINE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
