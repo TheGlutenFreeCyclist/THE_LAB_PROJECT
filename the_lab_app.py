@@ -41903,7 +41903,222 @@ def r194_backup_attest():
         return jsonify({'ok':False,'code':'RECEIPT_STORAGE_FAILED'}),503
     return jsonify({'ok':True,'status':'verified_export','date':dates['today']}),200
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.72 CANDIDATE R194.2 · ATHLETE UI SIMPLIFICATION · R194.1 BASELINE'
+# R194.3 — explicit, provenance-backed power prescriptions for canonical repeat intervals.
+# Calibrate from verified comparable repeated work first. Fresh, valid FTP can
+# supply a conservative initial training range, but is NEVER labelled observed.
+# Do not confuse an individual power-curve best with repeated-work evidence.
+R1943_SCHEMA = "V4.9.73-R194.3-POWER-CONTRACT-1"
+
+
+def _v1943_finite(v, low=0.0, high=1e7):
+    try:
+        f = float(v)
+        return f if math.isfinite(f) and low <= f <= high else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None, dimension=None):
+    """Compute an *explicit training prescription* distinct from PB/reference watts.
+
+    Only validated repeated efforts of comparable duration/reps are direct support.
+    FTP-only targets are conservative starter estimates, NOT achieved/validated
+    repeatability. No valid data => no fabricated numeric hard-work prescription.
+    """
+    t = template if isinstance(template, dict) else {}
+    pattern = str(t.get('pattern') or '').upper()
+    if pattern not in {'STANDARD', 'SUSTAINED', 'SHORT_POWER'}:
+        return {'schema':R1943_SCHEMA,'state':'UNSUPPORTED_STRUCTURE'}
+    work_s = _v1943_finite(t.get('work_s'), 60, 1800)
+    reps = int(_v1943_finite(t.get('reps'), 1, 20) or 0)
+    goal = str(t.get('goal') or '').upper()
+    if not (work_s and reps >= 2):
+        return {'schema':R1943_SCHEMA,'state':'UNSUPPORTED_STRUCTURE'}
+    valid_ftp = None
+    ftp = ftp_anchor if isinstance(ftp_anchor, dict) else {}
+    if ftp.get('available') is True and str(ftp.get('status') or '').upper() == 'VALID':
+        valid_ftp = _v1943_finite(ftp.get('prescription_watts'),80,600)
+    candidates=[]
+    events=((evidence_ledger or {}).get('repeatability') or {}).get('events') or []
+    for e in events:
+        if not isinstance(e,dict) or e.get('strong') is not True:
+            continue
+        d = str(e.get('date') or '')[:10]
+        try:
+            elapsed=(date.fromisoformat(str(as_of_date)[:10])-date.fromisoformat(d)).days
+            if elapsed < 0 or elapsed > 42: continue
+        except (ValueError, TypeError):
+            continue
+        secs=_v1943_finite(e.get('interval_secs'),60,1800)
+        er=int(_v1943_finite(e.get('reps'),1,30) or 0)
+        watts=_v1943_finite(e.get('avg_watts'),70,1200)
+        cv=_v1943_finite(e.get('cv_pct'),0,100)
+        if secs is None or watts is None or cv is None or cv>6 or er < reps:
+            continue
+        # Direct transfer allowed only from SAME or LONGER interval work.
+        if not (work_s*0.8 <= secs <= work_s*1.4): continue
+        truth=str(e.get('activity_truth_source') or e.get('source') or '').upper()
+        if truth not in {'DEVICE_LAPS','ICU_INTERVALS_CANONICAL'}: continue
+        if valid_ftp is not None and not (0.65*valid_ftp <= watts <= 1.8*valid_ftp):continue
+        candidates.append((abs(secs-work_s),elapsed,e,watts,secs))
+    candidates.sort(key=lambda c:(c[0],c[1],str(c[2].get('activity_id') or '')))
+    if candidates:
+        _,age,e,obs,source_seconds=candidates[0]
+        # Conservative, explicit coaching policy: preserve demonstrated repeated
+        # intensity while slightly easing after a new preload/variable-load lever.
+        ratio = .98 if str(dimension or '').upper() in {'RACE_TRANSFER','DURABILITY'} else 1.0
+        if source_seconds < work_s:ratio *= .98  # longer upcoming reps: conservative extrapolation
+        target=round((obs*ratio)/5)*5
+        return {
+            'schema':R1943_SCHEMA,'state':'PRESCRIBED',
+            'confidence':'HIGH' if source_seconds>=work_s else 'MODERATE',
+            'source':'COMPARABLE_VERIFIED_REPEATED_WORK',
+            'activity_id':str(e.get('activity_id') or ''),'activity_date':str(e.get('date') or ''),
+            'observed_repeated_avg_watts':round(obs,1),
+            'target_watts':int(target),'low_watts':int(target-5),'high_watts':int(target+5),
+            'reps':reps,'work_seconds':int(work_s),'evidence_interval_seconds':int(source_seconds),'evidence_age_days':age,
+        }
+    if valid_ftp is not None:
+        # Initial reference bands require a truly VALID FTP. These are declared
+        # provisional training-zone assumptions; never imply they were validated
+        # by an executed identical workout. Subsequent real repeats must replace them.
+        multipliers = {'POWER_5':1.10,'VO2MAX':1.08,'POWER_20':0.97,
+                       'TIME_TRIAL':0.97,'POWER_1':1.22}
+        mult=multipliers.get(goal)
+        if mult is not None:
+            if work_s >= 600 and goal in {'POWER_5','VO2MAX'}: mult=min(mult,1.03)
+            if str(dimension or '').upper() in {'RACE_TRANSFER','DURABILITY'}: mult*=.98
+            target=round(valid_ftp*mult/5)*5
+            return {
+                'schema':R1943_SCHEMA,'state':'PRESCRIBED','confidence':'PROVISIONAL',
+                'source':'VALID_FTP_STARTER_POLICY_NOT_OBSERVED_REPEATABILITY',
+                'ftp_watts':valid_ftp,'target_watts':int(target),
+                'low_watts':int(target-5),'high_watts':int(target+5),
+                'reps':reps,'work_seconds':int(work_s),
+            }
+    return {'schema':R1943_SCHEMA,'state':'NO_DEFENSIBLE_POWER_TARGET',
+            'reason':'NO_RECENT_COMPARABLE_COMPLETED_REPS_OR_VALID_FTP'}
+
+
+_v1943_build_before = build_nova_prescription
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None, evidence_ledger=None, power_model=None, ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    out=_v1943_build_before(nova_decision,coach_clock,adaptive_roadmap=adaptive_roadmap,
+        microcycle_ledger=microcycle_ledger,evidence_ledger=evidence_ledger,power_model=power_model,
+        ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,training_definitions=training_definitions)
+    if not isinstance(out,dict):return out
+    slots=list((coach_clock or {}).get('next_slots') or [])
+    for idx,raw in enumerate(out.get('raw_sessions') or []):
+        if not isinstance(raw,dict) or not str(raw.get('intensity') or '').upper().startswith('HARD'):continue
+        wid=raw.get('_tl_nova_workout_id') or raw.get('_tl_nova_contract_id')
+        template=next((t for t in _NOVA_WORKOUT_LIBRARY if t.get('id')==wid),None)
+        if not template:continue
+        slot_date=(slots[idx].get('date') if idx<len(slots) and isinstance(slots[idx],dict) else None)
+        as_of=slot_date or ((coach_clock or {}).get('date') or datetime.now(timezone.utc).date().isoformat())
+        raw['_tl_v1943_power_band']=_v1943_band(template,evidence_ledger,ftp_anchor,as_of,raw.get('_tl_nova_dimension') or out.get('dimension'))
+    future=out.get('future_quality_candidate')
+    if isinstance(future,dict) and isinstance(future.get('raw_quality'),dict):
+        raw=future['raw_quality'];wid=raw.get('_tl_nova_workout_id')
+        template=next((t for t in _NOVA_WORKOUT_LIBRARY if t.get('id')==wid),None)
+        if template:
+            raw['_tl_v1943_power_band']=_v1943_band(template,evidence_ledger,ftp_anchor,future.get('date'),raw.get('_tl_nova_dimension') or out.get('dimension'))
+    return out
+
+
+_v1943_compile_before = compile_nova_prescription
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None, ftp_anchor=None, recent_activities=None, undefined_training_intent=None, power_model=None, microcycle_ledger=None, coaching_contract=None, adaptive_roadmap=None, strength_pattern=None, training_rhythm=None, execution_model=None):
+    out=_v1943_compile_before(prescription,coach_clock,training_definitions=training_definitions,
+        ftp_anchor=ftp_anchor,recent_activities=recent_activities,undefined_training_intent=undefined_training_intent,
+        power_model=power_model,microcycle_ledger=microcycle_ledger,coaching_contract=coaching_contract,
+        adaptive_roadmap=adaptive_roadmap,strength_pattern=strength_pattern,training_rhythm=training_rhythm,
+        execution_model=execution_model)
+    if not isinstance(out,dict):return out
+    raw=list((prescription or {}).get('raw_sessions') or [])
+    future=(prescription or {}).get('future_quality_candidate') or {}
+    sessions=list(out.get('sessions') or [])
+    changes=[];blocked=[]
+    for i,existing in enumerate(sessions):
+        if not isinstance(existing,dict) or not str(existing.get('stimulus_architecture_state') or '').upper()=='NOVA_CANONICAL_LIBRARY':continue
+        if not (existing.get('hard_spacing_relevant') or existing.get('provisional_quality')):continue
+        if str(existing.get('intensity_class') or '').lower() not in {'tempo','threshold','vo2'}:continue
+        sess=dict(existing)
+        candidate=raw[i] if i<len(raw) and isinstance(raw[i],dict) else {}
+        if i==future.get('index') and isinstance(future.get('raw_quality'),dict):
+            candidate=future['raw_quality']
+        sid=str(sess.get('nova_workout_id') or '')
+        # Genuine maximal sprints are prescribed by effort and technique, not one arbitrary watt number.
+        if sid.startswith('SPR_'):continue
+        if sid!=str(candidate.get('_tl_nova_workout_id') or ''):continue
+        band=candidate.get('_tl_v1943_power_band') or {}
+        if band.get('state')!='PRESCRIBED':
+            # A hard structured session must not ask the athlete to guess the
+            # training dose. Retain diagnostic provenance but fail closed to easy.
+            sess.update({'title':'Easy aerobic · awaiting power calibration',
+                'intensity':'EASY','intensity_class':'recovery','hard_spacing_relevant':False,
+                'provisional_quality':False,'stimulus_architecture_state':'NOT_HARD',
+                'stimulus_role':None,'stimulus_domain':None,'nova_workout_id':None,
+                'nova_contract_id':None,'quality_relevance':'NOT_HARD',
+                'prescribed_power_low':None,'prescribed_power_high':None,
+                'quality_target_ratio':None,'power_band':None,
+                'main_set':'Easy Z1–Z2 only. No hard repeat prescription is currently justified; a validated FTP or comparable completed intervals are required.',
+                'why':'Nova withheld an uncalibrated hard session instead of asking the athlete to invent its power.',
+                'power_prescription':band})
+            blocked.append(i)
+        else:
+            mid=int(band['target_watts']); lo=int(band['low_watts']);hi=int(band['high_watts'])
+            # Record vs prescription semantics remain separated: PB sentences
+            # in the template are context-only; THIS explicit band is backed
+            # by independent repeat-work evidence or a valid FTP starter rule.
+            label=('verified same-or-longer completed intervals' if band.get('confidence')=='HIGH'
+                   else ('estimated from verified slightly shorter intervals' if band.get('confidence')=='MODERATE'
+                         else 'provisional target based on valid FTP'))
+            directive=(f'WORK TARGET: {mid} W in EACH of the {band["reps"]} work intervals '
+                       f'(acceptable training range {lo}–{hi} W; {label}). ')
+            sess['main_set']=directive+str(sess.get('main_set') or '')
+            sess.update({'prescribed_power_low':lo,'prescribed_power_high':hi,
+                'power_band':'CALIBRATED_REPEAT_WORK',
+                'power_prescription':band,'power_prescription_schema':R1943_SCHEMA,
+                'quality_relevance':'MEANINGFUL'})
+            sess['why']=str(sess.get('why') or '')+' The prescribed training wattage is independent of single-effort peak records.'
+            changes.append(i)
+        reasons=list(sess.get('coherence_reasons') or [])
+        reasons.append('R1943_EXPLICIT_POWER_CONTRACT' if i in changes else 'R1943_UNCALIBRATED_HARD_FAIL_CLOSED')
+        sess['coherence_reasons']=reasons
+        sessions[i]=sess
+    if changes or blocked:
+        out['sessions']=sessions
+        _v145_rehash_plan(out)
+        if isinstance(out.get('single_plan_authority'),dict):
+            out['single_plan_authority']['plan_id']=out['canonical_plan_id']
+        out['power_prescription_audit']={'schema':R1943_SCHEMA,'calibrated_indices':changes,'blocked_indices':blocked,
+            'rule':'No uncalibrated repeated hard workout; proof from strong same-or-longer repeated work or valid FTP starter. Single effort PBs are never a training watt target.'}
+        out['hard_session_count']=sum(str(x.get('intensity_class') or '').lower() in {'tempo','threshold','vo2'} for x in sessions if isinstance(x,dict))
+        out['hard_prescription_available']=out['hard_session_count']>0
+        if blocked and not changes and not out['hard_prescription_available']:
+            out['execution_status']='BLOCKED_UNCALIBRATED_POWER'
+            out['status']='BLOCKED'
+            out['workout_id']=None;out['contract_id']=None
+            if isinstance(out.get('single_plan_authority'),dict):
+                out['single_plan_authority']['workout_id']=None
+            out['fail_closed_reason']='NO_DEFENSIBLE_POWER_TARGET'
+    return out
+
+
+_v112_reference_only_power_before_r1943=_v112_reference_only_power
+
+def _v112_reference_only_power(session):
+    # Existing single-effort/reference-only guards still apply unless an
+    # entirely separate explicit, provenance-carrying prescription exists.
+    cal=(session or {}).get('power_prescription') or {}
+    if (cal.get('schema')==R1943_SCHEMA and cal.get('state')=='PRESCRIBED'
+        and cal.get('source') in {'COMPARABLE_VERIFIED_REPEATED_WORK','VALID_FTP_STARTER_POLICY_NOT_OBSERVED_REPEATABILITY'}
+        and (session or {}).get('prescribed_power_low')==cal.get('low_watts')
+        and (session or {}).get('prescribed_power_high')==cal.get('high_watts')):
+        return False
+    return _v112_reference_only_power_before_r1943(session)
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.73 CANDIDATE R194.3 · EVIDENCE-BASED EXPLICIT POWER · R194.2 BASELINE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
