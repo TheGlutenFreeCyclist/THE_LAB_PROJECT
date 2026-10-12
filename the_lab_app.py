@@ -3356,17 +3356,6 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% set td = data.training_direction if data.training_direction is defined and data.training_direction else none %}
 {% set ar = data.adaptive_roadmap if data.adaptive_roadmap is defined and data.adaptive_roadmap else none %}
-{% if data.decision_change_latest is defined and data.decision_change_latest %}
-<section class="v187-decision-log" aria-label="Why Nova changed the plan">
-  {% set change=data.decision_change_latest %}
-  <div class="v187-decision-head"><strong>WHY NOVA CHANGED THE PLAN</strong><small>{{ change.at_local }} · recorded from two consecutive saved Snapshots</small></div>
-  <p>{{ change.explanation }}</p>
-  <div class="v187-comparison"><div><small>PREVIOUS</small><strong>{{ change.before.summary }}</strong></div><div><small>NOW</small><strong>{{ change.after.summary }}</strong></div></div>
-  {% if change.evidence_changes %}<p class="v187-evidence"><strong>CHANGED EVIDENCE</strong> · {{ change.evidence_changes|join(' · ') }}</p>{% endif %}
-  <small>Only recorded differences and authoritative gates are described. This is not proof of a clinical cause or of an unavailable prior report.</small>
-  {% if data.decision_change_history is defined and data.decision_change_history|length > 1 %}<details><summary>Earlier plan changes ({{ data.decision_change_history|length }})</summary>{% for item in data.decision_change_history|reverse %}<p><strong>{{ item.at_local }}</strong> · {{ item.explanation }}</p>{% endfor %}</details>{% endif %}
-</section>
-{% endif %}
 <section class="v162-roadmap-priority" aria-label="Training roadmap">
 {% if td %}
 {% if ar and ar.available %}
@@ -41361,33 +41350,11 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
         'historical_before_r190_incomplete':True}
     return _save_latest_report_r189_final(incoming,now=now,owner_user_id=owner_id,qa_replay_bundle=qa_replay_bundle)
 
-# Render the current explanation even when no older snapshot is retained;
-# show the most recent material stage/question/quality change separately.
+# R194.2 ATHLETE-UI BOUNDARY — diagnostics stay in Product Snapshot and QA.
+# Raw reasoning / transition history (R187 and R190) is NOT rendered for athletes.
+# The roadmap and session prescription remain visible as the authoritative interface.
 R190_UI_ANCHOR = '<section class="v162-roadmap-priority" aria-label="Training roadmap">'
-R190_UI = """{% if data.nova_explanation is defined and data.nova_explanation %}
-<section class="v190-why" aria-label="Nova explains her decision"><div class="v190-heading"><strong>WHY NOVA DECIDED THIS</strong><small>Evidence · Roadmap · Recovery</small></div>
-<p>{{ data.nova_explanation }}</p>
-{% if data.nova_transition_latest is defined and data.nova_transition_latest %}{% set tr=data.nova_transition_latest %}
-<div class="v190-change"><strong>LATEST RECORDED CHANGE · {{ tr.reason_code|replace('_',' ') }}</strong>
-<span>{{ tr.previous.stage_label or tr.previous.stage or '?' }} → {{ tr.current.stage_label or tr.current.stage or '?' }}</span>
-<small>{{ tr.time_local }} · {{ tr.change_codes|join(' · ') }}</small></div>{% endif %}
-<details><summary>Decision evidence and diagnostic reference</summary><small>Trace {{ data.nova_reasoning_trace.trace_id if data.nova_reasoning_trace is defined else 'unavailable' }} · Full deterministic evidence is available in the Content Audit. A coaching stage is not a diagnosis.</small></details>
-</section>{% endif %}
-""" + R190_UI_ANCHOR
-assert HOME_PAGE.count(R190_UI_ANCHOR)==1, 'R190 missing roadmap panel anchor'
-HOME_PAGE=HOME_PAGE.replace(R190_UI_ANCHOR,R190_UI,1)
-BASE_CSS+=r"""
-.v190-why{border:1px solid rgba(108,164,184,.35);border-radius:14px;padding:16px;margin:14px 0 18px;overflow-wrap:anywhere}
-.v190-heading{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
-.v190-heading strong{font:800 14px/1.4 Arial,sans-serif;letter-spacing:.04em}
-.v190-heading small,.v190-why details small{opacity:.7;font:400 12px/1.5 Arial,sans-serif}
-.v190-why p{font:400 15px/1.6 Arial,sans-serif;margin:11px 0}
-.v190-change{padding:10px 12px;border:1px solid rgba(108,164,184,.25);border-radius:9px;display:grid;gap:4px}
-.v190-change strong{font:800 12px/1.4 Arial,sans-serif}.v190-change span{font:700 15px/1.5 Arial,sans-serif}
-.v190-change small{opacity:.72;font:400 12px/1.5 Arial,sans-serif}
-.v190-why details{margin-top:9px}.v190-why summary{cursor:pointer;font-size:13px;font-weight:700}
-@media(max-width:390px){.v190-why{padding:12px}}
-"""
+assert HOME_PAGE.count(R190_UI_ANCHOR) == 1, 'R190 roadmap anchor missing'
 APP_VERSION = 'THE LAB · PRODUCT V4.9.67 WIP R191 · QUESTION STATE AUDIT ORDER + BREADTH SAFETY · R190 BASELINE'
 
 
@@ -41936,7 +41903,7 @@ def r194_backup_attest():
         return jsonify({'ok':False,'code':'RECEIPT_STORAGE_FAILED'}),503
     return jsonify({'ok':True,'status':'verified_export','date':dates['today']}),200
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.71 CANDIDATE R194.1 · CROSS-CYCLE PRESCRIPTION CONTINUITY GUARD · R194 BASELINE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.72 CANDIDATE R194.2 · ATHLETE UI SIMPLIFICATION · R194.1 BASELINE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
