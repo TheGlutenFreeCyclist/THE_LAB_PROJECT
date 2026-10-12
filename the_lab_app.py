@@ -10094,7 +10094,7 @@ def _csrf_recovery_target(user=None):
     return url_for("login", security="SESSION EXPIRED", security_detail="Your secure session was refreshed. Log in again, then retry the action.")
 @app.before_request
 def product_csrf_protection():
-    if request.endpoint == "r193_maintenance_cron":
+    if request.endpoint in {"r193_maintenance_cron", "r194_backup_attest"}:
         return None  # Machine credential is verified in the route; never a browser cookie.
     if request.method not in {"POST", "PUT", "PATCH", "DELETE"} or _valid_csrf():
         return None
@@ -10131,7 +10131,7 @@ def product_csrf_protection():
 def enforce_required_password_change():
     allowed = {
         "force_password_change", "logout", "login",
-        "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker", "healthz", "r193_maintenance_cron",
+        "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker", "healthz", "r193_maintenance_cron", "r194_backup_attest",
     }
     if request.endpoint in allowed:
         return
@@ -10143,7 +10143,9 @@ def enforce_required_password_change():
         return redirect(url_for("force_password_change"))
 @app.before_request
 def automatic_storage_housekeeping():
-    if request.endpoint in {"login", "activate", "force_password_change", "athlete_setup", "product_waiting_room", "owner_workspace_hub", "owner_snapshot", "preview", "session_csrf", "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker", "healthz", "r193_maintenance_cron", "r193_admin_storage"}:
+    if not R194_ENABLE_ON_VISIT_CLEANUP:
+        return  # Destructive legacy cleanup bypasses the verified-backup gate.
+    if request.endpoint in {"login", "activate", "force_password_change", "athlete_setup", "product_waiting_room", "owner_workspace_hub", "owner_snapshot", "preview", "session_csrf", "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker", "healthz", "r193_maintenance_cron", "r194_backup_attest", "r193_admin_storage"}:
         return
     if str(request.endpoint or "").startswith("admin_"):
         return
@@ -41494,6 +41496,14 @@ R193_ROUTINE_ACTIONS = ('LOGIN_SUCCESS','DAILY_LOG_SAVED','SNAPSHOT_REPORT_SAVED
 R193_MAINTENANCE_KEY = (os.environ.get('THE_LAB_MAINTENANCE_KEY') or '').strip()
 R193_MAINTENANCE_ENABLED = (os.environ.get('THE_LAB_MAINTENANCE_ENABLED') or '') == '1'
 R193_DRY_RUN = (os.environ.get('THE_LAB_MAINTENANCE_DRY_RUN') or '') == '1'
+# R194: independent export proof and conservative data-retention policy.
+# Default is safe: absent proof or Personal Neon -> NEVER start destructive cleanup.
+R194_BACKUP_ATTEST_KEY = (os.environ.get('THE_LAB_BACKUP_ATTESTATION_KEY') or '').strip()
+R194_BACKUP_MAX_AGE = timedelta(hours=8)
+R194_ENABLE_NOTE_REDACTION = os.environ.get('THE_LAB_RETENTION_DELETE_DAILY_NOTES') == '1'
+R194_ENABLE_DAILY_LOG_RETENTION = os.environ.get('THE_LAB_RETENTION_DELETE_DAILY_LOGS') == '1'
+R194_ENABLE_ON_VISIT_CLEANUP = False  # Deliberately no opt-in: legacy path bypasses verified backups.
+
 
 
 def _r193_limits(now=None):
@@ -41521,10 +41531,12 @@ def _r193_limits(now=None):
 def _r193_targets(kind, dates):
     # ALL table names and predicates are hardcoded below. Never accept SQL, table names,
     # filters or retention intervals from a request or an admin input.
-    local = (
-        ('daily_logs', 'local_date < ?', (dates['logs'],), None),
-        ('daily_logs', "local_date < ? AND note IS NOT NULL AND note <> ''", (dates['notes'],), 'note'),
-    )
+    local = (('daily_logs', 'local_date < ?', (dates['logs'],), None),) if R194_ENABLE_DAILY_LOG_RETENTION else ()
+    # Free-text notes are not interchangeable with throwaway technical events.
+    # Disable the 21-day note redaction by default until a Nova memory policy exists.
+    if R194_ENABLE_NOTE_REDACTION:
+        local += (('daily_logs', "local_date < ? AND note IS NOT NULL AND note <> ''", (dates['notes'],), 'note'),)
+
     if kind == 'personal':
         return local
     return local + (
@@ -41607,6 +41619,56 @@ def _r193_prune_database(kind, dates, dry_run=False):
         conn.close()
 
 
+def _r194_check_both_backends():
+    """Fail closed before the first DELETE; not a distributed transaction guarantee."""
+    if not OWNER_PERSONAL_DATABASE_URL or OWNER_PERSONAL_DATABASE_URL == DATABASE_URL:
+        return 'PERSONAL_DATABASE_MISSING_OR_SHARED'
+    if not _db_is_postgres() or psycopg2 is None:
+        return 'POSTGRES_BACKEND_UNAVAILABLE'
+    for kind, connect in (('product', _db_connect), ('personal', _owner_personal_db_connect)):
+        conn = None
+        try:
+            conn = connect()
+            cur = conn.cursor()
+            try:
+                cur.execute('SELECT 1')
+                if cur.fetchone()[0] != 1:
+                    return 'DATABASE_PREFLIGHT_FAILED_' + kind.upper()
+            finally:
+                cur.close()
+        except Exception:
+            app.logger.exception('R194 %s preflight failed', kind)
+            return 'DATABASE_PREFLIGHT_FAILED_' + kind.upper()
+        finally:
+            if conn is not None:
+                conn.close()
+    return None
+
+
+def _r194_backup_status(dates=None, now=None):
+    """Machine-attested encrypted export status; NOT a successful isolated restore drill."""
+    now = now or datetime.now(timezone.utc)
+    dates = dates or _r193_limits(now)
+    try:
+        rows = _db_execute('SELECT updated_at_utc,status,details_json FROM storage_maintenance_runs WHERE run_key=?',
+                           ('backup:' + dates['today'],), fetch=True)
+        if not rows or rows[0].get('status') != 'verified':
+            return {'state':'missing', 'date':dates['today']}
+        row = rows[0]
+        attested = datetime.fromisoformat(str(row['updated_at_utc']).replace('Z','+00:00'))
+        age = now - attested
+        if age < timedelta(seconds=-300) or age > R194_BACKUP_MAX_AGE:
+            return {'state':'stale', 'date':dates['today']}
+        detail = json.loads(row.get('details_json') or '{}')
+        if detail.get('backends') != ['product','personal'] or not str(detail.get('github_run_id','')).isdigit():
+            return {'state':'invalid', 'date':dates['today']}
+        return {'state':'verified_export', 'date':dates['today'], 'at_utc':row['updated_at_utc'],
+                'github_run_id':str(detail['github_run_id'])}
+    except Exception:
+        app.logger.exception('R194 backup proof lookup failed')
+        return {'state':'unavailable', 'date':dates['today']}
+
+
 def _r193_acquire_daily_run(dates, dry_run):
     # One persisted run per mode per Rome day, independent of app process restarts.
     # If interrupted, allow retry only after 30 minutes; completed runs never replay.
@@ -41642,17 +41704,26 @@ def _r193_run_retention(now=None, dry_run=None):
     dates = _r193_limits(now)
     if dry_run is None:
         dry_run = R193_DRY_RUN
+    # Never return an unconditional 200 for a previous run of unknown status.
     key, claimed = _r193_acquire_daily_run(dates, dry_run)
     if not claimed:
-        return {'ok': True, 'status': 'already_processed_or_in_progress', 'run_key': key, 'dry_run': dry_run}
+        rows = _db_execute('SELECT status FROM storage_maintenance_runs WHERE run_key=?', (key,), fetch=True)
+        previous = rows[0].get('status') if rows else 'unknown'
+        return {'ok': previous in ('completed','preview'), 'status': 'already_processed_or_in_progress',
+                'previous_status': previous, 'run_key': key, 'dry_run': dry_run}
     results = {}
     errors = []
     incomplete = False
     try:
+        problem = _r194_check_both_backends()
+        backup_status = _r194_backup_status(dates, now or datetime.now(timezone.utc)) if not dry_run else {'state':'preview_not_required'}
+        if not problem and not dry_run and backup_status['state'] != 'verified_export':
+            problem = 'BACKUP_EXPORT_NOT_VERIFIED'
+        if problem:
+            errors = [{'code':problem, 'backup_state':backup_status['state']}]
+            _r193_finalize_run(key, 'failed', {'state':'failed','errors':errors,'change_count':0}, _now_utc_text())
+            return {'ok':False,'status':'failed','run_key':key,'dry_run':dry_run,'errors':errors,'change_count':0}
         for kind in ('product','personal'):
-            if kind == 'personal' and not OWNER_PERSONAL_DATABASE_URL:
-                results[kind] = {'state':'not_configured'}
-                continue
             try:
                 summary = _r193_prune_database(kind, dates, dry_run)
                 results[kind] = summary
@@ -41691,7 +41762,9 @@ def _r193_db_bytes(conn):
 def _r193_storage_overview():
     # Admin only. Never return credentials, user rows or any athlete note.
     init_memory_db()
-    out = {'product':{'state':'unavailable'}, 'personal':{'state':'not_configured'}, 'recent_runs':[]}
+    out = {'product':{'state':'unavailable'}, 'personal':{'state':'not_configured'}, 'recent_runs':[],
+           'backup_receipt':_r194_backup_status(), 'note_cleanup_enabled':R194_ENABLE_NOTE_REDACTION, 'diary_cleanup_enabled':R194_ENABLE_DAILY_LOG_RETENTION,
+           'legacy_on_visit_cleanup':R194_ENABLE_ON_VISIT_CLEANUP}
     for kind in ('product','personal'):
         if kind == 'personal' and not OWNER_PERSONAL_DATABASE_URL:
             continue
@@ -41722,7 +41795,7 @@ def _r193_storage_overview():
             if conn is not None:
                 conn.close()
     try:
-        rows = _db_execute('SELECT run_key,started_at_utc,updated_at_utc,status,details_json FROM storage_maintenance_runs ORDER BY started_at_utc DESC LIMIT 8',fetch=True)
+        rows = _db_execute('SELECT run_key,started_at_utc,updated_at_utc,status,details_json FROM storage_maintenance_runs WHERE run_key LIKE ? OR run_key LIKE ? ORDER BY started_at_utc DESC LIMIT 8',('live:%','preview:%'),fetch=True)
         for row in rows:
             try:
                 detail=json.loads(row.get('details_json') or '{}')
@@ -41744,9 +41817,14 @@ R193_STORAGE_PAGE = """
 {% if p.state == 'available' %}<p><strong>{{ p.human }}</strong> / {{ p.quota_human }} <span class="muted">(configured estimate)</span></p><div class="bar"><div class="fill" style="width:{{ [100,p.approx_percent]|min }}%"></div></div><p class="muted">{{ p.approx_percent }}% of configured per-project reference</p>
 {% if p.tables %}<details><summary>Largest tables</summary><table>{% for t in p.tables %}<tr><td>{{ t.name }}</td><td>{{ t.human }}</td></tr>{% endfor %}</table></details>{% endif %}
 {% elif p.error_class %}<p class="bad">Metrics unavailable · {{ p.error_class }}</p>{% endif %}</section>{% endfor %}</div>
-<section class="box"><h2>Automatic maintenance</h2><p><strong>{{ 'Configured' if enabled else 'Not enabled' }}</strong> · {{ 'PREVIEW ONLY — scheduled job does not delete (legacy on-visit 42-day cleanup still active)' if preview else 'live retention after authenticated scheduler invocation' }}</p>
+<section class="box"><h2>Backup verification gate · R194</h2>
+{% set proof=overview.backup_receipt %}<p><strong class="{{ 'good' if proof.state == 'verified_export' else 'bad' }}">{{ proof.state }}</strong> · {{ proof.date }}</p>
+{% if proof.at_utc %}<p class="muted">Last verified encrypted export: {{ proof.at_utc }} UTC · GitHub run #{{ proof.github_run_id }}</p>{% endif %}
+<p class="muted">Automatic deletion is blocked unless a fresh Product + Personal encrypted-export receipt exists, both databases respond to preflight, and machine authorization succeeds. This is <strong>not</strong> proof of a full restore test.</p>
+<p class="muted">Diary-row deletion (42 days): <strong>{{ 'opted in' if overview.diary_cleanup_enabled else 'PAUSED' }}</strong>. 21-day note redaction: <strong>{{ 'opted in' if overview.note_cleanup_enabled else 'PAUSED' }}</strong>. Legacy deletion on visits: <strong>{{ 'opted in' if overview.legacy_on_visit_cleanup else 'DISABLED' }}</strong>.</p></section>
+<section class="box"><h2>Automatic maintenance</h2><p><strong>{{ 'Configured' if enabled else 'Not enabled' }}</strong> · {{ 'PREVIEW ONLY — scheduled job does not delete; legacy on-visit cleanup disabled' if preview else 'live retention after authenticated scheduler invocation' }}</p>
 <p class="muted">Runs only with a separate secret-bearing scheduled POST. The 10-minute /healthz probe is unchanged and never accesses Neon.</p>
-<table><tr><td>Daily structured feedback</td><td>42 days</td></tr><tr><td>Daily free-text notes</td><td>21 days</td></tr><tr><td>Routine audit events</td><td>90 days</td></tr><tr><td>Security/incident/admin audit events</td><td>365 days</td></tr><tr><td>AI usage records / detailed prompt profiles</td><td>180 / 30 days</td></tr><tr><td>Inactive/revoked sessions</td><td>30 days</td></tr><tr><td>Nova memory, planning, latest report, evidence history</td><td><strong class="good">Never auto-deleted</strong></td></tr></table></section>
+<table><tr><td>Daily structured feedback</td><td>{{ '42 days (explicit opt-in only)' if overview.diary_cleanup_enabled else 'Preserved — cleanup paused' }}</td></tr><tr><td>Daily free-text notes</td><td>{{ '21 days (explicit opt-in only)' if overview.note_cleanup_enabled else 'Preserved — cleanup paused' }}</td></tr><tr><td>Routine audit events</td><td>90 days</td></tr><tr><td>Security/incident/admin audit events</td><td>365 days</td></tr><tr><td>AI usage records / detailed prompt profiles</td><td>180 / 30 days</td></tr><tr><td>Inactive/revoked sessions</td><td>30 days</td></tr><tr><td>Nova memory, planning, latest report, evidence history</td><td><strong class="good">Never auto-deleted</strong></td></tr></table></section>
 <section class="box"><h2>Last maintenance runs</h2>{% if overview.recent_runs %}<table><tr><th>Run</th><th>Status</th><th>When (UTC)</th><th>Records changed</th></tr>{% for run in overview.recent_runs %}<tr><td><code>{{ run.run_key }}</code></td><td>{{ run.status }}</td><td>{{ run.updated_at_utc }}</td><td>{{ run.details.get('would_change_count',0) if run.status == 'preview' else run.details.get('change_count','—') }}{{ ' (preview)' if run.status == 'preview' else '' }}</td></tr>{% endfor %}</table>{% else %}<p class="muted">No maintenance executions recorded yet. Installing code does not start the scheduler.</p>{% endif %}</section>
 <p class="muted">Database size is not total Neon project billed storage. PostgreSQL may reuse cleared pages without immediately reducing file size. No VACUUM FULL.</p></main></body></html>
 """
@@ -41791,7 +41869,42 @@ def r193_maintenance_cron():
     response.headers['X-Robots-Tag'] = 'noindex, nofollow'
     return response
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.69 WIP R193 · AUTONOMOUS STORAGE RETENTION + NOVA MEMORY PRESERVATION · R192 BASELINE'
+@app.route('/internal/maintenance/backup-attest', methods=['POST'])
+def r194_backup_attest():
+    provided = request.headers.get('X-TheLab-Backup-Key') or ''
+    if len(R194_BACKUP_ATTEST_KEY) < 32 or not hmac.compare_digest(provided, R194_BACKUP_ATTEST_KEY):
+        return Response(status=404, headers={'Cache-Control':'no-store'})
+    if not _db_is_postgres():
+        return jsonify({'ok':False,'code':'DATABASE_UNAVAILABLE'}),503
+    payload = request.get_json(silent=True)
+    if not isinstance(payload,dict):
+        return jsonify({'ok':False,'code':'INVALID_PROOF'}),400
+    run_id = str(payload.get('github_run_id') or '')
+    backends = payload.get('backends')
+    digests = payload.get('digests')
+    if (not run_id.isascii() or not run_id.isdigit() or not 1 <= len(run_id) <= 30
+        or backends != ['product','personal'] or not isinstance(digests,dict)
+        or set(digests) != {'product','personal'}
+        or any(not isinstance(digests[k],str) or len(digests[k]) != 64
+               or any(c not in '0123456789abcdef' for c in digests[k]) for k in backends)):
+        return jsonify({'ok':False,'code':'INVALID_PROOF'}),400
+    # A successful signature proves trusted GitHub workflow attested both archives.
+    # Never implies successful isolated restoration or email receipt by end user.
+    dates = _r193_limits()
+    when = _now_utc_text()
+    record = json.dumps({'backends':backends,'github_run_id':run_id,'sha256_encrypted':digests,
+                         'verification':'encrypted_export_gh_artifact_and_email'},sort_keys=True,separators=(',',':'))
+    try:
+        _db_execute('INSERT INTO storage_maintenance_runs(run_key,started_at_utc,updated_at_utc,status,details_json) '
+                    'VALUES(?,?,?,?,?) ON CONFLICT(run_key) DO UPDATE SET updated_at_utc=excluded.updated_at_utc,'
+                    'status=excluded.status,details_json=excluded.details_json',
+                    ('backup:'+dates['today'],when,when,'verified',record))
+    except Exception:
+        app.logger.exception('R194 backup attestation storage unavailable')
+        return jsonify({'ok':False,'code':'RECEIPT_STORAGE_FAILED'}),503
+    return jsonify({'ok':True,'status':'verified_export','date':dates['today']}),200
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.70 WIP R194 · FAIL-CLOSED RETENTION + BACKUP RECEIPT · R193 BASELINE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
