@@ -38109,14 +38109,46 @@ def _v166_execution_fingerprints(ledger):
 
 
 def _v166_hard_after_planned_date(ledger, planned_day):
+    """Cross-cycle verified hard evidence, not just current-week activity rows.
+
+    R146 persists exact reconciled executions across weekly rollover, whereas
+    completed_hard_sessions is scoped to the current Monday–Sunday microcycle.
+    """
     if not isinstance(planned_day, date):
         return False
-    for row in (ledger or {}).get("completed_hard_sessions") or []:
+    ledger = ledger or {}
+    for row in ledger.get("completed_hard_sessions") or []:
         if not isinstance(row, dict):
             continue
         try:
             d = date.fromisoformat(str(row.get("date") or "")[:10])
-        except Exception:
+        except (TypeError, ValueError):
+            continue
+        if d >= planned_day:
+            return True
+    # Execution history survives microcycle rollover and identifies a real
+    # activity reconciled against a prior hard workout by R146.
+    for row in ledger.get("prescription_execution_history") or []:
+        if not isinstance(row, dict) or not row.get("activity_id"):
+            continue
+        if not str(row.get("nova_workout_id") or "").strip():
+            continue
+        try:
+            d = date.fromisoformat(str(row.get("actual_date") or "")[:10])
+        except (TypeError, ValueError):
+            continue
+        if d >= planned_day:
+            return True
+    # Defensive fallback if execution history has not been materialized yet,
+    # but a previously reconciled fulfilled prescription was carried over.
+    for row in ledger.get("prescription_history") or []:
+        if not isinstance(row, dict) or str(row.get("prescription_status") or "").upper() != "FULFILLED":
+            continue
+        if not row.get("executed_activity_id") or not _v136_is_hard_summary(row):
+            continue
+        try:
+            d = date.fromisoformat(str(row.get("actual_date") or "")[:10])
+        except (TypeError, ValueError):
             continue
         if d >= planned_day:
             return True
@@ -38134,7 +38166,7 @@ def _v166_is_missed_candidate(row, ledger, today):
     if (today - planned).days > 14:
         return False
     status = str(row.get("prescription_status") or "").upper()
-    if status in {"FULFILLED", "SUPERSEDED", "CANCELLED", "WITHDRAWN"}:
+    if status in {"FULFILLED", "SUPERSEDED", "CANCELLED", "WITHDRAWN", "EXPIRED_BY_NEW_HARD_EVIDENCE"}:
         return False
     if row.get("superseded_by_fingerprint") or row.get("fulfilled_at_local") or row.get("executed_activity_id"):
         return False
@@ -38283,7 +38315,7 @@ def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=N
         fp = str(row.get("prescription_fingerprint") or _v136_prescription_fingerprint(row))
         if planned is None or planned >= today:
             continue
-        if status in {"FULFILLED", "SUPERSEDED", "CANCELLED", "WITHDRAWN"} or fp in executed:
+        if status in {"FULFILLED", "SUPERSEDED", "CANCELLED", "WITHDRAWN", "EXPIRED_BY_NEW_HARD_EVIDENCE"} or fp in executed:
             continue
         if not _v153_is_training_plan(row):
             continue
@@ -41904,7 +41936,7 @@ def r194_backup_attest():
         return jsonify({'ok':False,'code':'RECEIPT_STORAGE_FAILED'}),503
     return jsonify({'ok':True,'status':'verified_export','date':dates['today']}),200
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.70 WIP R194 · FAIL-CLOSED RETENTION + BACKUP RECEIPT · R193 BASELINE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.71 CANDIDATE R194.1 · CROSS-CYCLE PRESCRIPTION CONTINUITY GUARD · R194 BASELINE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
