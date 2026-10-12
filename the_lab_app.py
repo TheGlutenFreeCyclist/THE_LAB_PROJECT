@@ -4130,9 +4130,9 @@ form.addEventListener('submit',function(e){e.preventDefault();var q=(new FormDat
 DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
 OWNER_PERSONAL_DATABASE_URL = (os.environ.get("THE_LAB_OWNER_DATABASE_URL") or "").strip()
 try:
-    DATABASE_STORAGE_LIMIT_BYTES = int(os.environ.get("THE_LAB_DB_LIMIT_BYTES", "500000000"))
+    DATABASE_STORAGE_LIMIT_BYTES = int(os.environ.get("THE_LAB_DB_LIMIT_BYTES", "1000000000"))
 except (TypeError, ValueError):
-    DATABASE_STORAGE_LIMIT_BYTES = 500_000_000
+    DATABASE_STORAGE_LIMIT_BYTES = 1_000_000_000
 DAILY_LOG_RETENTION_DAYS = 42
 _LAST_DAILY_LOG_CLEANUP_BY_USER = {}
 SQLITE_PATH = os.environ.get(
@@ -4502,6 +4502,13 @@ def init_memory_db():
                 revoked_at_utc TEXT,
                 ip_address TEXT,
                 user_agent TEXT
+            )""",
+            """CREATE TABLE IF NOT EXISTS storage_maintenance_runs (
+                run_key TEXT PRIMARY KEY,
+                started_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                status TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}'
             )""",
             """CREATE TABLE IF NOT EXISTS audit_log (
                 id TEXT PRIMARY KEY,
@@ -10087,6 +10094,8 @@ def _csrf_recovery_target(user=None):
     return url_for("login", security="SESSION EXPIRED", security_detail="Your secure session was refreshed. Log in again, then retry the action.")
 @app.before_request
 def product_csrf_protection():
+    if request.endpoint == "r193_maintenance_cron":
+        return None  # Machine credential is verified in the route; never a browser cookie.
     if request.method not in {"POST", "PUT", "PATCH", "DELETE"} or _valid_csrf():
         return None
     actor_user_id = session.get("user_id")
@@ -10122,7 +10131,7 @@ def product_csrf_protection():
 def enforce_required_password_change():
     allowed = {
         "force_password_change", "logout", "login",
-        "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker", "healthz",
+        "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker", "healthz", "r193_maintenance_cron",
     }
     if request.endpoint in allowed:
         return
@@ -10134,7 +10143,7 @@ def enforce_required_password_change():
         return redirect(url_for("force_password_change"))
 @app.before_request
 def automatic_storage_housekeeping():
-    if request.endpoint in {"login", "activate", "force_password_change", "athlete_setup", "product_waiting_room", "owner_workspace_hub", "owner_snapshot", "preview", "session_csrf", "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker", "healthz"}:
+    if request.endpoint in {"login", "activate", "force_password_change", "athlete_setup", "product_waiting_room", "owner_workspace_hub", "owner_snapshot", "preview", "session_csrf", "pwa_manifest", "pwa_icon_192", "pwa_icon_512", "service_worker", "healthz", "r193_maintenance_cron", "r193_admin_storage"}:
         return
     if str(request.endpoint or "").startswith("admin_"):
         return
@@ -11203,7 +11212,7 @@ ADMIN_PAGE = """
 @media(max-width:760px){.ps59-admin-summary{grid-template-columns:1fr}.ps59-user-head,.ps59-ai-top,.ps59-owner-card,.ps59-hidden-row{display:block}.ps59-owner-dob{display:grid;grid-template-columns:1fr;margin-top:10px}.ps59-owner-dob .ps-btn{width:100%}.ps59-head-badges,.ps59-ai-meta,.ps59-owner-meta{justify-content:flex-start;margin-top:9px}.ps59-status-grid{grid-template-columns:1fr 1fr;overflow:visible}.ps59-card-actions{display:grid;grid-template-columns:1fr}.ps59-card-actions .ps-btn{width:100%}.ps59-form-row{grid-template-columns:1fr}.ps59-form-row .ps-btn{width:100%}.ps59-account-actions{display:grid;grid-template-columns:1fr}.ps59-account-actions form,.ps59-account-actions .ps-btn{width:100%}.ps59-modal{padding:11px}.ps59-modal-panel{padding:17px;max-height:90vh}.ps59-hidden-row form{margin-top:9px}}
 @media(max-width:360px){.ps59-status-grid{grid-template-columns:1fr}.ps59-head-badges{gap:5px}.ps59-mini{white-space:normal}.ps59-ai-mode .ps-pill{white-space:normal}}
 </style></head><body class="product-sec"><main class="ps-wrap">
-<header class="ps-head"><div><div class="ps-muted">OWNER ONLY · PRODUCT CONTROL</div><h1>THE LAB Control Center</h1><p>Manage beta access, AI sponsorship and product QA. Athlete Snapshot audits are available only when that athlete has explicitly opted in to beta QA sharing.</p></div><div class="ps-head-actions"><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('admin_system_diagnostics') }}">SYSTEM DIAGNOSTICS</a><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('owner_snapshot') }}">MY SNAPSHOT</a><a class="ps-nav-btn ps-nav-logout" href="{{ url_for('logout') }}">Log out</a></div></header>
+<header class="ps-head"><div><div class="ps-muted">OWNER ONLY · PRODUCT CONTROL</div><h1>THE LAB Control Center</h1><p>Manage beta access, AI sponsorship and product QA. Athlete Snapshot audits are available only when that athlete has explicitly opted in to beta QA sharing.</p></div><div class="ps-head-actions"><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('admin_system_diagnostics') }}">SYSTEM DIAGNOSTICS</a><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('r193_admin_storage') }}">STORAGE &amp; RETENTION</a><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('owner_snapshot') }}">MY SNAPSHOT</a><a class="ps-nav-btn ps-nav-logout" href="{{ url_for('logout') }}">Log out</a></div></header>
 {% if notice %}<div class="ps-note" style="margin-bottom:16px">{{ notice }}</div>{% endif %}{% if error %}<div class="ps-error" style="margin-bottom:16px">{{ error }}</div>{% endif %}{% if new_code %}<section class="ps-card" style="margin-bottom:16px"><h2>New one-time access code</h2><p>Copy it now. Only its protected hash is stored in the database.</p><div class="ps-code">{{ new_code }}</div></section>{% endif %}{% if reset_credential %}<section class="ps-card ps-reset-card" style="margin-bottom:16px"><div class="ps-section-head"><div><div class="ps-muted">PASSWORD RESET · SHOWN ONCE</div><h2>Temporary password for {{ reset_credential.username }}</h2></div><span class="ps-pill reset">RESET REQUIRED</span></div><p>Send this temporary password securely to the athlete. Existing sessions were closed. After login, THE LAB forces the athlete to create a new password before any workspace or Settings screen can open.</p><div class="ps-code">{{ reset_credential.temporary_password }}</div></section>{% endif %}
 <div class="ps59-admin-summary"><section class="ps-card"><h2>Create invitation</h2><form method="post" action="{{ url_for('admin_create_code') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label class="ps-field"><span>LICENSE TYPE</span><select name="license_type"><option>BETA</option><option>TRIAL</option><option>LIFETIME</option></select></label><label class="ps-field"><span>EXPIRES ON · OPTIONAL · GG/MM/AAAA</span><input name="expires_on" type="date" min="{{ today_iso }}" autocomplete="off" aria-label="Invitation expiry date"></label><label class="ps-field"><span>NOTE · OPTIONAL</span><input name="note" maxlength="500" placeholder="e.g. Zwift beta tester"></label><button class="ps-btn primary" type="submit">Generate access code</button></form></section><section class="ps-card"><h2>Product storage</h2><p><strong>{{ storage.used_human }}</strong> / {{ storage.limit_human }} · {{ '%.2f'|format(storage.pct) }}%</p><p class="ps-muted">{{ storage.backend }} · {{ storage.message }}</p><p class="ps-muted">Security records: {{ storage.counts.security_records }} · Total database records: {{ storage.counts.total_records }}</p></section></div>
 <section class="ps-card" style="margin-top:16px"><div class="ps59-roster-head"><div><h2>Athletes</h2><p class="ps-muted">One card per active roster athlete. Detailed controls stay inside focused panels instead of expanding the roster horizontally.</p></div><span class="ps-count">{{ athlete_count }}</span></div><div class="ps59-athlete-grid">
@@ -41419,7 +41428,7 @@ R192_DIAGNOSTICS_PAGE = """
 <style>{{ product_css }}</style><style>
 .r192-tools{display:flex;gap:9px;flex-wrap:wrap;align-items:end;margin:18px 0}.r192-tools input{width:min(440px,100%);min-height:43px;background:#081523;color:#eef7fe;border:1px solid #315071;border-radius:10px;padding:10px}.r192-tools label{display:grid;gap:5px;font-size:12px;font-weight:700;color:#a8c1d2}.r192-tools button,.r192-tools a,.r192-copy{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:8px 14px;border:1px solid #345b75;border-radius:11px;background:#122b41;color:#d4eefc;text-decoration:none;cursor:pointer;font-size:13px;font-weight:750}.r192-events{display:grid;gap:12px}.r192-event{padding:17px;border:1px solid #33506a;border-radius:15px;background:linear-gradient(160deg,#111e2e,#0a1725)}.r192-event-head{display:flex;justify-content:space-between;align-items:center;gap:9px;flex-wrap:wrap}.r192-event h2{font-size:16px;margin:0}.r192-event p{color:#b5c7d8;line-height:1.5;margin:9px 0}.r192-error{border-color:#93465d}.r192-event pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#a6defa;background:#061421;border:1px solid #31465e;border-radius:10px;padding:12px;font-size:12px;line-height:1.5}.r192-event details{margin-top:11px}.r192-event summary{cursor:pointer;color:#c5e2f7;font-size:13px}.r192-muted{color:#91afc6}.r192-code{font-size:12px;color:#d6edff}.r192-banner{padding:13px;border-radius:12px;border:1px solid #2a5669;background:#122638;margin:15px 0;font-size:13px;color:#d7edfb}.r192-copy-status{font-size:12px;color:#aeeacc}.r192-scope{font-size:12px;color:#a7bdcf}
 </style></head><body class="product-sec"><main class="ps-wrap">
-<header class="ps-head"><div><div class="ps-muted">OWNER ONLY · READ-ONLY AUDITS</div><h1>System Diagnostics</h1><p>Snapshot incident tracking from Product Neon, without opening a SQL console.</p></div><div class="ps-head-actions"><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('admin_control_center') }}">CONTROL CENTER</a></div></header>
+<header class="ps-head"><div><div class="ps-muted">OWNER ONLY · READ-ONLY AUDITS</div><h1>System Diagnostics</h1><p>Snapshot incident tracking from Product Neon, without opening a SQL console.</p></div><div class="ps-head-actions"><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('r193_admin_storage') }}">STORAGE &amp; RETENTION</a><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('admin_control_center') }}">CONTROL CENTER</a></div></header>
 <div class="r192-banner">Product Neon · {{ 'Available' if available else 'Temporarily unavailable' }} · Current source: {{ app_version }}<div class="r192-scope">Only your own Snapshot audit events are shown. Other athletes require separate consent-protected QA workflows. Limited to 100 most recent matches.</div></div>
 {% if problem %}<div class="ps-error">Diagnostic query unavailable ({{ problem }}). This does not imply a training data or report failure.</div>{% endif %}
 <form class="r192-tools" method="get" action="{{ url_for('admin_system_diagnostics') }}"><label>SEARCH INCIDENT ID, RELEASE OR ERROR CODE<input type="search" name="q" maxlength="90" value="{{ query }}" placeholder="SNP-... or TL-CMAG-..."></label><button type="submit">Search</button><a href="{{ url_for('admin_system_diagnostics') }}">Clear</a><a href="{{ url_for('admin_system_diagnostics', q=query, format='json') }}">Export safe JSON</a></form>
@@ -41469,7 +41478,320 @@ def admin_system_diagnostics():
     out.headers['X-Robots-Tag'] = 'noindex, nofollow'
     return out
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.68 WIP R192 · ADMIN SELF-DIAGNOSTICS + INERT HEALTH PROBE · R191 BASELINE'
+# R193 · STORAGE LIFECYCLE: deliberate, bounded, self-scheduled with external secure cron.
+# NO automatic DELETE/UPDATE on memory_items, planning_items, latest_report, strategy or microcycle history.
+R193_DAILY_LOG_DAYS = 42  # Nova uses multiweek structured feedback/quality windows.
+R193_DAILY_NOTE_DAYS = 21  # Daily free text is ephemeral; long-lived facts belong in durable memory.
+R193_AUDIT_ROUTINE_DAYS = 90
+R193_AUDIT_SECURITY_DAYS = 365
+R193_USAGE_DAYS = 180
+R193_USAGE_PROFILE_DAYS = 30
+R193_SESSION_DAYS = 30
+R193_RUN_HISTORY_DAYS = 90
+R193_BATCH_SIZE = 200
+R193_MAX_ROWS_PER_TARGET = 2000
+R193_ROUTINE_ACTIONS = ('LOGIN_SUCCESS','DAILY_LOG_SAVED','SNAPSHOT_REPORT_SAVED')
+R193_MAINTENANCE_KEY = (os.environ.get('THE_LAB_MAINTENANCE_KEY') or '').strip()
+R193_MAINTENANCE_ENABLED = (os.environ.get('THE_LAB_MAINTENANCE_ENABLED') or '') == '1'
+R193_DRY_RUN = (os.environ.get('THE_LAB_MAINTENANCE_DRY_RUN') or '') == '1'
+
+
+def _r193_limits(now=None):
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    today_rome = now.astimezone(ROME_TZ).date()
+    def stamp(days):
+        return (now - timedelta(days=days)).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    return {
+        'today': today_rome.isoformat(),
+        'logs': (today_rome - timedelta(days=R193_DAILY_LOG_DAYS)).isoformat(),
+        'notes': (today_rome - timedelta(days=R193_DAILY_NOTE_DAYS)).isoformat(),
+        'audit_routine': stamp(R193_AUDIT_ROUTINE_DAYS),
+        'audit_security': stamp(R193_AUDIT_SECURITY_DAYS),
+        'usage': stamp(R193_USAGE_DAYS),
+        'usage_profile': stamp(R193_USAGE_PROFILE_DAYS),
+        'session': stamp(R193_SESSION_DAYS),
+        'run_history': stamp(R193_RUN_HISTORY_DAYS),
+        'retry_after': stamp(0),
+        'now': stamp(0),
+    }
+
+
+def _r193_targets(kind, dates):
+    # ALL table names and predicates are hardcoded below. Never accept SQL, table names,
+    # filters or retention intervals from a request or an admin input.
+    local = (
+        ('daily_logs', 'local_date < ?', (dates['logs'],), None),
+        ('daily_logs', "local_date < ? AND note IS NOT NULL AND note <> ''", (dates['notes'],), 'note'),
+    )
+    if kind == 'personal':
+        return local
+    return local + (
+        ('audit_log', 'created_at_utc < ? AND action IN (' + ','.join(['?'] * len(R193_ROUTINE_ACTIONS)) + ')',
+         (dates['audit_routine'],) + R193_ROUTINE_ACTIONS, None),
+        ('audit_log', 'created_at_utc < ? AND action NOT IN (' + ','.join(['?'] * len(R193_ROUTINE_ACTIONS)) + ')',
+         (dates['audit_security'],) + R193_ROUTINE_ACTIONS, None),
+        ('auth_sessions', '(revoked_at_utc IS NOT NULL AND revoked_at_utc < ?) OR last_seen_at_utc < ?',
+         (dates['session'], dates['session']), None),
+        ('ai_usage_events', 'created_at_utc < ?', (dates['usage'],), None),
+        ('ai_usage_events', "created_at_utc < ? AND prompt_profile_json IS NOT NULL AND prompt_profile_json <> ''",
+         (dates['usage_profile'],), 'prompt_profile_json'),
+        ('storage_maintenance_runs', 'updated_at_utc < ?', (dates['run_history'],), None),
+    )
+
+
+def _r193_prune_target(conn, table, where, params, null_field=None, dry_run=False):
+    # Targeted 200-row transactions with hard upper bound; no VACUUM FULL on Neon.
+    # This avoids long-running locks, high write amplification and oversized requests.
+    is_pg = _db_is_postgres()
+    def sql_placeholders(query):
+        return query.replace('?', '%s') if is_pg else query
+    cur = conn.cursor()
+    if dry_run:
+        try:
+            cur.execute(sql_placeholders('SELECT COUNT(*) FROM ' + table + ' WHERE ' + where), params)
+            row = cur.fetchone()
+            return {'matched': int(row[0]), 'changed': 0, 'more': False}
+        finally:
+            cur.close()
+    n = 0
+    try:
+        while n < R193_MAX_ROWS_PER_TARGET:
+            limit = min(R193_BATCH_SIZE, R193_MAX_ROWS_PER_TARGET - n)
+            # DB stores text UUID ids; select by primary key, then execute a bounded mutation.
+            predicate = 'id IN (SELECT id FROM ' + table + ' WHERE ' + where + ' LIMIT ?)'
+            if table == 'storage_maintenance_runs':
+                predicate = 'run_key IN (SELECT run_key FROM ' + table + ' WHERE ' + where + ' LIMIT ?)'
+            cmd = ('UPDATE ' + table + ' SET ' + null_field + '=NULL WHERE ' + predicate
+                   if null_field else 'DELETE FROM ' + table + ' WHERE ' + predicate)
+            cur.execute(sql_placeholders(cmd), (*params, limit))
+            changed = max(0, int(cur.rowcount or 0))
+            conn.commit()
+            n += changed
+            if changed < limit:
+                break
+        more = False
+        if n >= R193_MAX_ROWS_PER_TARGET:
+            cur.execute(sql_placeholders('SELECT 1 FROM ' + table + ' WHERE ' + where + ' LIMIT 1'), params)
+            more = cur.fetchone() is not None
+        return {'matched': n, 'changed': n, 'more': more}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
+def _r193_prune_database(kind, dates, dry_run=False):
+    if kind not in ('product','personal'):
+        raise ValueError('Unsupported storage backend')
+    if kind == 'personal' and (not OWNER_PERSONAL_DATABASE_URL or OWNER_PERSONAL_DATABASE_URL == DATABASE_URL):
+        raise RuntimeError('Personal Neon must be configured and physically separate from Product Neon')
+    if kind == 'product' and not _db_is_postgres():
+        raise RuntimeError('Production maintenance requires Product Neon PostgreSQL; SQLite fallback refused')
+    if kind == 'personal' and psycopg2 is None:
+        raise RuntimeError('Personal Neon PostgreSQL driver missing')
+    if kind == 'personal':
+        _ensure_owner_personal_v4857_extensions()
+    conn = _db_connect() if kind == 'product' else _owner_personal_db_connect()
+    try:
+        results = {}
+        for table, where, params, null_field in _r193_targets(kind, dates):
+            key = table + ('.'+null_field if null_field else '.rows')
+            if key in results:
+                key += '.security'
+            results[key] = _r193_prune_target(conn, table, where, params, null_field, dry_run)
+        return results
+    finally:
+        conn.close()
+
+
+def _r193_acquire_daily_run(dates, dry_run):
+    # One persisted run per mode per Rome day, independent of app process restarts.
+    # If interrupted, allow retry only after 30 minutes; completed runs never replay.
+    init_memory_db()
+    key = ('preview:' if dry_run else 'live:') + dates['today']
+    stamp = dates['now']
+    stale = (datetime.fromisoformat(stamp.replace('Z','+00:00')) - timedelta(minutes=30)).isoformat().replace('+00:00','Z')
+    conn = _db_connect()
+    try:
+        cur = conn.cursor()
+        stmt = 'INSERT INTO storage_maintenance_runs(run_key,started_at_utc,updated_at_utc,status,details_json) VALUES(?,?,?,?,?) ON CONFLICT(run_key) DO NOTHING'
+        cur.execute(_db_sql(stmt), (key, stamp, stamp, 'running', '{}'))
+        inserted = cur.rowcount == 1
+        conn.commit()
+        if inserted:
+            return key, True
+        cur.execute(_db_sql('UPDATE storage_maintenance_runs SET started_at_utc=?,updated_at_utc=?,status=?,details_json=? WHERE run_key=? AND ((status=? AND updated_at_utc < ?) OR (status=? AND started_at_utc < ?))'),
+                    (stamp,stamp,'running','{}',key,'failed',stale,'running',stale))
+        claimed = cur.rowcount == 1
+        conn.commit()
+        return key, claimed
+    finally:
+        conn.close()
+
+
+def _r193_finalize_run(key, status, payload, when):
+    body = json.dumps(payload, separators=(',', ':'), ensure_ascii=True)[:8000]
+    _db_execute('UPDATE storage_maintenance_runs SET status=?,updated_at_utc=?,details_json=? WHERE run_key=?',
+                (status, when, body, key))
+
+
+def _r193_run_retention(now=None, dry_run=None):
+    dates = _r193_limits(now)
+    if dry_run is None:
+        dry_run = R193_DRY_RUN
+    key, claimed = _r193_acquire_daily_run(dates, dry_run)
+    if not claimed:
+        return {'ok': True, 'status': 'already_processed_or_in_progress', 'run_key': key, 'dry_run': dry_run}
+    results = {}
+    errors = []
+    incomplete = False
+    try:
+        for kind in ('product','personal'):
+            if kind == 'personal' and not OWNER_PERSONAL_DATABASE_URL:
+                results[kind] = {'state':'not_configured'}
+                continue
+            try:
+                summary = _r193_prune_database(kind, dates, dry_run)
+                results[kind] = summary
+                incomplete |= any(bool(row.get('more')) for row in summary.values())
+            except Exception as exc:
+                errors.append({'database': kind, 'error_class': type(exc).__name__})
+                results[kind] = {'state':'error','error_class':type(exc).__name__}
+                app.logger.exception('R193 %s retention failed', kind)
+        state = 'failed' if errors else ('partial' if incomplete else ('preview' if dry_run else 'completed'))
+        payload = {'state': state,'dry_run': dry_run, 'databases': results, 'errors': errors,
+                   'change_count':sum(int(r.get('changed',0)) for db in results.values() if isinstance(db,dict) for r in db.values() if isinstance(r,dict)),
+                   'would_change_count':sum(int(r.get('matched',0)) for db in results.values() if isinstance(db,dict) for r in db.values() if isinstance(r,dict)) if dry_run else None,
+                   'retention': {'daily_logs_days':R193_DAILY_LOG_DAYS,'daily_notes_days':R193_DAILY_NOTE_DAYS,
+                                 'routine_audit_days':R193_AUDIT_ROUTINE_DAYS,'security_audit_days':R193_AUDIT_SECURITY_DAYS}}
+        _r193_finalize_run(key, state, payload, _now_utc_text())
+        return {'ok': not bool(errors), 'status':state,'run_key':key,'dry_run':dry_run,
+                'databases':results,'errors':errors}
+    except Exception:
+        app.logger.exception('R193 retention orchestration aborted')
+        try:
+            _r193_finalize_run(key,'failed',{'error_class':'OrchestrationError'},_now_utc_text())
+        except Exception:
+            app.logger.exception('R193 could not persist failed maintenance status')
+        raise
+
+
+def _r193_db_bytes(conn):
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT pg_database_size(current_database())')
+        return int(cur.fetchone()[0])
+    finally:
+        cur.close()
+
+
+def _r193_storage_overview():
+    # Admin only. Never return credentials, user rows or any athlete note.
+    init_memory_db()
+    out = {'product':{'state':'unavailable'}, 'personal':{'state':'not_configured'}, 'recent_runs':[]}
+    for kind in ('product','personal'):
+        if kind == 'personal' and not OWNER_PERSONAL_DATABASE_URL:
+            continue
+        conn = None
+        try:
+            if kind == 'personal':
+                if OWNER_PERSONAL_DATABASE_URL == DATABASE_URL:
+                    raise RuntimeError('Product and Personal database URLs must differ')
+                conn = _owner_personal_db_connect()
+            else:
+                conn = _db_connect()
+            used = _r193_db_bytes(conn)
+            quota = DATABASE_STORAGE_LIMIT_BYTES
+            tables=[]
+            try:
+                cur = conn.cursor()
+                cur.execute('SELECT relname,pg_total_relation_size(relid) AS bytes FROM pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC LIMIT 8')
+                tables=[{'name':row[0],'human':_human_bytes(int(row[1]))} for row in cur.fetchall()]
+                cur.close()
+            except Exception:
+                conn.rollback()  # Optional table ranking must never hide database size metrics.
+            out[kind]={'state':'available','bytes':used,'human':_human_bytes(used), 'tables':tables,
+                       'configured_quota_bytes':quota,'quota_human':_human_bytes(quota),
+                       'approx_percent':round(100*used/quota,1) if quota else None}
+        except Exception as exc:
+            out[kind]={'state':'unavailable','error_class':type(exc).__name__}
+        finally:
+            if conn is not None:
+                conn.close()
+    try:
+        rows = _db_execute('SELECT run_key,started_at_utc,updated_at_utc,status,details_json FROM storage_maintenance_runs ORDER BY started_at_utc DESC LIMIT 8',fetch=True)
+        for row in rows:
+            try:
+                detail=json.loads(row.get('details_json') or '{}')
+            except Exception:
+                detail={}
+            out['recent_runs'].append({'run_key':row.get('run_key'),'started_at_utc':row.get('started_at_utc'),
+                                       'updated_at_utc':row.get('updated_at_utc'),'status':row.get('status'),
+                                       'details':detail})
+    except Exception as exc:
+        out['history_error_class']=type(exc).__name__
+    return out
+
+R193_STORAGE_PAGE = """
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Storage &amp; Retention · THE LAB</title>
+<style>body{font-family:Arial,sans-serif;color:#f2f8fc;background:#0c1726;margin:0}main{max-width:1100px;margin:auto;padding:24px}.lead{color:#a5c7df}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.box{padding:18px;border:1px solid #2e5063;border-radius:13px;background:#12283c;margin:12px 0}.title{font-size:28px;margin:8px 0 0}.muted{font-size:13px;color:#b2cede}.bad{color:#ff9da7}.good{color:#75e5aa}a{color:#54d7e6}.bar{height:9px;border-radius:7px;background:#2c4055;overflow:hidden}.fill{background:#44cedb;height:100%;max-width:100%}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #284259;padding:10px;text-align:left}code{overflow-wrap:anywhere}</style></head>
+<body><main><a href="{{ url_for('admin_control_center') }}">← Control Center</a> · <a href="{{ url_for('admin_system_diagnostics') }}">System Diagnostics</a>
+<h1 class="title">Storage &amp; Retention</h1><p class="lead">Owner-only · autonomous retention history · no database administration required</p>
+<div class="grid">{% for name,label in [('product','Product Neon'),('personal','Personal Neon')] %}{% set p=overview[name] %}<section class="box"><h2>{{ label }}</h2><p class="muted">{{ p.state }}</p>
+{% if p.state == 'available' %}<p><strong>{{ p.human }}</strong> / {{ p.quota_human }} <span class="muted">(configured estimate)</span></p><div class="bar"><div class="fill" style="width:{{ [100,p.approx_percent]|min }}%"></div></div><p class="muted">{{ p.approx_percent }}% of configured per-project reference</p>
+{% if p.tables %}<details><summary>Largest tables</summary><table>{% for t in p.tables %}<tr><td>{{ t.name }}</td><td>{{ t.human }}</td></tr>{% endfor %}</table></details>{% endif %}
+{% elif p.error_class %}<p class="bad">Metrics unavailable · {{ p.error_class }}</p>{% endif %}</section>{% endfor %}</div>
+<section class="box"><h2>Automatic maintenance</h2><p><strong>{{ 'Configured' if enabled else 'Not enabled' }}</strong> · {{ 'PREVIEW ONLY — scheduled job does not delete (legacy on-visit 42-day cleanup still active)' if preview else 'live retention after authenticated scheduler invocation' }}</p>
+<p class="muted">Runs only with a separate secret-bearing scheduled POST. The 10-minute /healthz probe is unchanged and never accesses Neon.</p>
+<table><tr><td>Daily structured feedback</td><td>42 days</td></tr><tr><td>Daily free-text notes</td><td>21 days</td></tr><tr><td>Routine audit events</td><td>90 days</td></tr><tr><td>Security/incident/admin audit events</td><td>365 days</td></tr><tr><td>AI usage records / detailed prompt profiles</td><td>180 / 30 days</td></tr><tr><td>Inactive/revoked sessions</td><td>30 days</td></tr><tr><td>Nova memory, planning, latest report, evidence history</td><td><strong class="good">Never auto-deleted</strong></td></tr></table></section>
+<section class="box"><h2>Last maintenance runs</h2>{% if overview.recent_runs %}<table><tr><th>Run</th><th>Status</th><th>When (UTC)</th><th>Records changed</th></tr>{% for run in overview.recent_runs %}<tr><td><code>{{ run.run_key }}</code></td><td>{{ run.status }}</td><td>{{ run.updated_at_utc }}</td><td>{{ run.details.get('would_change_count',0) if run.status == 'preview' else run.details.get('change_count','—') }}{{ ' (preview)' if run.status == 'preview' else '' }}</td></tr>{% endfor %}</table>{% else %}<p class="muted">No maintenance executions recorded yet. Installing code does not start the scheduler.</p>{% endif %}</section>
+<p class="muted">Database size is not total Neon project billed storage. PostgreSQL may reuse cleared pages without immediately reducing file size. No VACUUM FULL.</p></main></body></html>
+"""
+
+
+@app.route('/admin/storage', methods=['GET'])
+def r193_admin_storage():
+    admin = require_admin()
+    if not admin:
+        return redirect(url_for('login'))
+    overview = _r193_storage_overview()
+    if request.args.get('format') == 'json':
+        resp = jsonify(overview)
+        resp.headers['Cache-Control'] = 'private, no-store'
+        return resp
+    resp = Response(render_template_string(R193_STORAGE_PAGE, overview=overview,
+                 enabled=R193_MAINTENANCE_ENABLED and len(R193_MAINTENANCE_KEY)>=32,
+                 preview=R193_DRY_RUN), mimetype='text/html')
+    resp.headers['Cache-Control'] = 'private, no-store'
+    resp.headers['X-Robots-Tag'] = 'noindex, nofollow'
+    return resp
+
+
+@app.route('/internal/maintenance/retention', methods=['POST'])
+def r193_maintenance_cron():
+    # Explicit machine authentication, distinct from browser cookies/CSRF.
+    # No secret in URL, JSON reply, logs or Product Neon. Missing config always denies.
+    actual = request.headers.get('X-TheLab-Maintenance-Key') or ''
+    if not R193_MAINTENANCE_ENABLED or len(R193_MAINTENANCE_KEY)<32 or not hmac.compare_digest(actual,R193_MAINTENANCE_KEY):
+        return Response(status=404, headers={'Cache-Control':'no-store'})
+    if not _db_is_postgres():
+        return jsonify({'ok':False,'status':'product_database_not_postgres'}),503
+    try:
+        result = _r193_run_retention()
+    except Exception as exc:
+        app.logger.exception('R193 maintenance job failed')
+        return jsonify({'ok':False,'error_class':type(exc).__name__}),503
+    code = 200 if result.get('ok') else 503
+    response = jsonify(result)
+    response.status_code = code
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+    return response
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.69 WIP R193 · AUTONOMOUS STORAGE RETENTION + NOVA MEMORY PRESERVATION · R192 BASELINE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
