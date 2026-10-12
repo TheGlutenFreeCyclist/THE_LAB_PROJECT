@@ -41075,33 +41075,55 @@ def _v190_block_dose_evidence(ledger, activities, direction, now=None):
 _build_question_state_r189_final = build_question_state
 
 def build_question_state(goal_key, evidence_ledger=None, performance_evidence=None, roadmap=None, microcycle_ledger=None, aerobic_metabolic_range=None, now=None):
+    """Preserve completed-block dose only when R111 breadth is satisfied.
+
+    R191 repairs the R190 unordered append that caused a false
+    QUESTION_STATE_CLOSED_SET_MISMATCH when later dimensions had closed before
+    SPECIFIC_DOSE/TIME_AT_PRESSURE was carried forward. The canonical graph
+    order remains the sole source for open/closed lists and cannot be bypassed.
+    """
     out = _build_question_state_r189_final(goal_key, evidence_ledger, performance_evidence, roadmap, microcycle_ledger, aerobic_metabolic_range, now=now)
     if not isinstance(out, dict):
         return out
-    led = microcycle_ledger if isinstance(microcycle_ledger,dict) else {}
+    led = microcycle_ledger if isinstance(microcycle_ledger, dict) else {}
     hist = led.get('block_foundation_evidence') or {}
+    hist = hist if isinstance(hist, dict) else {}
     dims = out.get('dimensions') or {}
-    key=hist.get('dimension')
-    current = dims.get(key) if isinstance(dims,dict) else None
-    # No inference from a prior displayed badge, inferred plan, or another goal.
-    valid = (isinstance(current,dict) and hist.get('schema')==R190_SCHEMA
-             and hist.get('goal')==str(goal_key or '').upper()
-             and hist.get('block_start')==out.get('scope_start')
+    dims = dims if isinstance(dims, dict) else {}
+    goal = str(goal_key or 'ENDURANCE_BASE').upper()
+    graph = _V503_GOAL_GRAPH.get(goal) or _V503_GOAL_GRAPH['ENDURANCE_BASE']
+    seq = list(graph.get('sequence') or ())
+    key = hist.get('dimension')
+    current = dims.get(key) if isinstance(key, str) else None
+    facet = out.get('facet_profile') or {}
+    facet = facet if isinstance(facet, dict) else {}
+    required = int(_rhythm_num(facet.get('required_count')) or 0)
+    covered = int(_rhythm_num(facet.get('coverage_count')) or 0)
+    # R111 requires goal-duration facet coverage as well as earned dose.
+    # An earned completed week is evidence, never permission to skip breadth.
+    breadth_satisfied = not required or covered >= required
+    valid = (key in seq and isinstance(current, dict)
+             and hist.get('schema') == R190_SCHEMA
+             and hist.get('goal') == goal
+             and hist.get('block_start') == out.get('scope_start')
              and hist.get('earned') is True and bool(hist.get('earned_windows')))
-    if valid and not current.get('exit_satisfied'):
-        previous = {'state':current.get('state'),'exit_satisfied':current.get('exit_satisfied'),
-                    'reason':current.get('reason')}
+    if valid and not current.get('exit_satisfied') and breadth_satisfied:
+        previous = {'state': current.get('state'), 'exit_satisfied': current.get('exit_satisfied'),
+                    'reason': current.get('reason')}
         witness = hist['earned_windows'][-1]
         dims[key] = {
-            **current, 'state':'SUPPORTED', 'exit_satisfied':True,
-            'reason':f"Completed active-block dose progression was established in {witness['window_start']}–{witness['window_end']}; Monday's new incomplete dose window does not revoke it.",
-            'last_evidence_date':witness['window_end'],
-            'source':'COMPLETED_ACTIVE_BLOCK_NATIVE_POWER_ZONE_WINDOWS',
-            'foundation_continuity':{'schema':R190_SCHEMA,'reason_code':'WEEK_ROLLOVER_NOT_BLOCK_REGRESSION',
-                                     'live_week_record':previous,'completed_witness':copy.deepcopy(witness)} }
-        out['closed_dimensions'] = list(dict.fromkeys([*(out.get('closed_dimensions') or []),key]))
-        out['open_dimensions'] = [x for x in (out.get('open_dimensions') or []) if x!=key]
-    out['foundation_dose_accountability'] = copy.deepcopy(hist) if isinstance(hist,dict) else {}
+            **current, 'state': 'SUPPORTED', 'exit_satisfied': True,
+            'reason': f"Completed active-block dose progression was established in {witness['window_start']}–{witness['window_end']}; Monday's new incomplete dose window does not revoke it.",
+            'last_evidence_date': witness['window_end'],
+            'source': 'COMPLETED_ACTIVE_BLOCK_NATIVE_POWER_ZONE_WINDOWS',
+            'foundation_continuity': {'schema': R190_SCHEMA, 'reason_code': 'WEEK_ROLLOVER_NOT_BLOCK_REGRESSION',
+                                      'live_week_record': previous, 'completed_witness': copy.deepcopy(witness)}}
+    # Exact ordering and membership required by _v87_cross_module_authority_guard.
+    # Do not append; doing so fails whenever a subsequent question is closed.
+    out['open_dimensions'] = [d for d in seq if d not in {'REVALIDATION','EXTENSION_OR_REVALIDATION'}
+                              and not bool((dims.get(d) or {}).get('exit_satisfied'))]
+    out['closed_dimensions'] = [d for d in seq if bool((dims.get(d) or {}).get('exit_satisfied'))]
+    out['foundation_dose_accountability'] = copy.deepcopy(hist)
     return out
 
 
@@ -41323,7 +41345,7 @@ BASE_CSS+=r"""
 .v190-why details{margin-top:9px}.v190-why summary{cursor:pointer;font-size:13px;font-weight:700}
 @media(max-width:390px){.v190-why{padding:12px}}
 """
-APP_VERSION = 'THE LAB · PRODUCT V4.9.66 WIP R190 · AUDITABLE NOVA DECISIONS + BLOCK EVIDENCE CONTINUITY · R189 BASELINE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.67 WIP R191 · QUESTION STATE AUDIT ORDER + BREADTH SAFETY · R190 BASELINE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
