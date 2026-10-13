@@ -42337,5 +42337,244 @@ def _v195_attach_python_qa_audit(data, owner_user_id=None, now=None):
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.75 CANDIDATE R195.1 · REMOTE PYTHON QA INTEGRITY COVERAGE · R195.0 BASELINE"
 
+
+# R195.2 · SAME-DAY REISSUE INTEGRITY + RACE DISPLACEMENT AUTHORITY
+# One narrow ledger post-processor and one read-only QA extension. No changes
+# to training/FTP/power calculation, race load, hard spacing, or UI.
+R1952_SCHEMA = "V4.9.76-R195.2-RACE-REISSUE-INTEGRITY-1"
+
+
+def _v1952_clock_text(row):
+    """Prefer an explicit same-slot clock; avoid merging two daily opportunities."""
+    text = str((row or {}).get('slot') or '')
+    m = re.search(r'around\s+(\d{1,2}:\d{2})\s*(AM|PM)', text, flags=re.I)
+    if m:
+        return (m.group(1).upper(), m.group(2).upper())
+    return None
+
+
+def _v1952_day(row):
+    return str((row or {}).get('date') or '')[:10]
+
+
+def _v1952_wid(row):
+    return str((row or {}).get('nova_workout_id') or (row or {}).get('nova_contract_id') or '').strip()
+
+
+def _v1952_equiv(row):
+    """Exact mechanics + watt contract + matching clock; not just same workout id."""
+    if not isinstance(row,dict): return None
+    clock = _v1952_clock_text(row)
+    if not clock or not _v1952_day(row) or not _v1952_wid(row): return None
+    main = ' '.join(str(row.get('main_set') or '').split())
+    if not main: return None
+    return (_v1952_day(row), _v1952_wid(row), clock, main,
+            row.get('prescribed_power_low'), row.get('prescribed_power_high'),
+            row.get('interval_minutes'), str(row.get('title') or ''))
+
+
+def _v1952_race_days(sessions):
+    return {str(r.get('date') or '')[:10] for r in (sessions or []) if
+            isinstance(r,dict) and (str(r.get('restriction') or '').upper()=='RACE' or r.get('is_race'))}
+
+
+def _v1952_accepted_hard(sessions):
+    return {(_v1952_day(r),_v1952_wid(r)) for r in (sessions or [])
+            if isinstance(r,dict) and _v195_hard(r) and _v1952_wid(r)}
+
+
+def _v1952_withdrawn_days(sessions, decision_action):
+    """RACE PRIORITY: only explicit forecasted easy/race opportunities, not blank dates."""
+    if str(decision_action or '').upper()!='RACE_PRIORITY': return set()
+    return {str(r.get('date') or '')[:10] for r in (sessions or []) if
+            isinstance(r,dict) and str(r.get('date') or '').strip()
+            and (str(r.get('restriction') or '').upper()=='RACE' or r.get('is_race') or
+                 str(r.get('intensity_class') or '').lower()=='recovery')}
+
+
+def _v1952_reconcile_ledger(ledger, sessions, now=None, decision_action=None):
+    """Pure copy-on-write reconciliation. Never select/modify athlete workouts.
+
+    - Retire older exact same-day, same-time, same-mechanics reissues.
+    - Annotate quality displaced by race-priority recovery, preserving its
+      historical mechanics but preventing automatic missed-hard carry.
+    - Do not infer race priority from merely observing a recent Zwift race.
+    """
+    if not isinstance(ledger,dict): return ledger
+    out = copy.deepcopy(ledger)
+    hist = [x for x in (out.get('prescription_history') or []) if isinstance(x,dict)]
+    now = now or get_rome_now()
+    stamp = now.isoformat(timespec='seconds')
+    groups={}
+    for r in hist:
+        if str(r.get('prescription_status') or '').upper()!='ACTIVE':continue
+        key=_v1952_equiv(r)
+        if key is not None:groups.setdefault(key,[]).append(r)
+    retired=[]
+    for rows in groups.values():
+        if len(rows)<2:continue
+        # Unique, causally later issue required; ambiguous ties stay intact.
+        issued=[]
+        for r in rows:
+            try:dt=datetime.fromisoformat(str(r.get('recorded_at_local') or '').replace('Z','+00:00'))
+            except (ValueError,TypeError):dt=None
+            if dt is None or not r.get('prescription_fingerprint'):break
+            issued.append((dt,r))
+        if len(issued)!=len(rows):continue
+        issued.sort(key=lambda p:p[0],reverse=True)
+        if len(issued)>1 and issued[0][0]==issued[1][0]:continue
+        latest=issued[0][1]; winner=str(latest.get('prescription_fingerprint'))
+        for _,r in issued[1:]:
+            if str(r.get('prescription_fingerprint'))==winner:continue
+            r.update(prescription_status='SUPERSEDED',superseded_at_local=stamp,
+                     superseded_by_fingerprint=winner,superseded_by_workout_id=_v1952_wid(latest),
+                     supersession_reason='R1952_EXACT_SAME_TIME_MECHANICS_LATER_ISSUANCE',
+                     supersession_schema=R1952_SCHEMA)
+            retired.append(str(r.get('prescription_fingerprint')))
+    suspended=[]
+    if str(decision_action or '').upper()=='RACE_PRIORITY':
+        accepted=_v1952_accepted_hard(sessions)
+        easy_days=_v1952_withdrawn_days(sessions,decision_action)
+        for row in hist:
+            if str(row.get('prescription_status') or '').upper() not in {'ACTIVE','MISSED_UNEXECUTED'}:continue
+            day=_v1952_day(row)
+            if (not day or day not in easy_days or not _v195_hard(row)
+                or (day,_v1952_wid(row)) in accepted):continue
+            row['automatic_carry_eligibility']='SUSPENDED_BY_RACE_PRIORITY'
+            row['effective_execution_authority']='NOT_IN_CURRENT_ATHLETE_PLAN'
+            row['race_displacement_schema']=R1952_SCHEMA
+            suspended.append(str(row.get('prescription_fingerprint') or ''))
+    # A later confirmed hard recommendation for the exact same slot is the
+    # only way to release a suspended plan; a mere change to TRAIN is not enough.
+    accepted=_v1952_accepted_hard(sessions)
+    for row in hist:
+        if str(row.get('automatic_carry_eligibility') or '')=='SUSPENDED_BY_RACE_PRIORITY':
+            if (_v1952_day(row),_v1952_wid(row)) in accepted:
+                row.pop('automatic_carry_eligibility',None)
+                row.pop('effective_execution_authority',None)
+                row.pop('race_displacement_schema',None)
+            elif (_v1952_date(_v1952_day(row)) is not None and
+                  _v1952_date(_v1952_day(row)) < now.date() and
+                  str(row.get('prescription_status') or '').upper() in {'ACTIVE','MISSED_UNEXECUTED'}):
+                row['prescription_status']='WITHDRAWN'
+                row['withdrawn_at_local']=stamp
+                row['withdrawal_reason']='R1952_EXPLICIT_RACE_RECOVERY_PROJECTION_SUPERSEDED_EXECUTION'
+    out['prescription_history']=hist[-32:]
+    a=out.get('primary_anchor')
+    if isinstance(a,dict):
+        ad=_v1952_day(a)
+        if (str(decision_action or '').upper()=='RACE_PRIORITY'
+            and ad in _v1952_withdrawn_days(sessions,decision_action)
+            and str(a.get('status') or '').upper() in {'PLANNED','ACTIVE'}):
+            a['effective_execution_authority']='NOT_IN_CURRENT_ATHLETE_PLAN'
+            a['effective_status']='RACE_RECOVERY_SUSPENDED'
+            a['race_displacement_schema']=R1952_SCHEMA
+        elif (ad,_v1952_wid(a)) in accepted:
+            a.pop('effective_execution_authority',None)
+            a.pop('effective_status',None)
+            a.pop('race_displacement_schema',None)
+    prior_integrity=out.get('race_reissue_integrity') or {}
+    # Stable cumulative telemetry, not a counter that disappears on the next Snapshot.
+    prior_retired=[x for x in (prior_integrity.get('reissue_fingerprints_retired') or []) if isinstance(x,str)]
+    all_retired=list(dict.fromkeys(prior_retired+retired))[-32:]
+    pending_suspended=sum(1 for r in hist if
+        str(r.get('automatic_carry_eligibility') or '')=='SUSPENDED_BY_RACE_PRIORITY'
+        and str(r.get('prescription_status') or '').upper() in {'ACTIVE','MISSED_UNEXECUTED'})
+    # Normal athletes with no ambiguous history or race displacement must
+    # keep the exact R195.1 ledger and incur ZERO additional database writes.
+    if (not all_retired and not pending_suspended and not prior_integrity
+        and out.get('prescription_history',[]) == ledger.get('prescription_history',[])
+        and out.get('primary_anchor') == ledger.get('primary_anchor')):
+        return ledger
+    out['race_reissue_integrity']={
+        'schema':R1952_SCHEMA, 'exact_reissues_retired':len(all_retired),
+        'reissue_fingerprints_retired':all_retired,
+        'race_displaced_prescriptions':pending_suspended,
+        'rule':'A race is real load. Forecasted recovery cancels automatic hard-debt carry; future recovery can be reassessed. No race is manufactured from training labels.'}
+    return out
+
+
+def _v1952_date(value):
+    try:return date.fromisoformat(str(value or '')[:10])
+    except (TypeError,ValueError):return None
+
+
+# PRE-CARRY GUARD: old R166 may carry a missed workout before the ledger update.
+_v166_is_missed_candidate_r1951 = _v166_is_missed_candidate
+
+def _v166_is_missed_candidate(row, ledger, today):
+    if str((row or {}).get('automatic_carry_eligibility') or '')=='SUSPENDED_BY_RACE_PRIORITY':
+        return False
+    return _v166_is_missed_candidate_r1951(row,ledger,today)
+
+
+_update_microcycle_ledger_r1951 = update_microcycle_ledger_from_snapshot
+
+def update_microcycle_ledger_from_snapshot(ledger,sessions,user_id=None,now=None):
+    """Change only attributable ledger lifecycle; preserve original prescription."""
+    now=now or get_rome_now()
+    out=_update_microcycle_ledger_r1951(ledger,sessions,user_id=user_id,now=now)
+    # Canonical race priority lives in the runtime decision, but update()
+    # receives only sessions. Require actual calendar race on the projected
+    # horizon AND at least one race-aware recovery prescription. This avoids
+    # mislabeling ordinary easy days on normal training plans.
+    ss=list(sessions or [])
+    race=_v1952_race_days(ss)
+    action='RACE_PRIORITY' if race and any(isinstance(x,dict) and
+        str(x.get('intensity_class') or '').lower()=='recovery' for x in ss) else None
+    cleaned=_v1952_reconcile_ledger(out,ss,now=now,decision_action=action)
+    if cleaned!=out and isinstance(cleaned,dict) and cleaned.get('ledger_id'):
+        payload=json.dumps(cleaned,ensure_ascii=False,separators=(',',':'),default=_report_json_default)
+        _db_execute('UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?',
+                    (payload,_now_utc_text(),cleaned['ledger_id'],_data_owner_user_id(user_id)))
+    return cleaned
+
+
+_v195_analyze_r1951 = _v195_analyze
+
+def _v195_analyze(prior,current,now=None):
+    """QA-only cross-authority checks, including ephemeral remote Python QA."""
+    report=_v195_analyze_r1951(prior,current,now=now)
+    if not isinstance(report,dict):return report
+    cur=current if isinstance(current,dict) else {}
+    ledger=cur.get('microcycle_ledger') or {}
+    sessions=cur.get('next_sessions') or []
+    action=(cur.get('nova_decision') or {}).get('action')
+    # In ephemeral QA the ledger has not been committed/reconciled.
+    review=_v1952_reconcile_ledger(ledger,sessions,now=now,decision_action=action)
+    old=(ledger.get('prescription_history') or [])
+    revised=(review.get('prescription_history') or [])
+    active_before=sum(str(r.get('prescription_status') or '').upper()=='ACTIVE' for r in old if isinstance(r,dict))
+    active_after=sum(str(r.get('prescription_status') or '').upper()=='ACTIVE' for r in revised if isinstance(r,dict))
+    race_displaced=(review.get('race_reissue_integrity') or {}).get('race_displaced_prescriptions',0)
+    if active_after<active_before:
+        # This is precisely resolvable once a persisted Snapshot commits; QA
+        # must not suggest that it has already mutated the athlete's DB.
+        report['issues']=[x for x in (report.get('issues') or []) if
+            x.get('code')!='MULTIPLE_ACTIVE_PRESCRIPTION_IDENTITIES']
+        report['issues'].append({'code':'EXACT_DUPLICATE_REISSUES_RECONCILABLE','severity':'WATCH',
+            'facts':{'retirable':active_before-active_after,'not_mutated_in_qa':True}})
+    if race_displaced:
+        report['issues'].append({'code':'RACE_PREEMPTED_HISTORICAL_HARD_PLANS','severity':'WATCH',
+            'facts':{'affected':race_displaced,
+                     'meaning':'Historical intensity is not currently executable or automatic training debt.'}})
+    anchor=review.get('primary_anchor') or {}
+    if anchor.get('effective_status')=='RACE_RECOVERY_SUSPENDED':
+        report['historical_anchor_authority']={
+            'date':anchor.get('date'),'title':anchor.get('title'),
+            'effective_status':'RACE_RECOVERY_SUSPENDED',
+            'historical_status':anchor.get('status')}
+    report['issues']=report['issues'][:24]
+    report['issue_count']=len(report['issues'])
+    report['state']='ALERT' if any(x.get('severity')=='ALERT' for x in report['issues']) else ('WATCH' if report['issues'] else 'PASS')
+    report['race_reissue_integrity']=(review.get('race_reissue_integrity') or {})
+    report['race_reissue_integrity_schema']=R1952_SCHEMA
+    report['fingerprint']=hashlib.sha256(json.dumps({'base':report.get('fingerprint'),
+        'issues':report['issues'],'race_reissue':report.get('historical_anchor_authority')},
+        sort_keys=True,default=str).encode()).hexdigest()[:20]
+    return report
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.76 CANDIDATE R195.2 · RACE REISSUE INTEGRITY · R195.1 BASELINE"
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
