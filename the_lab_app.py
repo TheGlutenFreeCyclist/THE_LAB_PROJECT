@@ -41348,6 +41348,16 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
         'current_snapshot_trace_always_available':True,
         'no_ai_calls_required':True,'source':'ACTUAL_SNAPSHOT_DECISION_STATES',
         'historical_before_r190_incomplete':True}
+    # R195.0 shadow integrity compares with this athlete's previous report.
+    # No veto/replan, no additional DB query, no external service, no athlete UI.
+    # If diagnostics unexpectedly fail, preserve the R194.3 save path.
+    try:
+        incoming['decision_integrity_audit'] = _v195_analyze(prior, incoming, now=now or get_rome_now())
+    except Exception as exc:
+        incoming['decision_integrity_audit'] = {'schema':R195_SCHEMA,
+            'mode':'SHADOW_READ_ONLY', 'state':'UNASSESSED',
+            'issues':[{'code':'SHADOW_VALIDATOR_UNAVAILABLE','severity':'WATCH','facts':{'error_class':type(exc).__name__}}],
+            'policy':'R195.0 never interrupts normal Snapshot persistence.'}
     return _save_latest_report_r189_final(incoming,now=now,owner_user_id=owner_id,qa_replay_bundle=qa_replay_bundle)
 
 # R194.2 ATHLETE-UI BOUNDARY — diagnostics stay in Product Snapshot and QA.
@@ -42119,6 +42129,167 @@ def _v112_reference_only_power(session):
     return _v112_reference_only_power_before_r1943(session)
 
 APP_VERSION = 'THE LAB · PRODUCT V4.9.73 CANDIDATE R194.3 · EVIDENCE-BASED EXPLICIT POWER · R194.2 BASELINE'
+
+
+# R195.0: read-only, per-athlete decision integrity telemetry.
+# This module has no persistence, IO, model calls, or mutation.
+
+R195_SCHEMA = "V4.9.74-R195.0-DECISION-INTEGRITY-SHADOW-1"
+R195_TERMINAL = frozenset({
+    "FULFILLED", "SUPERSEDED", "CANCELLED", "WITHDRAWN",
+    "EXPIRED_BY_NEW_HARD_EVIDENCE", "EXPIRED", "COMPLETED",
+})
+
+
+def _v195_date(value):
+    try:
+        return date.fromisoformat(str(value or "")[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _v195_rows(snapshot):
+    return [x for x in ((snapshot.get('microcycle_ledger') or {}).get('prescription_history') or []) if isinstance(x, dict)]
+
+
+def _v195_id(row):
+    return str(row.get('prescription_fingerprint') or '').strip()
+
+
+def _v195_session_id(row):
+    return str(row.get('nova_workout_id') or row.get('nova_contract_id') or '').strip()
+
+
+def _v195_hard(row):
+    return (isinstance(row, dict)
+            and str(row.get('intensity_class') or '').lower() in {'tempo', 'threshold', 'vo2'}
+            and str(row.get('intensity') or '').upper() != 'RACE'
+            and str(row.get('restriction') or '').upper() != 'RACE'
+            and not row.get('is_race'))
+
+
+def _v195_primary(snapshot):
+    # The first future non-race quality prescription, not an old history row.
+    for row in snapshot.get('next_sessions') or []:
+        if _v195_hard(row) and _v195_session_id(row):
+            return {'date':str(row.get('date') or '')[:10],
+                    'workout_id':_v195_session_id(row),
+                    'low':row.get('prescribed_power_low'),
+                    'high':row.get('prescribed_power_high')}
+    return None
+
+
+def _v195_analyze(prior, current, now=None):
+    """Observe contradictions; NEVER change coaching decisions or athletes' data.
+
+    Accepts the *data* dictionaries from consecutive persisted Snapshots.
+    A finding is not proof of a physiological error. Policy: precise invariants
+    can be ALERT; potentially legitimate coaching changes are WATCH only.
+    """
+    previous = prior if isinstance(prior, dict) else {}
+    incoming = current if isinstance(current, dict) else {}
+    date_now = _v195_date(now.isoformat() if isinstance(now, (datetime, date)) else now)
+    issues = []
+    def add(code, severity, **facts):
+        issues.append({'code':code, 'severity':severity, 'facts':facts})
+
+    earlier = {_v195_id(r):r for r in _v195_rows(previous) if _v195_id(r)}
+    curr_rows = _v195_rows(incoming)
+    for row in curr_rows:
+        fp = _v195_id(row)
+        if not fp or fp not in earlier:
+            continue
+        old = str(earlier[fp].get('prescription_status') or '').upper()
+        new = str(row.get('prescription_status') or '').upper()
+        if old in R195_TERMINAL and new in {'ACTIVE', 'PLANNED', 'MISSED_UNEXECUTED'}:
+            add('TERMINAL_PRESCRIPTION_REACTIVATED', 'ALERT', fingerprint=fp,
+                earlier_status=old, current_status=new, workout_id=_v195_session_id(row))
+
+    active = {}
+    for row in curr_rows:
+        if str(row.get('prescription_status') or '').upper() != 'ACTIVE':
+            continue
+        k = (str(row.get('date') or '')[:10], _v195_session_id(row))
+        if not k[0] or not k[1]:
+            continue
+        active.setdefault(k, set()).add(_v195_id(row) or str(row.get('recorded_at_local') or 'UNKNOWN'))
+    for (day, wid), fingerprints in sorted(active.items()):
+        if len(fingerprints)>1:
+            add('MULTIPLE_ACTIVE_PRESCRIPTION_IDENTITIES', 'WATCH',
+                date=day, workout_id=wid, identities=len(fingerprints),
+                note='Different period labels might describe one opportunity; review before any automatic consolidation.')
+
+    # Consistency between athlete-visible target and canonical watt contract.
+    for row in incoming.get('next_sessions') or []:
+        if not _v195_hard(row):
+            continue
+        wid = _v195_session_id(row)
+        if not wid:
+            continue
+        band = row.get('power_prescription') or {}
+        if band.get('state') == 'PRESCRIBED':
+            if (row.get('prescribed_power_low') != band.get('low_watts') or
+                row.get('prescribed_power_high') != band.get('high_watts')):
+                add('POWER_CONTRACT_MISMATCH', 'ALERT', date=str(row.get('date') or '')[:10], workout_id=wid)
+        elif (str(row.get('stimulus_architecture_state') or '') == 'NOVA_CANONICAL_LIBRARY'
+              and not wid.startswith('SPR_')):
+            add('HARD_REPEAT_WITHOUT_POWER_CONTRACT', 'WATCH', date=str(row.get('date') or '')[:10], workout_id=wid)
+
+    # Cross-snapshot changes can be legitimate; an unchanged recorded core input
+    # with a changed workout is a stronger (but still reviewable) signal.
+    pp, cp = _v195_primary(previous), _v195_primary(incoming)
+    if pp and cp and pp != cp:
+        prior_fingerprint = str((previous.get('nova_replay_fixture') or {}).get('input_fingerprint') or '')
+        curr_fingerprint = str((incoming.get('nova_replay_fixture') or {}).get('input_fingerprint') or '')
+        if prior_fingerprint and curr_fingerprint and prior_fingerprint == curr_fingerprint:
+            add('PLAN_CHANGED_WITH_IDENTICAL_REPLAY_INPUT', 'ALERT', from_plan=pp, to_plan=cp)
+        else:
+            # A documented change in decision/gate/goal or completed activities can
+            # justify replanning. Do not label those cases as anomalies automatically.
+            prior_action = str((previous.get('nova_decision') or {}).get('action') or '')
+            curr_action = str((incoming.get('nova_decision') or {}).get('action') or '')
+            prior_dim = str((previous.get('nova_decision') or {}).get('dimension') or '')
+            curr_dim = str((incoming.get('nova_decision') or {}).get('dimension') or '')
+            prior_gate = str((previous.get('nova_prescription') or {}).get('quality_window_state') or '')
+            curr_gate = str((incoming.get('nova_prescription') or {}).get('quality_window_state') or '')
+            if (prior_action,prior_dim,prior_gate) == (curr_action,curr_dim,curr_gate):
+                add('PLAN_CHANGED_WITHOUT_OBVIOUS_DECISION_GATE_DELTA', 'WATCH',
+                    from_plan=pp, to_plan=cp,
+                    note='A new athlete activity or another input change may still justify this change.')
+
+    # Match a competition priority against any second hard prescription on the same day.
+    sessions = [r for r in incoming.get('next_sessions') or [] if isinstance(r, dict)]
+    race_days = {str(r.get('date') or '')[:10] for r in sessions if
+        str(r.get('restriction') or '').upper()=='RACE' or r.get('is_race')}
+    for row in sessions:
+        if _v195_hard(row) and str(row.get('date') or '')[:10] in race_days:
+            add('EXTRA_HARD_SESSION_ON_RACE_DAY', 'ALERT', date=str(row.get('date') or '')[:10], workout_id=_v195_session_id(row))
+
+    # A dated ACTUAL report must not reissue today's already completed workout.
+    fulfilled = {(str(r.get('actual_date') or '')[:10], _v195_session_id(r))
+        for r in curr_rows if str(r.get('prescription_status') or '').upper()=='FULFILLED' and r.get('executed_activity_id')}
+    for row in sessions:
+        key = (str(row.get('date') or '')[:10], _v195_session_id(row))
+        if _v195_hard(row) and key in fulfilled:
+            add('EXECUTED_SAME_DAY_HARD_REISSUED', 'ALERT', date=key[0], workout_id=key[1])
+
+    seen = set()
+    distinct = []
+    for item in issues:
+        token = (item['code'], json.dumps(item['facts'], sort_keys=True, default=str))
+        if token not in seen:
+            distinct.append(item)
+            seen.add(token)
+    state = 'ALERT' if any(x['severity']=='ALERT' for x in distinct) else ('WATCH' if distinct else 'PASS')
+    digest = hashlib.sha256(json.dumps({'previous':pp,'current':cp,'issues':distinct},
+        sort_keys=True, default=str).encode('utf-8')).hexdigest()[:20]
+    return {'schema':R195_SCHEMA, 'mode':'SHADOW_READ_ONLY', 'state':state,
+            'issues':distinct[:24], 'issue_count':len(distinct),
+            'previous_quality_plan':pp, 'current_quality_plan':cp,
+            'comparison_available':bool(previous), 'fingerprint':digest,
+            'policy':'Diagnostics only. Never changes workout mechanics, recovery gates, retention, or Snapshot persistence.'}
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.74 CANDIDATE R195.0 · DECISION INTEGRITY SHADOW · R194.3 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
