@@ -13807,6 +13807,9 @@ def build_vo2max_trend(season_wellness, current_power_payload=None, current_powe
         "ymin": ymin, "ymax": ymax,
     }
 def _race_repeatability_from_block(block):
+    # R195.4: race surges and raw laps are NOT structured repeat training.
+    if _v1954_confirmed_competition(block):
+        return None
     block=block or {};rep=block.get("repeatability") or {}
     watts=[float(x) for x in (rep.get("watts") or []) if _num(x) is not None]
     interval_secs=_num(rep.get("interval_secs"));reps=int(_num(rep.get("reps")) or 0)
@@ -13902,14 +13905,14 @@ def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_ke
         truth_status=str(truth.get("status") or "LEGACY_UNSPECIFIED").upper()
         tags=_v81_evidence_tags(b);quality=bool(b.get("quality_relevant"));rep=None
         reject_reason=None
-        if quality:
+        if quality and not _v1954_confirmed_competition(b):
             if truth_status in {"CONFLICT","UNRESOLVED","RAW_FALLBACK"}:
                 reject_reason="ACTIVITY_TRUTH_"+truth_status
             else:
                 rep=_race_repeatability_from_block(b)
         if reject_reason and (b.get("repeatability") or b.get("work_interval_evidence")):
             rejected.append({"activity_id":b.get("activity_id"),"date":b.get("date"),"name":b.get("name"),"reason":reject_reason})
-        event={"activity_id":b.get("activity_id"),"date":b.get("date"),"name":b.get("name"),"family":b.get("family"),"quality_relevant":quality,"activity_truth_status":truth_status,"activity_truth_source":truth.get("source") or b.get("interval_structure_source"),"duration_min":b.get("duration_min"),"tags":tags}
+        event={"activity_id":b.get("activity_id"),"date":b.get("date"),"name":b.get("name"),"event_kind":"RACE" if _v1954_confirmed_competition(b) else "TRAINING","family":b.get("family"),"quality_relevant":quality,"activity_truth_status":truth_status,"activity_truth_source":truth.get("source") or b.get("interval_structure_source"),"duration_min":b.get("duration_min"),"tags":tags}
         if rep:
             ret=_num(rep.get("retention_pct"));ftp=_num(b.get("ftp"));recw=_num(rep.get("recovery_avg_watts"));ratio=(recw/ftp) if ftp and recw is not None else None
             decay=_num(rep.get("decay_pct"));cv=_num(rep.get("cv_pct"));execution=b.get("execution_quality") or {};deg=execution.get("degradation") or {};badges=b.get("progression_badges") or []
@@ -15491,6 +15494,7 @@ def _v84_nova_prescription_text(x):
 def _v81_repeatability_rows(evidence_ledger):
     rows=[]
     for e in (((evidence_ledger or {}).get("repeatability") or {}).get("events") or []):
+        if _v1954_confirmed_competition(e):continue
         if _num((e or {}).get("retention_capped_pct")) is None:continue
         b={"activity_id":e.get("activity_id"),"date":e.get("date"),"name":e.get("name"),"ftp":e.get("ftp")}
         r={"reps":e.get("reps"),"interval_secs":e.get("interval_secs"),"interval_label":e.get("interval_label"),"recovery_secs":e.get("recovery_secs"),"recovery_avg_watts":e.get("recovery_avg_watts"),"retention_pct":e.get("retention_raw_pct"),"retention_raw_pct":e.get("retention_raw_pct"),"retention_capped_pct":e.get("retention_capped_pct"),"cv_pct":e.get("cv_pct"),"decay_pct":e.get("decay_pct")}
@@ -22226,7 +22230,12 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
         is_heat = _is_heat_name(name)
         interval_truth = _v79_activity_interval_truth(detail)
         analysis_intervals = interval_truth.get("sequence") or []
-        repeatability = _v4879_repeatability_stats(analysis_intervals, interval_truth.get("source"))
+        # R195.4: competition intervals are descriptive load/effort data, NEVER
+        # a prescribed repeatability workout, even if ICU infers 3+ equal laps.
+        # Use both summary and detail; the planned RACE link is merged into
+        # detail before this builder is invoked.
+        race_activity = _v1954_confirmed_competition(detail) or _v1954_confirmed_competition(summary)
+        repeatability = None if race_activity else _v4879_repeatability_stats(analysis_intervals, interval_truth.get("source"))
         truth_reps = interval_truth.get("repeated_work_count")
         repeatability_conflict = bool(truth_reps and repeatability and int(repeatability.get("reps") or 0) != int(truth_reps))
         if repeatability_conflict:
@@ -22284,6 +22293,8 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
             "garmin_vo2_contract": (detail.get("garmin_vo2_contract") if isinstance(detail.get("garmin_vo2_contract"),dict) else _v80_garmin_vo2_contract(detail,"ACTIVITY_DETAIL",dt.date().isoformat())),
             "garmin_vo2": ((detail.get("garmin_vo2_contract") or {}).get("value") if isinstance(detail.get("garmin_vo2_contract"),dict) and (detail.get("garmin_vo2_contract") or {}).get("status")=="FOUND" else _garmin_activity_vo2_value(detail)),
             "heat": is_heat, "family": family,
+            "event_kind": "RACE" if race_activity else "TRAINING",
+            "repeatability_exclusion": "CONFIRMED_COMPETITION" if race_activity else None,
             "quality_relevant": bool(quality_truth.get("quality_relevant")), "quality_basis": quality_truth.get("basis"),
             "duration_min": round((detail.get("moving_time") or summary.get("moving_time") or 0) / 60),
             "load": detail.get("icu_training_load", summary.get("icu_training_load")),
@@ -28128,6 +28139,14 @@ def analyze():
             cycling_season_activities, shared_training_details, max_single_fetches=1, max_fit_fetches=6, user_id=user["id"]
         ) if cycling_season_activities else ({}, {"status":"ABSENT","probe_used":False,"single_fetches":0,"original_fit_fetches":0})
         shared_training_details = _v125_enrich_bounded_laps(cycling_recent_activities, shared_training_details, user_id=user["id"])
+        # R195.4: the Calendar-confirmed RACE link is authoritative even if
+        # the provider's activity name or subtype is generic. This is an
+        # in-memory metadata overlay only: never change Intervals/DB records.
+        shared_training_details = _v1954_merge_confirmed_race_links(
+            shared_training_details,
+            list(cycling_recent_activities or []) + list(repeatability_history_activities or []),
+            (coach_clock or {}).get("completed_event_fulfillment") or [],
+        )
         progression_training_blocks = build_previous_training_blocks(cycling_recent_activities, 24, activity_details=shared_training_details)
         repeatability_history_blocks = build_previous_training_blocks(
             repeatability_history_activities, len(repeatability_history_activities), activity_details=shared_training_details
@@ -42751,7 +42770,109 @@ BASE_CSS += """
 .v1953-recovery-note strong{display:block;font-size:12px;font-weight:750;line-height:1.4;letter-spacing:.01em}
 .v1953-recovery-note small{display:block;color:var(--muted);font-size:11.5px;line-height:1.4;margin-top:2px}
 """
-APP_VERSION = 'THE LAB · PRODUCT V4.9.77 CANDIDATE R195.3 · SUBTLE RECOVERY SIGNAL · R195.2 BASELINE'
+# R195.4 · RACE-SAFE REPEATABILITY CONTRACT
+# Competition counts for REAL dose, recovery, intensity and honest observed
+# efforts, but must never be interpreted as a structured repeated-set workout.
+R1954_SCHEMA = "V4.9.78-R195.4-RACE-REPEATABILITY-1"
+
+
+def _v1954_confirmed_competition(activity):
+    a = activity if isinstance(activity, dict) else {}
+    # Explicit persisted/linked competition is a hard boundary.
+    if a.get("_tl_confirmed_race") is True or str(a.get("event_kind") or "").upper() == "RACE":
+        return True
+    if str(a.get("kind") or "").upper() == "RACE":
+        return True
+    # R164 already recognizes provider RACE subtype and actual Zwift leagues,
+    # while deliberately excluding "race simulation" workout titles.
+    return _v164_is_race_like(a)
+
+
+def _v1954_merge_confirmed_race_links(activity_details, recent_activities, fulfilled_items):
+    """Read-only metadata overlay for strongly reconciled Calendar races.
+
+    Never rely on a same-day coincidence: the plan/actual link must supply
+    a concrete activity id and HIGH confidence.
+    """
+    original = activity_details if isinstance(activity_details, dict) else {}
+    links = {
+        str(row.get("activity_id") or "").strip()
+        for row in (fulfilled_items or [])
+        if isinstance(row, dict)
+        and str(row.get("kind") or "").upper() == "RACE"
+        and str(row.get("confidence") or "").upper() == "HIGH"
+        and str(row.get("activity_id") or "").strip()
+    }
+    if not links:
+        return original
+    summary = {str(a.get("id") or ""): a for a in (recent_activities or []) if isinstance(a, dict)}
+    # Copy-on-write. No changes to caller-owned dictionaries.
+    output = dict(original)
+    for aid in links:
+        source = original.get(aid)
+        if not isinstance(source, dict):
+            source = summary.get(aid)
+        if not isinstance(source, dict):
+            continue
+        output[aid] = {**source, "_tl_confirmed_race": True}
+    return output
+
+
+# Final defense includes the R152 repaired-laps path and future changes to
+# the history builder. A race cannot leak into R146 cached block evidence.
+_v1954_previous_training_blocks_baseline = build_previous_training_blocks
+
+
+def build_previous_training_blocks(recent_activities, limit=3, activity_details=None):
+    blocks = _v1954_previous_training_blocks_baseline(
+        recent_activities, limit=limit, activity_details=activity_details
+    )
+    sources = {str(a.get("id") or ""): a for a in (recent_activities or []) if isinstance(a, dict)}
+    details = activity_details if isinstance(activity_details, dict) else {}
+    cleaned = False
+    for block in blocks or []:
+        if not isinstance(block, dict):
+            continue
+        aid = str(block.get("activity_id") or "")
+        race = (block.get("event_kind") == "RACE"
+                or _v1954_confirmed_competition(sources.get(aid))
+                or _v1954_confirmed_competition(details.get(aid))
+                or _v1954_confirmed_competition(block))
+        if not race:
+            continue
+        block["event_kind"] = "RACE"
+        block["repeatability_exclusion"] = "CONFIRMED_COMPETITION"
+        if block.get("repeatability") is not None:
+            block["repeatability"] = None
+            cleaned = True
+        # Keep W′bal, interval lines, direct best efforts and full physiological
+        # load. No false claim of a prescribed set and no performance grading.
+        if block.get("progression_badges"):
+            block["progression_badges"] = []
+            cleaned = True
+    if cleaned:
+        _V146_BLOCK_CONTEXT.set(tuple(_v4831_json_clone(x) for x in (blocks or []) if isinstance(x, dict)))
+    return blocks
+
+
+# Downstream safety for callers supplying stale/historical blocks directly.
+_v1954_progression_baseline = _v491_session_progression
+
+def _v491_session_progression(blocks):
+    eligible = [b for b in (blocks or []) if isinstance(b, dict)
+                and not _v1954_confirmed_competition(b)]
+    return _v1954_progression_baseline(eligible)
+
+
+_v1954_quality_review_baseline = _v4879_completed_quality_review
+
+def _v4879_completed_quality_review(previous_blocks, subjective_context, now=None):
+    eligible = [b for b in (previous_blocks or []) if isinstance(b, dict)
+                and not _v1954_confirmed_competition(b)]
+    return _v1954_quality_review_baseline(eligible, subjective_context, now=now)
+
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.78 CANDIDATE R195.4 · RACE-SAFE REPEATABILITY · R195.3 BASELINE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
