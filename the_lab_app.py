@@ -28473,6 +28473,12 @@ def analyze():
             raise ValueError("Snapshot rejected [" + _identifier + "]. Your previous saved report remains authoritative. Share this code with THE LAB support.")
         if qa_requested:
             nova_replay_fixture = _v115_finalize_nova_replay_fixture(nova_replay_fixture, data)
+            # R195.1: real Python QA (including consented remote athletes) must
+            # exercise the same shadow validator as a saved Snapshot. Read the
+            # SAME athlete's saved baseline, never persist the QA candidate.
+            # The distinct R115 zero-DB replay route remains untouched.
+            if python_qa:
+                _v195_attach_python_qa_audit(data, owner_user_id=user["id"], now=get_rome_now())
             qa_report = _v4831_qa_report(data, qa_kind, replay_bundle.get("context_fingerprint"), source_report=None, ai_runtime=qa_ai_runtime)
             qa_report["nova_replay_fixture"] = nova_replay_fixture
             qa_audit = build_content_audit_markdown(qa_report)
@@ -42289,7 +42295,47 @@ def _v195_analyze(prior, current, now=None):
             'comparison_available':bool(previous), 'fingerprint':digest,
             'policy':'Diagnostics only. Never changes workout mechanics, recovery gates, retention, or Snapshot persistence.'}
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.74 CANDIDATE R195.0 · DECISION INTEGRITY SHADOW · R194.3 BASELINE"
+def _v195_attach_python_qa_audit(data, owner_user_id=None, now=None):
+    """Compare an ephemeral Python QA candidate against the same athlete's saved Snapshot.
+
+    Performs ONE read of existing latest_report, with explicit owner scoping
+    enforced by _data_owner_user_id. No writes, no provider calls, no mutation
+    of training/coaching fields. Failures stay diagnostic, never break QA.
+    R115 replay remains separate and does not call this function.
+    """
+    if not isinstance(data, dict):
+        return None
+    try:
+        # Explicit owner ID is essential for admin remote QA: the current
+        # authenticated actor is the admin, while g scopes reads to the beta athlete.
+        owner_id = _data_owner_user_id(owner_user_id)
+        baseline = load_latest_report(include_payload=True, owner_user_id=owner_id)
+        previous = baseline.get('data') if isinstance(baseline, dict) else None
+        previous = previous if isinstance(previous, dict) else None
+        diagnostic = _v195_analyze(previous, data, now=now or get_rome_now())
+        diagnostic['evaluation_context'] = 'EPHEMERAL_PYTHON_QA'
+        diagnostic['baseline_source'] = 'SAME_ATHLETE_LATEST_SAVED_SNAPSHOT' if previous else 'NO_SAVED_SNAPSHOT'
+        diagnostic['baseline_generated_at_local'] = (baseline.get('generated_at_local')
+            if previous and isinstance(baseline, dict) else None)
+        diagnostic['qa_read_only'] = True
+        # A first-run QA may check intra-Snapshot invariants, but cannot claim
+        # a successful longitudinal comparison with a nonexistent predecessor.
+        if not previous and diagnostic.get('state') == 'PASS':
+            diagnostic['state'] = 'UNASSESSED'
+            diagnostic['reason_code'] = 'NO_SAVED_BASELINE_FOR_COMPARISON'
+        data['decision_integrity_audit'] = diagnostic
+    except Exception as exc:
+        data['decision_integrity_audit'] = {
+            'schema': R195_SCHEMA, 'mode': 'SHADOW_READ_ONLY',
+            'state': 'UNASSESSED', 'comparison_available': False,
+            'issues': [{'code': 'QA_SHADOW_VALIDATOR_UNAVAILABLE', 'severity': 'WATCH',
+                        'facts': {'error_class': type(exc).__name__}}],
+            'issue_count': 1, 'evaluation_context': 'EPHEMERAL_PYTHON_QA',
+            'baseline_source': 'UNAVAILABLE', 'qa_read_only': True,
+            'policy': 'Diagnostic failure never changes QA candidate or saved Snapshot.'}
+    return data['decision_integrity_audit']
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.75 CANDIDATE R195.1 · REMOTE PYTHON QA INTEGRITY COVERAGE · R195.0 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
