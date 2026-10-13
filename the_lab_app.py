@@ -14463,7 +14463,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     can revisit useful work when warranted without getting trapped in a loop.
     """
     goal=str(goal or "").upper();dim=str(dimension or "").upper();slot=slot or {}
-    candidates=[dict(x) for x in _NOVA_WORKOUT_LIBRARY if x.get("goal")==goal and dim in set(x.get("dimensions") or ())]
+    candidates=[dict(x) for x in _NOVA_WORKOUT_LIBRARY if x.get("goal")==goal and dim in set(x.get("dimensions") or ()) and not x.get("adaptive_only")]
     if not candidates:return None,{"version":NOVA_WORKOUT_LIBRARY_VERSION,"reason":"NO_LIBRARY_CANDIDATE","candidate_count":0}
     hint=_rhythm_num(slot.get("duration_hint_min")) or _parse_duration_minutes(slot.get("duration_hint_label"))
     events=list((((evidence_ledger or {}).get("repeatability") or {}).get("events") or []))
@@ -28183,6 +28183,10 @@ def analyze():
         strength_pattern["content_profile"] = build_strength_history_profile(
             season_activities, adaptive_roadmap=adaptive_roadmap, now=get_rome_now()
         )
+        recovery_signal = _v1953_signal(
+            _v167_autonomic_watch(season_wellness, metrics, now=get_rome_now()),
+            previous_training_blocks, session_progression, now=get_rome_now(),
+        )
         # R115: freeze the deterministic Nova-core boundary after all external
         # I/O / DB reads have already been normalized, but before Question State,
         # Roadmap evidence gating, Nova Decision and Prescription run.
@@ -28206,6 +28210,7 @@ def analyze():
                 "evidence_ledger": evidence_ledger,
                 "previous_training_blocks": previous_training_blocks,
                 "session_progression": session_progression,
+                "recovery_signal": recovery_signal,
                 "aerobic_metabolic_range": aerobic_metabolic_range,
                 "training_definitions": training_definitions,
                 "recent_activities": cycling_recent_activities,
@@ -28246,6 +28251,8 @@ def analyze():
             microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
             strength_pattern=strength_pattern, training_rhythm=training_rhythm, execution_model=execution_model,
         )
+        nova_prescription = _v1953_adapt_prescription(nova_prescription, recovery_signal)
+        recovery_signal = {**recovery_signal, "recovery_variant_count": int(((nova_prescription.get("recovery_variant_audit") or {}).get("count") or 0))}
         adaptive_roadmap["nova_prescription"]={k:v for k,v in nova_prescription.items() if k not in {"raw_sessions","sessions"}}
         competitive_direction = _v491_competitive_direction(training_direction.get("primary_goal"), adaptive_roadmap, session_progression, power_achievements, power_model)
         athlete_age_context = build_athlete_age_context(user["id"], on_date=get_rome_now().date())
@@ -28404,6 +28411,7 @@ def analyze():
             "aerobic_metabolic_range": aerobic_metabolic_range,
             "power_model": power_model,
             "advanced_physiology": advanced_physiology,
+            "nova_recovery_signal": recovery_signal,
             "planning_context": planning_context,
             "athlete_note_interpretation": planning_context.get("athlete_note_interpretation"),
             "feeling_trend": feeling_trend_live,
@@ -29149,7 +29157,7 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
 # secondary to purpose; when a facet is missing, a candidate in that band receives
 # a decisive information-value bonus and out-of-band repeats are penalized.
 def _v111_select_workout_template(goal, dimension, evidence_ledger=None, training_definitions=None, slot=None):
-    goal=str(goal or "").upper();dim=str(dimension or "").upper();slot=slot or {}; candidates=[dict(x) for x in _NOVA_WORKOUT_LIBRARY if x.get("goal")==goal and dim in set(x.get("dimensions") or ())]
+    goal=str(goal or "").upper();dim=str(dimension or "").upper();slot=slot or {}; candidates=[dict(x) for x in _NOVA_WORKOUT_LIBRARY if x.get("goal")==goal and dim in set(x.get("dimensions") or ()) and not x.get("adaptive_only")]
     if not candidates:return None,{"version":NOVA_WORKOUT_LIBRARY_REVISION,"revision":NOVA_WORKOUT_LIBRARY_REVISION,"reason":"NO_LIBRARY_CANDIDATE","candidate_count":0}
     facet=_v111_goal_facet_state(goal,evidence_ledger,None); target=(facet.get("missing") or [None])[0]; hint=_rhythm_num(slot.get("duration_hint_min")) or _parse_duration_minutes(slot.get("duration_hint_label")); events=list((((evidence_ledger or {}).get("repeatability") or {}).get("events") or [])); latest_day=None
     for e in events:
@@ -30132,6 +30140,9 @@ def _v115_replay_nova_core(fixture):
         adaptive_roadmap=adaptive_roadmap, strength_pattern=strength_pattern,
         training_rhythm=training_rhythm, execution_model=execution_model,
     )
+    recovery_signal = dict(c.get("recovery_signal") or {})
+    nova_prescription = _v1953_adapt_prescription(nova_prescription, recovery_signal)
+    recovery_signal["recovery_variant_count"] = int(((nova_prescription.get("recovery_variant_audit") or {}).get("count") or 0))
     adaptive_roadmap["nova_prescription"] = {
         k:v for k,v in nova_prescription.items() if k not in {"raw_sessions","sessions"}
     }
@@ -30172,6 +30183,7 @@ def _v115_replay_nova_core(fixture):
         "nova_decision": nova_decision,
         "nova_prescription": nova_prescription,
         "session_progression": session_progression,
+        "nova_recovery_signal": recovery_signal,
         "scientific_progression": scientific_progression,
         "training_state": training_state,
         "training_direction": training_direction,
@@ -42575,6 +42587,171 @@ def _v195_analyze(prior,current,now=None):
     return report
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.76 CANDIDATE R195.2 · RACE REISSUE INTEGRITY · R195.1 BASELINE"
+
+
+
+# R195.3 · RECOVERY SIGNAL / VISIBLE, LOW-FOOTPRINT SUPPORT
+# No new TRAIN/HOLD authority, no roadmap freeze, no new database columns.
+# Conservative verified RPE + persistent autonomic trend; opt-in for *fixed*
+# variants only; no rewrite of watt targets, work intervals, or quality slots.
+R1953_SCHEMA = "V4.9.77-R195.3-RECOVERY-SIGNAL-1"
+_R1953_VARIANTS = {
+    "P5_3X5_EASYREC": ("P5_3X5_EASYREC__REST6", 5, 6),
+    "P20_3X10": ("P20_3X10__REST6", 5, 6),
+    "TT_3X10": ("TT_3X10__REST6", 5, 6),
+}
+
+# Predeclared variant templates; the ordinary selector expressly excludes them.
+# They have different workout identities because their mechanics differ.
+_NOVA_WORKOUT_LIBRARY += tuple(
+    {**template, "id": variant[0], "recovery_s": variant[2]*60,
+     "adaptive_only": True, "derived_from": template["id"]}
+    for template in _NOVA_WORKOUT_LIBRARY
+    for variant in [_R1953_VARIANTS.get(template.get("id"))]
+    if variant is not None
+)
+
+def _v1953_signal(watch, blocks, progression, now=None):
+    """One evidence-based fatigue signal, never a medical assessment or veto."""
+    out = {"schema":R1953_SCHEMA,"active":False,"state":"CLEAR",
+           "reason":"NO_CONCORDANT_VERIFIED_TREND", "rpe_comparison":None,
+           "autonomic_persistent":False,"recovery_variant_count":0,
+           "policy":"HRV alone never changes a workout; only documented comparable subjective cost may enable a limited rest variant."}
+    w=watch if isinstance(watch,dict) else {}
+    if not (w.get("active") and w.get("persistent") and w.get("state")=="AUTONOMIC_TREND_WATCH"):
+        return out
+    out["autonomic_persistent"]=True
+    comp=(progression or {}).get("comparison") or {}
+    if not isinstance(comp,dict):return out
+    previous=comp.get("previous_subjective_feedback") or {}
+    current=(progression or {}).get("current_subjective_feedback") or {}
+    # The R150 source explicitly requires valid structured feedback for both.
+    if not all(isinstance(f,dict) and f.get("source")=="STRUCTURED_SESSION_FEEDBACK"
+               and f.get("rpe") is not None for f in (previous,current)):
+        return out
+    try:
+        a=float(comp.get("current_mean_watts")); b=float(comp.get("previous_mean_watts"))
+        previous_rpe=int(previous["rpe"]); current_rpe=int(current["rpe"])
+        comparable= b>0 and abs(a-b)/b <= 0.05 and current_rpe-previous_rpe>=2
+        # A compared workout should be recent rather than a remote historical peak.
+        day=str((progression or {}).get("date") or "")[:10]
+        date_now=(now or get_rome_now()).date()
+        age=(date_now-date.fromisoformat(day)).days
+        comparable=comparable and 0<=age<=21
+    except (TypeError,ValueError,KeyError,OverflowError):return out
+    if not comparable:return out
+    out.update({"active":True,"state":"WATCH","reason":"PERSISTENT_HRV_AND_COMPARABLE_RPE_RISE",
+                "rpe_comparison":{"previous":previous_rpe,"current":current_rpe,
+                                  "power_previous_w":round(b,1),"power_current_w":round(a,1)},
+                "display_title":"Recovery watch"})
+    return out
+
+
+def _v1953_adapt_prescription(prescription, signal):
+    """Edit only a versioned canonical library variant when full session fits.
+
+    No change to ordinary sessions, power bands, work intervals, training
+    selection, roadmap, calendar or safety gates. Idempotent by identity.
+    """
+    if not isinstance(prescription,dict) or not (signal or {}).get("active"):
+        return prescription
+    import copy as _copy
+    out=_copy.deepcopy(prescription)
+    sessions=list(out.get("sessions") or [])
+    changed=[]
+    for index,sess in enumerate(sessions):
+        if not isinstance(sess,dict):continue
+        base=str(sess.get("nova_workout_id") or "")
+        variant=_R1953_VARIANTS.get(base)
+        if not variant:continue
+        if (str(sess.get("stimulus_architecture_state") or "")!="NOVA_CANONICAL_LIBRARY"
+            or str(sess.get("intensity_class") or "").lower() not in ("vo2","threshold","tempo")
+            or (sess.get("power_prescription") or {}).get("state")!="PRESCRIBED"
+            or sess.get("restriction")=="RACE"):
+            continue
+        feasibility=sess.get("session_duration_feasibility") or {}
+        try:
+            reps=int(feasibility.get("reps")); intervals=int(feasibility.get("recovery_count"))
+            rest=float(feasibility.get("recovery_min")); required=float(feasibility.get("min_required"))
+            declared=float(feasibility.get("declared_min"))
+        except (ValueError,TypeError):continue
+        if (not feasibility.get("available") or feasibility.get("state")!="PASS"
+            or intervals!=max(0,reps-1) or intervals<1 or abs(rest-variant[1])>0.01):
+            continue
+        delta=intervals*(variant[2]-variant[1])
+        if required+delta > declared+0.01:continue
+        # Exact controlled replacement; no freeform workout synthesis.
+        old=f"with {variant[1]} min "
+        before=str(sess.get("main_set") or "")
+        after=before.replace(old, f"with {variant[2]} min ",1)
+        if after==before:continue
+        update=dict(sess)
+        update["main_set"]=after
+        update["nova_workout_id"]=variant[0]
+        update["nova_contract_id"]=variant[0]
+        update["nova_template_signature"]=f"{reps}x{int((sess.get('power_prescription') or {}).get('work_seconds') or 0)}r{variant[2]*60}"
+        update["canonical_workout_name"]=f"THE LAB · {variant[0]} · {sess.get('title') or ''}"
+        next_feas=dict(feasibility)
+        next_feas["recovery_min"]=float(variant[2])
+        next_feas["min_required"]=round(required+delta,2)
+        next_feas["adjusted"]=True
+        update["session_duration_feasibility"]=next_feas
+        update["rest_adaptation"]={"schema":R1953_SCHEMA,"from_workout_id":base,
+                                  "original_recovery_min":variant[1],"recovery_min":variant[2],
+                                  "extra_minutes":delta,"source":"CONCORDANT_RECOVERY_SIGNAL"}
+        update["coherence_reasons"]=list(sess.get("coherence_reasons") or [])+["R1953_VERIFIED_REST_VARIANT"]
+        sessions[index]=update
+        changed.append((index,base,variant[0],before,after))
+    if not changed:
+        return prescription
+    out["sessions"]=sessions
+    # Keep uncompiled raw contract aligned so no downstream surface sees an
+    # obsolete workout id/mechanics when referencing canonical sessions.
+    raw=list(out.get("raw_sessions") or [])
+    for index,base,target,before,after in changed:
+        if index<len(raw) and isinstance(raw[index],dict) and raw[index].get("_tl_nova_workout_id")==base:
+            row=dict(raw[index]);row["_tl_nova_workout_id"]=target
+            row["_tl_nova_template_signature"]=sessions[index]["nova_template_signature"]
+            row["main_set"]=str(row.get("main_set") or "").replace("with 5 min ","with 6 min ",1)
+            raw[index]=row
+        future=out.get("future_quality_candidate") or {}
+        if isinstance(future,dict) and future.get("index")==index:
+            fr=future.get("raw_quality") or {}
+            if isinstance(fr,dict) and fr.get("_tl_nova_workout_id")==base:
+                fr=dict(fr);fr["_tl_nova_workout_id"]=target
+                fr["_tl_nova_template_signature"]=sessions[index]["nova_template_signature"]
+                fr["main_set"]=str(fr.get("main_set") or "").replace("with 5 min ","with 6 min ",1)
+                future=dict(future);future["raw_quality"]=fr;out["future_quality_candidate"]=future
+    out["raw_sessions"]=raw
+    if str(out.get("workout_id") or "")==changed[0][1]:out["workout_id"]=changed[0][2]
+    if str(out.get("contract_id") or "")==changed[0][1]:out["contract_id"]=changed[0][2]
+    library=dict(out.get("workout_library") or {})
+    if library.get("selected_id")==changed[0][1]:
+        library["selected_id"]=changed[0][2]
+        library["selected_signature"]=sessions[changed[0][0]]["nova_template_signature"]
+        library["recovery_variant_rule"]=R1953_SCHEMA
+        out["workout_library"]=library
+    _v145_rehash_plan(out)
+    authority=dict(out.get("single_plan_authority") or {})
+    authority["plan_id"]=out["canonical_plan_id"]
+    if str(authority.get("workout_id") or "")==changed[0][1]:
+        authority["workout_id"]=changed[0][2]
+    out["single_plan_authority"]=authority
+    out["recovery_variant_audit"]={"schema":R1953_SCHEMA,"count":len(changed),
+                                  "workout_ids":[x[2] for x in changed]}
+    return out
+
+_R1953_HOME_TARGET = '<div class="v4-week-memory"><div class="v4-week-label">This week</div>'
+_R1953_HOME_INSERT = """{% if data.nova_recovery_signal and data.nova_recovery_signal.active %}<div class="v1953-recovery-note" role="status" aria-label="Recovery watch"><span class="v1953-recovery-mark" aria-hidden="true">♡</span><span><strong>Recovery watch</strong><small>Recent efforts felt harder than usual. Nova may add a little rest between reps.</small></span></div>{% endif %}"""
+assert HOME_PAGE.count(_R1953_HOME_TARGET)==1
+HOME_PAGE=HOME_PAGE.replace(_R1953_HOME_TARGET,_R1953_HOME_INSERT+"\n"+_R1953_HOME_TARGET,1)
+BASE_CSS += """
+.v1953-recovery-note{display:flex;align-items:center;gap:10px;margin:10px 0 14px;padding:10px 12px;border-radius:12px;background:rgba(179,131,56,.075);border:1px solid rgba(179,131,56,.24);color:var(--text);max-width:560px}
+.v1953-recovery-mark{flex:0 0 30px;width:30px;height:30px;display:grid;place-items:center;border-radius:10px;background:rgba(179,131,56,.13);color:#bb8a47;font-weight:800;font-size:20px;line-height:1}
+.v1953-recovery-note strong{display:block;font-size:12px;font-weight:750;line-height:1.4;letter-spacing:.01em}
+.v1953-recovery-note small{display:block;color:var(--muted);font-size:11.5px;line-height:1.4;margin-top:2px}
+"""
+APP_VERSION = 'THE LAB · PRODUCT V4.9.77 CANDIDATE R195.3 · SUBTLE RECOVERY SIGNAL · R195.2 BASELINE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
