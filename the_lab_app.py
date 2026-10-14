@@ -3515,7 +3515,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% set ml = ((data.metabolic_context or {}).get('metabolic_load') or {}) %}
 {% if ml.get('available') %}<div class="v4894-metabolic-summary"><div><span>7D METABOLIC PRESSURE</span><strong>{{ ml.get('trend_label','LEARNING') }}</strong><small>{{ ml.get('trend_detail','Building your personal cycling baseline.') }}</small></div><div><span>INTENSITY DENSITY</span><strong>{% if ml.get('density_delta_pct') is not none %}{{ '%+.0f'|format(ml.get('density_delta_pct')) }}% vs norm{% else %}{{ ml.get('current_density_label','LEARNING') }}{% endif %}</strong><small>Demand per riding hour</small></div><div><span>MECHANICAL WORK</span><strong>{% if ml.get('work_delta_pct') is not none %}{{ '%+.0f'|format(ml.get('work_delta_pct')) }}% vs norm{% elif ml.get('current_7d_work_kj') is not none %}{{ ml.get('current_7d_work_kj')|int }} kJ / 7d{% else %}—{% endif %}</strong><small>Power-derived, not calories</small></div><div><span>HIGH-INTENSITY</span><strong>{% if ml.get('high_delta_pct') is not none %}{{ '%+.0f'|format(ml.get('high_delta_pct')) }}% vs norm{% else %}{{ ml.get('current_7d_high_min',0)|round|int }} min / 7d{% endif %}</strong><small>High-zone exposure</small></div></div>{% endif %}
 {% if data.previous_training_blocks %}<div class="v25-blocks-grid">{% for b in data.previous_training_blocks[:3] %}
-{% set mp = b.get('metabolic_profile') or {} %}<article class="v25-block {% if b.heat %}heat{% endif %}"><div class="v25-block-top"><span>{{ b.date|ui_date }} · {{ b.time }}</span>{% if b.heat %}<span class="v25-heat-badge">🔥 HEAT</span>{% else %}<span>{{ b.family }}</span>{% endif %}</div><h4>{{ b.name }}</h4><div class="v25-block-metrics"><b>{{ b.duration_min }} min</b>{% if b.load is not none %}<b>Load {{ b.load }}</b>{% endif %}{% if b.avg_watts %}<b>{{ b.avg_watts }} W avg</b>{% endif %}{% if b.avg_hr %}<b>HR {{ b.avg_hr }}</b>{% endif %}{% if b.decoupling is not none %}<b>Drift {{ b.decoupling }}%</b>{% endif %}</div>{% if b.power_zone_summary or b.hr_zone_summary %}<div class="v25-zone-lines">{% if b.power_zone_summary %}<span>⚙️ POWER · {{ b.power_zone_summary }}</span>{% endif %}{% if b.hr_zone_summary %}<span>🫀 HR · {{ b.hr_zone_summary }}</span>{% endif %}</div>{% endif %}{% if b.intervals %}<div class="v25-intervals">{% for x in b.intervals %}<span>↳ {{ x }}</span>{% endfor %}</div>{% endif %}{% if mp %}<div class="v4894-metabolic-grid"><div><span>METABOLIC DEMAND</span><b class="{{ mp.get('demand_class','moderate') }}">{{ mp.get('demand_label','—') }}</b></div><div><span>GLYCOGEN PRESSURE</span><b class="{{ mp.get('glycogen_class','moderate') }}">{{ mp.get('glycogen_label','—') }}</b></div><div><span>HIGH-INTENSITY DEMAND</span><b class="{{ mp.get('high_intensity_class','minimal') }}">{{ mp.get('high_intensity_label','—') }}</b></div><div><span>RECOVERY PRESSURE</span><b class="{{ mp.get('recovery_class','moderate') }}">{{ mp.get('recovery_label','—') }}</b></div></div><div class="v4894-metabolic-foot">{% if mp.get('mechanical_work_kj') is not none %}<strong>{{ mp.get('mechanical_work_kj')|int }} kJ</strong> mechanical work{% else %}Mechanical work unavailable{% endif %}{% if mp.get('density') is not none %} · demand density {{ '%.2f'|format(mp.get('density')) }}× easy-hour equivalent{% endif %}</div>{% endif %}{% set eq=b.get('execution_quality') or {} %}{% if (b.get('fatigue_power') or {}).get('available') or b.repeatability or eq.get('available') or b.get('progression_badges') or (b.wbal and b.wbal.get('available')) %}<div class="v4894-evidence">{% set fp=b.get('fatigue_power') or {} %}{% set five=fp.get('best_5_min') or {} %}{% if fp.get('available') and five %}<span>⛰️ ≈5-MIN POWER AFTER PRIOR WORK · {{ five.get('watts')|int }} W · {{ five.get('prior_work_kj')|int }} kJ before effort · {{ five.get('prior_elapsed_min')|int }} min before effort · observational only, not fresh PR</span>{% endif %}{% if b.repeatability %}<span>Repeatability · {{ b.repeatability.get('reps') }}×{{ b.repeatability.get('interval_label') }}{% if b.repeatability.get('first_to_last_decay_pct') is not none %} · first→last {{ b.repeatability.get('first_to_last_decay_pct') }}%{% endif %}</span>{% endif %}{% if eq.get('available') %}<span>📉 OUTPUT DEGRADATION · {{ eq.degradation.index_pct }}% · {{ eq.degradation.label }}</span>{% if eq.adherence.available %}<span>🎯 WORKOUT ADHERENCE · {{ eq.adherence.score }}% · {{ eq.adherence.label }} · {{ eq.adherence.detail }} · recovery watts unscored</span>{% else %}<span>🎯 WORKOUT ADHERENCE · N/A · no exact THE LAB prescription link</span>{% endif %}{% endif %}{% for x in b.get('progression_badges',[]) %}<span style="font-size:12px;font-weight:800">{{ x.icon }} {{ x.label }} · {{ x.detail }}</span>{% endfor %}{% if b.wbal and b.wbal.get('available') and b.wbal.get('max_depletion_pct') is not none %}<span>W\u2032bal depletion · {{ b.wbal.get('max_depletion_pct') }}%{% if b.wbal.get('median_recovery_end_pct') is not none %} · recovery {{ b.wbal.get('median_recovery_end_pct') }}%{% endif %}</span>{% endif %}</div>{% endif %}<p class="v25-consideration">{{ b.consideration }}</p></article>
+{% set mp = b.get('metabolic_profile') or {} %}<article class="v25-block {% if b.heat %}heat{% endif %}"><div class="v25-block-top"><span>{{ b.date|ui_date }} · {{ b.time }}</span>{% if b.heat %}<span class="v25-heat-badge">🔥 HEAT</span>{% else %}<span>{{ b.family }}</span>{% endif %}</div><h4>{{ b.name }}</h4><div class="v25-block-metrics"><b>{{ b.duration_min }} min</b>{% if b.load is not none %}<b>Load {{ b.load }}</b>{% endif %}{% if b.avg_watts %}<b>{{ b.avg_watts }} W avg</b>{% endif %}{% if b.avg_hr %}<b>HR {{ b.avg_hr }}</b>{% endif %}{% if b.decoupling is not none %}<b>Drift {{ b.decoupling }}%</b>{% endif %}</div>{% if b.power_zone_summary or b.hr_zone_summary %}<div class="v25-zone-lines">{% if b.power_zone_summary %}<span>⚙️ POWER · {{ b.power_zone_summary }}</span>{% endif %}{% if b.hr_zone_summary %}<span>🫀 HR · {{ b.hr_zone_summary }}</span>{% endif %}</div>{% endif %}{% if b.intervals %}<div class="v25-intervals">{% for x in b.intervals %}<span>↳ {{ x }}</span>{% endfor %}</div>{% endif %}{% if mp %}<div class="v4894-metabolic-grid"><div><span>METABOLIC DEMAND</span><b class="{{ mp.get('demand_class','moderate') }}">{{ mp.get('demand_label','—') }}</b></div><div><span>GLYCOGEN PRESSURE</span><b class="{{ mp.get('glycogen_class','moderate') }}">{{ mp.get('glycogen_label','—') }}</b></div><div><span>HIGH-INTENSITY DEMAND</span><b class="{{ mp.get('high_intensity_class','minimal') }}">{{ mp.get('high_intensity_label','—') }}</b></div><div><span>RECOVERY PRESSURE</span><b class="{{ mp.get('recovery_class','moderate') }}">{{ mp.get('recovery_label','—') }}</b></div></div><div class="v4894-metabolic-foot">{% if mp.get('mechanical_work_kj') is not none %}<strong>{{ mp.get('mechanical_work_kj')|int }} kJ</strong> mechanical work{% else %}Mechanical work unavailable{% endif %}{% if mp.get('density') is not none %} · demand density {{ '%.2f'|format(mp.get('density')) }}× easy-hour equivalent{% endif %}</div>{% endif %}{% set eq=b.get('execution_quality') or {} %}{% if (b.get('fatigue_power') or {}).get('available') or b.repeatability or eq.get('available') or b.get('progression_badges') or (b.wbal and b.wbal.get('available')) %}<div class="v4894-evidence">{% set fp=b.get('fatigue_power') or {} %}{% if fp.get('available') %}{% for evidence in fp.get('display_observations',[]) %}<span>⛰️ {{ evidence.get('duration_label') }} OBSERVED AFTER PRIOR WORK · {{ evidence.get('watts')|int }} W{% if evidence.get('average_hr') is not none %} · HR {{ evidence.get('average_hr')|int }}{% endif %} · {{ evidence.get('prior_work_kj')|int }} kJ and {{ evidence.get('prior_elapsed_min')|int }} min before effort · {% if evidence.get('analysis_mode') == 'SUBMAX_DURABILITY' %}submaximal context, not a maximum or formal durability test{% elif evidence.get('duration_sec',0) < 30 %}measured sprint average, not instantaneous peak{% else %}not a fresh PR{% endif %}</span>{% endfor %}{% endif %}{% if b.repeatability %}<span>Repeatability · {{ b.repeatability.get('reps') }}×{{ b.repeatability.get('interval_label') }}{% if b.repeatability.get('first_to_last_decay_pct') is not none %} · first→last {{ b.repeatability.get('first_to_last_decay_pct') }}%{% endif %}</span>{% endif %}{% if eq.get('available') %}<span>📉 OUTPUT DEGRADATION · {{ eq.degradation.index_pct }}% · {{ eq.degradation.label }}</span>{% if eq.adherence.available %}<span>🎯 WORKOUT ADHERENCE · {{ eq.adherence.score }}% · {{ eq.adherence.label }} · {{ eq.adherence.detail }} · recovery watts unscored</span>{% else %}<span>🎯 WORKOUT ADHERENCE · N/A · no exact THE LAB prescription link</span>{% endif %}{% endif %}{% for x in b.get('progression_badges',[]) %}<span style="font-size:12px;font-weight:800">{{ x.icon }} {{ x.label }} · {{ x.detail }}</span>{% endfor %}{% if b.wbal and b.wbal.get('available') and b.wbal.get('max_depletion_pct') is not none %}<span>W\u2032bal depletion · {{ b.wbal.get('max_depletion_pct') }}%{% if b.wbal.get('median_recovery_end_pct') is not none %} · recovery {{ b.wbal.get('median_recovery_end_pct') }}%{% endif %}</span>{% endif %}</div>{% endif %}<p class="v25-consideration">{{ b.consideration }}</p></article>
 {% endfor %}</div>{% else %}<p class="v4-section-note">No detailed completed sessions available yet.</p>{% endif %}
 </div>
 {% set td = data.training_direction if data.training_direction is defined and data.training_direction else none %}
@@ -20749,7 +20749,7 @@ def _v125_original_fit_laps(content):
                         return []
                     b=raw[pos:pos+sz]
                     pos+=sz
-                    wanted = ((g==19 and fid in {2,7,8,19,41,253}) or
+                    wanted = ((g==19 and fid in {2,7,8,15,19,41,253}) or
                               (g==20 and fid in {7,253}))
                     if not wanted:
                         continue
@@ -20798,12 +20798,13 @@ def _v125_original_fit_laps(content):
                     end_ts=row.get(253)
                     if start_ts is not None and end_ts is None:
                         end_ts=float(start_ts)+duration
-                    if 25<=duration<=7200 and 20<=avg_watts<=2500:
+                    if 10<=duration<=7200 and 20<=avg_watts<=2500:
                         section_laps.append({
                             'moving_time':round(duration),
                             'elapsed_time':round(duration),
                             'average_watts':round(avg_watts,3),
                             'fit_avg_power_watts':watt,
+                            'average_heartrate':row.get(15),
                             'fit_total_work_j':total_work,
                             'average_watts_source':avg_source,
                             'fit_start_time':start_ts,
@@ -43276,6 +43277,257 @@ def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_ke
 
 APP_VERSION='THE LAB · PRODUCT V4.9.80 CANDIDATE R195.6 · MEASURED FATIGUED POWER · R195.5 BASELINE'
 
+
+# R195.7 · GOAL-CONFIGURED POWER UNDER PRIOR WORK
+# One evidence extraction for every configured duration; goal-scoped comparisons.
+# All existing Nova planning, checkpoint, race, recovery implementations are kept.
+R1957_SCHEMA = "V4.9.81-R195.7-GOAL-AWARE-FATIGUED-POWER-1"
+
+def _v1957_goal_contracts():
+    """Derive supported goals from THE LAB's authoritative roadmap definition.
+
+    A newly registered goal gets evaluated automatically. Unsupported metadata
+    fails closed rather than silently falling back to the 5-minute benchmark.
+    """
+    out={}
+    for key, value in _V4873_ROADMAP_GOALS.items():
+        t=(value or {}).get("field_test") or {}
+        sec=_num(t.get("seconds"))
+        mode=str(t.get("mode") or "").upper()
+        if not sec or not math.isfinite(sec) or sec<10 or sec>7200 or mode not in {"MAXIMAL","SUBMAX_DURABILITY"}:
+            out[str(key)]={"supported":False,"reason":"MISSING_OR_INVALID_GOAL_FIELD_TEST"}
+            continue
+        out[str(key)]={"supported":True,"anchor_seconds":int(sec),"mode":mode,
+                       "stimulus_domain":t.get("stimulus_domain"),"checkpoint_label":t.get("label")}
+    return out
+
+
+def _v1957_anchor_tolerance(seconds):
+    # Windows describe observed LAP averages, not exact-duration PRs.
+    if seconds<=30:return 1.0
+    if seconds<=90:return 2.0
+    return min(90.0,max(10.0,.025*seconds))
+
+
+def _v1957_prior_minimums(anchor):
+    """Conservative *measurement policy*, not a universal fatigue threshold."""
+    if anchor<=90:return (30.0,200.0)
+    if anchor<=360:return (45.0,300.0)
+    if anchor<=1800:return (60.0,400.0)
+    return (60.0,400.0)
+
+
+def _v1957_segment_hr(detail, segments, source):
+    """Attach HR only when raw segment identity and timestamps both match.
+
+    No HR interpolations or inheritance from the whole-activity average.
+    """
+    if source=="ORIGINAL_FIT_LAPS":
+        rows=sorted((detail.get("source_laps") or []),key=lambda x:float(x.get("fit_start_time") or 0))
+    elif source in {"ICU_EXPLICIT_SECONDS","ICU_FULL_COVERAGE_INDEXED"}:
+        rows=detail.get("icu_intervals") or []
+        start_field="start_secs" if source=="ICU_EXPLICIT_SECONDS" else "start_index"
+        rows=sorted(rows,key=lambda x:float(x.get(start_field) or 0))
+    else:return [None for _ in segments]
+    if len(rows)!=len(segments):return [None for _ in segments]
+    result=[]
+    for seg,row in zip(segments,rows):
+        duration=_num(row.get("moving_time") or row.get("elapsed_time"))
+        watt=_num(row.get("average_watts"))
+        hr=_num(row.get("average_heartrate") or row.get("avg_hr") or row.get("average_hr"))
+        if duration is None or watt is None or abs(duration-seg["secs"])>1.5 or abs(watt-seg["watts"])>2:
+            return [None for _ in segments]
+        result.append(round(hr,1) if hr is not None and 45<=hr<=220 else None)
+    return result
+
+
+def _v1957_fatigued_power_detail(detail):
+    """Goal-independent observed-effort catalog from validated whole-ride laps.
+
+    Evidence is retained by anchor duration; no prediction of fresh watts, no
+    virtual PR and no declaration that race fluctuations are workout repeats.
+    """
+    configs=_v1957_goal_contracts()
+    anchors=sorted({int(x["anchor_seconds"]) for x in configs.values() if x.get("supported")})
+    seg, reason, source=_v1956_timed_power_segments(detail)
+    base={"schema":R1957_SCHEMA,"available":False,"state":"DATA_NEEDED",
+          "reason":reason,"source":source,"best_by_duration":{},"observations":[],
+          "goal_contracts":configs,"display_observations":[],
+          "method_note":"Whole-ride indexed/elapsed chronology or FIT lap boundaries; only observed lap averages. Prior kJ is mechanical work, never a physiological fatigue score. Exact PRs and checkpoint validation are separate."}
+    if not seg:return base
+    hrs=_v1957_segment_hr(detail,seg,source)
+    ftp=_num((detail or {}).get("icu_ftp") or (detail or {}).get("ftp"))
+    wp=_num((detail or {}).get("icu_w_prime"))
+    passed_s=0.0;passed_kj=0.0;passed_hard_s=0.0;history=[];found=[]
+    for idx,row in enumerate(seg):
+        secs=row["secs"];watts=row["watts"]
+        matched=[a for a in anchors if abs(secs-a)<=_v1957_anchor_tolerance(a)]
+        for anchor in matched:
+            min_m,min_kj=_v1957_prior_minimums(anchor)
+            if passed_s/60<min_m or passed_kj<min_kj or watts<20:
+                continue
+            rem=900.0;recent_watts_j=0;recent_secs=0
+            for h in reversed(history):
+                part=min(rem,h["secs"])
+                recent_watts_j+=part*h["watts"]
+                recent_secs+=part
+                rem-=part
+                if rem<=0:break
+            recent_w=round(recent_watts_j/recent_secs,1) if recent_secs>=840 else None
+            wbal = row.get("wbal_start")
+            wbal_pct=round(100*wbal/wp,1) if wp and wp>0 and wbal is not None and 0<=wbal<=wp else None
+            # A single giant lap prior to a 'late' effort hides its intensity.
+            granularity=bool(history and max(x["secs"] for x in history)<=900)
+            mode="SUBMAX_DURABILITY" if any(
+                c.get("anchor_seconds")==anchor and c.get("mode")=="SUBMAX_DURABILITY"
+                for c in configs.values()) else "MAXIMAL"
+            hr=hrs[idx]
+            eligible=bool(granularity and (mode!="SUBMAX_DURABILITY" or hr is not None))
+            found.append({"anchor_seconds":anchor,"duration_sec":round(secs,1),
+                 "duration_label":f"{anchor} s" if anchor<60 else (f"{anchor//60} min" if anchor%60==0 else f"{anchor} s"),
+                 "duration_bucket":f"ANCHOR_{anchor}_S", "watts":round(watts,1),
+                 "average_hr":hr,"analysis_mode":mode,
+                 "prior_elapsed_min":round(passed_s/60,1),"prior_work_kj":round(passed_kj,1),
+                 "prior_high_power_lap_min":round(passed_hard_s/60,1) if ftp and ftp>0 else None,
+                 "prior_recent_15m_lap_watts":recent_w,"prior_wbal_pct":wbal_pct,
+                 "timeline_resolution":"LAP_GRANULAR" if granularity else "COARSE_LAPS_DESCRIPTIVE_ONLY",
+                 "evidence_eligible":eligible,"meaningful_prior_work":True,
+                 "workload_source":source,"is_fresh_pr":False,
+                 "interpretation":"SUBMAX_POWER_HR_CONTEXT_ONLY" if mode=="SUBMAX_DURABILITY" else "OBSERVED_POWER_AFTER_PRIOR_WORK"})
+        history.append(row)
+        passed_s+=secs;passed_kj+=secs*watts/1000
+        if ftp and ftp>0 and watts>=ftp:passed_hard_s+=secs
+    best={}
+    for a in anchors:
+        candidates=[x for x in found if x["anchor_seconds"]==a and x["evidence_eligible"]]
+        if candidates:
+            best[str(a)]=max(candidates,key=lambda x:(x["watts"],x["prior_work_kj"]))
+    shown=sorted(best.values(),key=lambda x:x["anchor_seconds"],reverse=True)[:4]
+    return {**base,"available":bool(best),"state":"OBSERVED" if best else ("PARTIAL" if found else "DATA_NEEDED"),
+            "reason":None if best else ("INSUFFICIENT_TIMELINE_RESOLUTION_OR_HR" if found else "NO_GOAL_ANCHOR_EFFORT_AFTER_PRIOR_WORK"),
+            "best_by_duration":best,"display_observations":shown,"observations":found[:100],
+            "best_5_min":best.get("300"),
+            "method_note":base["method_note"]+" Average 15s sprint power is not an instantaneous peak. The 60min submax benchmark additionally needs segment HR; no efficiency or decoupling improvement is inferred without comparable context."}
+
+
+def _v1957_compare_like_for_like(items, mode):
+    """Only matched prior independent performances for one configured anchor."""
+    valid=[]
+    for e in items or []:
+        o=e.get("best_effort") if isinstance(e,dict) else None
+        if not isinstance(o,dict) or not o.get("evidence_eligible"):continue
+        if all(_num(o.get(k)) is not None and math.isfinite(_num(o[k])) for k in
+               ("watts","duration_sec","prior_work_kj","prior_elapsed_min")):
+            valid.append(e)
+    valid.sort(key=lambda e:(str(e.get("date") or ""),str(e.get("activity_id") or "")))
+    comparisons=[]
+    for e in valid:
+        c=e["best_effort"]; prior=[]
+        for old in valid:
+            o=old["best_effort"]
+            if not str(old.get("date") or "")<str(e.get("date") or "") or old.get("activity_id")==e.get("activity_id"):continue
+            if old.get("event_kind")!=e.get("event_kind") or old.get("source")!=e.get("source"):continue
+            if o.get("anchor_seconds")!=c.get("anchor_seconds") or abs(o["duration_sec"]-c["duration_sec"])>_v1957_anchor_tolerance(c["anchor_seconds"]):continue
+            if abs(o["prior_work_kj"]-c["prior_work_kj"])>max(80,.2*max(o["prior_work_kj"],c["prior_work_kj"])):continue
+            if abs(o["prior_elapsed_min"]-c["prior_elapsed_min"])>max(10,.25*max(o["prior_elapsed_min"],c["prior_elapsed_min"])):continue
+            oh=o.get("prior_high_power_lap_min");ch=c.get("prior_high_power_lap_min")
+            if oh is not None and ch is not None and abs(oh-ch)>max(2,.3*max(oh,ch)):continue
+            orw=o.get("prior_recent_15m_lap_watts");crw=c.get("prior_recent_15m_lap_watts")
+            if orw is not None and crw is not None and abs(orw-crw)>max(30,.15*max(orw,crw)):continue
+            ow=o.get("prior_wbal_pct");cw=c.get("prior_wbal_pct")
+            if ow is not None and cw is not None and abs(ow-cw)>20:continue
+            if mode=="SUBMAX_DURABILITY":
+                # Without matched cardiac load this would compare different
+                # physiological intensities, not submax aerobic performance.
+                a=o.get("average_hr");b=c.get("average_hr")
+                if a is None or b is None or abs(a-b)>min(8,.05*max(a,b)):continue
+            prior.append(old)
+        if not prior:continue
+        prev=max(prior,key=lambda x:x["best_effort"]["watts"])
+        previous=prev["best_effort"];delta=round(c["watts"]-previous["watts"],1)
+        outcome=("HIGHER_OBSERVED_LATE_POWER" if delta>0 else ("LOWER_OBSERVED_LATE_POWER" if delta<0 else "SIMILAR_OBSERVED_LATE_POWER")) if mode!="SUBMAX_DURABILITY" else "SUBMAX_SIMILAR_HR_COMPARISON"
+        comparisons.append({"activity_id":e.get("activity_id"),"date":e.get("date"),
+             "previous_activity_id":prev.get("activity_id"),"previous_date":prev.get("date"),
+             "anchor_seconds":c.get("anchor_seconds"),"watts":c["watts"],
+             "previous_watts":previous["watts"],"delta_w":delta,"outcome":outcome,
+             "prior_work_kj":c["prior_work_kj"],"comparison":"SIMILAR_MEASURED_PRIOR_WORK",
+             "is_fresh_pb":False,"caveat":"Observed comparison, never a maximal PR, race-repeatability, or proof of physiological change."})
+    return comparisons
+
+
+def build_previous_training_blocks(recent_activities, limit=3, activity_details=None):
+    # R195.5 baseline already includes R195.4 race gating. Avoid evaluating
+    # R195.6's hard-coded five-minute module even on accounts pursuing POWER_20.
+    blocks=_v1956_previous_training_blocks_baseline(recent_activities,limit=limit,activity_details=activity_details)
+    details=activity_details if isinstance(activity_details,dict) else {}
+    sources={str(a.get("id")):a for a in recent_activities or [] if isinstance(a,dict) and a.get("id")}
+    for b in blocks or []:
+        if not isinstance(b,dict):continue
+        aid=str(b.get("activity_id") or "")
+        d=details.get(aid) or sources.get(aid) or {}
+        b["fatigue_power"]=_v1957_fatigued_power_detail(d)
+        if _v1954_confirmed_competition(b):b["repeatability"]=None
+    return blocks
+
+
+def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_key=None, scope_start=None):
+    """Attach only goal-relevant measured late-power observations; no fallback."""
+    # Original evidence ledger excludes R195.6's fixed-5-min overlay entirely.
+    led=_v1956_evidence_ledger_baseline(previous_training_blocks,overlay_blocks=overlay_blocks,
+                                        goal_key=goal_key,scope_start=scope_start)
+    if not isinstance(led,dict):return led
+    configs=_v1957_goal_contracts()
+    goal=str(goal_key or "").upper()
+    cfg=configs.get(goal)
+    anchor=cfg.get("anchor_seconds") if cfg and cfg.get("supported") else None
+    mode=cfg.get("mode") if cfg and cfg.get("supported") else None
+    start=str(scope_start or "")[:10]
+    by_key={}
+    for b in list(previous_training_blocks or [])+list(overlay_blocks or []):
+        if not isinstance(b,dict) or (start and str(b.get("date") or "")[:10]<start):continue
+        by_key[_v81_evidence_block_key(b)]=b
+    observed=[]
+    for b in by_key.values():
+        fp=b.get("fatigue_power") or {}
+        best=((fp.get("best_by_duration") or {}).get(str(anchor)) if anchor else None)
+        if not isinstance(best,dict) or not fp.get("available") or not best.get("evidence_eligible"):
+            continue
+        observed.append({"activity_id":b.get("activity_id"),"date":b.get("date"),"name":b.get("name"),
+              "event_kind":"RACE" if _v1954_confirmed_competition(b) else "TRAINING",
+              "source":fp.get("source"),"goal_key":goal,"anchor_seconds":anchor,"best_effort":best})
+    matches=_v1957_compare_like_for_like(observed,mode)
+    by_aid={str(o.get("activity_id")):o for o in observed}
+    comparisons={str(c.get("activity_id")):c for c in matches}
+    for row in led.get("events") or []:
+        if not isinstance(row,dict):continue
+        aid=str(row.get("activity_id") or "");ev=by_aid.get(aid)
+        if not ev:continue
+        # Physical work is real evidence, but the historic RACE repeatability
+        # contract is neither removed nor rebuilt here.
+        row["fatigue_power"]={"state":"OBSERVED","goal_key":goal,"best_effort":ev["best_effort"],
+                              "comparison":comparisons.get(aid),"is_fresh_pr":False}
+        tags=list(row.get("tags") or [])
+        tags.append("MEASURED_PRIOR_WORK") if "MEASURED_PRIOR_WORK" not in tags else None
+        # Submax efficiency context is not a maximal quality effort.
+        if mode=="MAXIMAL" and "PRELOADED_QUALITY" not in tags:tags.append("PRELOADED_QUALITY")
+        if ev["event_kind"]=="RACE" and "RACE_TRANSFER" not in tags:tags.append("RACE_TRANSFER")
+        row["tags"]=tags
+    feat=led.get("science_features")
+    if isinstance(feat,dict) and observed:
+        if mode=="MAXIMAL":feat["preloaded_quality"]=True
+        if any(e["event_kind"]=="RACE" for e in observed):feat["race_transfer"]=True
+    led["fatigued_power"]={"schema":R1957_SCHEMA,"available":bool(observed),"goal_key":goal,
+        "supported":bool(anchor),"status":"OBSERVED" if observed else ("DATA_NEEDED" if anchor else "UNSUPPORTED_GOAL"),
+        "anchor_seconds":anchor,"mode":mode,"goal_count":len(configs),
+        "observed_sessions":len(observed),"race_sessions":sum(e["event_kind"]=="RACE" for e in observed),
+        "training_sessions":sum(e["event_kind"]=="TRAINING" for e in observed),
+        "observations":sorted(observed,key=lambda e:(str(e.get("date") or ""),str(e.get("activity_id") or "")),reverse=True),
+        "comparable_pairs":len(matches),"comparisons":sorted(matches,key=lambda c:str(c.get("date") or ""),reverse=True),
+        "source_policy":"VALIDATED_FULL_TIMELINE_ONLY",
+        "method_note":"Active goal and anchor come from ROADMAP_GOALS.field_test, never hard-coded 5min. Maximal observed after load differs from fresh PR; 15s is average power, not instantaneous peak. Submax requires HR; comparison is contextual only, not a formal efficiency/decoupling validation."}
+    return led
+
+APP_VERSION="THE LAB · PRODUCT V4.9.81 CANDIDATE R195.7 · GOAL-CONFIGURED FATIGUED POWER · R195.6 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
