@@ -3515,7 +3515,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% set ml = ((data.metabolic_context or {}).get('metabolic_load') or {}) %}
 {% if ml.get('available') %}<div class="v4894-metabolic-summary"><div><span>7D METABOLIC PRESSURE</span><strong>{{ ml.get('trend_label','LEARNING') }}</strong><small>{{ ml.get('trend_detail','Building your personal cycling baseline.') }}</small></div><div><span>INTENSITY DENSITY</span><strong>{% if ml.get('density_delta_pct') is not none %}{{ '%+.0f'|format(ml.get('density_delta_pct')) }}% vs norm{% else %}{{ ml.get('current_density_label','LEARNING') }}{% endif %}</strong><small>Demand per riding hour</small></div><div><span>MECHANICAL WORK</span><strong>{% if ml.get('work_delta_pct') is not none %}{{ '%+.0f'|format(ml.get('work_delta_pct')) }}% vs norm{% elif ml.get('current_7d_work_kj') is not none %}{{ ml.get('current_7d_work_kj')|int }} kJ / 7d{% else %}—{% endif %}</strong><small>Power-derived, not calories</small></div><div><span>HIGH-INTENSITY</span><strong>{% if ml.get('high_delta_pct') is not none %}{{ '%+.0f'|format(ml.get('high_delta_pct')) }}% vs norm{% else %}{{ ml.get('current_7d_high_min',0)|round|int }} min / 7d{% endif %}</strong><small>High-zone exposure</small></div></div>{% endif %}
 {% if data.previous_training_blocks %}<div class="v25-blocks-grid">{% for b in data.previous_training_blocks[:3] %}
-{% set mp = b.get('metabolic_profile') or {} %}<article class="v25-block {% if b.heat %}heat{% endif %}"><div class="v25-block-top"><span>{{ b.date|ui_date }} · {{ b.time }}</span>{% if b.heat %}<span class="v25-heat-badge">🔥 HEAT</span>{% else %}<span>{{ b.family }}</span>{% endif %}</div><h4>{{ b.name }}</h4><div class="v25-block-metrics"><b>{{ b.duration_min }} min</b>{% if b.load is not none %}<b>Load {{ b.load }}</b>{% endif %}{% if b.avg_watts %}<b>{{ b.avg_watts }} W avg</b>{% endif %}{% if b.avg_hr %}<b>HR {{ b.avg_hr }}</b>{% endif %}{% if b.decoupling is not none %}<b>Drift {{ b.decoupling }}%</b>{% endif %}</div>{% if b.power_zone_summary or b.hr_zone_summary %}<div class="v25-zone-lines">{% if b.power_zone_summary %}<span>⚙️ POWER · {{ b.power_zone_summary }}</span>{% endif %}{% if b.hr_zone_summary %}<span>🫀 HR · {{ b.hr_zone_summary }}</span>{% endif %}</div>{% endif %}{% if b.intervals %}<div class="v25-intervals">{% for x in b.intervals %}<span>↳ {{ x }}</span>{% endfor %}</div>{% endif %}{% if mp %}<div class="v4894-metabolic-grid"><div><span>METABOLIC DEMAND</span><b class="{{ mp.get('demand_class','moderate') }}">{{ mp.get('demand_label','—') }}</b></div><div><span>GLYCOGEN PRESSURE</span><b class="{{ mp.get('glycogen_class','moderate') }}">{{ mp.get('glycogen_label','—') }}</b></div><div><span>HIGH-INTENSITY DEMAND</span><b class="{{ mp.get('high_intensity_class','minimal') }}">{{ mp.get('high_intensity_label','—') }}</b></div><div><span>RECOVERY PRESSURE</span><b class="{{ mp.get('recovery_class','moderate') }}">{{ mp.get('recovery_label','—') }}</b></div></div><div class="v4894-metabolic-foot">{% if mp.get('mechanical_work_kj') is not none %}<strong>{{ mp.get('mechanical_work_kj')|int }} kJ</strong> mechanical work{% else %}Mechanical work unavailable{% endif %}{% if mp.get('density') is not none %} · demand density {{ '%.2f'|format(mp.get('density')) }}× easy-hour equivalent{% endif %}</div>{% endif %}{% set eq=b.get('execution_quality') or {} %}{% if b.repeatability or eq.get('available') or b.get('progression_badges') or (b.wbal and b.wbal.get('available')) %}<div class="v4894-evidence">{% if b.repeatability %}<span>Repeatability · {{ b.repeatability.get('reps') }}×{{ b.repeatability.get('interval_label') }}{% if b.repeatability.get('first_to_last_decay_pct') is not none %} · first→last {{ b.repeatability.get('first_to_last_decay_pct') }}%{% endif %}</span>{% endif %}{% if eq.get('available') %}<span>📉 OUTPUT DEGRADATION · {{ eq.degradation.index_pct }}% · {{ eq.degradation.label }}</span>{% if eq.adherence.available %}<span>🎯 WORKOUT ADHERENCE · {{ eq.adherence.score }}% · {{ eq.adherence.label }} · {{ eq.adherence.detail }} · recovery watts unscored</span>{% else %}<span>🎯 WORKOUT ADHERENCE · N/A · no exact THE LAB prescription link</span>{% endif %}{% endif %}{% for x in b.get('progression_badges',[]) %}<span style="font-size:12px;font-weight:800">{{ x.icon }} {{ x.label }} · {{ x.detail }}</span>{% endfor %}{% if b.wbal and b.wbal.get('available') and b.wbal.get('max_depletion_pct') is not none %}<span>W\u2032bal depletion · {{ b.wbal.get('max_depletion_pct') }}%{% if b.wbal.get('median_recovery_end_pct') is not none %} · recovery {{ b.wbal.get('median_recovery_end_pct') }}%{% endif %}</span>{% endif %}</div>{% endif %}<p class="v25-consideration">{{ b.consideration }}</p></article>
+{% set mp = b.get('metabolic_profile') or {} %}<article class="v25-block {% if b.heat %}heat{% endif %}"><div class="v25-block-top"><span>{{ b.date|ui_date }} · {{ b.time }}</span>{% if b.heat %}<span class="v25-heat-badge">🔥 HEAT</span>{% else %}<span>{{ b.family }}</span>{% endif %}</div><h4>{{ b.name }}</h4><div class="v25-block-metrics"><b>{{ b.duration_min }} min</b>{% if b.load is not none %}<b>Load {{ b.load }}</b>{% endif %}{% if b.avg_watts %}<b>{{ b.avg_watts }} W avg</b>{% endif %}{% if b.avg_hr %}<b>HR {{ b.avg_hr }}</b>{% endif %}{% if b.decoupling is not none %}<b>Drift {{ b.decoupling }}%</b>{% endif %}</div>{% if b.power_zone_summary or b.hr_zone_summary %}<div class="v25-zone-lines">{% if b.power_zone_summary %}<span>⚙️ POWER · {{ b.power_zone_summary }}</span>{% endif %}{% if b.hr_zone_summary %}<span>🫀 HR · {{ b.hr_zone_summary }}</span>{% endif %}</div>{% endif %}{% if b.intervals %}<div class="v25-intervals">{% for x in b.intervals %}<span>↳ {{ x }}</span>{% endfor %}</div>{% endif %}{% if mp %}<div class="v4894-metabolic-grid"><div><span>METABOLIC DEMAND</span><b class="{{ mp.get('demand_class','moderate') }}">{{ mp.get('demand_label','—') }}</b></div><div><span>GLYCOGEN PRESSURE</span><b class="{{ mp.get('glycogen_class','moderate') }}">{{ mp.get('glycogen_label','—') }}</b></div><div><span>HIGH-INTENSITY DEMAND</span><b class="{{ mp.get('high_intensity_class','minimal') }}">{{ mp.get('high_intensity_label','—') }}</b></div><div><span>RECOVERY PRESSURE</span><b class="{{ mp.get('recovery_class','moderate') }}">{{ mp.get('recovery_label','—') }}</b></div></div><div class="v4894-metabolic-foot">{% if mp.get('mechanical_work_kj') is not none %}<strong>{{ mp.get('mechanical_work_kj')|int }} kJ</strong> mechanical work{% else %}Mechanical work unavailable{% endif %}{% if mp.get('density') is not none %} · demand density {{ '%.2f'|format(mp.get('density')) }}× easy-hour equivalent{% endif %}</div>{% endif %}{% set eq=b.get('execution_quality') or {} %}{% if (b.get('fatigue_power') or {}).get('available') or b.repeatability or eq.get('available') or b.get('progression_badges') or (b.wbal and b.wbal.get('available')) %}<div class="v4894-evidence">{% set fp=b.get('fatigue_power') or {} %}{% set five=fp.get('best_5_min') or {} %}{% if fp.get('available') and five %}<span>⛰️ ≈5-MIN POWER AFTER PRIOR WORK · {{ five.get('watts')|int }} W · {{ five.get('prior_work_kj')|int }} kJ before effort · {{ five.get('prior_elapsed_min')|int }} min before effort · observational only, not fresh PR</span>{% endif %}{% if b.repeatability %}<span>Repeatability · {{ b.repeatability.get('reps') }}×{{ b.repeatability.get('interval_label') }}{% if b.repeatability.get('first_to_last_decay_pct') is not none %} · first→last {{ b.repeatability.get('first_to_last_decay_pct') }}%{% endif %}</span>{% endif %}{% if eq.get('available') %}<span>📉 OUTPUT DEGRADATION · {{ eq.degradation.index_pct }}% · {{ eq.degradation.label }}</span>{% if eq.adherence.available %}<span>🎯 WORKOUT ADHERENCE · {{ eq.adherence.score }}% · {{ eq.adherence.label }} · {{ eq.adherence.detail }} · recovery watts unscored</span>{% else %}<span>🎯 WORKOUT ADHERENCE · N/A · no exact THE LAB prescription link</span>{% endif %}{% endif %}{% for x in b.get('progression_badges',[]) %}<span style="font-size:12px;font-weight:800">{{ x.icon }} {{ x.label }} · {{ x.detail }}</span>{% endfor %}{% if b.wbal and b.wbal.get('available') and b.wbal.get('max_depletion_pct') is not none %}<span>W\u2032bal depletion · {{ b.wbal.get('max_depletion_pct') }}%{% if b.wbal.get('median_recovery_end_pct') is not none %} · recovery {{ b.wbal.get('median_recovery_end_pct') }}%{% endif %}</span>{% endif %}</div>{% endif %}<p class="v25-consideration">{{ b.consideration }}</p></article>
 {% endfor %}</div>{% else %}<p class="v4-section-note">No detailed completed sessions available yet.</p>{% endif %}
 </div>
 {% set td = data.training_direction if data.training_direction is defined and data.training_direction else none %}
@@ -16645,11 +16645,15 @@ def _v4896_build_performance_evidence(training_direction, plan, power_achievemen
             continue
         name=str((act or {}).get("name") or "")
         if not checkpoint_pat.search(name) or not _v4895_activity_quality_truth(act).get("quality_relevant"): continue
+        comparison = _v1955_checkpoint_comparison(
+            list((stored or {}).get("events") or []) + new_events,
+            float(ev.get("watts")), int(test_secs), day, observed_event=ev,
+        )
         formal={"kind":"VALIDATION","source":"EXPLICIT_CHECKPOINT_ACTIVITY + INTERVALS_NATIVE_ACHIEVEMENT","date":day,"secs":int(test_secs),"watts":float(ev.get("watts")),
-                "previous_watts":ev.get("previous_watts"),"delta_w":ev.get("delta_w"),"activity_id":aid,"activity_name":name,"tier":3,"tier_code":"FORMAL_VALIDATION",
+                "previous_watts":comparison["previous_watts"],"delta_w":comparison["delta_w"],"activity_id":aid,"activity_name":name,"tier":3,"tier_code":"FORMAL_VALIDATION",
                 "goal_key":goal_key,"goal_relevant":True,"exact_checkpoint_duration":True,"activity_linked":True,"quality_linked":True,"stimulus_domain":test_domain,
-                "progression_signal":False,"formal_validation":True,"validation_mode":test_mode,"outcome":"VALIDATED_GAIN" if (_rhythm_num(ev.get("delta_w")) or 0)>0 else "BENCHMARK_COMPLETED",
-                "pb_confirmed":True,"decoupling_pct":None}
+                "progression_signal":False,"formal_validation":True,"validation_mode":test_mode,"outcome":comparison["outcome"],
+                "pb_confirmed":comparison["pb_confirmed"],"outcome_reference_source":comparison["reference_source"],"decoupling_pct":None}
         formal["id"]=_v4896_event_id(formal); new_events.append(formal); explicit_formal_keys.add((day,aid))
     for block in previous_blocks or []:
         if not isinstance(block,dict): continue
@@ -16667,12 +16671,17 @@ def _v4896_build_performance_evidence(training_direction, plan, power_achievemen
         if test_mode == "MAXIMAL" and not bool(block.get("quality_relevant")): continue
         if test_mode == "SUBMAX_DURABILITY" and (str(block.get("family") or "") not in {"Endurance / Z2","Recovery"} or block.get("decoupling") is None): continue
         exact_native=next((x for x in new_events if str(x.get("date") or "")==day and x.get("exact_checkpoint_duration") and (not aid or str(x.get("activity_id") or "")==aid)),None)
-        result_w=float(effort.get("watts")); gain=bool(exact_native and (_rhythm_num(exact_native.get("delta_w")) or 0) > 0)
+        result_w=float(effort.get("watts"))
+        comparison = _v1955_checkpoint_comparison(
+            list((stored or {}).get("events") or []) + new_events,
+            result_w, int(test_secs), day, observed_event=exact_native, mode=test_mode,
+        )
         formal={"kind":"VALIDATION","source":"EXPLICIT_CHECKPOINT_ACTIVITY + INTERVALS_WORK_INTERVAL","date":day,"secs":int(test_secs),"watts":round(result_w,1),
-                "previous_watts":None,"delta_w":_rhythm_num((exact_native or {}).get("delta_w")),"activity_id":aid,"activity_name":name,
+                "previous_watts":comparison["previous_watts"],"delta_w":comparison["delta_w"],"activity_id":aid,"activity_name":name,
                 "tier":3,"tier_code":"FORMAL_VALIDATION","goal_key":goal_key,"goal_relevant":True,"exact_checkpoint_duration":True,
                 "activity_linked":True,"quality_linked":test_mode=="MAXIMAL","stimulus_domain":test_domain,"progression_signal":False,"formal_validation":True,
-                "validation_mode":test_mode,"outcome":"VALIDATED_GAIN" if gain else "BENCHMARK_COMPLETED","pb_confirmed":bool(exact_native),
+                "validation_mode":test_mode,"outcome":comparison["outcome"],"pb_confirmed":comparison["pb_confirmed"],
+                "outcome_reference_source":comparison["reference_source"],
                 "decoupling_pct":block.get("decoupling") if test_mode=="SUBMAX_DURABILITY" else None}
         formal["id"]=_v4896_event_id(formal); new_events.append(formal); explicit_formal_keys.add((day,aid))
     planned_validation = [
@@ -16709,18 +16718,20 @@ def _v4896_build_performance_evidence(training_direction, plan, power_achievemen
                 None,
             )
             result_watts = float(effort.get("watts"))
-            delta_w = round(result_watts - reference_watts, 1) if reference_watts is not None else None
-            pb_confirmed = bool(exact_pb)
-            outcome = "VALIDATED_GAIN" if pb_confirmed else "BENCHMARK_COMPLETED"
+            comparison = _v1955_checkpoint_comparison(
+                list((stored or {}).get("events") or []) + new_events,
+                result_watts, planned_secs, day, observed_event=exact_pb, mode=test_mode,
+            )
             formal = {
                 "kind":"VALIDATION","source":"PLANNED_VALIDATION + INTERVALS_WORK_INTERVAL",
                 "date":day,"secs":int(planned_secs),"watts":round(result_watts,1),
-                "previous_watts":round(reference_watts,1) if reference_watts is not None else None,
-                "delta_w":delta_w,"activity_id":block.get("activity_id"),"activity_name":block.get("name"),
+                "previous_watts":comparison["previous_watts"],
+                "delta_w":comparison["delta_w"],"activity_id":block.get("activity_id"),"activity_name":block.get("name"),
+                "prescription_reference_watts":reference_watts,"outcome_reference_source":comparison["reference_source"],
                 "tier":3,"tier_code":"FORMAL_VALIDATION","goal_key":goal_key,"goal_relevant":True,
                 "exact_checkpoint_duration":True,"activity_linked":True,"quality_linked":test_mode == "MAXIMAL",
                 "stimulus_domain":planned_domain,"progression_signal":False,"formal_validation":True,
-                "validation_mode":test_mode,"outcome":outcome,"pb_confirmed":pb_confirmed,
+                "validation_mode":test_mode,"outcome":comparison["outcome"],"pb_confirmed":comparison["pb_confirmed"],
                 "decoupling_pct":block.get("decoupling") if test_mode == "SUBMAX_DURABILITY" else None,
             }
             formal["id"] = _v4896_event_id(formal)
@@ -35153,18 +35164,24 @@ def _v149_promote_reconciled_validation(evidence, training_direction, previous_b
         obs = _v149_exact_checkpoint_observation(out, previous_blocks, aid, actual, default_secs)
         if not obs:
             continue
-        reference = _rhythm_num(plan.get("quality_reference_watts")) or _rhythm_num(plan.get("stimulus_reference_power_watts")) or _rhythm_num(obs.get("previous_watts"))
+        prescription_ref = _rhythm_num(plan.get("quality_reference_watts"))
+        if prescription_ref is None:
+            prescription_ref = _rhythm_num(plan.get("stimulus_reference_power_watts"))
         result = float(obs.get("watts"))
-        delta = round(result - float(reference), 1) if reference is not None else _rhythm_num(obs.get("delta_w"))
-        pb = bool(obs.get("pb_confirmed") or (delta is not None and delta > 0))
+        comparison = _v1955_checkpoint_comparison(
+            out.get("events") or [], result, default_secs, actual,
+            observed_event=obs.get("source_event"), mode=field.get("mode") or "MAXIMAL",
+        )
         formal = {
             "kind": "VALIDATION",
             "source": "PRESCRIPTION_FULFILLMENT + EXECUTION_RECONCILIATION + EXACT_CHECKPOINT_EVIDENCE",
             "date": actual,
             "secs": int(default_secs),
             "watts": round(result, 1),
-            "previous_watts": round(float(reference), 1) if reference is not None else None,
-            "delta_w": delta,
+            "previous_watts": comparison["previous_watts"],
+            "delta_w": comparison["delta_w"],
+            "prescription_reference_watts": prescription_ref,
+            "outcome_reference_source": comparison["reference_source"],
             "activity_id": aid,
             "activity_name": rec.get("activity_name") or plan.get("executed_activity_name"),
             "tier": 3,
@@ -35178,8 +35195,8 @@ def _v149_promote_reconciled_validation(evidence, training_direction, previous_b
             "progression_signal": False,
             "formal_validation": True,
             "validation_mode": str(field.get("mode") or "MAXIMAL").upper(),
-            "outcome": "VALIDATED_GAIN" if pb else "BENCHMARK_COMPLETED",
-            "pb_confirmed": pb,
+            "outcome": comparison["outcome"],
+            "pb_confirmed": comparison["pb_confirmed"],
             "decoupling_pct": None,
             "prescription_fingerprint": rec.get("prescription_fingerprint"),
             "nova_workout_id": rec.get("nova_workout_id") or plan.get("nova_workout_id") or plan.get("nova_contract_id"),
@@ -42873,6 +42890,392 @@ def _v4879_completed_quality_review(previous_blocks, subjective_context, now=Non
 
 
 APP_VERSION = 'THE LAB · PRODUCT V4.9.78 CANDIDATE R195.4 · RACE-SAFE REPEATABILITY · R195.3 BASELINE'
+
+# R195.6: main entrypoint moved to the very end: all later release patches
+# must be installed before the blocking local app.run() call.
+
+
+# R195.5 · CHECKPOINT TRUTH AND EVIDENCE-GATED STAGE SYNC
+# No automatic infinite PR requirement; validation, gain and pacing are distinct.
+R1955_SCHEMA = "V4.9.79-R195.5-CHECKPOINT-TRUTH-1"
+
+def _v1955_checkpoint_comparison(events, result_watts, duration_secs, completed_day, observed_event=None, mode="MAXIMAL"):
+    """Use *earlier observed performance* only; never compare with prescribed watts.
+
+    If no comparable earlier value is proven, the formal test still closes the
+    validation question, but a numerical improvement is not asserted.
+    """
+    try:
+        result = float(result_watts)
+        secs = float(duration_secs)
+    except (TypeError, ValueError):
+        return {"previous_watts":None,"delta_w":None,"outcome":"BENCHMARK_COMPLETED","pb_confirmed":False,"reference_source":None}
+    if not math.isfinite(result) or result <= 0 or not math.isfinite(secs) or secs <= 0:
+        return {"previous_watts":None,"delta_w":None,"outcome":"BENCHMARK_COMPLETED","pb_confirmed":False,"reference_source":None}
+    valid_prior = []
+    try:
+        completed = date.fromisoformat(str(completed_day or "")[:10])
+    except (TypeError, ValueError):
+        completed = None
+    if completed is not None:
+        for row in events or []:
+            if not isinstance(row,dict) or not row.get("activity_linked"):
+                continue
+            try:
+                d = date.fromisoformat(str(row.get("date") or "")[:10]);
+                sec = float(row.get("secs") or 0); w = float(row.get("watts"))
+            except (TypeError, ValueError):
+                continue
+            if d >= completed or abs(sec-secs)>max(2.0,min(30.0,secs*.05)) or not math.isfinite(w) or w<=0:
+                continue
+            # A real past effort or formal test, not a predicted model wattage.
+            if str(row.get("kind") or "").upper() in {"PB","VALIDATION"}:
+                valid_prior.append(w)
+    native_previous = None
+    ev = observed_event if isinstance(observed_event,dict) else {}
+    # Only explicit, activity-linked measurements may offer a prior observed PB.
+    if ev.get("activity_linked") and str(ev.get("kind") or "").upper() == "PB":
+        p = _rhythm_num(ev.get("previous_watts")); delta = _rhythm_num(ev.get("delta_w"))
+        if p is not None and p>0 and delta is not None and delta>0:
+            native_previous = float(p)
+    if native_previous is not None:
+        valid_prior.append(native_previous)
+    previous = max(valid_prior) if valid_prior else None
+    delta = round(result-previous,1) if previous is not None else None
+    gain = bool(str(mode or "").upper() == "MAXIMAL" and previous is not None and result>previous+0.05)
+    # 'PB confirmed' requires an explicit native/observed prior-delta record.
+    pb = bool(gain and native_previous is not None and result>native_previous+0.05)
+    return {
+        "previous_watts":round(previous,1) if previous is not None else None,
+        "delta_w":delta,
+        "outcome":"VALIDATED_GAIN" if gain else "BENCHMARK_COMPLETED",
+        "pb_confirmed":pb,
+        "reference_source":"PRIOR_OBSERVED_PERFORMANCE" if previous is not None else None,
+    }
+
+
+def _v1955_sync_checkpoint_to_stage(roadmap, now=None):
+    """Keep evidence-gated stage and checkpoint copy/permission in one state.
+
+    Recovery, health, race priority and the completed-day absorption veto win;
+    this never creates a new slot, forces testing or cancels physical load.
+    """
+    road = roadmap if isinstance(roadmap,dict) else None
+    if road is None or not road.get("available"):
+        return road
+    try:
+        stage=int(road.get("stage_index") or 0)
+    except (TypeError,ValueError):
+        return road
+    test = road.get("test")
+    if not isinstance(test,dict):
+        return road
+    test = dict(test)
+    old_state = str(test.get("state") or "").upper()
+    quality = road.get("quality_window") or {}
+    q_state = str(quality.get("state") or "").upper()
+    # No change to an explicit independent safety veto or completed validation.
+    if old_state in {"COMPLETED","ON HOLD","RACE PRIORITY"} or q_state in {"ON HOLD","RECOVERY HOLD","RACE PRIORITY","LEARNING"}:
+        return road
+    if stage>=3:
+        slot = str(quality.get("preferred") or quality.get("earliest") or "").strip()
+        if slot and q_state in {"WATCH","OPEN"} and quality.get("hard_session_allowed") is not False:
+            test.update({"state":"WINDOW OPEN","when":slot,
+                         "reason":"The evidence-gated roadmap has reached validation. The checkpoint may replace the next eligible quality window, conditional on recovery and spacing; a new PR is not required to close it."})
+            src=str(test.get("reference_source") or "observed curve")
+            ref=_rhythm_num(test.get("reference_watts"))
+            pacing=f"Current {src} reference: {ref:.0f} W. " if ref is not None else ""
+            test["instruction"]=pacing+"Use this as pacing context, not a minimum, cap, or pass mark. Complete the exact-duration test; a plateau also validates completion."
+        else:
+            test.update({"state":"TEST SOON","when":"When the next valid quality opportunity is exposed",
+                         "reason":"The evidence-gated roadmap has reached validation, but no eligible quality opportunity is currently confirmed. Recovery and timing still decide when."})
+    elif stage==2 and old_state in {"BASELINE BUILD","BUILD FIRST","TEST SOON","WINDOW OPEN"}:
+        test.update({"state":"TEST SOON","when":"After the next successful race-transfer exposure and a fresh quality window",
+                     "reason":"Complete the remaining race-transfer question, then validate without demanding a PR."})
+    elif stage==1 and old_state in {"BASELINE BUILD","TEST SOON","WINDOW OPEN"}:
+        test.update({"state":"BUILD FIRST","when":"After representative repeatability-focused quality exposures",
+                     "reason":"Repeatability evidence is still being developed before validation."})
+    elif stage==0 and old_state in {"BUILD FIRST","TEST SOON","WINDOW OPEN"}:
+        test.update({"state":"BASELINE BUILD","when":"After representative goal-specific training has accumulated",
+                     "reason":"Build sufficient comparable work before the next checkpoint."})
+    else:
+        return road
+    test["checkpoint_sync_schema"]=R1955_SCHEMA
+    road["test"]=test
+    return road
+
+
+# The final scientific progression is the late evidence-gated stage authority.
+# Synchronize its test contract immediately after stage computation and before
+# Nova Decision / the canonical prescription consume the shared roadmap.
+_v1955_science_baseline = _v503_scientific_progression
+
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None,
+                               previous_blocks=None, performance_narrative=None,
+                               performance_evidence=None, aerobic_metabolic_range=None,
+                               evidence_ledger=None, question_state=None):
+    result = _v1955_science_baseline(
+        goal_key,roadmap,ledger,session_progression,previous_blocks,performance_narrative,
+        performance_evidence,aerobic_metabolic_range,
+        evidence_ledger=evidence_ledger,question_state=question_state,
+    )
+    _v1955_sync_checkpoint_to_stage(roadmap)
+    if isinstance(result,dict) and isinstance(roadmap,dict):
+        result["checkpoint_stage_sync"]={"schema":R1955_SCHEMA,
+              "stage_index":roadmap.get("stage_index"),
+              "test_state":((roadmap.get("test") or {}).get("state")),
+              "test_due":str(((roadmap.get("test") or {}).get("state") or "")).upper() in {"WINDOW OPEN","TEST SOON"}}
+    return result
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.79 CANDIDATE R195.5 · CHECKPOINT TRUTH + STAGE SYNC · R195.4 BASELINE"
+
+
+# R195.6 · OBSERVED POWER UNDER PRIOR WORK (NEVER FRESH-PB EQUIVALENCE)
+# No extra API calls. Do not transform sparse ICU auto-intervals into a chronology.
+R1956_SCHEMA = "V4.9.80-R195.6-FATIGUED-POWER-1"
+
+def _v1956_timed_power_segments(detail):
+    """Return trusted *whole-activity* ordered power segments, or a reason.
+
+    The FIT lap parser preserves start/end FIT timestamps and lap power. ICU
+    automatic intervals often omit warm-up or only include highlights; they are
+    accepted solely when explicit offsets permit checking whole-ride coverage.
+    No interpolation and no assumed durations from names/PRs.
+    """
+    d = detail if isinstance(detail, dict) else {}
+    native_laps = d.get("source_laps") or []
+    proven_fit = (str(d.get("_v125_source_lap_provenance") or "") == "ORIGINAL_ACTIVITY_FIT_LAP")
+    if proven_fit and len(native_laps) >= 2 and all(isinstance(r,dict) and r.get("_v125_record_origin") == "ORIGINAL_FIT_LAP" for r in native_laps):
+        source, rows, start_key, end_key = "ORIGINAL_FIT_LAPS", native_laps, "fit_start_time", "fit_end_time"
+    else:
+        native = d.get("icu_intervals") or []
+        # A timestamped, complete partition is admissible; never infer position
+        # from `_truth_pos`, WORK order or start_index (sample index != seconds).
+        if len(native) < 2 or not all(isinstance(r,dict) for r in native):
+            return [], "NO_TRUSTED_WHOLE_RIDE_TIMELINE", None
+        if all(r.get("start_secs") is not None for r in native):
+            source, rows, start_key, end_key = "ICU_EXPLICIT_SECONDS", native, "start_secs", None
+        elif all(r.get("start_index") is not None and r.get("end_index") is not None for r in native):
+            # ICU native sample indices establish order, NOT seconds. Accept only
+            # a contiguous, zero-anchored partition whose duration covers >=95%
+            # of the ride, then synthesize *relative cumulative lap seconds*.
+            # This is not legal for sparse automatic work-interval highlights.
+            try:
+                ordered=sorted(native,key=lambda r:float(r["start_index"]))
+                indices=[(float(r["start_index"]),float(r["end_index"])) for r in ordered]
+            except (TypeError,ValueError,OverflowError):
+                return [], "INVALID_SAMPLE_INDEX", None
+            if any(not (math.isfinite(a) and math.isfinite(b)) for a,b in indices):
+                return [], "INVALID_SAMPLE_INDEX", None
+            if indices[0][0] > 1 or indices[0][0] < 0 or any(b<=a for a,b in indices):
+                return [], "INCOMPLETE_SAMPLE_INDEX_COVERAGE", None
+            if any(abs(indices[i+1][0]-indices[i][1])>1 for i in range(len(indices)-1)):
+                return [], "INCOMPLETE_SAMPLE_INDEX_COVERAGE", None
+            source="ICU_FULL_COVERAGE_INDEXED"
+            cursor=0.0; rows=[]
+            for r in ordered:
+                duration=_num(r.get("moving_time") or r.get("elapsed_time"))
+                if duration is None or duration<=0:
+                    return [], "INVALID_LAP_POWER_OR_TIME", None
+                rows.append({**r,"_v1956_relative_start":cursor})
+                cursor+=duration
+            start_key,end_key="_v1956_relative_start",None
+        else:
+            return [], "NO_TRUSTED_WHOLE_RIDE_TIMELINE", None
+    total = _num(d.get("moving_time") or d.get("elapsed_time"))
+    if total is None or total <= 0: return [], "ACTIVITY_DURATION_UNAVAILABLE", None
+    seg=[]
+    for r in rows:
+        start = _num(r.get(start_key)); duration = _num(r.get("moving_time") or r.get("elapsed_time")); power = _num(r.get("average_watts"))
+        finish = _num(r.get(end_key)) if end_key else None
+        if not all(v is not None and math.isfinite(v) for v in (start,duration,power)):
+            return [], "MISSING_LAP_POWER_OR_TIME", None
+        if duration <= 0 or not (0 <= power <= 2500):return [], "INVALID_LAP_POWER_OR_TIME", None
+        if finish is None:finish = start+duration
+        if not math.isfinite(finish) or finish <= start or abs((finish-start)-duration)>max(5.0,.06*duration):
+            return [], "INCONSISTENT_LAP_BOUNDARIES", None
+        seg.append({"start":float(start),"end":float(finish),"secs":float(duration),"watts":float(power),"wbal_start":_num(r.get("wbal_start"))})
+    seg.sort(key=lambda r:r["start"])
+    if len(seg)>200:return [], "TOO_MANY_SEGMENTS", None
+    # No overlapping segments, hidden gaps or double-counting. This is a
+    # conservative accounting of observed work *before* each subsequent lap.
+    for a,b in zip(seg,seg[1:]):
+        gap=b["start"]-a["end"]
+        if gap < -3 or gap > 5:return [], "TIMELINE_GAPS_OR_OVERLAPS", None
+    covered=sum(r["secs"] for r in seg)
+    if covered / total < .95 or covered / total > 1.05:
+        return [], "INCOMPLETE_ACTIVITY_COVERAGE", None
+    if source == "ICU_EXPLICIT_SECONDS" and abs(seg[0]["start"])>5:
+        return [], "ICU_TIMELINE_NOT_ZERO_ANCHORED", None
+    return seg, None, source
+
+
+def _v1956_fatigued_power_detail(detail, goal_key="POWER_5"):
+    """Descriptive real effort power conditional on measured prior workload.
+
+    A 365 W fatigued effort does not become a 380 W fresh PR. Prior power-zone
+    time and exact W'bal trajectory are *not* inferable from lap-average watts.
+    """
+    seg, reason, source = _v1956_timed_power_segments(detail)
+    base={"schema":R1956_SCHEMA,"available":False,"state":"DATA_NEEDED","reason":reason,
+          "source":source,"best_5_min":None,"observations":[],
+          "method_note":"Time-ordered original FIT laps or full-coverage explicitly timestamped native intervals only. Prior mechanical work (kJ) is observed lap power × time, not a physiological fatigue score; no fresh-power equivalence or PR claim."}
+    if not seg:return base
+    ftp=_num((detail or {}).get("icu_ftp") or (detail or {}).get("ftp"))
+    wprime=_num((detail or {}).get("icu_w_prime"))
+    previous_seconds=0.0;previous_kj=0.0; previous_hard_lap_sec=0.0
+    preceding=[]; observations=[]
+    for r in seg:
+        secs=r["secs"];w=r["watts"]
+        if 120 <= secs <= 900 and w>=100 and previous_seconds>=1800 and previous_kj>=200:
+            # Exactly 5 minutes gets a separate 285-315 second bucket;
+            # 3 vs 6 minutes must never be graded as comparable power.
+            target="5_MIN" if 285<=secs<=315 else f"{int(round(secs/30)*30)}_SEC"
+            wbal_pct = round(100*r["wbal_start"]/wprime,1) if (wprime and wprime>0 and r.get("wbal_start") is not None and 0<=r["wbal_start"]<=wprime) else None
+            # Last 15 minutes: observed time-weighted lap averages. This is
+            # descriptive; coarse lap boundaries are not a sample-level model.
+            residual=900.0; recent_j=0.0; recent_s=0.0
+            for prior in reversed(preceding):
+                take=min(residual,prior["secs"])
+                recent_j+=take*prior["watts"];recent_s+=take;residual-=take
+                if residual<=0:break
+            recent_w=round(recent_j/recent_s,1) if recent_s>=840 else None
+            granular=bool(preceding and max(x["secs"] for x in preceding)<=900)
+            observations.append({"duration_sec":round(secs,1),"duration_bucket":target,"watts":round(w,1),
+                                 "evidence_eligible":granular,
+                                 "timeline_resolution":"LAP_GRANULAR" if granular else "COARSE_LAPS_DESCRIPTIVE_ONLY",
+                                 "prior_recent_15m_lap_watts":recent_w,
+                                 "prior_elapsed_min":round(previous_seconds/60,1),"prior_work_kj":round(previous_kj,1),
+                                 "prior_high_power_lap_min":round(previous_hard_lap_sec/60,1) if ftp and ftp>0 else None,
+                                 "prior_wbal_pct":wbal_pct,
+                                 "meaningful_prior_work":bool(previous_seconds>=2700 and previous_kj>=300),
+                                 "workload_source":source})
+        preceding.append(r)
+        previous_seconds+=secs;previous_kj+=secs*w/1000
+        if ftp and ftp>0 and w>=ftp:previous_hard_lap_sec+=secs
+    if not observations:
+        base["reason"]="NO_ELIGIBLE_LATE_QUALITY_EFFORT"
+        return base
+    # Retain strongest observed five-minute effort under meaningful prior work.
+    eligible=[e for e in observations if e["duration_bucket"]=="5_MIN" and e["meaningful_prior_work"]]
+    best=max(eligible,key=lambda e:(e["watts"],e["prior_work_kj"])) if eligible else None
+    return {**base,"available":bool(best),"state":"OBSERVED" if best else "PARTIAL",
+            "reason":None if best else "NO_5_MIN_EFFORT_AFTER_MEANINGFUL_WORK",
+            "best_5_min":best,"observations":observations[:32],
+            "method_note":base["method_note"] + " High-power lap minutes count entire laps averaging at/above FTP, not seconds above FTP; prior-15-min watts are lap-level weighted observations; no glycogen/W′bal reconstruction."}
+
+
+def _v1956_compare_like_for_like(items):
+    """Compare five-minute power only among independent sessions with similar lead-ins."""
+    events=[]
+    for e in items or []:
+        if not isinstance(e,dict) or not isinstance(e.get("best_5_min"),dict) or not e["best_5_min"].get("evidence_eligible"):
+            continue
+        required=("duration_sec","prior_work_kj","prior_elapsed_min","watts")
+        if all(_num(e["best_5_min"].get(k)) is not None and math.isfinite(_num(e["best_5_min"].get(k))) for k in required):
+            events.append(e)
+    # Sort chronologically; a same-day effort is not a verified earlier reference.
+    events.sort(key=lambda e:(str(e.get("date") or ""),str(e.get("activity_id") or "")))
+    comparisons=[]
+    for cur in events:
+        c=cur["best_5_min"]
+        prior=[]
+        for other in events:
+            if not str(other.get("date") or "") < str(cur.get("date") or "") or other.get("activity_id")==cur.get("activity_id"):
+                continue
+            if other.get("event_kind")!=cur.get("event_kind") or other.get("source")!=cur.get("source"):
+                continue
+            o=other["best_5_min"]
+            if abs(float(o["duration_sec"])-float(c["duration_sec"]))>15:continue
+            if abs(o["prior_work_kj"]-c["prior_work_kj"])>max(80,.20*max(o["prior_work_kj"],c["prior_work_kj"])):continue
+            if abs(o["prior_elapsed_min"]-c["prior_elapsed_min"])>max(10,.25*max(o["prior_elapsed_min"],c["prior_elapsed_min"])):continue
+            oh=o.get("prior_high_power_lap_min");ch=c.get("prior_high_power_lap_min")
+            if oh is not None and ch is not None and abs(oh-ch)>max(2,.30*max(oh,ch)):continue
+            orw=o.get("prior_recent_15m_lap_watts");crw=c.get("prior_recent_15m_lap_watts")
+            if orw is not None and crw is not None and abs(orw-crw)>max(30,.15*max(orw,crw)):continue
+            ow=o.get("prior_wbal_pct");cw=c.get("prior_wbal_pct")
+            if ow is not None and cw is not None and abs(ow-cw)>20:continue
+            prior.append(other)
+        if not prior:continue
+        prev=max(prior,key=lambda e:e["best_5_min"]["watts"])
+        delta=round(c["watts"]-prev["best_5_min"]["watts"],1)
+        comparisons.append({"activity_id":cur["activity_id"],"date":cur["date"],
+            "watts":c["watts"],"prior_work_kj":c["prior_work_kj"],"previous_activity_id":prev["activity_id"],
+            "previous_date":prev["date"],"previous_watts":prev["best_5_min"]["watts"],
+            "delta_w":delta,"outcome":"HIGHER_OBSERVED_LATE_POWER" if delta>0 else ("LOWER_OBSERVED_LATE_POWER" if delta<0 else "SIMILAR_OBSERVED_LATE_POWER"),
+            "comparison":"SIMILAR_MEASURED_PRIOR_WORK","is_fresh_pb":False,
+            "caveat":"Observational like-for-like comparison, not proof of physiological improvement or a fresh PR."})
+    return comparisons
+
+
+_v1956_previous_training_blocks_baseline = build_previous_training_blocks
+
+def build_previous_training_blocks(recent_activities, limit=3, activity_details=None):
+    blocks=_v1956_previous_training_blocks_baseline(recent_activities,limit=limit,activity_details=activity_details)
+    details=activity_details if isinstance(activity_details,dict) else {}
+    sources={str(a.get("id")):a for a in (recent_activities or []) if isinstance(a,dict) and a.get("id")}
+    for b in blocks or []:
+        if not isinstance(b,dict):continue
+        aid=str(b.get("activity_id") or "")
+        detail=details.get(aid) or sources.get(aid) or {}
+        b["fatigue_power"]=_v1956_fatigued_power_detail(detail)
+        # A competition provides genuine observed power but never prescribed reps.
+        if _v1954_confirmed_competition(b):
+            b["repeatability"]=None
+    return blocks
+
+_v1956_evidence_ledger_baseline = build_evidence_ledger
+
+def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_key=None, scope_start=None):
+    """Conserve old canonical metrics; append independent, conservative late-power evidence."""
+    led=_v1956_evidence_ledger_baseline(previous_training_blocks,overlay_blocks=overlay_blocks,goal_key=goal_key,scope_start=scope_start)
+    if not isinstance(led,dict):return led
+    start=str(scope_start or "")[:10]
+    blocks={}
+    for b in list(previous_training_blocks or [])+list(overlay_blocks or []):
+        if not isinstance(b,dict):continue
+        if start and str(b.get("date") or "")[:10]<start:continue
+        k=_v81_evidence_block_key(b)
+        blocks[k]=b
+    observed=[]
+    by_activity={}
+    for b in blocks.values():
+        fp=b.get("fatigue_power") or {}
+        best=fp.get("best_5_min") if isinstance(fp,dict) else None
+        if not isinstance(best,dict) or not fp.get("available") or not best.get("meaningful_prior_work") or not best.get("evidence_eligible"):continue
+        event={"activity_id":b.get("activity_id"),"date":b.get("date"),"event_kind":"RACE" if _v1954_confirmed_competition(b) else "TRAINING",
+               "source":fp.get("source"),"name":b.get("name"),"best_5_min":best}
+        observed.append(event)
+        by_activity[str(b.get("activity_id") or "")]=event
+    matches=_v1956_compare_like_for_like(observed)
+    match_by_id={str(x.get("activity_id")):x for x in matches}
+    for row in led.get("events") or []:
+        if not isinstance(row,dict):continue
+        aid=str(row.get("activity_id") or "")
+        if aid not in by_activity:continue
+        row["fatigue_power"]={"state":"OBSERVED","best_5_min":by_activity[aid]["best_5_min"],"comparison":match_by_id.get(aid),
+                             "is_fresh_pr":False}
+        # Real measured load contributes to durability and, on actual races,
+        # race transfer. It never enters repeated workout evidence.
+        tags=list(row.get("tags") or [])
+        for tag in (("MEASURED_PRIOR_WORK", "PRELOADED_QUALITY", "RACE_TRANSFER") if row.get("event_kind")=="RACE" else ("MEASURED_PRIOR_WORK", "PRELOADED_QUALITY")):
+            if tag not in tags:tags.append(tag)
+        row["tags"]=tags
+    features=led.get("science_features")
+    if isinstance(features,dict) and observed:
+        features["preloaded_quality"]=True
+        if any(x.get("event_kind")=="RACE" for x in observed):features["race_transfer"]=True
+    led["fatigued_power"]={"schema":R1956_SCHEMA,"available":bool(observed),
+        "five_min_sessions":len(observed),"five_min_race_sessions":sum(x.get("event_kind")=="RACE" for x in observed),
+        "five_min_training_sessions":sum(x.get("event_kind")=="TRAINING" for x in observed),
+        "observations":sorted(observed,key=lambda x:(str(x.get("date") or ""),str(x.get("activity_id") or "")),reverse=True),
+        "comparable_pairs":len(matches),"comparisons":sorted(matches,key=lambda x:str(x.get("date") or ""),reverse=True),
+        "source_policy":"VALIDATED_FULL_TIMELINE_ONLY",
+        "method_note":"Observed 5-minute power after measured preceding kJ/duration, separate from fresh PR, work-set repeatability and test validation. Only similar-load prior independent sessions are compared; coarse prior laps (>15min), missing chronology or sparse ICU segments yield no coaching credit."}
+    return led
+
+APP_VERSION='THE LAB · PRODUCT V4.9.80 CANDIDATE R195.6 · MEASURED FATIGUED POWER · R195.5 BASELINE'
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
