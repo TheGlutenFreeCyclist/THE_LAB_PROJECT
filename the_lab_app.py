@@ -43527,7 +43527,443 @@ def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_ke
         "method_note":"Active goal and anchor come from ROADMAP_GOALS.field_test, never hard-coded 5min. Maximal observed after load differs from fresh PR; 15s is average power, not instantaneous peak. Submax requires HR; comparison is contextual only, not a formal efficiency/decoupling validation."}
     return led
 
-APP_VERSION="THE LAB · PRODUCT V4.9.81 CANDIDATE R195.7 · GOAL-CONFIGURED FATIGUED POWER · R195.6 BASELINE"
+# R195.8 · RECOVERY LOAD EVIDENCE TRUTH
+# A hard work set with free/easy recovery is repeatability evidence, never
+# proof of sustaining hard work while recovery itself carries meaningful load.
+# The 70% personal FTP guard below is an intentionally conservative product
+# threshold, not a universal physiological boundary or substitute for HR/zone
+# assessment. Repeated independent observations remain required to close.
+R1958_SCHEMA = "V4.9.82-R195.8-RECOVERY-LOAD-TRUTH-1"
+R1958_MIN_MEANINGFUL_RECOVERY_FTP_RATIO = 0.70
+R1958_INTRODUCTORY_RECOVERY_FTP_RATIO = 0.56
+
+
+def _v1958_recovery_load_grade(event):
+    """Grade *observed* between-rep recovery, not interval power or session title.
+
+    Do not guess a recovery zone from session-global zone distribution. Ratio is
+    personalised by the contemporaneous measured FTP; the product guard is
+    explicitly heuristic. Unverified recovery watts/duration fail closed.
+    """
+    e = event if isinstance(event,dict) else {}
+    ftp = _rhythm_num(e.get("ftp"))
+    watts = _rhythm_num(e.get("recovery_avg_watts"))
+    duration = _rhythm_num(e.get("recovery_secs"))
+    if ftp is None or ftp <= 0 or watts is None or watts < 0 or duration is None or duration < 20:
+        return {"grade":"UNVERIFIED","eligible":False,"successful":False,
+                "reason":"MISSING_VALID_OBSERVED_RECOVERY_POWER_DURATION_OR_FTP","ratio":None}
+    ratio = watts / ftp
+    if ratio < R1958_INTRODUCTORY_RECOVERY_FTP_RATIO:
+        grade,reason = "EASY","EASY_RECOVERY_IS_REPEATABILITY_NOT_LOADED_RECOVERY"
+    elif ratio < R1958_MIN_MEANINGFUL_RECOVERY_FTP_RATIO:
+        grade,reason = "INTRODUCTORY","LOW_ACTIVE_RECOVERY_DOES_NOT_ESTABLISH_LOAD_TOLERANCE"
+    else:
+        grade,reason = "MEANINGFUL","MEASURED_ACTIVE_RECOVERY_ABOVE_CONSERVATIVE_FTP_GUARD"
+    eligible = grade == "MEANINGFUL"
+    return {"grade":grade,"eligible":eligible,"successful":bool(eligible and e.get("strong")),
+            "reason":reason,"ratio":round(ratio,4),"threshold_ratio":R1958_MIN_MEANINGFUL_RECOVERY_FTP_RATIO,
+            "work_reproduced":bool(e.get("strong")),"method":R1958_SCHEMA}
+
+
+def _v1958_rescore_recovery_load(ledger):
+    """Rebuild loaded-recovery evidence strictly from canonical training reps.
+
+    Any old ``active_load_recovery`` flag or cached 45%-FTP count is discarded.
+    Races are deliberately excluded; race durability is handled independently.
+    """
+    if not isinstance(ledger,dict):return ledger
+    rep = ledger.get("repeatability") or {}
+    events = rep.get("events") or []
+    kinds = {str(e.get("activity_id")):str(e.get("event_kind") or "").upper()
+             for e in ledger.get("events") or [] if isinstance(e,dict)}
+    meaningful, successes, intro = [], [], []
+    for event in events:
+        if not isinstance(event,dict):continue
+        grade=_v1958_recovery_load_grade(event)
+        if kinds.get(str(event.get("activity_id")))=="RACE":
+            grade={**grade,"grade":"EXCLUDED_RACE","eligible":False,
+                   "successful":False,"reason":"RACE_IS_NOT_STRUCTURED_RECOVERY_WORK"}
+        event["recovery_load_evidence"]=grade
+        if grade["grade"]=="INTRODUCTORY":intro.append(event)
+        if grade["eligible"]:meaningful.append(event)
+        if grade["successful"]:successes.append(event)
+    # Count *distinct activities*, not multiple repeated segments inside a ride.
+    unique_success={str(e.get("activity_id") or _v81_evidence_block_key(e)):e for e in successes}
+    successful_events=list(unique_success.values())
+    unique_exposure={str(e.get("activity_id") or _v81_evidence_block_key(e)):e for e in meaningful}
+    exposed_events=list(unique_exposure.values())
+    latest_success=max((str(e.get("date") or "")[:10] for e in successful_events),default=None) or None
+    latest_exposure=max((str(e.get("date") or "")[:10] for e in exposed_events),default=None) or None
+    feat=ledger.get("science_features")
+    if not isinstance(feat,dict):feat={};ledger["science_features"]=feat
+    feat.update({"recovery_under_load_exposures":len(exposed_events),
+        "recovery_under_load_successes":len(successful_events),
+        "active_load_recovery":len(successful_events)>=2,
+        "max_successful_recovery_ratio":round(max((_rhythm_num(e.get("recovery_avg_watts"))/_rhythm_num(e.get("ftp")) for e in successful_events),default=0),3) if successful_events else None,
+        "latest_recovery_under_load_success_date":latest_success,
+        "latest_recovery_under_load_exposure_date":latest_exposure,
+        "recovery_under_load_introductory_sessions":len(intro),
+        "recovery_under_load_evidence_schema":R1958_SCHEMA})
+    ledger["recovery_load_evidence"]={"schema":R1958_SCHEMA,
+       "meaningful_exposures":len(exposed_events),"successful_exposures":len(successful_events),
+       "introductory_exposures":len(intro),"established":len(successful_events)>=2,
+       "last_success_date":latest_success,"last_exposure_date":latest_exposure,
+       "minimum_observed_ratio":R1958_MIN_MEANINGFUL_RECOVERY_FTP_RATIO,
+       "successful_activity_ids":[e.get("activity_id") for e in successful_events],
+       "reason":"At least two independent successful sessions with measured materially loaded between-rep recovery are required. Z1/easy recovery never establishes this ability; prescribed recovery load alone is not execution evidence. Ratio relative to personal FTP is a conservative product heuristic."}
+    return ledger
+
+
+_v1958_ledger_baseline=build_evidence_ledger
+
+def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_key=None, scope_start=None):
+    led=_v1958_ledger_baseline(previous_training_blocks,overlay_blocks=overlay_blocks,
+                               goal_key=goal_key,scope_start=scope_start)
+    return _v1958_rescore_recovery_load(led)
+
+
+_v1958_question_baseline=build_question_state
+
+def build_question_state(goal_key, evidence_ledger=None, performance_evidence=None,
+                         roadmap=None, microcycle_ledger=None, aerobic_metabolic_range=None, now=None):
+    out=_v1958_question_baseline(goal_key,evidence_ledger,performance_evidence,roadmap,
+                                 microcycle_ledger,aerobic_metabolic_range,now=now)
+    if not isinstance(out,dict):return out
+    dimensions=out.get("dimensions")
+    if not isinstance(dimensions,dict):return out
+    # Earlier question-state layers use a broad 45% FTP event count and the last
+    # *any-repeatability* date. Both must be overridden from the same evidence.
+    source=evidence_ledger if isinstance(evidence_ledger,dict) else {}
+    if "recovery_load_evidence" not in source:
+        # No trustworthy canonical evidence: never preserve a stale award.
+        source=_v1958_rescore_recovery_load(copy.deepcopy(source))
+    proof=source.get("recovery_load_evidence") or {}
+    good=int(proof.get("successful_exposures") or 0)
+    attempted=int(proof.get("meaningful_exposures") or 0)
+    intro=int(proof.get("introductory_exposures") or 0)
+    day=proof.get("last_success_date") if good else proof.get("last_exposure_date")
+    if good>=2:
+        state,closed,n,reason="CONSOLIDATED",True,good,"Independent measured loaded-recovery efforts preserved repeat quality at a materially meaningful recovery intensity."
+    elif good==1:
+        state,closed,n,reason="SUPPORTED",False,good,"One successful measured loaded-recovery session supports this ability; an independent confirmation is required."
+    elif attempted:
+        state,closed,n,reason="BUILDING",False,attempted,"Meaningfully loaded recovery was attempted, but repeat-work quality was not yet preserved."
+    elif intro:
+        state,closed,n,reason="BUILDING",False,intro,"Introductory active recovery has been observed, but the load is not meaningful enough to establish recovery under load."
+        day=None # introductory work is not an established loaded-recovery witness
+    else:
+        state,closed,n,reason="UNPROVEN",False,0,"No directly measured successful work with meaningfully loaded between-rep recovery; free Z1 recovery counts only for repeatability."
+        day=None
+    dimensions["RECOVERY_UNDER_LOAD"]=_v82_question_record(state,closed,n,day,reason,R1958_SCHEMA)
+    goal=str(goal_key or "ENDURANCE_BASE").upper()
+    graph=_V503_GOAL_GRAPH.get(goal) or _V503_GOAL_GRAPH["ENDURANCE_BASE"]
+    seq=list(graph.get("sequence") or ())
+    out["open_dimensions"]=[k for k in seq if k not in {"REVALIDATION","EXTENSION_OR_REVALIDATION"} and not bool((dimensions.get(k) or {}).get("exit_satisfied"))]
+    out["closed_dimensions"]=[k for k in seq if bool((dimensions.get(k) or {}).get("exit_satisfied"))]
+    out["recovery_load_validation_schema"]=R1958_SCHEMA
+    return out
+
+
+_v1958_science_features_baseline=_v503_block_science_features
+
+def _v503_block_science_features(blocks, evidence_ledger=None):
+    if isinstance(evidence_ledger,dict):
+        feat=(evidence_ledger.get("science_features") or {})
+        if feat.get("recovery_under_load_evidence_schema")==R1958_SCHEMA:
+            return _v1958_science_features_baseline(blocks,evidence_ledger=evidence_ledger)
+    # All call paths, including preview/fallback, must use the same conservative
+    # grade; otherwise scientific progression could resurrect the old 45% flag.
+    led=build_evidence_ledger(blocks or [],goal_key=None)
+    return _v1958_science_features_baseline(blocks,evidence_ledger=led)
+
+
+
+# R195.9 · OBSERVE THEN DOSE: WORK AND RECOVERY ARE ONE STRESS BUDGET
+# The reward threshold (>=70% FTP in two independently validated sessions) is
+# NOT a training target. Build the bridge from comparable executed sessions.
+R1959_SCHEMA = "V4.9.83-R195.9-OBSERVED-COUPLED-DOSE-1"
+
+
+def _v1959_comparable_recovery_history(evidence_ledger):
+    """Only canonical, dated, completed TRAINING rep events; never race repeats.
+
+    This is history for *dosing*, not a shortcut to RECOVERY_UNDER_LOAD awards.
+    The previous session's recoveries, work and duration must all be observed.
+    """
+    led=evidence_ledger if isinstance(evidence_ledger,dict) else {}
+    kind={str(e.get('activity_id')):str(e.get('event_kind') or '').upper()
+          for e in (led.get('events') or []) if isinstance(e,dict)}
+    out=[]; seen=set()
+    for e in ((led.get('repeatability') or {}).get('events') or []):
+        if not isinstance(e,dict):continue
+        aid=str(e.get('activity_id') or '')
+        if not aid or kind.get(aid)!='TRAINING' or aid in seen:continue
+        source=str(e.get('activity_truth_source') or e.get('source') or '').upper()
+        if source not in {'ICU_INTERVALS_CANONICAL','DEVICE_LAPS','ORIGINAL_ACTIVITY_FIT_LAP','ORIGINAL_FIT_LAPS'}:continue
+        vals={k:_rhythm_num(e.get(k)) for k in ('reps','interval_secs','recovery_secs','avg_watts','recovery_avg_watts','ftp')}
+        if any(v is None for v in vals.values()) or any(vals[k]<=0 for k in ('reps','interval_secs','recovery_secs','avg_watts','ftp')) or vals['recovery_avg_watts']<0:continue
+        if vals['reps']<2 or vals['recovery_secs']<20:continue
+        day=str(e.get('date') or '')[:10]
+        try:date.fromisoformat(day)
+        except (ValueError,TypeError):continue
+        seen.add(aid)
+        out.append({'activity_id':aid,'date':day,'strong':bool(e.get('strong')),
+             'reps':int(round(vals['reps'])),'interval_secs':vals['interval_secs'],
+             'recovery_secs':vals['recovery_secs'],'work_watts':vals['avg_watts'],
+             'recovery_watts':vals['recovery_avg_watts'], 'ftp':vals['ftp'],
+             'recovery_ratio':vals['recovery_avg_watts']/vals['ftp']})
+    return sorted(out,key=lambda x:(x['date'],x['activity_id']),reverse=True)
+
+
+_v1959_science_features_baseline=_v503_block_science_features
+
+def _v503_block_science_features(blocks,evidence_ledger=None):
+    out=_v1959_science_features_baseline(blocks,evidence_ledger=evidence_ledger)
+    if not isinstance(out,dict):return out
+    # Preview without an evidence ledger may not invent a completed session.
+    out['recovery_dose_history']=_v1959_comparable_recovery_history(evidence_ledger)
+    out['recovery_dose_schema']=R1959_SCHEMA
+    return out
+
+
+def _v1959_recovery_dose_contract(goal,dimension,features):
+    """Conservative observable stepped bridge; NEVER grade an athlete by a target.
+
+    No estimate/model/FTP-scaled guessed *work* wattage: work is always derived
+    from a strong completed comparable session, with a compensating reduction
+    when recovery is increased. Keep structure fixed and never jump to 70% FTP.
+    """
+    if str(dimension or '').upper()!='RECOVERY_UNDER_LOAD':
+        return {'available':False,'reason':'DIMENSION_NOT_DOSE_CONTRACTED'}
+    f=features if isinstance(features,dict) else {}
+    ref=f.get('latest_repeatability') or {}
+    r={k:_rhythm_num(ref.get(k)) for k in ('reps','interval_secs','recovery_secs','avg_watts','recovery_avg_watts','ftp')}
+    if not ref.get('strong') or any(v is None for v in r.values()) or any(r[k]<=0 for k in ('reps','interval_secs','recovery_secs','avg_watts','ftp')) or r['recovery_avg_watts']<0 or r['reps']<2 or r['recovery_secs']<20:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'NO_CURRENT_STRONG_MEASURED_REPEATED_WORK','rule':'No quantified loaded recovery without a strong, recent, completely observed work/recovery pair.'}
+    # For safety, a saved scientific-feature cache alone is not proof of
+    # chronology or provenance. Match the most recent strong witness to ledger.
+    history=list(f.get('recovery_dose_history') or [])
+    ref_date=str(ref.get('date') or '')[:10]
+    try:
+        ref_day=date.fromisoformat(ref_date)
+        today=get_rome_now().date()
+        days_old=(today-ref_day).days
+    except (ValueError,TypeError,AttributeError):
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'REFERENCE_DATE_NOT_VERIFIABLE'}
+    if not -1<=days_old<=28:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'STALE_OR_FUTURE_UNVERIFIED_REFERENCE',
+                'rule':'No loaded-recovery watt target from a repeated-work baseline older than 28 days.'}
+    structure_pool=[]
+    for h in history:
+        if not h.get('strong') or h['date']>ref_date:continue
+        if abs(h['interval_secs']/r['interval_secs']-1)>0.10:continue
+        if abs(h['recovery_secs']/r['recovery_secs']-1)>0.25:continue
+        if abs(h['reps']-r['reps'])>1:continue
+        if abs(h['ftp']/r['ftp']-1)>0.08:continue
+        try:gap=(date.fromisoformat(ref_date)-date.fromisoformat(h['date'])).days
+        except (TypeError,ValueError):continue
+        if 0<=gap<=28:structure_pool.append(h)
+    if not structure_pool:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'REFERENCE_NOT_VERIFIED_IN_CANONICAL_LEDGER'}
+    if r['avg_watts']<r['ftp']*.90 or r['avg_watts']<=r['recovery_avg_watts']*1.10:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'NO_MEANINGFUL_MAIN_WORK_CAPACITY'}
+    best_work=max(h['work_watts'] for h in structure_pool)
+    # Preserve a recent high-quality capacity anchor. Recovery progression cannot
+    # repeatedly discount work by another 7% every time the athlete succeeds.
+    if r['avg_watts']<best_work*.88:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'MAIN_WORK_BELOW_RECENT_CAPACITY_FLOOR',
+                'rule':'Do not advance recovery load while work power falls below 88% of the best recent comparable repeated work.'}
+    comparable=[h for h in structure_pool if h['work_watts']>=best_work*.88]
+    # Require the canonical measured reference, not merely similar prior reps.
+    matching=[h for h in comparable if h['date']==ref_date
+             and abs(h['work_watts']-r['avg_watts'])<=max(3,0.015*r['avg_watts'])
+             and abs(h['recovery_watts']-r['recovery_avg_watts'])<=max(3,0.025*r['ftp'])]
+    if not matching:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'REFERENCE_NOT_VERIFIED_IN_CANONICAL_LEDGER','rule':'Evidence must include the completed reference with matched work and recovery, not a narrative or predicted wattage.'}
+    # A prior hard recovery failure at an otherwise comparable work structure
+    # forbids raising load until a new successful lower-load bridge exists.
+    failed=[]
+    for h in history:
+        if h.get('strong') or h['date']>ref_date:continue
+        if abs(h['interval_secs']/r['interval_secs']-1)<=.10 and abs(h['reps']-r['reps'])<=1 and abs(h['work_watts']/r['avg_watts']-1)<=.10:
+            failed.append(h)
+    failed.sort(key=lambda h:(h['date'],h['activity_id']),reverse=True)
+    if failed and failed[0]['date']>=ref_date:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'LATEST_COMPARABLE_WORK_FAILED','rule':'Do not progress recovery after a failed comparable repetition; first re-establish quality under easy recovery.'}
+    recent_best=max(comparable,key=lambda h:h['recovery_ratio'])
+    # Do not jump from 30% to 52% just because a different 3-minute session
+    # once tolerated it. Same structure & high maintained work are required.
+    anchor_ratio=max(float(recent_best['recovery_ratio']),r['recovery_avg_watts']/r['ftp'])
+    if sum(1 for h in history if h.get('strong') and h['recovery_ratio']>=.70)>=2:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'RECOVERY_LOAD_ALREADY_ESTABLISHED','rule':'Move to the next adaptation question instead of making recovery progressively harder.'}
+    confirming=bool(anchor_ratio>=.70)
+    # One modest increase in the recovery variable per verified quality session.
+    # The maximum absolute jump is 0.06 FTP, even if the previous recovery was Z1.
+    step=.05 if anchor_ratio>=.56 else .06
+    candidate=anchor_ratio if confirming else min(.70,anchor_ratio+step)
+    if not confirming and candidate<=anchor_ratio+.009:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'NO_SAFE_PROGRESSIVE_RECOVERY_STEP'}
+    def floor5(x):return int(math.floor(float(x)/5)*5)
+    def ceil5(x):return int(math.ceil(float(x)/5)*5)
+    rec_anchor=recent_best['recovery_watts']
+    # Prescribe a narrow controlled band starting near last observed easy/loaded
+    # watts. Neither end may exceed the previously proved intensity by >.06 FTP.
+    rec_hi=floor5(min(r['ftp']*candidate,rec_anchor+r['ftp']*.06))
+    rec_lo=floor5(max(rec_anchor-10 if confirming else rec_anchor+5,rec_hi-10))
+    rec_lo=min(rec_lo,rec_hi)
+    if (not confirming and rec_hi<=rec_anchor+2) or rec_hi<=rec_lo:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'RECOVERY_STEP_TOO_SMALL_TO_DOSE_SAFELY'}
+    # Use a STABLE recent proven work-capacity anchor rather than compounding
+    # reductions. Never increase work above the immediately observed session.
+    work_hi=floor5(min(best_work*.93,r['avg_watts']))
+    work_lo=floor5(max(best_work*.88,min(best_work*.90,work_hi-5)))
+    if work_hi<=0 or work_lo<=0 or work_hi<=work_lo:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'UNSAFE_OR_UNRESOLVED_WORK_BAND'}
+    # Hard fail if either lever would exceed the proven main work or if
+    # the recovery jump would exceed one safe increment once rounded.
+    if work_hi>r['avg_watts']+1 or rec_hi>rec_anchor+r['ftp']*.06+0.01:
+        return {'available':False,'schema':R1959_SCHEMA,'reason':'UNSAFE_COUPLED_LOAD_INVARIANT'}
+    stage='MEANINGFUL_LOAD_CONFIRMATION' if confirming else ('CONTROLLED_RECOVERY_BRIDGE' if candidate<.56 else ('ACTIVE_RECOVERY_BUILD' if candidate<.70 else 'MEANINGFUL_LOAD_TRIAL'))
+    return {'available':True,'schema':R1959_SCHEMA,'stage':stage,
+        'dominant_lever':'RECOVERY_LOAD_WITH_COMPENSATING_WORK_REDUCTION',
+        'reference':{'date':ref_date,'reps':int(round(r['reps'])),'interval_secs':int(round(r['interval_secs'])),
+            'recovery_secs':int(round(r['recovery_secs'])),'work_avg_watts':round(r['avg_watts'],1),
+            'recovery_avg_watts':round(r['recovery_avg_watts'],1),'ftp':round(r['ftp'],1),
+            'recovery_ratio':round(r['recovery_avg_watts']/r['ftp'],3),
+            'matched_completed_sessions':len(comparable),
+            'recent_best_repeated_work_watts':round(best_work,1),
+            'minimum_meaningful_work_watts':round(best_work*.88,1),
+            'last_verified_recovery_watts':round(rec_anchor,1),
+            'last_verified_recovery_ratio':round(anchor_ratio,3)},
+        'prescription':{'reps':int(round(r['reps'])),'interval_secs':int(round(r['interval_secs'])),
+            'recovery_secs':int(round(r['recovery_secs'])),'work_watts_low':work_lo,'work_watts_high':work_hi,
+            'recovery_watts_low':rec_lo,'recovery_watts_high':rec_hi,
+            'recovery_ratio_low':round(rec_lo/r['ftp'],3),'recovery_ratio_high':round(rec_hi/r['ftp'],3)},
+        'rule':'The next loaded-recovery trial is conditional on recovery/spacing. Preserve rep count, duration, and interval density; deliberately lower BOTH bounds of work relative to the last strong completed session before increasing recovery. Recovery wattage is an observed-based increment, never an automatic 70% FTP target. If the work fades, return to easy self-selected Z1; do not escalate until a later comparable observed success. No award is promised.',
+        'evidence_basis':'Canonical independent completed repeated work; same-structure recovery history; explicit small FTP-relative increments and measured work de-rating. Heuristic safety policy, not a clinical/physiological law.'}
+
+
+_v1959_dose_contract_baseline=_v504_scientific_dose_contract
+
+def _v504_scientific_dose_contract(goal,dimension,features):
+    if str(dimension or '').upper()!='RECOVERY_UNDER_LOAD':
+        return _v1959_dose_contract_baseline(goal,dimension,features)
+    return _v1959_recovery_dose_contract(goal,dimension,features)
+
+
+# R138 parsed numeric recovery bands >=100 W only. A cautious first
+# observed bridge may legitimately be 90-100 W. Permit such measured targets
+# without accidentally mistaking the work band for the recovery band.
+_v1959_recovery_parser_baseline=_v138_recovery_fields
+
+def _v138_recovery_fields(main_set):
+    result=_v1959_recovery_parser_baseline(main_set)
+    if not isinstance(result,dict):return result
+    for seg in _v138_recovery_clause_segments(main_set):
+        if not re.search(r'\b(?:recovery|recoveries|rest|between\s+reps|bridge|recupero|tra\s+le\s+ripetute)\b',seg,re.I):continue
+        m=re.search(r'(?<!\d)([4-9]\d|[1-7]\d{1,2})\s*(?:-|–|—|to|a)\s*([4-9]\d|[1-7]\d{1,2})\s*w\b',seg,re.I)
+        if not m:continue
+        lo,hi=sorted((int(m.group(1)),int(m.group(2))))
+        if 40<=lo<=hi<=799:
+            result['recovery_power_low']=float(lo)
+            result['recovery_power_high']=float(hi)
+            break
+    return result
+
+
+# Strengthen the canonical architecture guard for our coupled-dose contract.
+_v1959_dose_guard_baseline=_v504_scientific_dose_violations
+
+def _v504_scientific_dose_violations(proposed,main_set,road):
+    sci=(road or {}).get('scientific_progression') or {};dc=sci.get('dose_contract') or {}
+    if dc.get('schema')!=R1959_SCHEMA or not dc.get('available'):
+        return _v1959_dose_guard_baseline(proposed,main_set,road)
+    issues=_v1959_dose_guard_baseline(proposed,main_set,road)
+    p=dc.get('prescription') or {};r=dc.get('reference') or {}
+    pp=_rhythm_num((proposed or {}).get('power_high'))
+    rec=_rhythm_num((proposed or {}).get('recovery_power_high'))
+    if pp is None or pp>float(p['work_watts_high'])+5 or pp>=float(r['work_avg_watts']):issues.append('WORK_NOT_BELOW_OBSERVED_SUCCESS')
+    if rec is None or rec>float(p['recovery_watts_high'])+5:issues.append('RECOVERY_NOT_CAPPED_TO_OBSERVED_INCREMENT')
+    return list(dict.fromkeys(issues))
+
+
+_v1959_science_hard_baseline=_v503_scientific_hard_repair
+
+def _v503_scientific_hard_repair(ledger,road,power_model,ftp_anchor=None):
+    sci=(road or {}).get('scientific_progression') or {};dc=sci.get('dose_contract') or {}
+    if dc.get('schema')!=R1959_SCHEMA or not dc.get('available'):
+        return _v1959_science_hard_baseline(ledger,road,power_model,ftp_anchor=ftp_anchor)
+    result=_v1959_science_hard_baseline(ledger,road,power_model,ftp_anchor=ftp_anchor)
+    if not result:return None
+    title,intensity,main,why,architecture=result
+    if str(dc.get('stage'))=='CONTROLLED_RECOVERY_BRIDGE':
+        title=title.replace('Loaded-repeatability','Repeatability bridge')
+    # Do not alter intensity domains or reuse a more demanding hard workout.
+    # Explicitly describe the de-rated work: combined demand, not a PB attempt.
+    why=('The work band is deliberately below the last measured successful main set because recoveries are now slightly more active. '
+         "These targets come from the athlete's completed comparable reps, not FTP multiplication for the main set. "
+         'Only one recovery step; if sustained power fades, return to easy Z1 rather than force the target. '
+         'A recovery-under-load award is earned separately from this prescription.')
+    architecture=dict(architecture or {});architecture['dose_contract_schema']=R1959_SCHEMA
+    architecture['dimensions']=['RECOVERY_LOAD','WORK_DOSE_SAFETY_REDUCTION']
+    return title,intensity,main,why,architecture
+
+
+
+# A previously issued future workout may be sticky (R153 continuity). A
+# software policy update is not permission to silently increase athlete load;
+# nor may the lock preserve an old, now-conflicting recovery-dose prescription.
+_v1959_prescription_baseline=build_nova_prescription
+
+def build_nova_prescription(nova_decision,coach_clock,adaptive_roadmap=None,microcycle_ledger=None,
+                            evidence_ledger=None,power_model=None,ftp_anchor=None,
+                            aerobic_metabolic_range=None,training_definitions=None):
+    out=_v1959_prescription_baseline(nova_decision,coach_clock,adaptive_roadmap=adaptive_roadmap,
+        microcycle_ledger=microcycle_ledger,evidence_ledger=evidence_ledger,power_model=power_model,
+        ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions)
+    if not isinstance(out,dict) or str(out.get('status') or '').upper()!='PRESCRIBED':return out
+    sci=(adaptive_roadmap or {}).get('scientific_progression') or {}
+    dc=sci.get('dose_contract') or {}
+    if str(sci.get('dimension') or '').upper()!='RECOVERY_UNDER_LOAD':return out
+    # R131 severe-dose re-entry is independently safety-authoritative.
+    if str(dc.get('stage') or '').upper()=='POST_SEVERE_INTENSITY_REENTRY':return out
+    locked=(str(out.get('source') or '').upper()=='PRESCRIPTION_CONTINUITY_LOCK'
+        or bool(((out.get('prescription_continuity') or {}).get('active'))))
+    if not locked:return out
+    raw=list(out.get('raw_sessions') or [])
+    idx=out.get('selected_slot_index')
+    try:i=int(idx);candidate=raw[i]
+    except (ValueError,TypeError,IndexError):return out
+    if not isinstance(candidate,dict):return out
+    title=str(candidate.get('title') or '')
+    orig_dim=str(candidate.get('_tl_preserved_original_dimension') or candidate.get('_tl_nova_dimension') or '').upper()
+    if orig_dim!='RECOVERY_UNDER_LOAD' and 'loaded-repeatability' not in title.lower():return out
+    sig=_v4886_primary_stimulus_signature(title=title,main_set=candidate.get('main_set'),intensity_class='vo2')
+    bad=(not dc.get('available') or dc.get('schema')!=R1959_SCHEMA
+         or bool(_v504_scientific_dose_violations(sig,candidate.get('main_set'),adaptive_roadmap)))
+    if not bad:return out
+    # Never resurface an unsafe sticky plan. Explicitly HOLD that hard slot
+    # instead of fabricating a reissued plan ID or covertly changing workouts.
+    slots=list((coach_clock or {}).get('next_slots') or [])
+    slot=slots[i] if 0<=i<len(slots) and isinstance(slots[i],dict) else {}
+    safe=copy.deepcopy(out)
+    safe_raw=list(safe.get('raw_sessions') or [])
+    safe_raw[i]=_v84_easy_raw(slot,nova_decision or {})
+    safe.update({'raw_sessions':safe_raw,'status':'EASY_ONLY','source':'R1959_LOCKED_HARD_SAFETY_HOLD',
+         'selected_slot_index':None,'workout_id':None,'contract_id':None,
+         'fail_reason':'PRIOR_LOADED_RECOVERY_PLAN_EXCEEDS_CURRENT_MEASURED_SAFETY_CONTRACT',
+         'prescription_continuity':{'schema':R1959_SCHEMA,'active':False,
+              'state':'REISSUE_REQUIRES_SAFETY_REPLAN',
+              'invalidated_workout_id':out.get('workout_id') or out.get('contract_id'),
+              'reason':'Previously issued loaded-recovery work/recovery targets are no longer justified by measured comparable execution; easy slot until safely reissued.'}})
+    safe.pop('single_plan_authority',None)
+    safe.pop('future_quality_candidate',None)
+    return safe
+
+
+
+APP_VERSION="THE LAB · PRODUCT V4.9.83 CANDIDATE R195.9 · OBSERVED COUPLED RECOVERY DOSE · R195.8 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
