@@ -42115,7 +42115,7 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
         # Genuine maximal sprints are prescribed by effort and technique, not one arbitrary watt number.
         if sid.startswith('SPR_'):continue
         if sid!=str(candidate.get('_tl_nova_workout_id') or ''):continue
-        band=candidate.get('_tl_v1943_power_band') or {}
+        band=candidate.get('_tl_v1943_power_band') or _v1960_coupled_power_band(candidate,sess,adaptive_roadmap) or {}
         if band.get('state')!='PRESCRIBED':
             # A hard structured session must not ask the athlete to guess the
             # training dose. Retain diagnostic provenance but fail closed to easy.
@@ -42135,9 +42135,11 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
             # Record vs prescription semantics remain separated: PB sentences
             # in the template are context-only; THIS explicit band is backed
             # by independent repeat-work evidence or a valid FTP starter rule.
-            label=('verified same-or-longer completed intervals' if band.get('confidence')=='HIGH'
+            label=('measured comparable work with a controlled recovery-load adjustment'
+                   if band.get('source')=='OBSERVED_COUPLED_RECOVERY_DOSE'
+                   else ('verified same-or-longer completed intervals' if band.get('confidence')=='HIGH'
                    else ('estimated from verified slightly shorter intervals' if band.get('confidence')=='MODERATE'
-                         else 'provisional target based on valid FTP'))
+                         else 'provisional target based on valid FTP')))
             directive=(f'WORK TARGET: {mid} W in EACH of the {band["reps"]} work intervals '
                        f'(acceptable training range {lo}–{hi} W; {label}). ')
             sess['main_set']=directive+str(sess.get('main_set') or '')
@@ -42177,7 +42179,10 @@ def _v112_reference_only_power(session):
     # entirely separate explicit, provenance-carrying prescription exists.
     cal=(session or {}).get('power_prescription') or {}
     if (cal.get('schema')==R1943_SCHEMA and cal.get('state')=='PRESCRIBED'
-        and cal.get('source') in {'COMPARABLE_VERIFIED_REPEATED_WORK','VALID_FTP_STARTER_POLICY_NOT_OBSERVED_REPEATABILITY'}
+        and (cal.get('source') in {'COMPARABLE_VERIFIED_REPEATED_WORK','VALID_FTP_STARTER_POLICY_NOT_OBSERVED_REPEATABILITY'}
+             or (cal.get('source')=='OBSERVED_COUPLED_RECOVERY_DOSE'
+                 and cal.get('provenance_schema')=='V4.9.83-R195.9-OBSERVED-COUPLED-DOSE-1'
+                 and cal.get('observed_repeated_avg_watts') is not None))
         and (session or {}).get('prescribed_power_low')==cal.get('low_watts')
         and (session or {}).get('prescribed_power_high')==cal.get('high_watts')):
         return False
@@ -43963,7 +43968,100 @@ def build_nova_prescription(nova_decision,coach_clock,adaptive_roadmap=None,micr
 
 
 
-APP_VERSION="THE LAB · PRODUCT V4.9.83 CANDIDATE R195.9 · OBSERVED COUPLED RECOVERY DOSE · R195.8 BASELINE"
+
+
+# R196.0 -- strict authority handoff from the evidence-backed recovery-dose
+# contract (R195.9) into R194.3's mandatory hard-work power check.
+# Recovery-under-load workouts are deliberately *not* generic library templates.
+# An absent library entry is NOT evidence of missing FTP or completed workouts.
+# The exception is narrow: exact, immutable mechanics matching a verified dose
+# contract, never a free-form power estimate or automatic approval of hard work.
+R1960_SCHEMA = "V4.9.84-R196.0-COUPLED-POWER-HANDOFF-1"
+
+
+def _v1960_coupled_power_band(raw, compiled, roadmap):
+    if not isinstance(raw,dict) or not isinstance(compiled,dict):return None
+    workout='RECOVERY_UNDER_LOAD_EVIDENCE_DOSE_V1'
+    if (str(raw.get('_tl_nova_workout_id') or '')!=workout
+        or str(raw.get('_tl_nova_contract_id') or '')!=workout
+        or str(compiled.get('nova_workout_id') or '')!=workout
+        or str(raw.get('_tl_nova_dimension') or '').upper()!='RECOVERY_UNDER_LOAD'
+        or not raw.get('_tl_nova_deterministic')):return None
+    sci=((roadmap or {}).get('scientific_progression') or {})
+    dc=sci.get('dose_contract') or {}
+    if (str(sci.get('dimension') or '').upper()!='RECOVERY_UNDER_LOAD'
+        or dc.get('schema')!=R1959_SCHEMA or dc.get('available') is not True
+        or str(dc.get('stage') or '')=='POST_SEVERE_INTENSITY_REENTRY'):return None
+    ref=dc.get('reference') or {};p=dc.get('prescription') or {}
+    def number(v,low=0,high=1000000):
+        try:
+            f=float(v)
+            return f if math.isfinite(f) and low<=f<=high else None
+        except (ValueError,TypeError,OverflowError):return None
+    keys=('reps','interval_secs','recovery_secs','work_watts_low','work_watts_high','recovery_watts_low','recovery_watts_high')
+    v={k:number(p.get(k)) for k in keys}
+    if any(x is None for x in v.values()):return None
+    if (not 2<=v['reps']<=20 or not 60<=v['interval_secs']<=1800
+        or not 20<=v['recovery_secs']<=1800 or not 40<=v['recovery_watts_low']<v['recovery_watts_high']<=600
+        or not 80<=v['work_watts_low']<v['work_watts_high']<=1200):return None
+    best=number(ref.get('recent_best_repeated_work_watts'),80,1200)
+    observed=number(ref.get('work_avg_watts'),80,1200)
+    ftp=number(ref.get('ftp'),80,600)
+    previous=number(ref.get('recovery_avg_watts'),0,600)
+    recovery_anchor=number(ref.get('last_verified_recovery_watts'),0,600)
+    count=number(ref.get('matched_completed_sessions'),1,500)
+    if (None in (best,observed,ftp,previous,recovery_anchor,count)
+        or v['work_watts_high']>=observed or v['work_watts_low']<best*.88-5
+        or v['recovery_watts_high']>recovery_anchor+ftp*.06+5
+        or v['recovery_watts_high']>=v['work_watts_low']):return None
+    # The R195.9 composer publishes work and recovery as ONE indivisible dose.
+    # Reject even a plausible wattage when somebody changes reps, work duration,
+    # recoveries, or either band on the issued contract.
+    pattern=(r'^\s*(\d+)\s*[×xX]\s*(\d+(?:\.\d+)?)\s*(min|s)'
+             r'\s+free\s+at\s+(\d+)\s*[–—-]\s*(\d+)\s*W\.\s*'
+             r'Recovery\s+between\s+reps:\s*(\d+(?:\.\d+)?)\s*(min|s)'
+             r'\s+continuously\s+at\s+(\d+)\s*[–—-]\s*(\d+)\s*W\b')
+    match=re.search(pattern,str(raw.get('main_set') or ''),re.I)
+    if not match:return None
+    reps,work_d,work_u,work_lo,work_hi,rec_d,rec_u,rec_lo,rec_hi=match.groups()
+    work_secs=float(work_d)*(60 if work_u.lower()=='min' else 1)
+    rec_secs=float(rec_d)*(60 if rec_u.lower()=='min' else 1)
+    if (int(reps)!=int(v['reps']) or abs(work_secs-v['interval_secs'])>3.1
+        or abs(rec_secs-v['recovery_secs'])>6.1
+        or [int(work_lo),int(work_hi),int(rec_lo),int(rec_hi)]!=
+        [int(v['work_watts_low']),int(v['work_watts_high']),int(v['recovery_watts_low']),int(v['recovery_watts_high'])]):return None
+    # Recheck on the compiled athlete-facing text: mechanics must survive every
+    # prior compiler guard, not just be present in the raw request.
+    compiled_text=str(compiled.get('main_set') or '')
+    # Warm-up instructions may precede the clause; they must not replace it.
+    # Compare VALUES, not merely the regex shape: a rewritten 400–410 W main
+    # set must fail even though it still looks syntactically well-formed.
+    compiled_match=re.search(pattern[1:],compiled_text,re.I)
+    if not compiled_match:return None
+    cr,cwd,cwu,cwl,cwh,crd,cru,crl,crh=compiled_match.groups()
+    if (int(cr)!=int(reps)
+        or abs(float(cwd)*(60 if cwu.lower()=='min' else 1)-v['interval_secs'])>3.1
+        or abs(float(crd)*(60 if cru.lower()=='min' else 1)-v['recovery_secs'])>6.1
+        or [int(cwl),int(cwh),int(crl),int(crh)]!=
+           [int(v['work_watts_low']),int(v['work_watts_high']),int(v['recovery_watts_low']),int(v['recovery_watts_high'])]):return None
+    ref_date=str(ref.get('date') or '')[:10];slot_date=str(compiled.get('date') or '')[:10]
+    try:
+        lag=(date.fromisoformat(slot_date)-date.fromisoformat(ref_date)).days
+        if not 0<=lag<=35:return None
+    except (ValueError,TypeError):return None
+    lo=int(v['work_watts_low']);hi=int(v['work_watts_high'])
+    return {'schema':R1943_SCHEMA,'state':'PRESCRIBED','confidence':'HIGH',
+        'source':'OBSERVED_COUPLED_RECOVERY_DOSE','handoff_schema':R1960_SCHEMA,
+        'provenance_schema':R1959_SCHEMA,'reference_date':ref_date,
+        'observed_repeated_avg_watts':round(observed,1),
+        'target_watts':int(round((lo+hi)/2)),'low_watts':lo,'high_watts':hi,
+        'reps':int(v['reps']),'work_seconds':int(v['interval_secs']),
+        'recovery_seconds':int(v['recovery_secs']),
+        'recovery_watts_low':int(v['recovery_watts_low']),
+        'recovery_watts_high':int(v['recovery_watts_high']),
+        'source_note':'Verified R195.9 observed coupled-dose contract; not a generic workout-library template or FTP-only guess.'}
+
+APP_VERSION="THE LAB · PRODUCT V4.9.84 CANDIDATE R196.0 · VERIFIED COUPLED-DOSE POWER HANDOFF · R195.9 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
