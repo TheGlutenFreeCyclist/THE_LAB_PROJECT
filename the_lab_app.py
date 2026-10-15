@@ -18688,7 +18688,7 @@ def parse_local_activity_datetime(value):
         return None
 RHYTHM_RECENT_DAYS = 21
 RHYTHM_ESTABLISHED_DAYS = 42
-RHYTHM_SEASON_DAYS = 90
+RHYTHM_SEASON_DAYS = 180
 RHYTHM_MIN_SESSION_SECONDS = 600
 _RHYTHM_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 def _rhythm_num(value):
@@ -19378,6 +19378,52 @@ def _v4882_strength_suggestion_guard(text, strength_pattern=None, adaptive_roadm
     if len(s) > 260:
         s = s[:257].rstrip(" ,;:-") + "…"
     return s
+def _v1964_weekday_evidence(recent, established, season, weekday_scores, state):
+    """Training opportunities are supported per weekday, not capped by rounded weekly volume.
+
+    A date has evidence when it repeats at least twice in the recent sample, or
+    reliably in a longer established sample. Blended probability alone must not
+    invent a day with no repeated observations. "Likely" is a candidate, never
+    a mandate to train or a recovery clearance.
+    """
+    def occurrences(stats, weekday):
+        try:
+            lo = date.fromisoformat(str(stats.get("start_date")))
+            hi = date.fromisoformat(str(stats.get("end_date")))
+        except (TypeError, ValueError):
+            return 0
+        if hi < lo:
+            return 0
+        first = (weekday - lo.weekday()) % 7
+        return max(0, ((hi - lo).days - first) // 7 + 1)
+
+    result = {}
+    for wd in range(7):
+        r_occ = occurrences(recent, wd)
+        e_occ = occurrences(established, wd)
+        s_occ = occurrences(season, wd)
+        rp = float((recent.get("weekday_probability") or {}).get(wd) or 0.0)
+        ep = float((established.get("weekday_probability") or {}).get(wd) or 0.0)
+        sp = float((season.get("weekday_probability") or {}).get(wd) or 0.0)
+        r_days = int(round(r_occ * rp))
+        e_days = int(round(e_occ * ep))
+        s_days = int(round(s_occ * sp))
+        score = float(weekday_scores.get(wd) or 0.0)
+        recent_repeated = (r_occ >= 2 and r_days >= 2 and rp >= (2.0 / 3.0 - 0.001))
+        established_repeated = (e_occ >= 4 and e_days >= 3 and ep >= (2.0 / 3.0 - 0.001)
+                                and score >= 0.50)
+        supported = (state != "LEARNING" and (recent_repeated or established_repeated))
+        result[wd] = {
+            "recent_observed": r_days, "recent_opportunities": r_occ,
+            "established_observed": e_days, "established_opportunities": e_occ,
+            "long_term_observed": s_days, "long_term_opportunities": s_occ,
+            "blended_score": round(score, 3), "supported": supported,
+            "reason": ("RECENT_REPEAT" if recent_repeated else
+                       "ESTABLISHED_REPEAT" if established_repeated else
+                       "LEARNING" if state == "LEARNING" else "INSUFFICIENT_WEEKDAY_EVIDENCE"),
+        }
+    return result
+
 def build_training_rhythm(season_activities, now=None, scope="CYCLING"):
     now = now or get_rome_now()
     today = now.date()
@@ -19455,14 +19501,24 @@ def build_training_rhythm(season_activities, now=None, scope="CYCLING"):
     est_sessions = max(est_days, blend("sessions_per_week"))
     est_hours = max(0.0, blend("hours_per_week"))
     double_propensity = max(0.0, min(1.0, blend("double_day_pct")))
-    target_days = 0 if state == "LEARNING" else max(1, min(7, int(round(est_days or 1))))
+    # Estimated days/week describes observed volume; it is NOT the number of
+    # weekdays allowed to receive a candidate. An athlete can alternate days.
+    weekday_evidence = _v1964_weekday_evidence(recent, established, season, weekday_scores, state)
+    recent_start = end - timedelta(days=RHYTHM_RECENT_DAYS - 1)
+    for wd in range(7):
+        weekday_evidence[wd]["recent_recorded_dates"] = sorted({
+            row["date"].isoformat() for row in historical
+            if row["weekday"] == wd and row["date"] >= recent_start
+        })
     ranked_days = sorted(range(7), key=lambda wd: (-weekday_scores[wd], wd))
-    likely_weekdays = ranked_days[:target_days] if target_days else []
-    if target_days >= 7:
-        pattern_strength = "HIGH"
-    elif target_days and target_days < 7:
+    likely_weekdays = [wd for wd in ranked_days if weekday_evidence[wd]["supported"]]
+    if len(likely_weekdays) == 7:
+        # Uniform 4-5d/week athletes do not thereby train *every* weekday.
+        # Only seven strong, nearly-daily weekday priors justify daily slots.
+        pattern_strength = "HIGH" if min(weekday_scores.values()) >= 0.80 else "LOW"
+    elif likely_weekdays:
         top = [weekday_scores[i] for i in likely_weekdays]
-        rest = [weekday_scores[i] for i in ranked_days[target_days:]]
+        rest = [weekday_scores[i] for i in ranked_days if i not in likely_weekdays]
         separation = (statistics.mean(top) if top else 0) - (statistics.mean(rest) if rest else 0)
         pattern_strength = "HIGH" if separation >= 0.28 else ("MODERATE" if separation >= 0.12 else "LOW")
     else:
@@ -19500,6 +19556,9 @@ def build_training_rhythm(season_activities, now=None, scope="CYCLING"):
         "estimated_days_per_week": round(est_days, 1), "estimated_sessions_per_week": round(est_sessions, 1),
         "estimated_hours_per_week": round(est_hours, 1), "double_propensity": round(double_propensity, 3),
         "weekday_scores": weekday_scores, "weekday_double_scores": weekday_double,
+        "weekday_evidence": weekday_evidence, "weekday_selection_policy": "INDEPENDENT_OBSERVED_WEEKDAYS_R1964",
+        "history_window_requested_days": RHYTHM_SEASON_DAYS,
+        "history_first_observed_date": history_start.isoformat() if history_start else None,
         "likely_weekdays": likely_weekdays, "pattern_strength": pattern_strength,
         "median_training_gap_days": median_gap, "median_session_duration_min": round(median_duration, 1) if median_duration else None,
         "typical_training_day_load": round(typical_day_load, 1) if typical_day_load is not None else None,
@@ -19513,7 +19572,7 @@ def build_training_rhythm(season_activities, now=None, scope="CYCLING"):
         "clock_profile": clock_profile, "short_label": short_label, "detail": " · ".join(detail_parts),
         "recent_label": recent_label, "established_label": established_label,
         "history_records": len(historical),
-        "method_note": f"{str(scope or 'CYCLING').upper()} rhythm: 21d recent behavior is blended conservatively with 42d established rhythm and 90d longer-term context. A single atypical week must not erase a learned weekday double-session pattern.",
+        "method_note": f"{str(scope or 'CYCLING').upper()} rhythm: {RHYTHM_RECENT_DAYS}d recent behavior is blended with {RHYTHM_ESTABLISHED_DAYS}d established rhythm and up to {RHYTHM_SEASON_DAYS}d longer-term context. Each weekday needs repeat evidence; estimated days/week is not an eligibility cap. A learned opportunity is not a mandate or recovery clearance.",
     }
 def _v4895_rhythm_duration_reliable(rhythm, min_samples=3):
     r = rhythm or {}
@@ -19896,7 +19955,7 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
     else:
         phase = "RHYTHM · NEXT"
         headline = "Training timing follows your learned pattern"
-        explanation = "Recent 14-day behavior is blended with the established 42-day rhythm and 90-day longer-term context so sustained changes progressively replace old habits."
+        explanation = "Recent 21-day behavior is blended with the established 42-day rhythm and up to 180-day longer-term context; each weekday must have repeated activity evidence."
     if blocked_today:
         today_status, today_class = "BLOCKED", "missed"
     elif today_rows:
@@ -19906,7 +19965,8 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
     elif next_slots and next_slots[0].get("date") == today_iso:
         today_status, today_class = "LIKELY WINDOW", "open"
     else:
-        today_status, today_class = "NO SESSION YET", "missed"
+        # No completed workout is not a "missed" workout unless one was due.
+        today_status, today_class = "NOT SCHEDULED", "upcoming"
     if today_rows:
         today_detail = f'{round(today_minutes)} min completed' + (f' · load {round(today_load,1)}' if today_load else '')
     else:
@@ -28197,7 +28257,10 @@ def analyze():
         provider_metabolic_context = build_metabolic_context(cycling_recent_activities, season_wellness, planning_context, season_activities=cycling_season_activities)
         metrics = apply_health_override_to_metrics(metrics, planning_context)
         season_stats = compute_season_stats(cycling_season_activities)
-        training_rhythm = build_training_rhythm(cycling_season_activities)
+        # Intervals history is already fetched (365d) for power intelligence.
+        # Restrict ONLY rhythm learning to a richer 180d sample; training load,
+        # wellness, energy and recovery retain their existing windows.
+        training_rhythm = build_training_rhythm(cycling_history_activities)
         strength_pattern = build_strength_pattern(season_activities)
         energy_bank = compute_energy_bank(
             metrics["form_zone"], metrics["fatigue_zone"], metrics.get("latest_sleep_hours"),
@@ -40718,7 +40781,7 @@ def build_training_rhythm(season_activities, now=None, scope='CYCLING'):
     full = _build_training_rhythm_r184_final(season_activities, now=now, scope=scope)
     if not isinstance(full, dict) or str(scope or 'CYCLING').upper() != 'CYCLING':
         return full
-    excluded = _v185_load_pto_dates(now.date() - timedelta(days=100), now.date())
+    excluded = _v185_load_pto_dates(now.date() - timedelta(days=RHYTHM_SEASON_DAYS + 7), now.date())
     if not excluded:
         return full
     ordinary = [a for a in season_activities or []
@@ -40732,6 +40795,7 @@ def build_training_rhythm(season_activities, now=None, scope='CYCLING'):
     # Timing/frequency scheduling only: never remove holiday work from overall
     # load, energy, completed workout history or medical/recovery assessment.
     for key in ('clock_profile','weekday_scores','weekday_double_scores',
+                'weekday_evidence','weekday_selection_policy',
                 'likely_weekdays','pattern_strength','double_propensity',
                 'median_training_gap_days'):
         if key in learned:
@@ -44591,7 +44655,7 @@ def build_content_audit_markdown(report):
         return full.replace(divider,section+divider,1)
     return full+'\n'+section
 
-APP_VERSION="THE LAB · PRODUCT V4.9.87 R196.3 · NATIVE SINGLE-TAP AUDIT DOWNLOAD · NOVA R196.2 CORE"
+APP_VERSION="THE LAB · PRODUCT V4.9.88 R196.4 · INDEPENDENT WEEKDAY RHYTHM EVIDENCE · NOVA R196.2 CORE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
