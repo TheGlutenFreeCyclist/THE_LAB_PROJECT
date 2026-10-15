@@ -3450,39 +3450,56 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% if data.training_state %}<div class="v35-phase-explain" id="v35-phase-explain" hidden><strong>{{ data.training_state.state }} · {{ data.training_state.headline }}</strong><p>{{ data.training_state.why }}</p><p><strong>Confidence:</strong> {{ data.training_state.confidence }} reflects how much supporting training and wellness history is available for this phase view; it is not workout intensity or fatigue severity.</p>{% if data.training_state.signals %}<div class="v35-phase-signals">{% for signal in data.training_state.signals %}<span>{{ signal }}</span>{% endfor %}</div>{% endif %}</div>{% endif %}
 <div class="v4-week-memory"><div class="v4-week-label">This week</div><div class="v4-week-chips">{% if data.week_memory and data.week_memory.activities %}{% for a in data.week_memory.activities %}<span class="v4-week-chip {{ 'hard' if a.hard else '' }}"><strong>{{ a.day_short }}</strong> {{ a.family_short }}</span>{% endfor %}{% else %}<span class="v4-week-chip">No completed sessions found yet.</span>{% endif %}</div>{% if data.week_memory and data.week_memory.hard_summary %}<div class="v4-week-note">Quality: {{ data.week_memory.hard_summary }}</div>{% endif %}</div>
-{# R196.1 quality cards: only canonical session identities can be displayed. #}
-{# Card 1+2 = next two canonical chronological slots, no promotion. #}
-{# Card 3 = earliest DISTINCT verified/provisional quality in remaining #}
-{# canonical session horizon. If none, omit card 3: never disguise easy #}
-{# as the next quality or synthesize one from an unverified date. #}
-{% set upcoming=namespace(rows=[], next_quality_index=none) %}
-{% for s in data.next_sessions[:2] %}
-  {% set upcoming.rows=upcoming.rows+[(loop.index0,s)] %}
-{% endfor %}
-{% if data.next_sessions|length > 2 %}
-  {% for candidate in data.next_sessions[2:] %}
-    {% if upcoming.next_quality_index is none
-       and candidate.intensity_class in ['vo2','threshold','sprint','high','hard','tempo']
-       and (candidate.hard_spacing_relevant or candidate.provisional_quality or candidate.quality_relevance == 'MEANINGFUL')
-       and candidate.restriction not in ['RACE','HEALTH','NO_INTENSITY']
-       and candidate.intensity|upper in ['HARD','QUALITY','VO2MAX','THRESHOLD','SPRINT','TEMPO'] %}
-      {% set upcoming.next_quality_index=loop.index0+2 %}
-    {% endif %}
-  {% endfor %}
-  {% if upcoming.next_quality_index is not none %}
-    {% set upcoming.rows=upcoming.rows+[(upcoming.next_quality_index, data.next_sessions[upcoming.next_quality_index])] %}
+{# R196.2: show exactly three intentional surfaces, without manufacturing a quality session. #}
+{# First two show chronological sessions. Third is the nearest canonical quality #}
+{# not already shown, or a truthful status card about the nearest quality. #}
+{% set upcoming=namespace(rows=[], quality_index=none, quality_in_first_two=none) %}
+{% for si in range(2) %}
+  {% if data.next_sessions and si < (data.next_sessions|length) %}
+    {% set upcoming.rows=upcoming.rows+[(si,data.next_sessions[si])] %}
+  {% else %}
+    {% set upcoming.rows=upcoming.rows+[(none,none)] %}
   {% endif %}
+{% endfor %}
+{% for candidate in data.next_sessions %}
+  {% if upcoming.quality_index is none
+     and candidate.intensity_class in ['vo2','threshold','sprint','high','hard','tempo']
+     and (candidate.hard_spacing_relevant or candidate.provisional_quality or candidate.quality_relevance == 'MEANINGFUL')
+     and candidate.restriction not in ['RACE','HEALTH','NO_INTENSITY']
+     and candidate.intensity|upper not in ['EASY','RECOVERY','DEFERRED'] %}
+    {% set upcoming.quality_index=loop.index0 %}
+  {% endif %}
+{% endfor %}
+{% if upcoming.quality_index is not none and upcoming.quality_index > 1 %}
+  {% set upcoming.rows=upcoming.rows+[(upcoming.quality_index,data.next_sessions[upcoming.quality_index])] %}
+{% else %}
+  {% set upcoming.rows=upcoming.rows+[(none,none)] %}
 {% endif %}
-<div class="v23-session-fuel-grid v23-count-{{ upcoming.rows|length }}">
-{% for si, s in upcoming.rows[:3] %}
-{% set n = data.nutrition_plan[si] if data.nutrition_plan and si < (data.nutrition_plan|length) else none %}
-{% set is_featured_quality = (loop.index == 3) %}
-<article class="v4-card v4-session {{ s.intensity_class }} v23-session-card v23-col-{{ loop.index }}{{ ' v1961-quality-card' if is_featured_quality else '' }}"{% if is_featured_quality %} aria-label="{{ 'Provisional ' if s.provisional_quality else '' }}next quality session"{% endif %}>
-<div class="v4-session-slot">{% if is_featured_quality %}<span class="v1961-quality-eyebrow">⚡ NEXT QUALITY{{ ' · PROVISIONAL' if s.provisional_quality else '' }}</span>{% endif %}{% if s.date %}{{ s.date[8:10] }}/{{ s.date[5:7] }}/{{ s.date[:4] }} · {% endif %}{{ s.slot }}</div>
+<div class="v23-session-fuel-grid v23-count-3">
+{% for si, s in upcoming.rows %}
+{% set is_quality_slot=loop.index == 3 %}
+{% set quality_already_shown=is_quality_slot and upcoming.quality_index is not none and upcoming.quality_index < 2 %}
+{% set is_pending=is_quality_slot and not s %}
+{% set is_chronological_pending=not is_quality_slot and not s %}
+{% set n = data.nutrition_plan[si] if s and data.nutrition_plan and si is not none and si < (data.nutrition_plan|length) else none %}
+<article class="v4-card v4-session {{ s.intensity_class if s else 'recovery' }} v23-session-card v23-col-{{ loop.index }}{{ ' v1962-quality-card' if is_quality_slot else '' }}"{% if is_quality_slot %} aria-label="Next quality session status"{% endif %}>
+{% if is_chronological_pending %}
+<div class="v4-session-slot">UPCOMING · AWAITING PLAN</div>
+<h3>Next chronological session not yet scheduled</h3>
+<div class="v4-session-main">Nova has not established another safe session opportunity yet. No date or workout has been invented.</div>
+{% elif is_pending %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · {{ 'IN YOUR NEXT TWO' if quality_already_shown else 'AWAITING PLAN' }}</span></div>
+<h3>{{ 'Already planned in card ' ~ (upcoming.quality_index + 1) if quality_already_shown else 'Next quality not yet scheduled' }}</h3>
+<div class="v4-session-meta"><span class="v4-session-pill">{{ 'SEE CARD ' ~ (upcoming.quality_index + 1) if quality_already_shown else 'PENDING' }}</span></div>
+<div class="v4-session-main">{% if quality_already_shown %}{{ data.next_sessions[upcoming.quality_index].title }} · see its session details above. No duplicate workout is prescribed.{% else %}Nova has not yet established an executable next quality session. No date, duration, power or structure has been invented.{% endif %}</div>
+<div class="v4-session-why"><strong>Why:</strong> {{ 'The earliest validated quality is already one of the next two chronological sessions.' if quality_already_shown else 'Nova will reassess the next quality opportunity when the scientific, recovery and scheduling checks support one.' }}</div>
+{% else %}
+<div class="v4-session-slot">{% if is_quality_slot %}<span class="v1962-quality-eyebrow">NEXT QUALITY{{ ' · PROVISIONAL' if s.provisional_quality else '' }}</span>{% endif %}{% if s.date %}{{ s.date[8:10] }}/{{ s.date[5:7] }}/{{ s.date[:4] }} · {% endif %}{{ s.slot }}</div>
 <div class="v150-workout-title-row"><h3>{{ s.title|replace('Coach-selected session','Nova-selected session') }}</h3><button class="v150-copy-workout" type="button" data-copy-workout="{{ s.title|replace('Coach-selected session','Nova-selected session')|e }}" aria-label="Copy workout name" title="Copy workout name">⧉<span>Copy</span></button></div>
 <div class="v4-session-meta"><span class="v4-session-pill v177-duration-pill">{{ s.duration|replace('Coach-selected duration','Nova-selected duration') }}</span><span class="v4-session-pill">{{ s.intensity }}</span>{% if s.provisional_quality %}<span class="v4-session-pill v4873-provisional-pill">⚡ CANDIDATE · REASSESS</span>{% endif %}{% if s.environment %}<span class="v4-session-pill {% if s.is_planned_training %}v24-plan-pill{% endif %}">{{ "🚴 " if s.is_planned_training else "" }}{{ s.environment }}</span>{% endif %}{% if s.planned_demand and s.planned_demand not in ["COACH","RACE"] %}<span class="v4-session-pill v24-plan-pill">PLAN {{ s.planned_demand }}</span>{% endif %}</div>
 <div class="v4-session-main">{{ s.main_set|replace('See coach recommendation.','See the recommendation above.') }}</div>
 <div class="v4-session-why"><strong>Why:</strong> {{ s.why }}</div>
+{% endif %}
 </article>
 <div class="v23-session-fuel v23-col-{{ loop.index }}">
 <div class="v23-fuel-head"><span>🥤</span><strong>SESSION FUEL</strong>{% if n %}<b>{{ n.session_demand }}</b>{% endif %}</div>
@@ -3492,25 +3509,23 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v23-fuel-meta">{{ n.kind }} · {{ n.environment }}{% if n.duration_display %} · <span class="v26-duration-meta">{{ n.duration_display }}</span>{% endif %}</div>
 {% if n.intra_total %}<div class="v26-fuel-total">≈ {{ n.intra_total }}</div>{% endif %}
 {% else %}
-<div class="v23-fuel-dose">—</div><div class="v23-fuel-copy">No fueling target available.</div>
+<div class="v23-fuel-dose">—</div><div class="v23-fuel-copy">{{ 'See the fueling in its chronological card.' if quality_already_shown else 'Fueling will follow the confirmed quality prescription.' if is_quality_slot else 'No fueling target available.' }}</div>
 {% endif %}
 </div>
 {% endfor %}
 </div>
 <style>
-/* Only the dedicated third card signals NEXT QUALITY. Keep stock session
-   and fuel colors unchanged on cards one and two. No neon/glow/gradient band. */
-.v23-session-card.v23-col-3.v1961-quality-card{
-  border:1px solid rgba(174,157,205,.62)!important;
-  background:linear-gradient(180deg,rgba(174,157,205,.025),rgba(174,157,205,0) 46%),var(--panel)!important;
+/* Only position three carries a quiet next-quality accent, regardless of state. */
+.v23-session-card.v23-col-3.v1962-quality-card{
+  border:1px solid rgba(160,148,186,.48)!important;
+  background:linear-gradient(180deg,rgba(158,145,183,.018),transparent 52%),var(--panel)!important;
   box-shadow:0 18px 50px rgba(0,0,0,.24)!important;
 }
-.v23-session-card.v23-col-3.v1961-quality-card::before{
-  background:rgba(174,157,205,.78)!important;
-  width:2px!important;
+.v23-session-card.v23-col-3.v1962-quality-card::before{
+  background:rgba(160,148,186,.55)!important;width:2px!important;
 }
-.v1961-quality-eyebrow{display:block;color:#b9a9d6;font-size:10px;font-weight:750;letter-spacing:.085em;margin-bottom:5px}
-@media(prefers-reduced-motion:reduce){.v1961-quality-card{transition:none!important}}
+.v1962-quality-eyebrow{display:block;color:#b4a9c8;font-size:10px;font-weight:750;letter-spacing:.085em;margin-bottom:6px}
+@media(prefers-reduced-motion:reduce){.v1962-quality-card{transition:none!important}}
 </style>
 {% if data.aerobic_volume_advice %}
 <section class="v4882-strength-nudge v178-volume-advice" role="note" aria-label="Optional aerobic volume development">
@@ -3960,7 +3975,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </section>
 {% endif %}
 </main>
-<div class="v4-build">{{ app_version.split(' · ')[1] | replace('PRODUCT ', '') }}</div>
+
 <script>
 (function(){
 {% if not is_preview and not report_mode %}window.addEventListener('pageshow',function(e){if(e.persisted){window.location.reload();}});{% endif %}
@@ -3980,12 +3995,72 @@ document.querySelectorAll('[data-v4878-guide-target]').forEach(function(b){b.add
 document.querySelectorAll('[data-v4834-qa-run]').forEach(function(f){f.addEventListener('submit',function(e){e.preventDefault();var modal=f.closest('.v4832-modal'),kind=f.getAttribute('data-v4834-qa-run')||'QA',status=document.getElementById('v4834-qa-status'),title=status?status.querySelector('[data-v4834-status-title]'):null,copy=status?status.querySelector('[data-v4834-status-copy]'):null;if(modal)modal.classList.add('is-qa-running');document.querySelectorAll('[data-v4834-qa-run]').forEach(function(other){var b=other.querySelector('[data-v4834-qa-button]');if(b)b.disabled=true;});f.classList.add('is-running');var btn=f.querySelector('[data-v4834-qa-button]');if(btn)btn.textContent=btn.getAttribute('data-running-label')||'Generating QA…';if(status){status.classList.add('is-running');if(title)title.textContent=kind==='REPLAY'?'Replaying saved Snapshot with Gemini…':(kind==='PYTHON'?'Running Python-only QA…':'Generating Live QA Snapshot…');if(copy)copy.textContent=kind==='REPLAY'?'Saved production context is being reprocessed through Gemini and the production guards. No Intervals call is being made.':(kind==='PYTHON'?'THE LAB is refreshing live Intervals data and running the deterministic production pipeline in read-only mode. No AI provider call will be made.':'THE LAB is collecting live Intervals data, running Gemini, then applying the production normalizers and guards. Please keep this tab open.');}setTimeout(function(){try{f.scrollIntoView({behavior:'smooth',block:'nearest'});}catch(_e){}},30);requestAnimationFrame(function(){requestAnimationFrame(function(){HTMLFormElement.prototype.submit.call(f);});});});});
 document.addEventListener('keydown',function(e){if(e.key==='Escape'&&activeModal){e.preventDefault();modalClose(activeModal);}});
 })();
+function v1962SaveAudit(blob,filename){
+  var url=URL.createObjectURL(blob),link=document.createElement('a');
+  link.href=url;link.download=filename;document.body.appendChild(link);link.click();link.remove();
+  setTimeout(function(){URL.revokeObjectURL(url);},60000);
+}
 {% if qa_mode %}
 var qaAuditText={{ qa_audit_markdown|default('')|tojson }};
 var qaAuditFilename={{ qa_audit_filename|default('the_lab_qa_content_audit.md')|tojson }};
-function downloadQaAudit(){if(!qaAuditText)return;var blob=new Blob([qaAuditText],{type:'text/markdown;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=qaAuditFilename;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},500);}
-['qa-audit-download-btn','qa-audit-download-btn-bottom'].forEach(function(id){var b=document.getElementById(id);if(b)b.addEventListener('click',downloadQaAudit);});
+function v1962AuditStatus(target,message,busy){
+  if(!target)return; var indicator=target.nextElementSibling;
+  if(!indicator || !indicator.classList.contains('v1962-audit-status')){
+    indicator=document.createElement('span');indicator.className='v1962-audit-status';
+    indicator.setAttribute('role','status');indicator.setAttribute('aria-live','polite');
+    indicator.style.cssText='display:block;font-size:12px;color:#adb6c4;margin-top:6px;';
+    target.insertAdjacentElement('afterend',indicator);
+  }
+  target.setAttribute('aria-busy',busy?'true':'false');
+  indicator.textContent=message;
+}
+function downloadQaAudit(target){
+  if(!qaAuditText)return;
+  target=target||document.activeElement;
+  v1962AuditStatus(target,'Preparing full diagnostic audit…',true);
+  requestAnimationFrame(function(){setTimeout(function(){
+    try{
+      var blob=new Blob([qaAuditText],{type:'text/markdown;charset=utf-8'});
+      v1962AuditStatus(target,'Audit ready ('+Math.ceil(blob.size/1024)+' KB). Handing file to browser…',true);
+      v1962SaveAudit(blob,qaAuditFilename);
+      v1962AuditStatus(target,'File delivered to browser. Saving to your device may continue in Downloads.',false);
+    }catch(err){v1962AuditStatus(target,'Audit export failed. Retry or contact support.',false);}
+  },50);});
+}
+['qa-audit-download-btn','qa-audit-download-btn-bottom'].forEach(function(id){var b=document.getElementById(id);if(b)b.addEventListener('click',function(){downloadQaAudit(b);});});
 {% endif %}
+/* Persist progress until the audit HTTP response has been completely received.
+   Browser/device filesystem completion cannot be observed from a web page. */
+document.querySelectorAll('a[href*="/last-report/content-audit.md"]').forEach(function(btn){
+  btn.addEventListener('click',async function(event){
+    if(!window.fetch)return;
+    event.preventDefault();if(btn.getAttribute('aria-busy')==='true')return;
+    var old=btn.textContent;btn.textContent='Preparing audit…';
+    var status=document.createElement('span');status.className='v1962-audit-status';
+    status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+    status.style.cssText='display:block;font-size:12px;color:#adb6c4;margin-top:6px;';
+    btn.insertAdjacentElement('afterend',status);btn.setAttribute('aria-busy','true');
+    try{
+      var response=await fetch(btn.href,{credentials:'same-origin'});
+      if(!response.ok)throw new Error('HTTP '+response.status);
+      var bytes=[],total=0,expected=Number(response.headers.get('Content-Length'))||0;
+      if(response.body&&response.body.getReader){
+        var reader=response.body.getReader();while(true){
+          var part=await reader.read();if(part.done)break;
+          bytes.push(part.value);total+=part.value.byteLength;
+          status.textContent='Receiving complete audit: '+Math.ceil(total/1024)+' KB'+(expected?' / '+Math.ceil(expected/1024)+' KB':'')+'…';
+        }
+      }else{var buf=await response.arrayBuffer();bytes=[new Uint8Array(buf)];total=buf.byteLength;}
+      var blob=new Blob(bytes,{type:'text/markdown;charset=utf-8'});
+      if(!blob.size)throw new Error('empty audit');
+      var cd=response.headers.get('Content-Disposition')||'';
+      var match=cd.match(/filename="?([^";]+)"?/i);
+      v1962SaveAudit(blob,match?match[1]:'the_lab_content_audit.md');
+      status.textContent='Full audit received ('+Math.ceil(total/1024)+' KB). Handed to browser; device save may still be in progress.';
+    }catch(err){status.textContent='Audit download failed. Retry; no complete file was received.';}
+    finally{btn.textContent=old;btn.setAttribute('aria-busy','false');}
+  });
+});
 var form=document.getElementById('snapshot-form'); if(form){ form.addEventListener('submit',function(e){ var btn=document.getElementById('snapshot-btn'), track=document.getElementById('loading-track'), fill=track?track.querySelector('.loading-fill'):null, label=document.getElementById('loading-label'); if(form.getAttribute('data-csrf-ready')!=='1'){e.preventDefault();if(btn){btn.disabled=true;btn.textContent='Checking session…';}if(label){label.style.display='block';label.textContent='Refreshing secure session…';}fetch('/session/csrf',{method:'GET',credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}}).then(function(r){return r.text().then(function(t){var j={};try{j=JSON.parse(t);}catch(_e){}return {ok:r.ok,status:r.status,data:j};});}).then(function(res){if(!res.ok||!res.data.csrf_token){window.location.assign((res.data&&res.data.login_url)||'/login');return;}var input=form.querySelector('input[name="csrf_token"]');if(input)input.value=res.data.csrf_token;form.setAttribute('data-csrf-ready','1');if(btn){btn.disabled=false;}form.requestSubmit();}).catch(function(){window.location.assign('/login');});return;} if(btn){btn.disabled=true;btn.textContent='Analyzing…';} if(track)track.style.display='block'; if(label){label.style.display='block';label.textContent='Loading your training data…';} var pct=5; if(fill){fill.style.width=pct+'%'; setInterval(function(){ if(pct<92){pct+=(92-pct)*.08;fill.style.width=pct+'%';}},250);} }); }
 var phaseBtn=document.getElementById('v35-phase-button'), phasePanel=document.getElementById('v35-phase-explain');
 if(phaseBtn && phasePanel && phaseBtn.getAttribute('data-static')!=='1'){ var togglePhase=function(){ var open=phaseBtn.getAttribute('aria-expanded')==='true'; phaseBtn.setAttribute('aria-expanded',open?'false':'true'); phasePanel.hidden=open; }; phaseBtn.addEventListener('click',togglePhase); phaseBtn.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){e.preventDefault();togglePhase();} }); }
@@ -41539,7 +41614,7 @@ R192_DIAGNOSTICS_PAGE = """
 .r192-tools{display:flex;gap:9px;flex-wrap:wrap;align-items:end;margin:18px 0}.r192-tools input{width:min(440px,100%);min-height:43px;background:#081523;color:#eef7fe;border:1px solid #315071;border-radius:10px;padding:10px}.r192-tools label{display:grid;gap:5px;font-size:12px;font-weight:700;color:#a8c1d2}.r192-tools button,.r192-tools a,.r192-copy{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:8px 14px;border:1px solid #345b75;border-radius:11px;background:#122b41;color:#d4eefc;text-decoration:none;cursor:pointer;font-size:13px;font-weight:750}.r192-events{display:grid;gap:12px}.r192-event{padding:17px;border:1px solid #33506a;border-radius:15px;background:linear-gradient(160deg,#111e2e,#0a1725)}.r192-event-head{display:flex;justify-content:space-between;align-items:center;gap:9px;flex-wrap:wrap}.r192-event h2{font-size:16px;margin:0}.r192-event p{color:#b5c7d8;line-height:1.5;margin:9px 0}.r192-error{border-color:#93465d}.r192-event pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#a6defa;background:#061421;border:1px solid #31465e;border-radius:10px;padding:12px;font-size:12px;line-height:1.5}.r192-event details{margin-top:11px}.r192-event summary{cursor:pointer;color:#c5e2f7;font-size:13px}.r192-muted{color:#91afc6}.r192-code{font-size:12px;color:#d6edff}.r192-banner{padding:13px;border-radius:12px;border:1px solid #2a5669;background:#122638;margin:15px 0;font-size:13px;color:#d7edfb}.r192-copy-status{font-size:12px;color:#aeeacc}.r192-scope{font-size:12px;color:#a7bdcf}
 </style></head><body class="product-sec"><main class="ps-wrap">
 <header class="ps-head"><div><div class="ps-muted">OWNER ONLY · READ-ONLY AUDITS</div><h1>System Diagnostics</h1><p>Snapshot incident tracking from Product Neon, without opening a SQL console.</p></div><div class="ps-head-actions"><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('r193_admin_storage') }}">STORAGE &amp; RETENTION</a><a class="ps-nav-btn ps-nav-workspace" href="{{ url_for('admin_control_center') }}">CONTROL CENTER</a></div></header>
-<div class="r192-banner">Product Neon · {{ 'Available' if available else 'Temporarily unavailable' }} · Current source: {{ app_version }}<div class="r192-scope">Only your own Snapshot audit events are shown. Other athletes require separate consent-protected QA workflows. Limited to 100 most recent matches.</div></div>
+<div class="r192-banner">Product Neon · {{ 'Available' if available else 'Temporarily unavailable' }}<div class="r192-scope">Only your own Snapshot audit events are shown. Other athletes require separate consent-protected QA workflows. Limited to 100 most recent matches.</div></div>
 {% if problem %}<div class="ps-error">Diagnostic query unavailable ({{ problem }}). This does not imply a training data or report failure.</div>{% endif %}
 <form class="r192-tools" method="get" action="{{ url_for('admin_system_diagnostics') }}"><label>SEARCH INCIDENT ID, RELEASE OR ERROR CODE<input type="search" name="q" maxlength="90" value="{{ query }}" placeholder="SNP-... or TL-CMAG-..."></label><button type="submit">Search</button><a href="{{ url_for('admin_system_diagnostics') }}">Clear</a><a href="{{ url_for('admin_system_diagnostics', q=query, format='json') }}">Export safe JSON</a></form>
 {% if events %}<div class="r192-events">{% for item in events %}
@@ -42157,7 +42232,7 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
             candidate=future['raw_quality']
         sid=str(sess.get('nova_workout_id') or '')
         # Genuine maximal sprints are prescribed by effort and technique, not one arbitrary watt number.
-        if sid.startswith('SPR_'):continue
+        if any(t.get('id')==sid and str(t.get('pattern') or '').upper()=='SPRINT' for t in _NOVA_WORKOUT_LIBRARY):continue
         if sid!=str(candidate.get('_tl_nova_workout_id') or ''):continue
         band=candidate.get('_tl_v1943_power_band') or _v1960_coupled_power_band(candidate,sess,adaptive_roadmap) or {}
         if band.get('state')!='PRESCRIBED':
@@ -44208,7 +44283,332 @@ def build_nova_decision(goal_key,question_state=None,scientific_progression=None
     return out
 
 
-APP_VERSION="THE LAB · PRODUCT V4.9.85 R196.1 WIP · QUALITY CONTRACT / 2+NEXT QUALITY · NOT RELEASED · CANDIDATE R196.0 BASELINE"
+
+# R196.2 · ATOMIC NOVA DECISION / DOSE / CONTINUITY RECONCILIATION.
+# Seven goal families are explicitly covered; no user-specific power, day or slot
+# thresholds. ContextVar prevents one concurrent athlete's FTP/evidence from
+# affecting another athlete's library choice.
+from contextvars import ContextVar
+R1962_SCHEMA = 'V4.9.86-R196.2-NOVA-COHERENCE-1'
+R1962_GOALS = frozenset({'POWER_1','POWER_5','POWER_20','SPRINTER','VO2MAX','TIME_TRIAL','ENDURANCE_BASE'})
+_r1962_power_scope = ContextVar('r1962_power_scope', default=None)
+_r1962_library_before = _v109_select_workout_template
+
+def _v1962_repeat_guard(template, band, evidence_ledger, slot):
+    """Block an immediately repeated identical main set without a new dose.
+
+    Compare only the athlete's most recent verified repeated-work exposure.
+    Different work count/duration is a different structural question. A higher
+    target must exceed the 5 W prescription resolution to count as a distinct
+    intensity lever. No universal power percentage or goal-specific exception.
+    """
+    t = template if isinstance(template,dict) else {}
+    pat = str(t.get('pattern') or '').upper()
+    if pat not in {'STANDARD','SUSTAINED','SHORT_POWER','SPRINT'}:
+        return None
+    rows=[]
+    for e in ((evidence_ledger or {}).get('repeatability') or {}).get('events') or []:
+        if not isinstance(e,dict) or e.get('strong') is not True: continue
+        if str(e.get('activity_truth_source') or e.get('source') or '').upper() not in {
+             'DEVICE_LAPS','ICU_INTERVALS_CANONICAL'}:continue
+        try:
+            when=date.fromisoformat(str(e.get('date') or '')[:10])
+            to=date.fromisoformat(str((slot or {}).get('date') or '')[:10])
+            if when>to:continue
+            secs=float(e.get('interval_secs')); reps=int(e.get('reps'))
+        except (ValueError,TypeError):continue
+        rows.append((when, str(e.get('activity_id') or ''), secs, reps,e))
+    if not rows: return None
+    rows.sort(key=lambda x:(x[0],x[1]),reverse=True)
+    _,_,seconds,repetitions,latest=rows[0]
+    if abs(seconds-float(t.get('work_s') or 0))>1 or repetitions != int(t.get('reps') or 0):
+        return None
+    if pat=='SPRINT':
+        return {'reason':'LATEST_VERIFIED_SPRINT_STRUCTURE_ALREADY_COMPLETED',
+                'reference_activity_id':latest.get('activity_id')}
+    try: observed=float(latest.get('avg_watts')); target=float(band.get('target_watts'))
+    except (TypeError,ValueError):return None
+    if not (math.isfinite(observed) and math.isfinite(target)):return None
+    if target-observed < 5:
+        return {'reason':'LATEST_VERIFIED_MAIN_SET_NO_MEASURABLE_NEW_LEVER',
+                'reference_activity_id':latest.get('activity_id'),
+                'observed_watts':round(observed,1),'proposed_watts':target}
+    return None
+
+
+
+def _v109_select_workout_template(goal, dimension, evidence_ledger=None, training_definitions=None, slot=None):
+    template, audit = _r1962_library_before(goal, dimension, evidence_ledger=evidence_ledger,
+        training_definitions=training_definitions, slot=slot)
+    context = _r1962_power_scope.get()
+    if not isinstance(context, dict) or str(goal or '').upper() not in R1962_GOALS:
+        return template, audit
+    if not isinstance(template, dict):
+        return template, audit
+    # Sprints, endurance and relative load protocols are *not* numeric interval
+    # targets. Never make the lack of an FTP a reason to suppress these families.
+    patterns = {'STANDARD', 'SUSTAINED', 'SHORT_POWER'}
+    if str(template.get('pattern') or '').upper() not in patterns:
+        # Sprint has no numeric watt target. It still must not recycle the most
+        # recent identical sprint structure without another stated lever.
+        if str(template.get('pattern') or '').upper() in {'SPRINT'}:
+            check=_v1962_repeat_guard(template,{},evidence_ledger,slot)
+            if check:
+                options=list((audit or {}).get('top_candidates') or [])
+                for r in options:
+                    candidate=next((t for t in _NOVA_WORKOUT_LIBRARY if t.get('id')==r.get('id')
+                                    and t.get('goal')==str(goal or '').upper()
+                                    and str(dimension or '').upper() in set(t.get('dimensions') or ())),None)
+                    if candidate and str(candidate.get('pattern') or '').upper()=='SPRINT' and not _v1962_repeat_guard(candidate,{},evidence_ledger,slot):
+                        return dict(candidate),dict(audit or {},reason='NON_REPEATED_SPRINT_STRUCTURE',
+                            selected_id=candidate.get('id'),repeatability_guard=check)
+                return None,dict(audit or {},reason='NO_FRESH_SPRINT_STRUCTURE',repeatability_guard=check)
+        return template, audit
+    clock = slot if isinstance(slot, dict) else {}
+    as_of = clock.get('date') or context.get('as_of')
+    chosen = _v1943_band(template, evidence_ledger=evidence_ledger,
+                          ftp_anchor=context.get('ftp_anchor'), as_of_date=as_of,
+                          dimension=dimension)
+    metadata = dict(audit or {})
+    repeat=_v1962_repeat_guard(template,chosen,evidence_ledger,slot) if chosen.get('state')=='PRESCRIBED' else None
+    if chosen.get('state') == 'PRESCRIBED' and not repeat:
+        metadata['feasibility_gate'] = {'schema':R1962_SCHEMA, 'selected':'ORIGINAL',
+                                       'power_source':chosen.get('source')}
+        return template, metadata
+    # The original score ordering is retained: only candidates for the exact
+    # same goal / scientific dimension may be reconsidered. No goal swapping,
+    # no arbitrary dose/facet, no global monkey-patching of workout selectors.
+    ranked = list(metadata.get('top_candidates') or [])
+    rejected = [{'id':template.get('id'), 'state':'NO_MEANINGFUL_NEW_STIMULUS' if repeat else chosen.get('state'), 'repeat_guard':repeat}]
+    tried = {str(template.get('id') or '')}
+    for record in ranked:
+        ident = str(record.get('id') or '')
+        if not ident or ident in tried: continue
+        tried.add(ident)
+        option = next((t for t in _NOVA_WORKOUT_LIBRARY if t.get('id') == ident
+                       and str(t.get('goal') or '').upper() == str(goal).upper()
+                       and str(dimension or '').upper() in set(t.get('dimensions') or ())), None)
+        if not option or str(option.get('pattern') or '').upper() not in patterns:
+            continue
+        band = _v1943_band(option, evidence_ledger=evidence_ledger,
+                            ftp_anchor=context.get('ftp_anchor'), as_of_date=as_of,
+                            dimension=dimension)
+        repeat_option=_v1962_repeat_guard(option,band,evidence_ledger,slot) if band.get('state')=='PRESCRIBED' else None
+        if band.get('state') == 'PRESCRIBED' and not repeat_option:
+            metadata.update({'selected_id':ident, 'selected_score':record.get('score'), 'selected_signature':record.get('signature'), 'selected_facet':record.get('facet'), 'reason':'EVIDENCE_FEASIBLE_ALTERNATIVE',
+                'feasibility_gate':{'schema':R1962_SCHEMA, 'selected':'FIRST_VALID_RANKED_ALTERNATIVE',
+                    'original_id':template.get('id'), 'rejected':rejected,
+                    'power_source':band.get('source'), 'candidate_id':ident}})
+            return dict(option), metadata
+        rejected.append({'id':ident, 'state':'NO_MEANINGFUL_NEW_STIMULUS' if repeat_option else band.get('state'), 'repeat_guard':repeat_option})
+    metadata['feasibility_gate'] = {'schema':R1962_SCHEMA, 'selected':'NONE',
+                                    'rejected':rejected, 'reason':'NO_VERIFIABLE_WORKOUT_AT_CURRENT_DIMENSION'}
+    # A numerically plausible duplicate is not a meaningful prescription.
+    # None is the safe contract: return to the coaching decision, not a fake
+    # underpowered copy. No library candidate means no executable quality.
+    return None, metadata
+
+
+_r1962_prescription_before = build_nova_prescription
+
+def _v1962_call_prescriber(decision, clock, roadmap, ledger, evidence, power, ftp,
+                           aerobic, definitions):
+    scope = _r1962_power_scope.set({'ftp_anchor':ftp, 'as_of':(clock or {}).get('date')})
+    try:
+        return _r1962_prescription_before(decision, clock, adaptive_roadmap=roadmap,
+            microcycle_ledger=ledger, evidence_ledger=evidence, power_model=power,
+            ftp_anchor=ftp, aerobic_metabolic_range=aerobic, training_definitions=definitions)
+    finally:
+        _r1962_power_scope.reset(scope)
+
+
+def _v1962_locked_identity(out, decision):
+    if not isinstance(out, dict) or str(out.get('status') or '').upper() != 'PRESCRIBED':
+        return None
+    if str(out.get('source') or '') != 'PRESCRIPTION_CONTINUITY_LOCK':
+        return None
+    try:
+        raw = out['raw_sessions'][int(out.get('selected_slot_index'))]
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    if not isinstance(raw,dict): return None
+    original = str(raw.get('_tl_preserved_original_dimension') or '').upper()
+    current = str((decision or {}).get('dimension') or '').upper()
+    band = raw.get('_tl_v1943_power_band') or {}
+    # A persisted power target may have been legal yesterday but unsupported by
+    # today's evidence/FTP. R153 may not resurrect it by continuity, even when
+    # the scientific dimension is unchanged (the real POWER_20 QA failure).
+    wid = str(out.get('workout_id') or '')
+    family = next((t for t in _NOVA_WORKOUT_LIBRARY if str(t.get('id') or '') == wid), {})
+    numerically_prescribed = str(family.get('pattern') or '').upper() in {'STANDARD','SUSTAINED','SHORT_POWER'}
+    # Sprint, endurance and other non-numeric structures legitimately carry an
+    # UNSUPPORTED_STRUCTURE audit marker; that is not a reason to invalidate
+    # their plan identity or suppress a real strength/sprint training stimulus.
+    stale_power = (numerically_prescribed and isinstance(band,dict) and bool(band)
+                   and band.get('state') not in {'PRESCRIBED'})
+    mismatched_dimension = bool(original and current and original != current)
+    if mismatched_dimension or stale_power:
+        return {'original_dimension':original or current, 'current_dimension':current,
+                'reason':'STALE_POWER_CONTRACT' if stale_power else 'SCIENTIFIC_DIMENSION_CHANGED',
+                'workout_id':out.get('workout_id'),
+                'selected_slot_index':out.get('selected_slot_index')}
+    return None
+
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, microcycle_ledger=None,
+        evidence_ledger=None, power_model=None, ftp_anchor=None,
+        aerobic_metabolic_range=None, training_definitions=None):
+    args = (nova_decision, coach_clock, adaptive_roadmap, microcycle_ledger,
+            evidence_ledger, power_model, ftp_anchor, aerobic_metabolic_range, training_definitions)
+    out = _v1962_call_prescriber(*args)
+    mismatch = _v1962_locked_identity(out, nova_decision)
+    if not mismatch: return out
+    # A new science gate may invalidate an old issued recovery protocol. Retain
+    # its history (immutable), but exclude the conflicting slot from a one-time
+    # pure *selection* replay. No DB write or cross-athlete state mutation.
+    shadow = copy.deepcopy(microcycle_ledger or {})
+    slots = list((coach_clock or {}).get('next_slots') or [])
+    try: slot = slots[int(mismatch['selected_slot_index'])]
+    except (IndexError, ValueError, TypeError): slot = {}
+    target = (str(slot.get('date') or '')[:10], str(slot.get('period') or ''))
+    kept=[];excluded=[]
+    for row in shadow.get('prescription_history') or []:
+        if (isinstance(row,dict) and str(row.get('nova_workout_id') or row.get('nova_contract_id') or '') == str(mismatch['workout_id'] or '')
+                and _v153_plan_slot(row)==target and _v153_is_training_plan(row)):
+            excluded.append(str(row.get('prescription_fingerprint') or ''))
+        else:kept.append(row)
+    shadow['prescription_history'] = kept
+    if isinstance(shadow.get('primary_anchor'),dict) and (
+         str(shadow['primary_anchor'].get('nova_workout_id') or shadow['primary_anchor'].get('nova_contract_id') or '') == str(mismatch['workout_id'] or '')):
+        shadow['primary_anchor'] = None
+    candidate = _v1962_call_prescriber(nova_decision, coach_clock, adaptive_roadmap, shadow,
+        evidence_ledger, power_model, ftp_anchor, aerobic_metabolic_range, training_definitions)
+    if not isinstance(candidate,dict) or _v1962_locked_identity(candidate, nova_decision):
+        candidate = None
+    if candidate is None:
+        candidate = copy.deepcopy(out)
+        i=mismatch.get('selected_slot_index')
+        try: candidate['raw_sessions'][int(i)] = _v84_easy_raw(slot,nova_decision or {})
+        except (ValueError, IndexError, TypeError, KeyError): pass
+        candidate.update({'status':'EASY_ONLY','hard_prescription_available':False,
+            'selected_slot_index':None,'workout_id':None,'contract_id':None,
+            'fail_closed_reason':'INCOMPATIBLE_LOCK_NO_EVIDENCED_REPLACEMENT'})
+        candidate.pop('single_plan_authority',None)
+    candidate['prescription_continuity']={
+        'schema':R1962_SCHEMA, 'active':False, 'state':'POLICY_CONFLICT_RECONCILED',
+        'old_workout_id':mismatch['workout_id'], 'old_dimension':mismatch['original_dimension'],
+        'current_dimension':mismatch['current_dimension'], 'excluded_history_fingerprints':excluded,
+        'rule':'Historical workout identity stays in the ledger but cannot be executed against an incompatible live science decision.'}
+    candidate['r1962_reconciliation'] = {'schema':R1962_SCHEMA,'state':'PRIOR_LOCK_INVALIDATED',
+        'old_workout_id':mismatch['workout_id'],
+        'replacement_workout_id':candidate.get('workout_id'),
+        'status':candidate.get('status')}
+    return candidate
+
+
+def _v1962_snapshot_consistency(data):
+    """Full diagnostic cross-module coherence proof, never an athlete-facing label."""
+    d = data if isinstance(data,dict) else {}
+    decision = d.get('nova_decision') or {}
+    prescription = d.get('nova_prescription') or {}
+    rows = [x for x in d.get('next_sessions') or [] if isinstance(x,dict)]
+    hard = [x for x in rows if str(x.get('intensity_class') or '').lower() in {'tempo','threshold','vo2'}
+            and str(x.get('intensity') or '').upper() not in {'EASY','RECOVERY'}]
+    issues=[]
+    def fail(code):issues.append(code)
+    if len(rows)>3:pass # later canonical horizons are allowed
+    if str(prescription.get('status') or '') == 'BLOCKED' and hard:
+        fail('BLOCKED_PRESCRIPTION_STILL_EXPOSES_EXECUTABLE_HARD')
+    if str(decision.get('action') or '').upper() in {'HOLD','MAINTAIN','RACE_PRIORITY'} and any(
+            not x.get('provisional_quality') for x in hard):
+        fail('NON_TRAIN_DECISION_EXPOSES_EXECUTABLE_HARD')
+    for row in hard:
+        if row.get('nova_workout_id') and row.get('power_prescription'):
+            pp=row['power_prescription']
+            if (pp.get('state')!='PRESCRIBED' and not any(t.get('id') == row.get('nova_workout_id') and str(t.get('pattern') or '').upper() == 'SPRINT' for t in _NOVA_WORKOUT_LIBRARY)):
+                fail('HARD_WORKOUT_WITHOUT_VERIFIED_POWER_CONTRACT')
+    return {'schema':R1962_SCHEMA,'status':'PASS' if not issues else 'BLOCKED',
+            'goal_key':(d.get('training_direction') or {}).get('primary_goal'),
+            'decision_dimension':decision.get('dimension'),'action':decision.get('action'),
+            'prescription_status':prescription.get('status'),
+            'prescription_id':prescription.get('workout_id'),
+            'session_workout_ids':[r.get('nova_workout_id') for r in rows],
+            'hard_session_count':len(hard), 'issues':issues}
+
+
+
+_r1962_training_plan_before = _v153_is_training_plan
+
+def _v153_is_training_plan(row):
+    if not isinstance(row,dict):return False
+    if str(row.get('prescription_status') or '').upper() in {
+        'SUPERSEDED','WITHDRAWN','EXPIRED','EXPIRED_BY_NEW_HARD_EVIDENCE',
+        'CANCELLED','FULFILLED','COMPLETED'}:
+        return False
+    if str(row.get('effective_execution_authority') or '') == 'NOT_IN_CURRENT_ATHLETE_PLAN':
+        return False
+    return _r1962_training_plan_before(row)
+
+
+_r1962_ledger_before = _v1952_reconcile_ledger
+
+def _v1952_reconcile_ledger(ledger, sessions, now=None, decision_action=None):
+    out=_r1962_ledger_before(ledger,sessions,now=now,decision_action=decision_action)
+    if not isinstance(out,dict):return out
+    # An explicit newer canonical quality in the *same exact future slot* owns
+    # execution, not any older active contract. Keep history + original dose
+    # unchanged; close the old execution identity only when replacement exists.
+    accepted={(_v153_plan_slot(s),str(s.get('nova_workout_id') or s.get('nova_contract_id') or ''))
+              for s in (sessions or []) if isinstance(s,dict)
+              and _v195_hard(s) and s.get('nova_workout_id')
+              and ((s.get('power_prescription') or {}).get('state') == 'PRESCRIBED'
+                   or any(t.get('id') == s.get('nova_workout_id') and str(t.get('pattern') or '').upper() == 'SPRINT' for t in _NOVA_WORKOUT_LIBRARY))}
+    if not accepted:return out
+    cleaned=copy.deepcopy(out)
+    changed=[];now=now or get_rome_now()
+    for row in cleaned.get('prescription_history') or []:
+        if not isinstance(row,dict) or str(row.get('prescription_status') or '').upper() not in {'ACTIVE','PLANNED','MISSED_UNEXECUTED'}:
+            continue
+        slot=_v153_plan_slot(row);old=str(row.get('nova_workout_id') or row.get('nova_contract_id') or '')
+        newer=next((wid for key,wid in accepted if key==slot and wid and wid!=old),None)
+        if not newer or not old or not _v195_hard(row):continue
+        row.update({'prescription_status':'SUPERSEDED',
+            'superseded_at_local':now.isoformat(timespec='seconds'),
+            'superseded_by_workout_id':newer,
+            'supersession_reason':'R1962_NEW_CANONICAL_HARD_SAME_EXACT_SLOT',
+            'supersession_schema':R1962_SCHEMA})
+        changed.append({'old_workout_id':old,'new_workout_id':newer,'slot':slot,
+                        'fingerprint':row.get('prescription_fingerprint')})
+    if not changed:return out
+    anchor=cleaned.get('primary_anchor')
+    if isinstance(anchor,dict):
+        sid=_v153_plan_slot(anchor);old=str(anchor.get('nova_workout_id') or anchor.get('nova_contract_id') or '')
+        if any(z['slot']==sid and z['old_workout_id']==old for z in changed):
+            anchor['effective_execution_authority']='NOT_IN_CURRENT_ATHLETE_PLAN'
+            anchor['effective_status']='SUPERSEDED_BY_R1962_CANONICAL_REPLAN'
+    cleaned['r1962_ledger_supersession']={'schema':R1962_SCHEMA,'count':len(changed),'transitions':changed[-16:],
+      'rule':'Only a verified new canonical hard workout at the same exact date and period retires an older active identity; uncertainty in timing does not resurrect stale workouts; preserve historical audit.'}
+    return cleaned
+
+
+_r1962_audit_export_before = build_content_audit_markdown
+
+def build_content_audit_markdown(report):
+    # Never strip historic telemetry or remove domain-specific diagnosis to
+    # reduce an export's size. This additional cross-module check is descriptive.
+    full = _r1962_audit_export_before(report)
+    diagnosis = _v1962_snapshot_consistency((report or {}).get('data'))
+    section = ('## R196.2 CROSS-MODULE CONSISTENCY\n\n'
+               'Read alongside the complete Snapshot, not instead of it. '
+               'BLOCKED findings must be investigated before release.\n\n'
+               '```json\n' + json.dumps(diagnosis,indent=2,ensure_ascii=False,default=str)
+               + '\n```\n\n')
+    divider = '## FULL STRUCTURED SNAPSHOT'
+    if divider in full:
+        return full.replace(divider,section+divider,1)
+    return full+'\n'+section
+
+APP_VERSION="THE LAB · PRODUCT V4.9.86 R196.2 · ATOMIC CONSISTENCY CONTRACT · QUALITY STATUS · ALL-GOAL QA"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
