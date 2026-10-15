@@ -3450,11 +3450,35 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% if data.training_state %}<div class="v35-phase-explain" id="v35-phase-explain" hidden><strong>{{ data.training_state.state }} · {{ data.training_state.headline }}</strong><p>{{ data.training_state.why }}</p><p><strong>Confidence:</strong> {{ data.training_state.confidence }} reflects how much supporting training and wellness history is available for this phase view; it is not workout intensity or fatigue severity.</p>{% if data.training_state.signals %}<div class="v35-phase-signals">{% for signal in data.training_state.signals %}<span>{{ signal }}</span>{% endfor %}</div>{% endif %}</div>{% endif %}
 <div class="v4-week-memory"><div class="v4-week-label">This week</div><div class="v4-week-chips">{% if data.week_memory and data.week_memory.activities %}{% for a in data.week_memory.activities %}<span class="v4-week-chip {{ 'hard' if a.hard else '' }}"><strong>{{ a.day_short }}</strong> {{ a.family_short }}</span>{% endfor %}{% else %}<span class="v4-week-chip">No completed sessions found yet.</span>{% endif %}</div>{% if data.week_memory and data.week_memory.hard_summary %}<div class="v4-week-note">Quality: {{ data.week_memory.hard_summary }}</div>{% endif %}</div>
-<div class="v23-session-fuel-grid v23-count-{{ [data.next_sessions|length, 3]|min }}">
-{% for s in data.next_sessions %}
-{% set n = data.nutrition_plan[loop.index0] if data.nutrition_plan and loop.index0 < (data.nutrition_plan|length) else none %}
-<article class="v4-card v4-session {{ s.intensity_class }} v23-session-card v23-col-{{ loop.index }}">
-<div class="v4-session-slot">{% if s.date %}{{ s.date[8:10] }}/{{ s.date[5:7] }}/{{ s.date[:4] }} · {% endif %}{{ s.slot }}</div>
+{# R196.1 quality cards: only canonical session identities can be displayed. #}
+{# Card 1+2 = next two canonical chronological slots, no promotion. #}
+{# Card 3 = earliest DISTINCT verified/provisional quality in remaining #}
+{# canonical session horizon. If none, omit card 3: never disguise easy #}
+{# as the next quality or synthesize one from an unverified date. #}
+{% set upcoming=namespace(rows=[], next_quality_index=none) %}
+{% for s in data.next_sessions[:2] %}
+  {% set upcoming.rows=upcoming.rows+[(loop.index0,s)] %}
+{% endfor %}
+{% if data.next_sessions|length > 2 %}
+  {% for candidate in data.next_sessions[2:] %}
+    {% if upcoming.next_quality_index is none
+       and candidate.intensity_class in ['vo2','threshold','sprint','high','hard','tempo']
+       and (candidate.hard_spacing_relevant or candidate.provisional_quality or candidate.quality_relevance == 'MEANINGFUL')
+       and candidate.restriction not in ['RACE','HEALTH','NO_INTENSITY']
+       and candidate.intensity|upper in ['HARD','QUALITY','VO2MAX','THRESHOLD','SPRINT','TEMPO'] %}
+      {% set upcoming.next_quality_index=loop.index0+2 %}
+    {% endif %}
+  {% endfor %}
+  {% if upcoming.next_quality_index is not none %}
+    {% set upcoming.rows=upcoming.rows+[(upcoming.next_quality_index, data.next_sessions[upcoming.next_quality_index])] %}
+  {% endif %}
+{% endif %}
+<div class="v23-session-fuel-grid v23-count-{{ upcoming.rows|length }}">
+{% for si, s in upcoming.rows[:3] %}
+{% set n = data.nutrition_plan[si] if data.nutrition_plan and si < (data.nutrition_plan|length) else none %}
+{% set is_featured_quality = (loop.index == 3) %}
+<article class="v4-card v4-session {{ s.intensity_class }} v23-session-card v23-col-{{ loop.index }}{{ ' v1961-quality-card' if is_featured_quality else '' }}"{% if is_featured_quality %} aria-label="{{ 'Provisional ' if s.provisional_quality else '' }}next quality session"{% endif %}>
+<div class="v4-session-slot">{% if is_featured_quality %}<span class="v1961-quality-eyebrow">⚡ NEXT QUALITY{{ ' · PROVISIONAL' if s.provisional_quality else '' }}</span>{% endif %}{% if s.date %}{{ s.date[8:10] }}/{{ s.date[5:7] }}/{{ s.date[:4] }} · {% endif %}{{ s.slot }}</div>
 <div class="v150-workout-title-row"><h3>{{ s.title|replace('Coach-selected session','Nova-selected session') }}</h3><button class="v150-copy-workout" type="button" data-copy-workout="{{ s.title|replace('Coach-selected session','Nova-selected session')|e }}" aria-label="Copy workout name" title="Copy workout name">⧉<span>Copy</span></button></div>
 <div class="v4-session-meta"><span class="v4-session-pill v177-duration-pill">{{ s.duration|replace('Coach-selected duration','Nova-selected duration') }}</span><span class="v4-session-pill">{{ s.intensity }}</span>{% if s.provisional_quality %}<span class="v4-session-pill v4873-provisional-pill">⚡ CANDIDATE · REASSESS</span>{% endif %}{% if s.environment %}<span class="v4-session-pill {% if s.is_planned_training %}v24-plan-pill{% endif %}">{{ "🚴 " if s.is_planned_training else "" }}{{ s.environment }}</span>{% endif %}{% if s.planned_demand and s.planned_demand not in ["COACH","RACE"] %}<span class="v4-session-pill v24-plan-pill">PLAN {{ s.planned_demand }}</span>{% endif %}</div>
 <div class="v4-session-main">{{ s.main_set|replace('See coach recommendation.','See the recommendation above.') }}</div>
@@ -3473,6 +3497,21 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% endfor %}
 </div>
+<style>
+/* Only the dedicated third card signals NEXT QUALITY. Keep stock session
+   and fuel colors unchanged on cards one and two. No neon/glow/gradient band. */
+.v23-session-card.v23-col-3.v1961-quality-card{
+  border:1px solid rgba(174,157,205,.62)!important;
+  background:linear-gradient(180deg,rgba(174,157,205,.025),rgba(174,157,205,0) 46%),var(--panel)!important;
+  box-shadow:0 18px 50px rgba(0,0,0,.24)!important;
+}
+.v23-session-card.v23-col-3.v1961-quality-card::before{
+  background:rgba(174,157,205,.78)!important;
+  width:2px!important;
+}
+.v1961-quality-eyebrow{display:block;color:#b9a9d6;font-size:10px;font-weight:750;letter-spacing:.085em;margin-bottom:5px}
+@media(prefers-reduced-motion:reduce){.v1961-quality-card{transition:none!important}}
+</style>
 {% if data.aerobic_volume_advice %}
 <section class="v4882-strength-nudge v178-volume-advice" role="note" aria-label="Optional aerobic volume development">
   <div class="v178-volume-header">
@@ -3515,7 +3554,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% set ml = ((data.metabolic_context or {}).get('metabolic_load') or {}) %}
 {% if ml.get('available') %}<div class="v4894-metabolic-summary"><div><span>7D METABOLIC PRESSURE</span><strong>{{ ml.get('trend_label','LEARNING') }}</strong><small>{{ ml.get('trend_detail','Building your personal cycling baseline.') }}</small></div><div><span>INTENSITY DENSITY</span><strong>{% if ml.get('density_delta_pct') is not none %}{{ '%+.0f'|format(ml.get('density_delta_pct')) }}% vs norm{% else %}{{ ml.get('current_density_label','LEARNING') }}{% endif %}</strong><small>Demand per riding hour</small></div><div><span>MECHANICAL WORK</span><strong>{% if ml.get('work_delta_pct') is not none %}{{ '%+.0f'|format(ml.get('work_delta_pct')) }}% vs norm{% elif ml.get('current_7d_work_kj') is not none %}{{ ml.get('current_7d_work_kj')|int }} kJ / 7d{% else %}—{% endif %}</strong><small>Power-derived, not calories</small></div><div><span>HIGH-INTENSITY</span><strong>{% if ml.get('high_delta_pct') is not none %}{{ '%+.0f'|format(ml.get('high_delta_pct')) }}% vs norm{% else %}{{ ml.get('current_7d_high_min',0)|round|int }} min / 7d{% endif %}</strong><small>High-zone exposure</small></div></div>{% endif %}
 {% if data.previous_training_blocks %}<div class="v25-blocks-grid">{% for b in data.previous_training_blocks[:3] %}
-{% set mp = b.get('metabolic_profile') or {} %}<article class="v25-block {% if b.heat %}heat{% endif %}"><div class="v25-block-top"><span>{{ b.date|ui_date }} · {{ b.time }}</span>{% if b.heat %}<span class="v25-heat-badge">🔥 HEAT</span>{% else %}<span>{{ b.family }}</span>{% endif %}</div><h4>{{ b.name }}</h4><div class="v25-block-metrics"><b>{{ b.duration_min }} min</b>{% if b.load is not none %}<b>Load {{ b.load }}</b>{% endif %}{% if b.avg_watts %}<b>{{ b.avg_watts }} W avg</b>{% endif %}{% if b.avg_hr %}<b>HR {{ b.avg_hr }}</b>{% endif %}{% if b.decoupling is not none %}<b>Drift {{ b.decoupling }}%</b>{% endif %}</div>{% if b.power_zone_summary or b.hr_zone_summary %}<div class="v25-zone-lines">{% if b.power_zone_summary %}<span>⚙️ POWER · {{ b.power_zone_summary }}</span>{% endif %}{% if b.hr_zone_summary %}<span>🫀 HR · {{ b.hr_zone_summary }}</span>{% endif %}</div>{% endif %}{% if b.intervals %}<div class="v25-intervals">{% for x in b.intervals %}<span>↳ {{ x }}</span>{% endfor %}</div>{% endif %}{% if mp %}<div class="v4894-metabolic-grid"><div><span>METABOLIC DEMAND</span><b class="{{ mp.get('demand_class','moderate') }}">{{ mp.get('demand_label','—') }}</b></div><div><span>GLYCOGEN PRESSURE</span><b class="{{ mp.get('glycogen_class','moderate') }}">{{ mp.get('glycogen_label','—') }}</b></div><div><span>HIGH-INTENSITY DEMAND</span><b class="{{ mp.get('high_intensity_class','minimal') }}">{{ mp.get('high_intensity_label','—') }}</b></div><div><span>RECOVERY PRESSURE</span><b class="{{ mp.get('recovery_class','moderate') }}">{{ mp.get('recovery_label','—') }}</b></div></div><div class="v4894-metabolic-foot">{% if mp.get('mechanical_work_kj') is not none %}<strong>{{ mp.get('mechanical_work_kj')|int }} kJ</strong> mechanical work{% else %}Mechanical work unavailable{% endif %}{% if mp.get('density') is not none %} · demand density {{ '%.2f'|format(mp.get('density')) }}× easy-hour equivalent{% endif %}</div>{% endif %}{% set eq=b.get('execution_quality') or {} %}{% if (b.get('fatigue_power') or {}).get('available') or b.repeatability or eq.get('available') or b.get('progression_badges') or (b.wbal and b.wbal.get('available')) %}<div class="v4894-evidence">{% set fp=b.get('fatigue_power') or {} %}{% if fp.get('available') %}{% for evidence in fp.get('display_observations',[]) %}<span>⛰️ {{ evidence.get('duration_label') }} OBSERVED AFTER PRIOR WORK · {{ evidence.get('watts')|int }} W{% if evidence.get('average_hr') is not none %} · HR {{ evidence.get('average_hr')|int }}{% endif %} · {{ evidence.get('prior_work_kj')|int }} kJ and {{ evidence.get('prior_elapsed_min')|int }} min before effort · {% if evidence.get('analysis_mode') == 'SUBMAX_DURABILITY' %}submaximal context, not a maximum or formal durability test{% elif evidence.get('duration_sec',0) < 30 %}measured sprint average, not instantaneous peak{% else %}not a fresh PR{% endif %}</span>{% endfor %}{% endif %}{% if b.repeatability %}<span>Repeatability · {{ b.repeatability.get('reps') }}×{{ b.repeatability.get('interval_label') }}{% if b.repeatability.get('first_to_last_decay_pct') is not none %} · first→last {{ b.repeatability.get('first_to_last_decay_pct') }}%{% endif %}</span>{% endif %}{% if eq.get('available') %}<span>📉 OUTPUT DEGRADATION · {{ eq.degradation.index_pct }}% · {{ eq.degradation.label }}</span>{% if eq.adherence.available %}<span>🎯 WORKOUT ADHERENCE · {{ eq.adherence.score }}% · {{ eq.adherence.label }} · {{ eq.adherence.detail }} · recovery watts unscored</span>{% else %}<span>🎯 WORKOUT ADHERENCE · N/A · no exact THE LAB prescription link</span>{% endif %}{% endif %}{% for x in b.get('progression_badges',[]) %}<span style="font-size:12px;font-weight:800">{{ x.icon }} {{ x.label }} · {{ x.detail }}</span>{% endfor %}{% if b.wbal and b.wbal.get('available') and b.wbal.get('max_depletion_pct') is not none %}<span>W\u2032bal depletion · {{ b.wbal.get('max_depletion_pct') }}%{% if b.wbal.get('median_recovery_end_pct') is not none %} · recovery {{ b.wbal.get('median_recovery_end_pct') }}%{% endif %}</span>{% endif %}</div>{% endif %}<p class="v25-consideration">{{ b.consideration }}</p></article>
+{% set mp = b.get('metabolic_profile') or {} %}<article class="v25-block {% if b.heat %}heat{% endif %}"><div class="v25-block-top"><span>{{ b.date|ui_date }} · {{ b.time }}</span>{% if b.heat %}<span class="v25-heat-badge">🔥 HEAT</span>{% else %}<span>{{ b.family }}</span>{% endif %}</div><h4>{{ b.name }}</h4><div class="v25-block-metrics"><b>{{ b.duration_min }} min</b>{% if b.load is not none %}<b>Load {{ b.load }}</b>{% endif %}{% if b.avg_watts %}<b>{{ b.avg_watts }} W avg</b>{% endif %}{% if b.avg_hr %}<b>HR {{ b.avg_hr }}</b>{% endif %}{% if b.decoupling is not none %}<b>Drift {{ b.decoupling }}%</b>{% endif %}</div>{% if b.power_zone_summary or b.hr_zone_summary %}<div class="v25-zone-lines">{% if b.power_zone_summary %}<span>⚙️ POWER · {{ b.power_zone_summary }}</span>{% endif %}{% if b.hr_zone_summary %}<span>🫀 HR · {{ b.hr_zone_summary }}</span>{% endif %}</div>{% endif %}{% if b.intervals %}<div class="v25-intervals">{% for x in b.intervals %}<span>↳ {{ x }}</span>{% endfor %}</div>{% endif %}{% if mp %}<div class="v4894-metabolic-grid"><div><span>METABOLIC DEMAND</span><b class="{{ mp.get('demand_class','moderate') }}">{{ mp.get('demand_label','—') }}</b></div><div><span>GLYCOGEN PRESSURE</span><b class="{{ mp.get('glycogen_class','moderate') }}">{{ mp.get('glycogen_label','—') }}</b></div><div><span>HIGH-INTENSITY DEMAND</span><b class="{{ mp.get('high_intensity_class','minimal') }}">{{ mp.get('high_intensity_label','—') }}</b></div><div><span>RECOVERY PRESSURE</span><b class="{{ mp.get('recovery_class','moderate') }}">{{ mp.get('recovery_label','—') }}</b></div></div><div class="v4894-metabolic-foot">{% if mp.get('mechanical_work_kj') is not none %}<strong>{{ mp.get('mechanical_work_kj')|int }} kJ</strong> mechanical work{% else %}Mechanical work unavailable{% endif %}{% if mp.get('density') is not none %} · demand density {{ '%.2f'|format(mp.get('density')) }}× easy-hour equivalent{% endif %}</div>{% endif %}{% set eq=b.get('execution_quality') or {} %}{% if (b.get('fatigue_power') or {}).get('available') or b.repeatability or eq.get('available') or b.get('progression_badges') or (b.wbal and b.wbal.get('available')) %}<div class="v4894-evidence">{% set fp=b.get('fatigue_power') or {} %}{% if fp.get('available') %}{% for evidence in fp.get('display_observations',[]) %}<span>⛰️ {{ evidence.get('duration_label') }} OBSERVED AFTER PRIOR WORK · {{ evidence.get('watts')|int }} W{% if evidence.get('average_hr') is not none %} · HR {{ evidence.get('average_hr')|int }}{% endif %} · {{ evidence.get('prior_work_kj')|int }} kJ and {{ evidence.get('prior_elapsed_min')|int }} min before effort · {% if evidence.get('analysis_mode') == 'SUBMAX_DURABILITY' %}submaximal context, not a maximum or formal durability test{% elif evidence.get('duration_sec',0) < 30 %}measured sprint average, not instantaneous peak{% else %}not a fresh PR{% endif %}</span>{% endfor %}{% endif %}{% if b.repeatability %}<span>Repeatability · {{ b.repeatability.get('reps') }}×{{ b.repeatability.get('interval_label') }}{% if b.repeatability.get('first_to_last_change_pct') is not none %} · first→last {{ '%+.1f'|format(b.repeatability.get('first_to_last_change_pct') or 0) }}%{% endif %}</span>{% endif %}{% if eq.get('available') %}<span>📊 REP VARIATION (CV) · {{ eq.degradation.cv_pct }}% · FIRST→LAST {{ "%+.1f"|format(b.repeatability.get("first_to_last_change_pct") or 0) }}% · {{ eq.degradation.label }}</span>{% if eq.adherence.available %}<span>🎯 WORKOUT ADHERENCE · {{ eq.adherence.score }}% · {{ eq.adherence.label }} · {{ eq.adherence.detail }} · recovery watts unscored</span>{% else %}<span>🎯 WORKOUT ADHERENCE · N/A · no exact THE LAB prescription link</span>{% endif %}{% endif %}{% for x in b.get('progression_badges',[]) %}<span style="font-size:12px;font-weight:800">{{ x.icon }} {{ x.label }} · {{ x.detail }}</span>{% endfor %}{% if b.wbal and b.wbal.get('available') and b.wbal.get('max_depletion_pct') is not none %}<span>W\u2032bal depletion · {{ b.wbal.get('max_depletion_pct') }}%{% if b.wbal.get('median_recovery_end_pct') is not none %} · recovery {{ b.wbal.get('median_recovery_end_pct') }}%{% endif %}</span>{% endif %}</div>{% endif %}<p class="v25-consideration">{{ b.consideration }}</p></article>
 {% endfor %}</div>{% else %}<p class="v4-section-note">No detailed completed sessions available yet.</p>{% endif %}
 </div>
 {% set td = data.training_direction if data.training_direction is defined and data.training_direction else none %}
@@ -18589,7 +18628,7 @@ def parse_local_activity_datetime(value):
         return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
     except (ValueError, TypeError):
         return None
-RHYTHM_RECENT_DAYS = 14
+RHYTHM_RECENT_DAYS = 21
 RHYTHM_ESTABLISHED_DAYS = 42
 RHYTHM_SEASON_DAYS = 90
 RHYTHM_MIN_SESSION_SECONDS = 600
@@ -19327,11 +19366,11 @@ def build_training_rhythm(season_activities, now=None, scope="CYCLING"):
         state = "TRACKING"
         confidence = "MODERATE"
     if state == "ADAPTING":
-        raw_weights = ((recent, 0.72), (established, 0.23), (season, 0.05))
+        raw_weights = ((recent, 0.30), (established, 0.52), (season, 0.18))
     elif recent.get("training_days", 0) >= 3:
-        raw_weights = ((recent, 0.52), (established, 0.33), (season, 0.15))
+        raw_weights = ((recent, 0.35), (established, 0.50), (season, 0.15))
     elif established.get("training_days", 0) >= 4:
-        raw_weights = ((recent, 0.15), (established, 0.62), (season, 0.23))
+        raw_weights = ((recent, 0.25), (established, 0.55), (season, 0.20))
     else:
         raw_weights = ((recent, 0.10), (established, 0.45), (season, 0.45))
     valid = [(stats, weight) for stats, weight in raw_weights if stats.get("days_observed", 0) > 0]
@@ -19416,7 +19455,7 @@ def build_training_rhythm(season_activities, now=None, scope="CYCLING"):
         "clock_profile": clock_profile, "short_label": short_label, "detail": " · ".join(detail_parts),
         "recent_label": recent_label, "established_label": established_label,
         "history_records": len(historical),
-        "method_note": f"{str(scope or 'CYCLING').upper()} rhythm: 14d recent behavior is blended with 42d established rhythm and 90d longer-term context; sustained changes progressively outrank older habits.",
+        "method_note": f"{str(scope or 'CYCLING').upper()} rhythm: 21d recent behavior is blended conservatively with 42d established rhythm and 90d longer-term context. A single atypical week must not erase a learned weekday double-session pattern.",
     }
 def _v4895_rhythm_duration_reliable(rhythm, min_samples=3):
     r = rhythm or {}
@@ -19429,7 +19468,7 @@ def training_rhythm_text(rhythm):
     return (
         "TRAINING RHYTHM (deterministic Intervals-history model; timing/frequency context, not a commitment):\n"
         f'- State {rhythm.get("state", "LEARNING")} | confidence {rhythm.get("confidence", "LOW")} | pattern strength {rhythm.get("pattern_strength", "LOW")}.\n'
-        f'- Recent 14d: {rhythm.get("recent_label", "n/a")}. Established 42d: {rhythm.get("established_label", "n/a")}.\n'
+        f'- Recent {RHYTHM_RECENT_DAYS}d: {rhythm.get("recent_label", "n/a")}. Established 42d: {rhythm.get("established_label", "n/a")}.\n'
         f'- Learned estimate: {rhythm.get("estimated_days_per_week", "n/a")} training day(s)/week | {rhythm.get("estimated_sessions_per_week", "n/a")} session(s)/week | {rhythm.get("estimated_hours_per_week", "n/a")} h/week.\n'
         f'- Double-session propensity: {round(float(rhythm.get("double_propensity") or 0)*100)}%. Shift signals: {", ".join(rhythm.get("shift_signals") or []) or "none"}.\n'
         "- This rhythm decides which future timing opportunities are plausible. Daily Log ratings/comments NEVER create a slot. Calendar/race/health constraints outrank learned rhythm."
@@ -21231,7 +21270,7 @@ def _v492_execution_quality(block,ledger=None):
 def _v492_attach_execution_quality(blocks,ledger=None):
     for b in blocks or []:
         q=_v492_execution_quality(b,ledger);b["execution_quality"]=q
-        if (q.get("degradation") or {}).get("label")=="EXCELLENT":b["progression_badges"]=[{"icon":"🏅","label":"Excellent repeatability","detail":f"Output degradation {(q.get('degradation') or {}).get('index_pct')}%"}]
+        if (q.get("degradation") or {}).get("label")=="EXCELLENT":b["progression_badges"]=[{"icon":"🏅","label":"Excellent repeatability","detail":f"Rep variation (CV) {(q.get('degradation') or {}).get('cv_pct')}% · first-to-last {float((b.get('repeatability') or {}).get('first_to_last_change_pct') or 0):+.1f}%"}]
     return blocks
 def _v4930_performance_narrative_state(roadmap,ledger,previous_blocks,training_direction=None,performance_evidence=None,now=None,evidence_ledger=None,question_state=None):
     now=now or get_rome_now();road=roadmap or {};td=training_direction or {};pe=performance_evidence or {};latest=None
@@ -33326,7 +33365,12 @@ def _v136_promote_quality_target(clock, road):
         row=rows[i]
         if str(row.get('source') or '').upper()=='RHYTHM' and not row.get('is_race') and not row.get('is_planned_training'):
             replace=i;break
-    if replace is None:return clock
+    # Preserve the first two chronological opportunities. A future hard
+    # preference cannot displace an earlier session merely for presentation.
+    if replace is None or replace < 2:return clock
+    if len(rows)>=2 and (target_key[0],target_key[1]) <= (
+        str(rows[1].get('date') or ''),int(rows[1].get('start_minute') or 0)):
+        return clock
     old=rows[replace];minute=target_key[1];today=get_rome_now().date()
     day='Today' if dt.date()==today else ('Tomorrow' if dt.date()==today+timedelta(days=1) else dt.strftime('%A'))
     promoted=dict(old)
@@ -40199,7 +40243,7 @@ APP_VERSION = "THE LAB · PRODUCT V4.9.59 WIP R183 · INDEPENDENT MAIN-SET + POW
 
 
 # R184 · unified Training History layout, single source markup/CSS, no coaching changes.
-R184_HISTORY_FRAGMENT = '{% set eq=b.get(\'execution_quality\') or {} %}\n{% if b.repeatability or eq.get(\'available\') or b.get(\'progression_badges\') or (b.wbal and b.wbal.get(\'available\')) or (eq.get(\'supplemental_effort\') or {}).get(\'available\') %}\n<div class="v184-evidence" aria-label="TRAINING EVIDENCE">\n{% if b.repeatability %}\n<div class="v184-evidence-row"><span class="v184-evidence-label">REPEATABILITY</span><span class="v184-evidence-value">{{ b.repeatability.get(\'reps\') }}×{{ b.repeatability.get(\'interval_label\') }}{% if b.repeatability.get(\'first_to_last_decay_pct\') is not none %} · FIRST TO LAST {{ b.repeatability.get(\'first_to_last_decay_pct\') }}%{% endif %}</span></div>\n{% endif %}\n{% if eq.get(\'available\') %}\n{% set deg=eq.get(\'degradation\') or {} %}\n{% if deg.get(\'index_pct\') is not none %}\n<div class="v184-evidence-row"><span class="v184-evidence-label">OUTPUT DEGRADATION</span><span class="v184-evidence-value">{{ deg.get(\'index_pct\') }}%</span>{% if deg.get(\'label\') %}<span class="v184-evidence-status v184-good">{{ deg.get(\'label\') }}</span>{% endif %}</div>\n{% endif %}\n<div class="v184-adherence" aria-label="WORKOUT ADHERENCE">\n<div class="v184-evidence-label">WORKOUT ADHERENCE</div>\n{% set adh=eq.get(\'adherence\') or {} %}\n{% if adh.get(\'available\') %}\n{% if adh.get(\'schema\') == \'V4.9.59-R183-1\' %}\n{% set structure=adh.get(\'structure\') or {} %}{% set power=adh.get(\'power_band\') or {} %}\n<div class="v184-adherence-head"><strong>MAIN SET {{ structure.get(\'completed_reps\') }}/{{ structure.get(\'prescribed_reps\') }} COMPLETE</strong><span class="v184-evidence-status {{ \'v184-good\' if power.get(\'state\') == \'IN_TARGET\' else \'v184-watch\' if power.get(\'state\') in (\'ABOVE_TARGET\',\'BELOW_TARGET\',\'MIXED_DEVIATION\') else \'v184-neutral\' }}">{{ power.get(\'label\') or \'POWER NOT ASSESSED\' }}</span></div>\n{% if power.get(\'available\') and power.get(\'in_target_reps\') is not none %}<div class="v184-adherence-detail">{{ power.get(\'in_target_reps\') }}/{{ power.get(\'prescribed_reps\') }} IN TARGET RANGE</div>{% endif %}\n{% if power.get(\'observed_power_min_w\') is not none and power.get(\'prescribed_power_low_w\') is not none %}<div class="v184-adherence-detail">{{ power.get(\'observed_power_min_w\')|round|int }}–{{ power.get(\'observed_power_max_w\')|round|int }} W ACTUAL · {{ power.get(\'prescribed_power_low_w\')|int }}–{{ power.get(\'prescribed_power_high_w\')|int }} W TARGET</div>{% endif %}\n{% elif adh.get(\'presentation\') == \'STRUCTURE_AND_DOSE_SEPARATE\' %}\n<div class="v184-adherence-head"><strong>MAIN SET {{ adh.get(\'completed_main_reps\') }}/{{ adh.get(\'prescribed_main_reps\') }} COMPLETE</strong><span class="v184-evidence-status v184-watch">{{ adh.get(\'dose_band_status\') or \'POWER NOT ASSESSED\' }}</span></div>\n{% elif adh.get(\'score\') is not none %}\n<div class="v184-adherence-head"><strong>{{ adh.get(\'label\',\'ADHERENCE ASSESSED\') }}</strong><span class="v184-evidence-status v184-neutral">{{ adh.get(\'score\') }}% · LEGACY SCORING</span></div>\n{% else %}<div class="v184-adherence-head"><strong>{{ adh.get(\'label\') or \'MAIN SET REVIEWED\' }}</strong></div>{% endif %}\n{% else %}<div class="v184-evidence-detail">No causally linked THE LAB prescription for this activity.</div>{% endif %}\n</div>\n{% endif %}\n{% for badge in b.get(\'progression_badges\',[]) %}<div class="v184-evidence-row"><span class="v184-evidence-label">{{ badge.icon }} {{ badge.label }}</span><span class="v184-evidence-detail">{{ badge.detail }}</span></div>{% endfor %}\n{% if b.wbal and b.wbal.get(\'available\') and b.wbal.get(\'max_depletion_pct\') is not none %}\n<div class="v184-evidence-row"><span class="v184-evidence-label">W′BAL DEPLETION</span><span class="v184-evidence-value">{{ b.wbal.get(\'max_depletion_pct\') }}%</span>{% if b.wbal.get(\'median_recovery_end_pct\') is not none %}<span class="v184-evidence-detail">RECOVERY {{ b.wbal.get(\'median_recovery_end_pct\') }}%</span>{% endif %}</div>\n{% endif %}\n{% set extra=eq.get(\'supplemental_effort\') or {} %}\n{% if extra.get(\'available\') %}\n<div class="v184-evidence-extra" role="note" aria-label="SUPPLEMENTAL HIGH-POWER EFFORT">\n<div class="v184-evidence-label">SUPPLEMENTAL HIGH-POWER EFFORT</div>\n<div class="v184-evidence-extra-stats"><strong>{{ extra.get(\'total_seconds\')|int }} S</strong>{% if extra.get(\'max_interval_average_watts\') is not none %}<span>{{ extra.get(\'max_interval_average_watts\')|round|int }} W</span>{% endif %}<span>{{ extra.get(\'count\') }} EFFORT{{ \'S\' if extra.get(\'count\') != 1 else \'\' }}</span></div>\n<p>Observed after the main set. No adherence penalty.{% if extra.get(\'whole_activity_load_in_provider_totals\') %} Included in the recorded activity load once.{% else %} No independent load added; provider load unavailable.{% endif %}</p>\n</div>\n{% endif %}\n</div>\n{% endif %}'
+R184_HISTORY_FRAGMENT = '{% set eq=b.get(\'execution_quality\') or {} %}\n{% if b.repeatability or eq.get(\'available\') or b.get(\'progression_badges\') or (b.wbal and b.wbal.get(\'available\')) or (eq.get(\'supplemental_effort\') or {}).get(\'available\') %}\n<div class="v184-evidence" aria-label="TRAINING EVIDENCE">\n{% if b.repeatability %}\n<div class="v184-evidence-row"><span class="v184-evidence-label">REPEATABILITY</span><span class="v184-evidence-value">{{ b.repeatability.get(\'reps\') }}×{{ b.repeatability.get(\'interval_label\') }}{% if b.repeatability.get(\'first_to_last_decay_pct\') is not none %} · FIRST→LAST {{ "%+.1f"|format(b.repeatability.get("first_to_last_change_pct") or 0) }}%{% endif %}</span></div>\n{% endif %}\n{% if eq.get(\'available\') %}\n{% set deg=eq.get(\'degradation\') or {} %}\n{% if deg.get(\'index_pct\') is not none %}\n<div class="v184-evidence-row"><span class="v184-evidence-label">REP VARIATION (CV)</span><span class="v184-evidence-value">{{ deg.get(\'cv_pct\') }}%</span>{% if deg.get(\'label\') %}<span class="v184-evidence-status v184-good">{{ deg.get(\'label\') }}</span>{% endif %}</div>\n{% endif %}\n<div class="v184-adherence" aria-label="WORKOUT ADHERENCE">\n<div class="v184-evidence-label">WORKOUT ADHERENCE</div>\n{% set adh=eq.get(\'adherence\') or {} %}\n{% if adh.get(\'available\') %}\n{% if adh.get(\'schema\') == \'V4.9.59-R183-1\' %}\n{% set structure=adh.get(\'structure\') or {} %}{% set power=adh.get(\'power_band\') or {} %}\n<div class="v184-adherence-head"><strong>MAIN SET {{ structure.get(\'completed_reps\') }}/{{ structure.get(\'prescribed_reps\') }} COMPLETE</strong><span class="v184-evidence-status {{ \'v184-good\' if power.get(\'state\') == \'IN_TARGET\' else \'v184-watch\' if power.get(\'state\') in (\'ABOVE_TARGET\',\'BELOW_TARGET\',\'MIXED_DEVIATION\') else \'v184-neutral\' }}">{{ power.get(\'label\') or \'POWER NOT ASSESSED\' }}</span></div>\n{% if power.get(\'available\') and power.get(\'in_target_reps\') is not none %}<div class="v184-adherence-detail">{{ power.get(\'in_target_reps\') }}/{{ power.get(\'prescribed_reps\') }} IN TARGET RANGE</div>{% endif %}\n{% if power.get(\'observed_power_min_w\') is not none and power.get(\'prescribed_power_low_w\') is not none %}<div class="v184-adherence-detail">{{ power.get(\'observed_power_min_w\')|round|int }}–{{ power.get(\'observed_power_max_w\')|round|int }} W ACTUAL · {{ power.get(\'prescribed_power_low_w\')|int }}–{{ power.get(\'prescribed_power_high_w\')|int }} W TARGET</div>{% endif %}\n{% elif adh.get(\'presentation\') == \'STRUCTURE_AND_DOSE_SEPARATE\' %}\n<div class="v184-adherence-head"><strong>MAIN SET {{ adh.get(\'completed_main_reps\') }}/{{ adh.get(\'prescribed_main_reps\') }} COMPLETE</strong><span class="v184-evidence-status v184-watch">{{ adh.get(\'dose_band_status\') or \'POWER NOT ASSESSED\' }}</span></div>\n{% elif adh.get(\'score\') is not none %}\n<div class="v184-adherence-head"><strong>{{ adh.get(\'label\',\'ADHERENCE ASSESSED\') }}</strong><span class="v184-evidence-status v184-neutral">{{ adh.get(\'score\') }}% · LEGACY SCORING</span></div>\n{% else %}<div class="v184-adherence-head"><strong>{{ adh.get(\'label\') or \'MAIN SET REVIEWED\' }}</strong></div>{% endif %}\n{% else %}<div class="v184-evidence-detail">No causally linked THE LAB prescription for this activity.</div>{% endif %}\n</div>\n{% endif %}\n{% for badge in b.get(\'progression_badges\',[]) %}<div class="v184-evidence-row"><span class="v184-evidence-label">{{ badge.icon }} {{ badge.label }}</span><span class="v184-evidence-detail">{{ badge.detail }}</span></div>{% endfor %}\n{% if b.wbal and b.wbal.get(\'available\') and b.wbal.get(\'max_depletion_pct\') is not none %}\n<div class="v184-evidence-row"><span class="v184-evidence-label">W′BAL DEPLETION</span><span class="v184-evidence-value">{{ b.wbal.get(\'max_depletion_pct\') }}%</span>{% if b.wbal.get(\'median_recovery_end_pct\') is not none %}<span class="v184-evidence-detail">RECOVERY {{ b.wbal.get(\'median_recovery_end_pct\') }}%</span>{% endif %}</div>\n{% endif %}\n{% set extra=eq.get(\'supplemental_effort\') or {} %}\n{% if extra.get(\'available\') %}\n<div class="v184-evidence-extra" role="note" aria-label="SUPPLEMENTAL HIGH-POWER EFFORT">\n<div class="v184-evidence-label">SUPPLEMENTAL HIGH-POWER EFFORT</div>\n<div class="v184-evidence-extra-stats"><strong>{{ extra.get(\'total_seconds\')|int }} S</strong>{% if extra.get(\'max_interval_average_watts\') is not none %}<span>{{ extra.get(\'max_interval_average_watts\')|round|int }} W</span>{% endif %}<span>{{ extra.get(\'count\') }} EFFORT{{ \'S\' if extra.get(\'count\') != 1 else \'\' }}</span></div>\n<p>Observed after the main set. No adherence penalty.{% if extra.get(\'whole_activity_load_in_provider_totals\') %} Included in the recorded activity load once.{% else %} No independent load added; provider load unavailable.{% endif %}</p>\n</div>\n{% endif %}\n</div>\n{% endif %}'
 R184_HISTORY_CSS = '\n/* R184 · Shared evidence-row typography for all completed-training cards.\n   A badge is a short status, never a container for multiple paragraphs. */\n.v25-blocks .v25-block{min-width:0}\n.v25-blocks .v25-block h4{font-size:18px;line-height:1.32;letter-spacing:.005em}\n.v25-blocks .v25-block-top span{font-size:13px;line-height:1.4}\n.v25-blocks .v25-block-metrics b{font-size:13px;line-height:1.4}\n.v25-blocks .v25-zone-lines span{font-size:14px;line-height:1.45}\n.v25-blocks .v25-intervals span{font-size:15px;line-height:1.45}\n.v25-blocks .v4894-metabolic-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}\n.v25-blocks .v4894-metabolic-grid>div{min-width:0;padding:9px 10px}\n.v25-blocks .v4894-metabolic-grid span{font-size:14px;line-height:1.35;letter-spacing:.025em}\n.v25-blocks .v4894-metabolic-grid b{font-size:15px;line-height:1.3}\n.v25-blocks .v4894-metabolic-foot{font-size:14px;line-height:1.5}\n.v25-blocks .v25-consideration{font-size:14px;line-height:1.5}\n.v25-blocks .v184-evidence{display:grid;gap:0;margin-top:13px;border-top:1px solid var(--line);min-width:0}\n.v25-blocks .v184-evidence-row{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;min-width:0;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.07)}\n.v25-blocks .v184-evidence-label{font-family:var(--display);font-size:14px;line-height:1.4;font-weight:800;letter-spacing:.045em;text-transform:uppercase;color:#a5b6c3;min-width:0}\n.v25-blocks .v184-evidence-value{font-size:15px;line-height:1.45;font-weight:700;color:#eaf2f7;overflow-wrap:anywhere}\n.v25-blocks .v184-evidence-detail{font-size:15px;line-height:1.5;color:#b4c5ce;overflow-wrap:anywhere}\n.v25-blocks .v184-evidence-status{display:inline-flex;align-items:center;width:fit-content;max-width:100%;padding:3px 9px;border:1px solid rgba(255,255,255,.14);border-radius:999px;font-size:13px;line-height:1.45;letter-spacing:.025em;font-weight:800;text-transform:uppercase;overflow-wrap:anywhere;white-space:normal}\n.v25-blocks .v184-evidence-status.v184-good{color:#9af0b7;border-color:rgba(42,190,107,.3);background:rgba(42,190,107,.055)}\n.v25-blocks .v184-evidence-status.v184-watch{color:#ffd28b;border-color:rgba(255,174,57,.27);background:rgba(255,174,57,.05)}\n.v25-blocks .v184-evidence-status.v184-neutral{color:#c9d4dd}\n.v25-blocks .v184-adherence{display:grid;min-width:0;gap:6px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.07)}\n.v25-blocks .v184-adherence-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:7px 10px;min-width:0}\n.v25-blocks .v184-adherence-head strong{font-family:var(--display);font-size:15px;line-height:1.45;letter-spacing:.01em;font-weight:800;color:#ebf7fb;overflow-wrap:anywhere}\n.v25-blocks .v184-evidence-extra{min-width:0;padding:12px 0 4px;border-bottom:1px solid rgba(255,255,255,.07)}\n.v25-blocks .v184-evidence-extra-stats{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline;margin-top:3px;font-size:15px;color:#d6e7ee}\n.v25-blocks .v184-evidence-extra-stats strong{font-family:var(--display);font-size:17px;color:#8ce3f2;font-weight:800}\n.v25-blocks .v184-evidence-extra p{font-size:16px;line-height:1.5;margin:6px 0 0;color:#b2c6d1}\n@media(max-width:720px){.v25-blocks .v4894-metabolic-grid{grid-template-columns:minmax(0,1fr)}}\n.v25-blocks .v184-evidence-label,.v25-blocks .v184-evidence-detail,.v25-blocks .v184-evidence-value,.v25-blocks .v184-adherence-head strong,.v25-blocks .v184-evidence-extra-stats,.v25-blocks .v4894-metabolic-grid b{overflow-wrap:anywhere}\n@media(max-width:520px){.v25-blocks .v25-block{padding:14px}.v25-blocks .v184-evidence-row{align-items:flex-start}.v25-blocks .v184-evidence-label{flex-basis:100%}.v25-blocks .v184-adherence-head{align-items:flex-start}}\n'
 _R184_EVIDENCE_START = "{% set eq=b.get('execution_quality') or {} %}"
 _R184_EVIDENCE_END = '<p class="v25-consideration">{{ b.consideration }}</p>'
@@ -42119,16 +42163,16 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
         if band.get('state')!='PRESCRIBED':
             # A hard structured session must not ask the athlete to guess the
             # training dose. Retain diagnostic provenance but fail closed to easy.
-            sess.update({'title':'Easy aerobic · awaiting power calibration',
+            sess.update({'title':'Easy aerobic · quality deferred',
                 'intensity':'EASY','intensity_class':'recovery','hard_spacing_relevant':False,
                 'provisional_quality':False,'stimulus_architecture_state':'NOT_HARD',
                 'stimulus_role':None,'stimulus_domain':None,'nova_workout_id':None,
                 'nova_contract_id':None,'quality_relevance':'NOT_HARD',
                 'prescribed_power_low':None,'prescribed_power_high':None,
                 'quality_target_ratio':None,'power_band':None,
-                'main_set':'Easy Z1–Z2 only. No hard repeat prescription is currently justified; a validated FTP or comparable completed intervals are required.',
-                'why':'Nova withheld an uncalibrated hard session instead of asking the athlete to invent its power.',
-                'power_prescription':band})
+                'main_set':'Easy Z1–Z2. No unverified hard-interval watt target is prescribed.',
+                'why':'The planned hard structure lacked verified comparable repeated work or an applicable valid FTP starter band. Nova deferred intensity; a new assessment may open a different evidence-supported quality session.',
+                'power_prescription':band, 'deferred_quality_reason':str(band.get('reason') or band.get('state') or 'INSUFFICIENT_EVIDENCE')})
             blocked.append(i)
         else:
             mid=int(band['target_watts']); lo=int(band['low_watts']);hi=int(band['high_watts'])
@@ -43818,10 +43862,19 @@ def _v1959_recovery_dose_contract(goal,dimension,features):
     rec_lo=min(rec_lo,rec_hi)
     if (not confirming and rec_hi<=rec_anchor+2) or rec_hi<=rec_lo:
         return {'available':False,'schema':R1959_SCHEMA,'reason':'RECOVERY_STEP_TOO_SMALL_TO_DOSE_SAFELY'}
+    # R196.1: a tiny increase from free/easy recovery is not a second HARD
+    # coaching stimulus. No de-rated near-duplicate 3x5, 3x10, etc. just to
+    # accumulate an award. At least an independently demonstrated meaningful
+    # loaded-recovery base is needed before a hard repeat can progress this
+    # specific dimension. Other scientific dimensions remain separate.
+    if anchor_ratio < .55 or candidate < .55:
+        return {'available':False,'schema':R1959_SCHEMA,
+                'reason':'NO_MEANINGFUL_LOADED_RECOVERY_STIMULUS',
+                'rule':'Free/easy recovery plus a tiny watt increment does not justify a repeated hard main set, a power sacrifice, or a recovery-under-load award. Select a distinct proven training question or wait for a valid quality window.'}
     # Use a STABLE recent proven work-capacity anchor rather than compounding
     # reductions. Never increase work above the immediately observed session.
-    work_hi=floor5(min(best_work*.93,r['avg_watts']))
-    work_lo=floor5(max(best_work*.88,min(best_work*.90,work_hi-5)))
+    work_hi=floor5(min(best_work*.98,r['avg_watts']))
+    work_lo=floor5(max(best_work*.94,min(best_work*.96,work_hi-5)))
     if work_hi<=0 or work_lo<=0 or work_hi<=work_lo:
         return {'available':False,'schema':R1959_SCHEMA,'reason':'UNSAFE_OR_UNRESOLVED_WORK_BAND'}
     # Hard fail if either lever would exceed the proven main work or if
@@ -43896,6 +43949,8 @@ _v1959_science_hard_baseline=_v503_scientific_hard_repair
 
 def _v503_scientific_hard_repair(ledger,road,power_model,ftp_anchor=None):
     sci=(road or {}).get('scientific_progression') or {};dc=sci.get('dose_contract') or {}
+    if str(sci.get('dimension') or '').upper()=='RECOVERY_UNDER_LOAD' and (dc.get('schema')!=R1959_SCHEMA or not dc.get('available')):
+        return None  # No meaningful evidence-based hard repeat; do not fall back to a generic template.
     if dc.get('schema')!=R1959_SCHEMA or not dc.get('available'):
         return _v1959_science_hard_baseline(ledger,road,power_model,ftp_anchor=ftp_anchor)
     result=_v1959_science_hard_baseline(ledger,road,power_model,ftp_anchor=ftp_anchor)
@@ -43905,7 +43960,7 @@ def _v503_scientific_hard_repair(ledger,road,power_model,ftp_anchor=None):
         title=title.replace('Loaded-repeatability','Repeatability bridge')
     # Do not alter intensity domains or reuse a more demanding hard workout.
     # Explicitly describe the de-rated work: combined demand, not a PB attempt.
-    why=('The work band is deliberately below the last measured successful main set because recoveries are now slightly more active. '
+    why=('The work band is constrained by the last demonstrated main set and adjusted only for a meaningful loaded-recovery progression. '
          "These targets come from the athlete's completed comparable reps, not FTP multiplication for the main set. "
          'Only one recovery step; if sustained power fades, return to easy Z1 rather than force the target. '
          'A recovery-under-load award is earned separately from this prescription.')
@@ -44061,7 +44116,99 @@ def _v1960_coupled_power_band(raw, compiled, roadmap):
         'recovery_watts_high':int(v['recovery_watts_high']),
         'source_note':'Verified R195.9 observed coupled-dose contract; not a generic workout-library template or FTP-only guess.'}
 
-APP_VERSION="THE LAB · PRODUCT V4.9.84 CANDIDATE R196.0 · VERIFIED COUPLED-DOSE POWER HANDOFF · R195.9 BASELINE"
+# R196.1 · alternative scientific question when a proposed repeat is not a stimulus.
+# Re-rank only already-scored, unresolved questions. Never synthesize another
+# dimension from the athlete's primary goal or change the primary checkpoint.
+R1961_SCHEMA='V4.9.85-R196.1-PURPOSEFUL-QUALITY-21D-RHYTHM-1'
+_v1961_science_before=_v503_scientific_progression
+
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None,
+                                previous_blocks=None, performance_narrative=None,
+                                performance_evidence=None, aerobic_metabolic_range=None,
+                                evidence_ledger=None, question_state=None):
+    out=_v1961_science_before(goal_key,roadmap,ledger,session_progression,previous_blocks,
+        performance_narrative,performance_evidence,aerobic_metabolic_range,
+        evidence_ledger=evidence_ledger,question_state=question_state)
+    if not isinstance(out,dict) or str(out.get('dimension') or '').upper()!='RECOVERY_UNDER_LOAD':
+        return out
+    old=out.get('dose_contract') or {}
+    if old.get('reason')!='NO_MEANINGFUL_LOADED_RECOVERY_STIMULUS':
+        return out
+    options=[r for r in (out.get('ranked_questions') or []) if isinstance(r,dict)
+        and str(r.get('dimension') or '').upper() not in {'RECOVERY_UNDER_LOAD','NONE',
+        'REVALIDATION','EXTENSION_OR_REVALIDATION'}
+        and float(r.get('score') or 0)>=50
+        and bool(r.get('architectures'))
+        and not _v82_question_exit_satisfied(question_state,r.get('dimension'))]
+    out=dict(out)
+    out['deferred_dimension']='RECOVERY_UNDER_LOAD'
+    out['meaningful_stimulus_gate']={'schema':R1961_SCHEMA,'decision':'NO_NEAR_DUPLICATE',
+        'reason':old.get('reason'),'original_dose_contract':old,'same_structure_power_sacrifice_authorized':False}
+    if options:
+        alt=options[0]
+        dim=str(alt['dimension']).upper()
+        out['dimension']=dim
+        out['candidate_architectures']=list(alt.get('architectures') or [])
+        out['open_question']=(str(alt.get('reason') or '').strip()+' The previously top-ranked '
+            'recovery-load option was declined: free/easy recovery plus a few extra watts '
+            'does not justify repeating the same hard main set at reduced power.')
+        out['dose_contract']={'available':False,'reason':'NON_RECOVERY_DIMENSION_WORKOUT_LIBRARY',
+                              'selected_alternative':dim}
+        base_ids=['TID_ELITE','CYCLIST_TRAINING_DISTRIBUTION','LONG_TERM_DEVELOPMENT']
+        if dim in {'DURABILITY','RACE_TRANSFER','LATE_SESSION_STABILITY'}:
+            base_ids+=['DURABILITY_INDEPENDENT','DURATION_SPECIFIC_FATIGUE','PRIOR_INTENSITY_MATTERS']
+        elif dim in {'SPECIFIC_DOSE','REPEATABILITY','FRESH_CAPACITY','TIME_AT_PRESSURE'}:
+            base_ids+=['HIIT_PROGRAMMING','RECOVERY_DURATION_HIIT','POWER_DURATION_PROFILE']
+        else:
+            base_ids+=['POWER_DURATION_PROFILE']
+        out['evidence_ids']=[k for k in base_ids if k in _V503_SCIENCE_EVIDENCE]
+        out['evidence']=[{'id':k,**_V503_SCIENCE_EVIDENCE[k]} for k in out['evidence_ids']]
+        out['meaningful_stimulus_gate']['alternative_dimension']=dim
+    else:
+        out['dimension']='NONE'
+        out['candidate_architectures']=[]
+        out['open_question']='No distinct evidence-backed hard-session question is available; retain easy training rather than recycle the recent main set.'
+        out['dose_contract']={'available':False,'reason':'NO_PURPOSEFUL_HARD_ALTERNATIVE'}
+        out['meaningful_stimulus_gate']['alternative_dimension']=None
+    return out
+
+
+# A scored alternative is NOT permission for the legacy decision engine to
+# silently substitute another open question. The older R83 fallback maps NONE
+# to the first open dimension, including the just-rejected recovery repeat.
+# Enforce the scientific no-near-duplicate decision at the final authority
+# boundary, before any prescription or prescription continuity handling.
+_v1961_decision_before=build_nova_decision
+
+def build_nova_decision(goal_key,question_state=None,scientific_progression=None,
+                        adaptive_roadmap=None,training_state=None,planning_context=None):
+    out=_v1961_decision_before(goal_key,question_state=question_state,
+        scientific_progression=scientific_progression,adaptive_roadmap=adaptive_roadmap,
+        training_state=training_state,planning_context=planning_context)
+    sci=scientific_progression if isinstance(scientific_progression,dict) else {}
+    gate=sci.get('meaningful_stimulus_gate') or {}
+    if not isinstance(out,dict) or gate.get('decision')!='NO_NEAR_DUPLICATE':
+        return out
+    selected=str(sci.get('dimension') or 'NONE').upper()
+    decision=str(out.get('dimension') or 'NONE').upper()
+    # A corrected-to-another-dimension decision has NOT been re-evaluated by
+    # the science selector. It is unsafe to resurrect a hard fallback here.
+    if selected!='NONE' and decision==selected:
+        return out
+    out=dict(out)
+    retained_action=str(out.get('action') or '').upper()
+    safe_action=retained_action if retained_action in {'HOLD','RACE_PRIORITY'} else 'MAINTAIN'
+    out.update({'dimension':'NONE','action':safe_action,'hard_session_allowed':False,
+        'candidate_architectures':[],'selected_architecture':None,'stage_code':None,
+        'dose_contract':{'available':False,'reason':'R1961_PURPOSEFUL_STIMULUS_HOLD'},
+        'reason':'No independently evidenced hard alternative survived the purposeful-stimulus and question-eligibility gates; keep the eligible sessions easy until new evidence or a legitimate coaching question emerges.',
+        'question_state':None,'question_exit_satisfied':None,
+        'meaningful_stimulus_gate':dict(gate,decision_authority='MAINTAIN_NO_HARD_FALLBACK')})
+    out['corrections']=list(dict.fromkeys(list(out.get('corrections') or [])+['R1961_PREVENT_HARD_FALLBACK']))
+    return out
+
+
+APP_VERSION="THE LAB · PRODUCT V4.9.85 R196.1 WIP · QUALITY CONTRACT / 2+NEXT QUALITY · NOT RELEASED · CANDIDATE R196.0 BASELINE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
