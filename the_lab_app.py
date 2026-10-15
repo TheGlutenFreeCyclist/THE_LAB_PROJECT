@@ -4017,48 +4017,31 @@ function v1962AuditStatus(target,message,busy){
 function downloadQaAudit(target){
   if(!qaAuditText)return;
   target=target||document.activeElement;
-  v1962AuditStatus(target,'Preparing full diagnostic audit…',true);
-  requestAnimationFrame(function(){setTimeout(function(){
-    try{
-      var blob=new Blob([qaAuditText],{type:'text/markdown;charset=utf-8'});
-      v1962AuditStatus(target,'Audit ready ('+Math.ceil(blob.size/1024)+' KB). Handing file to browser…',true);
-      v1962SaveAudit(blob,qaAuditFilename);
-      v1962AuditStatus(target,'File delivered to browser. Saving to your device may continue in Downloads.',false);
-    }catch(err){v1962AuditStatus(target,'Audit export failed. Retry or contact support.',false);}
-  },50);});
+  // Preserve the user's actual click activation. Deferring a synthetic download
+  // behind requestAnimationFrame/setTimeout can be blocked on mobile browsers.
+  try{
+    v1962AuditStatus(target,'Preparing complete diagnostic audit…',true);
+    var blob=new Blob([qaAuditText],{type:'text/markdown;charset=utf-8'});
+    v1962SaveAudit(blob,qaAuditFilename);
+    v1962AuditStatus(target,'Download requested ('+Math.ceil(blob.size/1024)+' KB). Check browser Downloads for device save.',false);
+  }catch(err){v1962AuditStatus(target,'Audit export failed. Retry or contact support.',false);}
 }
 ['qa-audit-download-btn','qa-audit-download-btn-bottom'].forEach(function(id){var b=document.getElementById(id);if(b)b.addEventListener('click',function(){downloadQaAudit(b);});});
 {% endif %}
-/* Persist progress until the audit HTTP response has been completely received.
-   Browser/device filesystem completion cannot be observed from a web page. */
+/* Content Audit: leave the original href and server Content-Disposition intact.
+   A fetch followed by link.click() after await loses transient user activation on
+   some mobile browsers. Native navigation/download must occur on the first tap.
+   The browser does not report its final device-save completion to JavaScript. */
 document.querySelectorAll('a[href*="/last-report/content-audit.md"]').forEach(function(btn){
-  btn.addEventListener('click',async function(event){
-    if(!window.fetch)return;
-    event.preventDefault();if(btn.getAttribute('aria-busy')==='true')return;
-    var old=btn.textContent;btn.textContent='Preparing audit…';
-    var status=document.createElement('span');status.className='v1962-audit-status';
-    status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-    status.style.cssText='display:block;font-size:12px;color:#adb6c4;margin-top:6px;';
-    btn.insertAdjacentElement('afterend',status);btn.setAttribute('aria-busy','true');
-    try{
-      var response=await fetch(btn.href,{credentials:'same-origin'});
-      if(!response.ok)throw new Error('HTTP '+response.status);
-      var bytes=[],total=0,expected=Number(response.headers.get('Content-Length'))||0;
-      if(response.body&&response.body.getReader){
-        var reader=response.body.getReader();while(true){
-          var part=await reader.read();if(part.done)break;
-          bytes.push(part.value);total+=part.value.byteLength;
-          status.textContent='Receiving complete audit: '+Math.ceil(total/1024)+' KB'+(expected?' / '+Math.ceil(expected/1024)+' KB':'')+'…';
-        }
-      }else{var buf=await response.arrayBuffer();bytes=[new Uint8Array(buf)];total=buf.byteLength;}
-      var blob=new Blob(bytes,{type:'text/markdown;charset=utf-8'});
-      if(!blob.size)throw new Error('empty audit');
-      var cd=response.headers.get('Content-Disposition')||'';
-      var match=cd.match(/filename="?([^";]+)"?/i);
-      v1962SaveAudit(blob,match?match[1]:'the_lab_content_audit.md');
-      status.textContent='Full audit received ('+Math.ceil(total/1024)+' KB). Handed to browser; device save may still be in progress.';
-    }catch(err){status.textContent='Audit download failed. Retry; no complete file was received.';}
-    finally{btn.textContent=old;btn.setAttribute('aria-busy','false');}
+  btn.addEventListener('click',function(){
+    var status=btn.nextElementSibling;
+    if(!status || !status.classList.contains('v1963-audit-status')){
+      status=document.createElement('span');status.className='v1963-audit-status';
+      status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+      status.style.cssText='display:block;font-size:12px;color:#adb6c4;margin-top:6px;';
+      btn.insertAdjacentElement('afterend',status);
+    }
+    status.textContent='Audit requested. Download will start when the server is ready; check browser Downloads.';
   });
 });
 var form=document.getElementById('snapshot-form'); if(form){ form.addEventListener('submit',function(e){ var btn=document.getElementById('snapshot-btn'), track=document.getElementById('loading-track'), fill=track?track.querySelector('.loading-fill'):null, label=document.getElementById('loading-label'); if(form.getAttribute('data-csrf-ready')!=='1'){e.preventDefault();if(btn){btn.disabled=true;btn.textContent='Checking session…';}if(label){label.style.display='block';label.textContent='Refreshing secure session…';}fetch('/session/csrf',{method:'GET',credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}}).then(function(r){return r.text().then(function(t){var j={};try{j=JSON.parse(t);}catch(_e){}return {ok:r.ok,status:r.status,data:j};});}).then(function(res){if(!res.ok||!res.data.csrf_token){window.location.assign((res.data&&res.data.login_url)||'/login');return;}var input=form.querySelector('input[name="csrf_token"]');if(input)input.value=res.data.csrf_token;form.setAttribute('data-csrf-ready','1');if(btn){btn.disabled=false;}form.requestSubmit();}).catch(function(){window.location.assign('/login');});return;} if(btn){btn.disabled=true;btn.textContent='Analyzing…';} if(track)track.style.display='block'; if(label){label.style.display='block';label.textContent='Loading your training data…';} var pct=5; if(fill){fill.style.width=pct+'%'; setInterval(function(){ if(pct<92){pct+=(92-pct)*.08;fill.style.width=pct+'%';}},250);} }); }
@@ -44608,7 +44591,7 @@ def build_content_audit_markdown(report):
         return full.replace(divider,section+divider,1)
     return full+'\n'+section
 
-APP_VERSION="THE LAB · PRODUCT V4.9.86 R196.2 · ATOMIC CONSISTENCY CONTRACT · QUALITY STATUS · ALL-GOAL QA"
+APP_VERSION="THE LAB · PRODUCT V4.9.87 R196.3 · NATIVE SINGLE-TAP AUDIT DOWNLOAD · NOVA R196.2 CORE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
