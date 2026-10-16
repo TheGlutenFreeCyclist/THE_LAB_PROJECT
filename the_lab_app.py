@@ -42298,7 +42298,7 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
                 'power_prescription':band, 'deferred_quality_reason':str(band.get('reason') or band.get('state') or 'INSUFFICIENT_EVIDENCE')})
             blocked.append(i)
         else:
-            mid=int(band['target_watts']); lo=int(band['low_watts']);hi=int(band['high_watts'])
+            mid=int(band['target_watts']) if band.get('target_watts') is not None else None; lo=int(band['low_watts']);hi=int(band['high_watts'])
             # Record vs prescription semantics remain separated: PB sentences
             # in the template are context-only; THIS explicit band is backed
             # by independent repeat-work evidence or a valid FTP starter rule.
@@ -42317,6 +42317,19 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
                            'Repeatability at the exact work/recovery dose is not yet verified. '
                            'Power shortfall must not count as failure, reduce adherence or block progression; assess structure and recovery separately. ')
             sess['main_set']=directive+str(sess.get('main_set') or '')
+            # The third Upcoming quality card may lack a previously attached
+            # same-duration PB. Enrich from DIRECT curve evidence, never a fit.
+            work_seconds=_v1943_finite(band.get('work_seconds'),60,1800)
+            if work_seconds:
+                observed=_v124_power_duration_evidence(power_model, work_seconds/60.0)
+                single_best=observed.get('observed_recent_watts') or observed.get('observed_season_best_watts')
+                if single_best is not None:
+                    sess.update({'power_evidence':observed,
+                                 'quality_reference_watts':single_best,
+                                 'quality_reference_interval_min':work_seconds/60.0,
+                                 'quality_reference_source':observed.get('observed_recent_source') or observed.get('observed_season_source'),
+                                 'quality_assessment_reference_watts':None,
+                                 'quality_assessment_policy':'REPEATABILITY_EVIDENCE_ONLY; SINGLE_PB_NOT_GRADED'})
             sess.update({'prescribed_power_low':lo,'prescribed_power_high':hi,
                 'power_band':'CALIBRATED_REPEAT_WORK',
                 'power_prescription':band,'power_prescription_schema':R1943_SCHEMA,
@@ -45038,7 +45051,7 @@ HOME_PAGE = HOME_PAGE.replace('This is the threshold reference THE LAB currently
 HOME_PAGE = HOME_PAGE.replace("{% elif fa.status == 'AGING' %}", "{% elif fa.status in ('AGING','TEST ESTIMATE') %}", 1)
 BASE_CSS += '\n.v4822-breakthrough-grid{grid-template-columns:minmax(0,1fr)}'
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.91 R196.7 · REPEATED-EFFORT EVIDENCE + ATHLETE VIEW · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.92 R196.8 · STRICT REPEATED-DOSE TRUTH + DIRECT PB REFERENCE · NOVA R196.2 CORE'
 
 # R196.7 — evidence for repeated work is not the best single fresh effort.
 # All seven goals use the same invariant, with no athlete-specific watts.
@@ -45056,48 +45069,60 @@ def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None
     band['repeatability_evidence_schema'] = R1967_SCHEMA
     source = str(band.get('source') or '')
     if source == 'COMPARABLE_VERIFIED_REPEATED_WORK':
-        # Original selection already requires strong, recent, canonical repeated
-        # work, enough repetitions, low variability and bounded duration transfer.
-        # Add the missing recovery-context contract before allowing HIGH confidence.
+        # A fresh best never establishes repeatability. Reconfirm a completed
+        # canonical set with comparable repetitions, interval and *recovery*.
+        # The earlier R194.3 selector also gates provenance, 42d age and CV.
         events = ((evidence_ledger or {}).get('repeatability') or {}).get('events') or []
         event = next((e for e in events if isinstance(e, dict)
                       and str(e.get('activity_id') or '') == str(band.get('activity_id') or '')
                       and e.get('strong') is True
+                      and str(e.get('activity_truth_source') or e.get('source') or '').upper()
+                      in {'ICU_INTERVALS_CANONICAL', 'DEVICE_LAPS'}
                       and abs((_v1943_finite(e.get('interval_secs'), 0) or -1)
-                              - (band.get('evidence_interval_seconds') or 0)) < 1), None)
+                              - (band.get('evidence_interval_seconds') or 0)) <= 1), None)
         work = _v1943_finite(band.get('work_seconds'), 1)
         actual = _v1943_finite(band.get('evidence_interval_seconds'), 1)
         prescribed_recovery = _v1943_finite((template or {}).get('recovery_s'), 1)
         observed_recovery = _v1943_finite((event or {}).get('recovery_secs'), 1)
         comparable_recovery = bool(prescribed_recovery and observed_recovery
-                                   and observed_recovery <= prescribed_recovery * 1.15)
+                                   and observed_recovery <= prescribed_recovery + 1)
         comparable_repetitions = bool(event and int(_v1943_finite(event.get('reps'), 1) or 0)
                                       >= int(band.get('reps') or 0))
-        if not comparable_repetitions or not comparable_recovery or not actual or not work or actual < work:
-            reason = ('SHORTER_INTERVAL_TRANSFER' if actual and work and actual < work
-                      else 'RECOVERY_CONTEXT_NOT_COMPARABLE' if not comparable_recovery
-                      else 'REPEATED_EVIDENCE_NOT_RECONFIRMED')
+        if not comparable_repetitions or not comparable_recovery or not actual or not work:
+            band.update({'state':'NO_DEFENSIBLE_POWER_TARGET', 'confidence':'NONE',
+                         'repeatability_state':'UNVERIFIED_SOURCE_OR_RECOVERY',
+                         'repeatability_reason':'MISSING_CANONICAL_REPEATS_OR_COMPARABLE_RECOVERY',
+                         'reason':'MISSING_CANONICAL_REPEATS_OR_COMPARABLE_RECOVERY'})
+            return band
+        novel_context = str(dimension or '').upper() in {'RACE_TRANSFER', 'DURABILITY'}
+        if actual + 1 < work or novel_context:
+            reason = ('SHORTER_INTERVAL_TRANSFER' if actual + 1 < work
+                      else 'NEW_PRIOR_LOAD_NOT_VERIFIED_LIKE_FOR_LIKE')
+            target = int(band['target_watts'])
             band.update({'confidence': 'LOW', 'exploratory': True, 'non_punitive': True,
                          'scoring_policy': 'STRUCTURE_ONLY_POWER_DESCRIPTIVE',
                          'repeatability_state': 'NOT_VERIFIED_FOR_THIS_WORKOUT',
-                         'repeatability_reason': reason,
-                         'reason': reason,
-                         'low_watts': min(int(band['low_watts']), int(band['target_watts']) - 20),
-                         'high_watts': max(int(band['high_watts']), int(band['target_watts']) + 5)})
+                         'repeatability_reason': reason, 'reason': reason,
+                         'low_watts': min(int(band['low_watts']), target - 20),
+                         'high_watts': max(int(band['high_watts']), target + 5),
+                         'target_watts': None,
+                         'power_target_mode': 'EXPLORATORY_RANGE'})
         else:
-            band['repeatability_state'] = ('VERIFIED_COMPARABLE_REPEATS' if actual == work
+            band['repeatability_state'] = ('VERIFIED_COMPARABLE_REPEATS' if abs(actual-work) <= 1
                                             else 'SUPPORTED_BY_LONGER_REPEATS')
             band['repeatability_reason'] = 'REPEATED_WORK_AND_RECOVERY_COMPARABLE'
+            band['power_target_mode'] = 'VERIFIED_REPEATED_TARGET'
             if actual > work:
                 band['confidence'] = 'MODERATE'
         band['observed_single_best_is_repeatability_proof'] = False
-        band['observed_repeated_work_is_direct_evidence'] = bool(
+        band['observed_repeated_work_is_direct_evidence'] = (
             band['repeatability_state'] == 'VERIFIED_COMPARABLE_REPEATS')
     elif source == 'VALID_FTP_STARTER_POLICY_NOT_OBSERVED_REPEATABILITY':
         # A supported FTP estimate can establish a starter zone; it cannot prove
         # a specific set of repetitions or license a pass/fail power grade.
         band.update({'confidence': 'PROVISIONAL', 'exploratory': True,
                      'non_punitive': True, 'scoring_policy': 'STRUCTURE_ONLY_POWER_DESCRIPTIVE',
+                     'target_watts':None, 'power_target_mode':'PROVISIONAL_RANGE',
                      'repeatability_state': 'NOT_VERIFIED_FOR_THIS_WORKOUT',
                      'repeatability_reason': 'FTP_ZONE_IS_NOT_COMPLETED_REPEATED_WORK',
                      'observed_single_best_is_repeatability_proof': False,

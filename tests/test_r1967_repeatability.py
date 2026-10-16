@@ -48,20 +48,37 @@ class R1967(unittest.TestCase):
     def test_strict_same_duration_and_recovery(self):
         for secs,rec,expected in [(420,300,'VERIFIED_COMPARABLE_REPEATS'),
                                   (450,300,'SUPPORTED_BY_LONGER_REPEATS'),
-                                  (420,600,'NOT_VERIFIED_FOR_THIS_WORKOUT'),
+                                  (420,600,'UNVERIFIED_SOURCE_OR_RECOVERY'),
                                   (360,300,'NOT_VERIFIED_FOR_THIS_WORKOUT'),
-                                  (420,None,'NOT_VERIFIED_FOR_THIS_WORKOUT')]:
+                                  (420,None,'UNVERIFIED_SOURCE_OR_RECOVERY')]:
             with self.subTest(secs=secs,recovery=rec):
                 b=self.env(self.base(secs))['_v1943_band']({'recovery_s':300},
                    evidence_ledger={'repeatability':{'events':[self.event(secs,rec)]}})
                 self.assertEqual(b['repeatability_state'],expected)
                 if expected == 'NOT_VERIFIED_FOR_THIS_WORKOUT':
                     self.assertEqual(b['scoring_policy'],'STRUCTURE_ONLY_POWER_DESCRIPTIVE')
+                    self.assertIsNone(b['target_watts'])
+                if expected == 'UNVERIFIED_SOURCE_OR_RECOVERY':
+                    self.assertEqual(b['state'],'NO_DEFENSIBLE_POWER_TARGET')
 
     def test_ftp_starter_does_not_certify_reps(self):
         b=self.env(self.base(source='VALID_FTP_STARTER_POLICY_NOT_OBSERVED_REPEATABILITY'))['_v1943_band']({})
         self.assertTrue(b['exploratory'] and b['non_punitive'])
         self.assertEqual(b['repeatability_state'],'NOT_VERIFIED_FOR_THIS_WORKOUT')
+        self.assertIsNone(b['target_watts'])
+
+    def test_novel_race_context_is_not_fixed_even_if_same_reps(self):
+        b=self.env(self.base(420))['_v1943_band']({'recovery_s':300},
+             evidence_ledger={'repeatability':{'events':[self.event(420,298)]}},
+             dimension='RACE_TRANSFER')
+        self.assertEqual(b['repeatability_state'],'NOT_VERIFIED_FOR_THIS_WORKOUT')
+        self.assertIsNone(b['target_watts'])
+        self.assertEqual(b['power_target_mode'],'EXPLORATORY_RANGE')
+
+    def test_missing_verified_recovery_fails_closed(self):
+        b=self.env(self.base(420))['_v1943_band']({'recovery_s':300},
+             evidence_ledger={'repeatability':{'events':[]}})
+        self.assertEqual(b['state'],'NO_DEFENSIBLE_POWER_TARGET')
 
     def test_athlete_view_exposes_real_best_not_interpolation(self):
         ns=self.env(self.base())
@@ -88,6 +105,8 @@ class R1967(unittest.TestCase):
 
     def test_ui_is_projection_not_canonical_mutation(self):
         self.assertIn('nova_athlete_view(s)',self.source)
+        self.assertIn("observed=_v124_power_duration_evidence(power_model",self.source)
+        self.assertIn("'quality_reference_source':observed.get('observed_recent_source')",self.source)
         self.assertIn('data.nutrition_plan[si]',self.source)
         self.assertIn('if quality_already_shown',self.source)
 
