@@ -34,7 +34,8 @@ class R1967(unittest.TestCase):
 
     def event(self,secs=360,recovery=298,strong=True):
         return {'activity_id':'observed','reps':3,'interval_secs':secs,
-                'recovery_secs':recovery,'strong':strong}
+                'recovery_secs':recovery,'strong':strong,
+                'activity_truth_source':'ICU_INTERVALS_CANONICAL'}
 
     def test_all_seven_goals_separate_single_pb_from_repeats(self):
         for goal in ('POWER_1','POWER_5','POWER_20','SPRINTER','VO2MAX','TIME_TRIAL','ENDURANCE_BASE'):
