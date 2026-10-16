@@ -42306,9 +42306,11 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
                    if band.get('source')=='OBSERVED_COUPLED_RECOVERY_DOSE'
                    else ('verified same-or-longer completed intervals' if band.get('confidence')=='HIGH'
                    else ('estimated from verified slightly shorter intervals' if band.get('confidence')=='MODERATE'
-                         else 'provisional target based on valid FTP')))
+                         else 'exploratory target from shorter verified repeats' if band.get('exploratory') else 'provisional target based on valid FTP')))
             directive=(f'WORK TARGET: {mid} W in EACH of the {band["reps"]} work intervals '
                        f'(acceptable training range {lo}–{hi} W; {label}). ')
+            if band.get('exploratory'):
+                directive += ('EXPLORATORY POWER TARGET: unverified longer repeated duration. The range is a challenge, not a pass mark. ' 'Power shortfall must not count as failure, reduce adherence or block progression; assess structure and recovery separately. ')
             sess['main_set']=directive+str(sess.get('main_set') or '')
             sess.update({'prescribed_power_low':lo,'prescribed_power_high':hi,
                 'power_band':'CALIBRATED_REPEAT_WORK',
@@ -44838,7 +44840,200 @@ HOME_PAGE = HOME_PAGE.replace(_v1965_alignment_help,
     'Easy rides and prescribed rest are not covered; this is not whole-plan adherence. '
     'Missing or unresolved activity links never count as a confirmed miss.</p>', 1)
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.89 R196.5 · HONEST ALIGNMENT + CONTINUOUS ENERGY + UI CLEANUP · NOVA R196.2 CORE'
+# R196.6 — FTP evidence and non-punitive exploratory intensity contracts.
+R1966_SCHEMA = 'V4.9.90-R196.6-EVIDENCE-GATED-FTP-EXPLORATION-1'
+R1966_MIN_FTP_EFFORT_SECONDS = 1200
+R1966_MIN_SUPPORTED_FTP_SECONDS = 1800
+R1966_CHECKPOINT_FRESH_DAYS = 21
+
+_r1966_persist_ftp_before = _persist_ftp_anchor_events
+
+def _persist_ftp_anchor_events(activities, user_id=None):
+    qualified = []
+    for row in activities or []:
+        event = _ftp_up_event_from_activity(row)
+        secs = _rhythm_num((event or {}).get('effort_secs'))
+        watts = _rhythm_num((event or {}).get('effort_watts'))
+        if secs is not None and secs >= R1966_MIN_FTP_EFFORT_SECONDS and watts is not None and watts > 0:
+            qualified.append(row)
+    return _r1966_persist_ftp_before(qualified, user_id=user_id)
+
+_r1966_ftp_context_before = build_ftp_anchor_context
+
+def build_ftp_anchor_context(history_activities, now=None, user_id=None):
+    now = now or get_rome_now()
+    base = _r1966_ftp_context_before(history_activities, now=now, user_id=user_id)
+    anchors = _stored_interval_metric_points(FTP_ANCHOR_METRIC_KEY, user_id=user_id)
+    secs_rows = {x['date']: x['value'] for x in _stored_interval_metric_points(FTP_ANCHOR_EFFORT_SECS_KEY, user_id=user_id)}
+    watts_rows = {x['date']: x['value'] for x in _stored_interval_metric_points(FTP_ANCHOR_EFFORT_WATTS_KEY, user_id=user_id)}
+    eligible = []
+    for row in anchors:
+        d = row.get('date')
+        secs = _rhythm_num(secs_rows.get(d))
+        watts = _rhythm_num(watts_rows.get(d))
+        value = _rhythm_num(row.get('value'))
+        if secs is None or secs < R1966_MIN_FTP_EFFORT_SECONDS or watts is None or watts <= 0 or value is None or value <= 0:
+            continue
+        try:
+            age = (now.date() - date.fromisoformat(d)).days
+        except (TypeError, ValueError):
+            continue
+        if age < 0:
+            continue
+        eligible.append((d, age, value, int(round(secs)), int(round(watts))))
+    out = dict(base or {})
+    out.update({'evidence_schema': R1966_SCHEMA, 'minimum_evidence_seconds': R1966_MIN_FTP_EFFORT_SECONDS,
+                'excluded_short_duration_metric_count': len(anchors) - len(eligible),
+                'rolling_ftp_is_diagnostic_only': True,
+                'method_note': 'An Intervals FTP_UP is a test-derived estimate only with a documented effort of at least 20 minutes. 20-29 minutes is provisional; 30+ minutes is better supported, never a direct physiological measurement. Shorter and unknown-duration FTP_UP signals are excluded. Rolling activity estimates are diagnostics only.'})
+    if not eligible:
+        out.update({'available': False, 'anchor_watts': None, 'prescription_watts': None,
+                    'anchor_date': None, 'anchor_date_display': None, 'age_days': None,
+                    'effort_secs': None, 'effort_duration': None, 'effort_watts': None,
+                    'historical_peak_watts': None, 'historical_peak_date': None,
+                    'status': 'NO TEST-BACKED FTP', 'status_class': 'grey', 'retest_due': True,
+                    'evidence_grade': 'INSUFFICIENT'})
+        return out
+    latest = max(eligible, key=lambda x: x[0])
+    d, age, watts_ftp, secs, effort_w = latest
+    fresh = age <= FTP_ANCHOR_AGING_DAYS
+    within_validity = age <= FTP_ANCHOR_VALID_DAYS
+    grade = '20_MIN_PROVISIONAL_ESTIMATE' if secs < R1966_MIN_SUPPORTED_FTP_SECONDS else 'LONGER_TEST_SUPPORTED_ESTIMATE'
+    status = ('RETEST DUE' if not fresh else
+              'AGING' if not within_validity else
+              'TEST ESTIMATE' if secs < R1966_MIN_SUPPORTED_FTP_SECONDS else 'TEST SUPPORTED')
+    out.update({'available': True, 'anchor_watts': int(round(watts_ftp)),
+                'prescription_watts': int(round(watts_ftp)) if within_validity and secs >= R1966_MIN_SUPPORTED_FTP_SECONDS else None,
+                'anchor_date': d, 'anchor_date_display': date.fromisoformat(d).strftime('%d %b %Y'),
+                'age_days': age, 'effort_secs': secs, 'effort_duration': format_duration_label(secs),
+                'effort_watts': effort_w, 'status': status,
+                'status_class': 'green' if status == 'TEST SUPPORTED' else 'orange' if fresh else 'red',
+                'retest_due': not fresh, 'evidence_grade': grade,
+                'historical_peak_watts': None, 'historical_peak_date': None})
+    return out
+
+_r1966_ftp_text_before = ftp_anchor_text
+
+def ftp_anchor_text(context):
+    ctx = context or {}
+    if not ctx.get('anchor_watts'):
+        return 'FTP TEST REFERENCE: no eligible 20-minute-or-longer test-derived estimate. Rolling FTP is diagnostic only and cannot substitute for a verified-duration effort.'
+    return (f"FTP TEST REFERENCE: {ctx['anchor_watts']} W (estimated, not directly measured FTP) "
+            f"from {ctx.get('effort_duration')} at {ctx.get('effort_watts')} W on {ctx.get('anchor_date')}; "
+            f"evidence {ctx.get('evidence_grade')}; status {ctx.get('status')}; "
+            f"prescription eligibility: {'yes' if ctx.get('prescription_watts') else 'no'}. "
+            'Do not update from shorter efforts or rolling model changes.')
+
+_r1966_power_band_before = _v1943_band
+
+def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None, dimension=None):
+    ftp = dict(ftp_anchor or {})
+    if ftp.get('evidence_schema') == R1966_SCHEMA and ftp.get('status') == 'TEST SUPPORTED' and ftp.get('prescription_watts'):
+        ftp['status'] = 'VALID'
+    band = _r1966_power_band_before(template, evidence_ledger=evidence_ledger,
+                                   ftp_anchor=ftp, as_of_date=as_of_date, dimension=dimension)
+    if not isinstance(band, dict) or band.get('state') != 'PRESCRIBED':
+        return band
+    secs = _rhythm_num(band.get('evidence_interval_seconds'))
+    work = _rhythm_num(band.get('work_seconds'))
+    if (band.get('source') == 'COMPARABLE_VERIFIED_REPEATED_WORK' and
+        secs is not None and work is not None and secs < work):
+        band = dict(band)
+        target = int(band['target_watts'])
+        band.update({'confidence': 'LOW', 'exploratory': True, 'non_punitive': True,
+                     'scoring_policy': 'STRUCTURE_ONLY_POWER_DESCRIPTIVE',
+                     'low_watts': target - 20, 'high_watts': target + 5,
+                     'reason': 'NEW_LONGER_REPEATED_DURATION_NOT_YET_VERIFIED',
+                     'evidence_schema': R1966_SCHEMA})
+    return band
+
+_r1966_axes_before = _v183_adherence_axes
+
+def _v183_adherence_axes(block, plan, prior):
+    out = _r1966_axes_before(block, plan, prior)
+    if not isinstance(out, dict):
+        return out
+    band = (plan or {}).get('power_prescription') or {}
+    exploratory = bool(band.get('exploratory')) or 'EXPLORATORY POWER TARGET' in str((plan or {}).get('main_set') or '').upper()
+    if not exploratory:
+        return out
+    out = dict(out)
+    power = dict(out.get('power_band') or {})
+    power.update({'state': 'EXPLORATORY_NOT_GRADED', 'label': 'EXPLORATORY · NOT GRADED',
+                  'available': False, 'in_target_percent': None, 'in_target_reps': None,
+                  'above_target_reps': None, 'below_target_reps': None,
+                  'power_band_rule': 'DESCRIPTIVE_ONLY_NO_SUCCESS_FAILURE_PENALTY'})
+    out['power_band'] = power
+    out['label'] = 'MAIN SET COMPLETE · EXPLORATORY POWER'
+    out['detail'] = 'Duration/structure recorded; power observed without a pass/fail consequence.'
+    out['historical_binary_check'] = {'score': None, 'do_not_display_as_global_adherence': True,
+                                       'do_not_use_as_progression_veto': True,
+                                       'interpretation': 'NOVEL_DURATION_NOT_A_POWER_FAILURE'}
+    out['exploratory_outcome_policy'] = 'DESCRIPTIVE_ONLY_NO_FAILURE_CREDIT_OR_PENALTY'
+    return out
+
+_r1966_progression_before = _v503_scientific_progression
+
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None,
+                                previous_blocks=None, performance_narrative=None,
+                                performance_evidence=None, aerobic_metabolic_range=None,
+                                evidence_ledger=None, question_state=None):
+    result = _r1966_progression_before(goal_key, roadmap, ledger, session_progression,
+                                      previous_blocks, performance_narrative,
+                                      performance_evidence, aerobic_metabolic_range,
+                                      evidence_ledger=evidence_ledger, question_state=question_state)
+    if not isinstance(roadmap, dict) or not isinstance(roadmap.get('test'), dict):
+        return result
+    test = roadmap['test']
+    checkpoint_secs = _rhythm_num(test.get('seconds'))
+    events = (performance_evidence or {}).get('events') or []
+    validations = []
+    for e in events:
+        if not isinstance(e, dict) or not e.get('formal_validation') or not e.get('activity_linked'):
+            continue
+        if str(e.get('goal_key') or '').upper() != str(goal_key or '').upper():
+            continue
+        if checkpoint_secs is None or abs((_rhythm_num(e.get('secs')) or 0) - checkpoint_secs) > max(2, checkpoint_secs * .05):
+            continue
+        try:
+            age = (get_rome_now().date() - date.fromisoformat(str(e.get('date') or '')[:10])).days
+        except (ValueError, TypeError):
+            continue
+        if 0 <= age <= R1966_CHECKPOINT_FRESH_DAYS:
+            validations.append(e)
+    if validations:
+        latest = max(validations, key=lambda e: str(e.get('date') or ''))
+        test = dict(test)
+        test.update({'state': 'COMPLETED', 'when': str(latest.get('date')),
+                     'reason': 'This exact-duration, activity-linked formal checkpoint has already been completed. Do not request another identical test inside the fresh-evidence window.',
+                     'checkpoint_sync_schema': R1966_SCHEMA})
+        roadmap['test'] = test
+        if isinstance(result, dict):
+            result = dict(result)
+            sync = dict(result.get('checkpoint_stage_sync') or {})
+            sync.update({'test_state': 'COMPLETED', 'test_due': False, 'schema': R1966_SCHEMA,
+                         'completed_activity_id': latest.get('activity_id')})
+            result['checkpoint_stage_sync'] = sync
+    return result
+
+assert HOME_PAGE.count("{% if latest_perf and (latest_perf.rolling_ftp or latest_perf.pm_ftp) %}") == 1
+HOME_PAGE = HOME_PAGE.replace("{% if latest_perf and (latest_perf.rolling_ftp or latest_perf.pm_ftp) %}", "{% if false %}", 1)
+HOME_PAGE = HOME_PAGE.replace("{% if perf and perf.available %}", "{% if perf and perf.available and perf.pb_count %}", 1)
+HOME_PAGE = HOME_PAGE.replace("🏆 PERFORMANCE BREAKTHROUGH", "🏅 RECENT POWER BEST", 1)
+HOME_PAGE = HOME_PAGE.replace("A breakthrough marks a meaningful new performance signal in your cycling history; it is evidence of progress, not a complete physiology diagnosis.", "Recorded power best for this duration; not an FTP estimate or a validated primary-goal improvement.", 1)
+HOME_PAGE = HOME_PAGE.replace("{% for r in perf.activities %}{% for ach in r.achievements %}", "{% for r in perf.activities %}{% for ach in r.achievements %}{% if ach.type in ['BEST_POWER','THE_LAB_PB'] %}", 1)
+HOME_PAGE = HOME_PAGE.replace("{% endfor %}{% endfor %}\n</div>\n{% if false %}", "{% endif %}{% endfor %}{% endfor %}\n</div>\n{% if false %}", 1)
+HOME_PAGE = re.sub(r'<div><span>INTERVALS ROLLING FTP SIGNAL</span>.*?</div>', '', HOME_PAGE, count=1, flags=re.S)
+HOME_PAGE = HOME_PAGE.replace('📌 CURRENT FTP ANCHOR', '📌 FTP TEST REFERENCE', 1)
+HOME_PAGE = HOME_PAGE.replace('NO VALIDATED ANCHOR', 'NO TEST-BACKED ESTIMATE', 1)
+HOME_PAGE = HOME_PAGE.replace('LAST VALIDATED', 'LATEST QUALIFYING EFFORT', 1)
+HOME_PAGE = HOME_PAGE.replace('No persisted FTP_UP yet', 'No qualifying effort of at least 20 minutes', 1)
+HOME_PAGE = HOME_PAGE.replace('VALIDATING EFFORT', 'RECORDED TEST EFFORT', 1)
+HOME_PAGE = HOME_PAGE.replace('This is the threshold reference THE LAB currently trusts for workout context; it is not changed by a single weaker signal.', 'Test-derived estimate only. Short efforts and rolling activity estimates never reset it.', 1)
+HOME_PAGE = HOME_PAGE.replace("{% elif fa.status == 'AGING' %}", "{% elif fa.status in ('AGING','TEST ESTIMATE') %}", 1)
+BASE_CSS += '\n.v4822-breakthrough-grid{grid-template-columns:minmax(0,1fr)}'
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.90 R196.6 · FTP EVIDENCE + EXPLORATORY POWER + CHECKPOINT TRUTH · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
