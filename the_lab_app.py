@@ -28097,7 +28097,7 @@ def beta_qa_consent_gate():
             _r170_consent_queue(athlete["id"], "DECLINED")
             return redirect(url_for("home"), code=303)
         abort(400)
-    return render_template_string("""<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>THE LAB · Beta QA permission</title><style>{{ css }}</style></head><body class="product-sec"><main class="ps-wrap"><section class="ps-card" style="max-width:650px;margin:10vh auto;padding:24px"><h1>Beta testing · Diagnostic permission</h1><p>THE LAB is currently in beta. To investigate errors, the administrator can run an on-demand read-only Python diagnostic using your Intervals.icu training and wellness data and your THE LAB account data, and view/download the resulting diagnostic report.</p><p>No AI call is made, your saved Snapshot is not replaced, and no continuous background monitoring is enabled. You can withdraw this permission later in Settings.</p><p>Giving permission helps us troubleshoot problems without repeatedly asking you to run tests. If you decline, you may continue using available features, but admin remote diagnostics will remain disabled.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn primary" name="decision" value="ACCEPT" type="submit">Allow beta diagnostics</button> <button class="ps-btn" name="decision" value="DECLINE" type="submit">Not now</button></form></section></main></body></html>""", css=PRODUCT_SIMPLE_CSS)
+    return render_template_string("""<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>THE LAB · Beta QA permission</title><style>{{ css }}</style></head><body class="product-sec"><main class="ps-wrap"><section class="ps-card" style="max-width:650px;margin:10vh auto;padding:24px"><h1>Beta testing · Diagnostic permission</h1><p>THE LAB is currently in beta. To investigate errors, the administrator can run an on-demand read-only Python diagnostic using your Intervals.icu training and wellness data and your THE LAB account data, and view/download the resulting diagnostic report.</p><p>Your saved Snapshot is not replaced, and no continuous background monitoring is enabled. You can withdraw this permission later in Settings.</p><p>Giving permission helps us troubleshoot problems without repeatedly asking you to run tests. If you decline, you may continue using available features, but admin remote diagnostics will remain disabled.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn primary" name="decision" value="ACCEPT" type="submit">Allow beta diagnostics</button> <button class="ps-btn" name="decision" value="DECLINE" type="submit">Not now</button></form></section></main></body></html>""", css=PRODUCT_SIMPLE_CSS)
 
 @app.route("/admin/users/<user_id>/request-remote-qa-consent", methods=["POST"])
 def admin_request_remote_qa_consent(user_id):
@@ -28265,7 +28265,7 @@ def analyze():
         energy_bank = compute_energy_bank(
             metrics["form_zone"], metrics["fatigue_zone"], metrics.get("latest_sleep_hours"),
             recent_activities=recent_activities, personal_baselines=metrics.get("personal_baselines"), now=get_rome_now(),
-            sleep_quality=metrics.get("sleep_quality"), training_rhythm=systemic_activity_rhythm, wellness=season_wellness
+            sleep_quality=metrics.get("sleep_quality"), training_rhythm=systemic_activity_rhythm, wellness=season_wellness, metrics=metrics
         )
         energy_bank = apply_health_override_to_energy(energy_bank, planning_context)
         recent_trend = compute_recent_trend(wellness, n=5, form_thresholds=form_thresholds, form_median=form_median)
@@ -28347,6 +28347,7 @@ def analyze():
         microcycle_ledger = load_microcycle_ledger(strategy_plan, training_direction, cycling_season_activities, user_id=user["id"], read_only=qa_requested)
         microcycle_ledger = _v4932_attach_dose_context(microcycle_ledger, cycling_history_activities, now=get_rome_now())
         microcycle_ledger = _v190_block_dose_evidence(microcycle_ledger, cycling_history_activities, training_direction, now=get_rome_now())
+        training_direction["nova_execution"] = _v1965_verified_quality_execution(microcycle_ledger, training_direction.get("started_on"), now=get_rome_now())
         progression_training_blocks=_v492_attach_execution_quality(progression_training_blocks,microcycle_ledger);previous_training_blocks=progression_training_blocks[:8];session_progression=_v491_session_progression(progression_training_blocks)
         evidence_ledger=build_evidence_ledger(
             repeatability_history_blocks or progression_training_blocks, overlay_blocks=progression_training_blocks,
@@ -28656,7 +28657,7 @@ def analyze():
                 _codes=[str((x or {}).get("code") or "UNKNOWN") for x in _issues if isinstance(x,dict)]
                 qa_regression_message=(
                     "Nova-only QA regression is BLOCKED; diagnostic Snapshot and audit are shown below. "
-                    "No AI call was made and Production Last Report remains unchanged."
+                    "Production Last Report remains unchanged."
                     + ((" Failed: "+", ".join(_codes[:6])) if _codes else "")
                 )
                 data["qa_regression_blocked"] = True
@@ -28905,7 +28906,7 @@ def daily_log():
         saved_row = get_daily_log(saved_id)
         if not saved_row or str(saved_row.get("local_date") or "") != str(log_date):
             raise RuntimeError("Daily Log save verification failed")
-        detail = f"Daily Log saved for {log_date} · review it in Journal / Diary · no AI call"
+        detail = f"Daily Log saved for {log_date} · review it in Journal / Diary"
         return redirect(url_for("home", notice="NOTED", detail=detail))
     except (ValueError, TypeError) as exc:
         return redirect(url_for("home", notice="CHECK INPUT", detail=str(exc) or "Daily Log was not saved"))
@@ -28922,7 +28923,7 @@ def daily_log_promote(log_id):
         return redirect(url_for("home", notice="NOTHING TO MOVE", detail="That Daily Log has no note"))
     if not memory_text_exists(note):
         add_memory_item(note, "DAILY")
-        detail = "Daily note promoted to durable Memory · no AI call"
+        detail = "Daily note promoted to durable Memory"
     else:
         detail = "That note is already in durable Memory"
     return redirect(url_for("home", notice="NOTED", detail=detail))
@@ -28931,7 +28932,7 @@ def memory_add():
     if not require_login():
         return redirect(url_for("login"))
     add_memory_item(request.form.get("text", ""), request.form.get("category", "GENERAL"))
-    return redirect(url_for("home", notice="NOTED", detail="Durable Memory saved · no AI call"))
+    return redirect(url_for("home", notice="NOTED", detail="Durable Memory saved"))
 @app.route("/memory/archive/<item_id>", methods=["POST"])
 def memory_archive(item_id):
     if not require_login():
@@ -28979,7 +28980,7 @@ def planning_add():
             expected_duration_min=(request.form.get("expected_duration_min") if kind == "RACE" else request.form.get("training_duration_min")),
             expected_duration_max=(request.form.get("expected_duration_max") if kind == "RACE" else request.form.get("training_duration_min")),
         )
-        return redirect(url_for("home", notice="NOTED", detail="Calendar entry saved · no AI call"))
+        return redirect(url_for("home", notice="NOTED", detail="Calendar entry saved"))
     except ValueError as exc:
         return redirect(url_for("home", notice="CHECK EVENT", detail=str(exc) or "Calendar entry was not saved"))
 @app.route("/planning/archive/<item_id>", methods=["POST"])
@@ -29087,7 +29088,7 @@ def log_feeling():
         error = "Please pick a value between 1 and 10."
     if error:
         return redirect(url_for("home", notice="CHECK INPUT", detail=error))
-    return redirect(url_for("home", notice="NOTED", detail="Feeling saved · no AI call"))
+    return redirect(url_for("home", notice="NOTED", detail="Feeling saved"))
 
 # ============================================================================
 # R111 · EVIDENCE-GATED ROADMAP + DEEP CANONICAL WORKOUT LIBRARY
@@ -44656,6 +44657,188 @@ def build_content_audit_markdown(report):
     return full+'\n'+section
 
 APP_VERSION="THE LAB · PRODUCT V4.9.88 R196.4 · INDEPENDENT WEEKDAY RHYTHM EVIDENCE · NOVA R196.2 CORE"
+
+# R196.5 — three independent presentation/measurement corrections.
+# Existing scoring fields remain for historic audit compatibility; they do
+# longer describe an athlete's compliance with a Nova prescription.
+_v1965_energy_previous = compute_energy_bank
+
+def _v1965_bounded(value, low, high):
+    return max(low, min(high, value))
+
+
+def _v1965_number(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        x = float(value)
+        return x if math.isfinite(x) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _v1965_personal_deviation(current, low, high, invert=False):
+    current, low, high = map(_v1965_number, (current, low, high))
+    if None in (current, low, high) or high <= low:
+        return 0.0, False
+    distance = (current - (low + high) / 2.0) / max(high - low, 1.0)
+    return round(_v1965_bounded((-1.0 if invert else 1.0) * distance * 5.0, -6.0, 6.0), 2), True
+
+
+def compute_energy_bank(form_zone, fatigue_zone, avg_sleep_hours, recent_activities=None,
+                        personal_baselines=None, now=None, sleep_quality=None,
+                        training_rhythm=None, wellness=None, metrics=None):
+    """Heuristic energy index with continuous inputs; not a measured body battery."""
+    out = _v1965_energy_previous(
+        form_zone, fatigue_zone, avg_sleep_hours, recent_activities=recent_activities,
+        personal_baselines=personal_baselines, now=now, sleep_quality=sleep_quality,
+        training_rhythm=training_rhythm, wellness=wellness,
+    )
+    pb = personal_baselines or {}
+    resolved = pb.get('resolved') or {}
+    m = metrics or {}
+    today = (wellness or [])[-1] if wellness else {}
+    components = {'reference': 66.0}
+    tsb = _v1965_number(m.get('tsb'))
+    if tsb is not None:
+        components['load_balance'] = round(_v1965_bounded(tsb * 0.68, -16, 16), 2)
+    else:
+        components['load_balance'] = {'green': 9, 'red': -11}.get(form_zone, 0)
+    ctl = _v1965_number(m.get('ctl'))
+    atl = _v1965_number(m.get('atl'))
+    if ctl is not None and atl is not None and ctl > 0:
+        components['fatigue_ratio'] = round(_v1965_bounded((1.0-atl/ctl)*9, -7, 7), 2)
+    else:
+        components['fatigue_ratio'] = {'green': 5, 'red': -6}.get(fatigue_zone, 0)
+    hours = _v1965_number(avg_sleep_hours)
+    habitual = _v1965_number((pb.get('sleep') or {}).get('habitual_minutes'))
+    if hours is not None:
+        reference_hours = habitual / 60.0 if habitual and habitual > 0 else 7.0
+        components['sleep_duration'] = round(_v1965_bounded((hours-reference_hours)*5, -11, 7), 2)
+    else:
+        components['sleep_duration'] = 0.0
+    components['sleep_quality'] = {1: 7.0, 2: 3.0, 3: -3.0, 4: -8.0}.get(sleep_quality, 0.0)
+    for name, field, low, high, reverse in (
+        ('hrv', 'hrv', 'hrv_low', 'hrv_high', False),
+        ('resting_hr', 'restingHR', 'rhr_low', 'rhr_high', True),
+    ):
+        adjustment, available = _v1965_personal_deviation(today.get(field), resolved.get(low), resolved.get(high), reverse)
+        components[name] = adjustment
+    score_delta = _v1965_number(today.get('sleepScore'))
+    score_reference = _v1965_number(resolved.get('sleep_score'))
+    components['sleep_score'] = round(_v1965_bounded((score_delta-score_reference)*0.12, -4, 4), 2) if score_delta is not None and score_reference is not None else 0.0
+    raw_start = sum(components.values())
+    starting = round(_v1965_bounded(raw_start, 5, 100))
+    score = round(_v1965_bounded(starting - float(out.get('energy_spent') or 0), 5, 100))
+    label, zone = (('Charged', 'green') if score >= 72 else
+                   ('Available', 'grey') if score >= 45 else
+                   ('Used', 'orange') if score >= 25 else ('Drained', 'red'))
+    theta = math.pi * (1 - score / 100.0)
+    out.update({
+        'energy_score': score, 'energy_label': label, 'energy_zone': zone,
+        'energy_morning_score': starting, 'energy_starting_score': starting,
+        'marker_x': round(100 + 87 * math.cos(theta), 1),
+        'marker_y': round(95 - 87 * math.sin(theta), 1),
+        'energy_model': 'R1965_CONTINUOUS_HEURISTIC',
+        'energy_components': components,
+        'energy_interpretation': 'Relative heuristic; not a measured physiological battery. Missing signals are neutral.',
+    })
+    return out
+
+
+_v1965_direction_previous = build_training_direction
+
+def build_training_direction(season_activities, planning_context=None, plan=None, now=None):
+    out = _v1965_direction_previous(season_activities, planning_context=planning_context, plan=plan, now=now)
+    out['strategy_alignment_score'] = out.get('adherence_score')
+    out['strategy_alignment_label'] = out.get('adherence_label')
+    out['strategy_alignment_class'] = out.get('adherence_class')
+    out['strategy_alignment_scope'] = 'INTENSITY_DISTRIBUTION_AND_GOAL_STIMULUS_NOT_PRESCRIPTION_EXECUTION'
+    for key in ('headline','journey_summary','mesocycle_focus','method_note'):
+        if isinstance(out.get(key), str):
+            out[key] = out[key].replace('plan adherence', 'strategy alignment').replace('Plan adherence', 'Strategy alignment').replace('Overall plan adherence', 'Strategy alignment').replace('adherence score', 'alignment score').replace('adherence window', 'alignment window').replace('post-selection adherence', 'post-selection strategy alignment')
+    out['method_note'] = ('Strategy alignment compares observed intensity and goal stimulus with the declared model; '
+                          'it does not measure compliance with individual Nova sessions. '
+                          'Quality-session execution is reported separately only when linkable to persisted prescriptions.')
+    return out
+
+
+def _v1965_verified_quality_execution(ledger, start_date, now=None):
+    """Never infer full-plan compliance from hard-only prescription history."""
+    today = (now or get_rome_now()).date()
+    try:
+        start = date.fromisoformat(str(start_date)[:10])
+    except (TypeError, ValueError):
+        return {'available': False, 'reason': 'NO_DECLARED_PLAN_START', 'completed': 0, 'confirmed_missed': 0, 'unresolved': 0, 'score': None}
+    start = max(start, today - timedelta(days=27))
+    groups = {}
+    for row in (ledger or {}).get('prescription_history') or []:
+        if not isinstance(row, dict) or not (row.get('nova_workout_id') or row.get('nova_contract_id')):
+            continue
+        if not _v136_is_hard_summary(row) and not _v153_is_training_plan(row):
+            continue
+        try:
+            due = date.fromisoformat(str(row.get('date') or '')[:10])
+        except (TypeError, ValueError):
+            continue
+        if not (start <= due < today):
+            continue
+        status = str(row.get('prescription_status') or '').upper()
+        if status in {'SUPERSEDED', 'CANCELLED', 'WITHDRAWN', 'EXPIRED_BY_NEW_HARD_EVIDENCE'}:
+            continue
+        # A carried-forward instance is one commitment, not multiple missed doses.
+        if row.get('carried_forward_to_fingerprint'):
+            continue
+        identity = (due.isoformat(), str(row.get('nova_workout_id') or row.get('nova_contract_id')))
+        old = groups.get(identity)
+        if old is None or (status == 'FULFILLED' and row.get('executed_activity_id')):
+            groups[identity] = row
+    completed = sum(str(r.get('prescription_status') or '').upper() == 'FULFILLED' and bool(r.get('executed_activity_id')) for r in groups.values())
+    missed = sum(str(r.get('prescription_status') or '').upper() == 'MISSED_UNEXECUTED' for r in groups.values())
+    unresolved = len(groups) - completed - missed
+    # Unresolved attribution prevents a misleading numerical score.
+    scored = completed + missed if unresolved == 0 else 0
+    return {
+        'available': bool(scored), 'score': round(100 * completed/scored) if scored else None,
+        'completed': completed, 'confirmed_missed': missed, 'unresolved': unresolved,
+        'observed_hard_contracts': len(groups),
+        'reason': 'VERIFIED_HARD_ONLY' if scored else ('LINKS_UNRESOLVED' if unresolved else 'NO_VERIFIED_DUE_QUALITY_CONTRACTS'),
+        'scope': 'VERIFIED_QUALITY_PRESCRIPTIONS_ONLY_NOT_FULL_PLAN_ADHERENCE',
+    }
+
+# Obsolete provider-state wording has no place in the athlete's Nova UI.
+for _old, _new in (
+    ('NOVA · NO AI CALL', 'NOVA · GROUNDED ANSWER'),
+    (' · 0 AI calls.', '.'),
+    (' · no AI call', ''),
+    (' · No AI call', ''),
+    ('No AI call', 'No external provider required'),
+):
+    if isinstance(HOME_PAGE, str):
+        HOME_PAGE = HOME_PAGE.replace(_old, _new)
+
+# Distinguish alignment from execution; retain the historic values in audit data.
+if not isinstance(HOME_PAGE, str) or HOME_PAGE.count('🎯 PLAN ADHERENCE') != 1:
+    raise RuntimeError('R1965_STRATEGY_UI_ANCHOR_CHANGED')
+HOME_PAGE = HOME_PAGE.replace('🎯 PLAN ADHERENCE', '🎯 STRATEGY ALIGNMENT')
+HOME_PAGE = HOME_PAGE.replace('Plan adherence {{ td.adherence_score', 'Strategy alignment {{ td.strategy_alignment_score')
+HOME_PAGE = HOME_PAGE.replace('plan adherence still starts', 'strategy alignment still starts')
+HOME_PAGE = HOME_PAGE.replace('plan adherence ·', 'strategy alignment ·')
+HOME_PAGE = HOME_PAGE.replace('adherence {{ td.adherence_score', 'strategy alignment {{ td.strategy_alignment_score')
+HOME_PAGE = HOME_PAGE.replace('td.adherence_score', 'td.strategy_alignment_score').replace('td.adherence_label', 'td.strategy_alignment_label').replace('td.adherence_class', 'td.strategy_alignment_class')
+_v1965_alignment_help = '<p class="v48-direction-headline">{{ td.headline }}</p>'
+if HOME_PAGE.count(_v1965_alignment_help) != 1:
+    raise RuntimeError('R1965_ALIGNMENT_HELP_ANCHOR_CHANGED')
+HOME_PAGE = HOME_PAGE.replace(_v1965_alignment_help,
+    '<p class="v48-direction-headline">{{ td.headline }}</p>'
+    '<p class="v48-direction-headline"><strong>NOVA QUALITY EXECUTION · '
+    "{% set nx=td.get('nova_execution') or {} %}"
+    "{% if nx.get('available') %}{{ nx.get('completed') }}/{{ nx.get('completed') + nx.get('confirmed_missed') }} confirmed · {{ nx.get('score') }}%{% else %}NOT YET VERIFIABLE{% endif %}"
+    '</strong></p><p class="v48-direction-headline">Only causally linked quality prescriptions are counted. '
+    'Easy rides and prescribed rest are not covered; this is not whole-plan adherence. '
+    'Missing or unresolved activity links never count as a confirmed miss.</p>', 1)
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.89 R196.5 · HONEST ALIGNMENT + CONTINUOUS ENERGY + UI CLEANUP · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
