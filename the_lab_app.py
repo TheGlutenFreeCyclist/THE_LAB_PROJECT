@@ -45051,7 +45051,7 @@ HOME_PAGE = HOME_PAGE.replace('This is the threshold reference THE LAB currently
 HOME_PAGE = HOME_PAGE.replace("{% elif fa.status == 'AGING' %}", "{% elif fa.status in ('AGING','TEST ESTIMATE') %}", 1)
 BASE_CSS += '\n.v4822-breakthrough-grid{grid-template-columns:minmax(0,1fr)}'
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.92 R196.8.1 · STRICT REPEATED-DOSE TRUTH + DIRECT PB REFERENCE · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.93 R196.8.2 · VERIFIED REPEATABILITY BADGES + SAFE CANDIDATE UX · NOVA R196.2 CORE'
 
 # R196.7 — evidence for repeated work is not the best single fresh effort.
 # All seven goals use the same invariant, with no athlete-specific watts.
@@ -45193,6 +45193,63 @@ BASE_CSS += '''\n.v1967-work-range{font-weight:750;font-size:.96rem;margin:.65re
 .v1967-observed-reference{margin:.8rem 0;padding:.65rem .8rem;border-left:2px solid rgba(123,174,164,.65);background:rgba(123,174,164,.06);border-radius:4px}
 .v1967-observed-reference strong{display:block;font-size:.9rem}
 .v1967-observed-reference small{display:block;font-size:.78rem;line-height:1.4;opacity:.82;margin-top:.35rem}\n'''
+
+
+
+# R196.8.2 — descriptive interval variation is not verified repeatability.
+R19682_SCHEMA = "V4.9.93-R196.8.2-INTERVAL-PROVENANCE-AND-CONDITIONAL-UI-1"
+_r19682_attach_execution_before = _v492_attach_execution_quality
+
+def _v492_attach_execution_quality(blocks, ledger=None):
+    rows = _r19682_attach_execution_before(blocks, ledger)
+    for b in rows or []:
+        if not isinstance(b, dict):
+            continue
+        truth = b.get("activity_truth") or {}
+        repeated = b.get("repeatability") or {}
+        canonical_sources = {"ICU_INTERVALS_CANONICAL", "DEVICE_LAPS"}
+        verified = (truth.get("status") == "RESOLVED"
+                    and truth.get("confidence") == "HIGH"
+                    and str(truth.get("source") or "").upper() in canonical_sources
+                    and str(repeated.get("source") or "").upper() in canonical_sources
+                    and isinstance(repeated.get("watts"), (list, tuple))
+                    and len(repeated["watts"]) >= 2)
+        if verified:
+            continue
+        old_badges = b.get("progression_badges") or []
+        if isinstance(old_badges, list):
+            b["progression_badges"] = [
+                x for x in old_badges
+                if not (isinstance(x, dict) and x.get("label") == "Excellent repeatability")
+            ]
+        quality = b.get("execution_quality")
+        if isinstance(quality, dict) and isinstance(quality.get("degradation"), dict):
+            degradation = dict(quality["degradation"])
+            if degradation.get("label") in {"EXCELLENT", "STABLE", "GOOD"}:
+                degradation.update({"label": "UNVERIFIED INTERVAL BOUNDARIES",
+                                    "evidence_grade": "DESCRIPTIVE_ONLY",
+                                    "evidence_schema": R19682_SCHEMA})
+                quality = dict(quality)
+                quality["degradation"] = degradation
+                b["execution_quality"] = quality
+    return rows
+
+_r19682_athlete_view_before = _v1967_athlete_session_view
+
+def _v1967_athlete_session_view(session):
+    view = _r19682_athlete_view_before(session)
+    if not isinstance(view, dict):
+        return view
+    s = session if isinstance(session, dict) else {}
+    if s.get("provisional_quality") is True:
+        view = dict(view)
+        notice = "Candidate quality: execute only if the next recovery check confirms the session is appropriate."
+        note = str(view.get("why") or "").strip()
+        if "next recovery check" not in note.lower():
+            view["why"] = (notice + " " + note).strip()
+    return view
+
+app.jinja_env.globals["nova_athlete_view"] = _v1967_athlete_session_view
 
 
 if __name__ == "__main__":
