@@ -42310,7 +42310,12 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
             directive=(f'WORK TARGET: {mid} W in EACH of the {band["reps"]} work intervals '
                        f'(acceptable training range {lo}–{hi} W; {label}). ')
             if band.get('exploratory'):
-                directive += ('EXPLORATORY POWER TARGET: unverified longer repeated duration. The range is a challenge, not a pass mark. ' 'Power shortfall must not count as failure, reduce adherence or block progression; assess structure and recovery separately. ')
+                # Do not promote a shorter repeat or fresh single-effort PB to a
+                # fixed target for a longer set of consecutive intervals.
+                directive=(f'EXPLORATORY POWER TARGET: {lo}–{hi} W across {band["reps"]} work intervals; '
+                           'there is no required midpoint or validated per-rep watt target. '
+                           'Repeatability at the exact work/recovery dose is not yet verified. '
+                           'Power shortfall must not count as failure, reduce adherence or block progression; assess structure and recovery separately. ')
             sess['main_set']=directive+str(sess.get('main_set') or '')
             sess.update({'prescribed_power_low':lo,'prescribed_power_high':hi,
                 'power_band':'CALIBRATED_REPEAT_WORK',
@@ -45033,7 +45038,138 @@ HOME_PAGE = HOME_PAGE.replace('This is the threshold reference THE LAB currently
 HOME_PAGE = HOME_PAGE.replace("{% elif fa.status == 'AGING' %}", "{% elif fa.status in ('AGING','TEST ESTIMATE') %}", 1)
 BASE_CSS += '\n.v4822-breakthrough-grid{grid-template-columns:minmax(0,1fr)}'
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.90 R196.6 · FTP EVIDENCE + EXPLORATORY POWER + CHECKPOINT TRUTH · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.91 R196.7 · REPEATED-EFFORT EVIDENCE + ATHLETE VIEW · NOVA R196.2 CORE'
+
+# R196.7 — evidence for repeated work is not the best single fresh effort.
+# All seven goals use the same invariant, with no athlete-specific watts.
+R1967_SCHEMA = 'V4.9.91-R196.7-REPEATABILITY-AND-ATHLETE-VIEW-1'
+_r1967_band_before = _v1943_band
+
+
+def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None, dimension=None):
+    band = _r1967_band_before(template, evidence_ledger=evidence_ledger,
+                              ftp_anchor=ftp_anchor, as_of_date=as_of_date,
+                              dimension=dimension)
+    if not isinstance(band, dict) or band.get('state') != 'PRESCRIBED':
+        return band
+    band = dict(band)
+    band['repeatability_evidence_schema'] = R1967_SCHEMA
+    source = str(band.get('source') or '')
+    if source == 'COMPARABLE_VERIFIED_REPEATED_WORK':
+        # Original selection already requires strong, recent, canonical repeated
+        # work, enough repetitions, low variability and bounded duration transfer.
+        # Add the missing recovery-context contract before allowing HIGH confidence.
+        events = ((evidence_ledger or {}).get('repeatability') or {}).get('events') or []
+        event = next((e for e in events if isinstance(e, dict)
+                      and str(e.get('activity_id') or '') == str(band.get('activity_id') or '')
+                      and e.get('strong') is True
+                      and abs((_v1943_finite(e.get('interval_secs'), 0) or -1)
+                              - (band.get('evidence_interval_seconds') or 0)) < 1), None)
+        work = _v1943_finite(band.get('work_seconds'), 1)
+        actual = _v1943_finite(band.get('evidence_interval_seconds'), 1)
+        prescribed_recovery = _v1943_finite((template or {}).get('recovery_s'), 1)
+        observed_recovery = _v1943_finite((event or {}).get('recovery_secs'), 1)
+        comparable_recovery = bool(prescribed_recovery and observed_recovery
+                                   and observed_recovery <= prescribed_recovery * 1.15)
+        comparable_repetitions = bool(event and int(_v1943_finite(event.get('reps'), 1) or 0)
+                                      >= int(band.get('reps') or 0))
+        if not comparable_repetitions or not comparable_recovery or not actual or not work or actual < work:
+            reason = ('SHORTER_INTERVAL_TRANSFER' if actual and work and actual < work
+                      else 'RECOVERY_CONTEXT_NOT_COMPARABLE' if not comparable_recovery
+                      else 'REPEATED_EVIDENCE_NOT_RECONFIRMED')
+            band.update({'confidence': 'LOW', 'exploratory': True, 'non_punitive': True,
+                         'scoring_policy': 'STRUCTURE_ONLY_POWER_DESCRIPTIVE',
+                         'repeatability_state': 'NOT_VERIFIED_FOR_THIS_WORKOUT',
+                         'repeatability_reason': reason,
+                         'reason': reason,
+                         'low_watts': min(int(band['low_watts']), int(band['target_watts']) - 20),
+                         'high_watts': max(int(band['high_watts']), int(band['target_watts']) + 5)})
+        else:
+            band['repeatability_state'] = ('VERIFIED_COMPARABLE_REPEATS' if actual == work
+                                            else 'SUPPORTED_BY_LONGER_REPEATS')
+            band['repeatability_reason'] = 'REPEATED_WORK_AND_RECOVERY_COMPARABLE'
+            if actual > work:
+                band['confidence'] = 'MODERATE'
+        band['observed_single_best_is_repeatability_proof'] = False
+        band['observed_repeated_work_is_direct_evidence'] = bool(
+            band['repeatability_state'] == 'VERIFIED_COMPARABLE_REPEATS')
+    elif source == 'VALID_FTP_STARTER_POLICY_NOT_OBSERVED_REPEATABILITY':
+        # A supported FTP estimate can establish a starter zone; it cannot prove
+        # a specific set of repetitions or license a pass/fail power grade.
+        band.update({'confidence': 'PROVISIONAL', 'exploratory': True,
+                     'non_punitive': True, 'scoring_policy': 'STRUCTURE_ONLY_POWER_DESCRIPTIVE',
+                     'repeatability_state': 'NOT_VERIFIED_FOR_THIS_WORKOUT',
+                     'repeatability_reason': 'FTP_ZONE_IS_NOT_COMPLETED_REPEATED_WORK',
+                     'observed_single_best_is_repeatability_proof': False,
+                     'observed_repeated_work_is_direct_evidence': False})
+    else:
+        # A separately validated coupled-recovery policy keeps its own contract.
+        band['repeatability_state'] = 'SEPARATE_PROVENANCE_POLICY'
+    return band
+
+
+def _v1967_athlete_session_view(session):
+    """Read-only UI projection. Never edits canonical sessions, watt contracts or audits."""
+    s = session if isinstance(session, dict) else {}
+    band = s.get('power_prescription') or {}
+    power = s.get('power_evidence') or {}
+    raw = str(s.get('main_set') or '').strip()
+    why = str(s.get('why') or '').strip()
+    exploratory = bool(band.get('exploratory'))
+    output = {'instructions': raw, 'why': why, 'band_label': None,
+              'reference_label': None, 'reference_caution': None,
+              'exploratory': exploratory}
+    if band.get('state') == 'PRESCRIBED' and band.get('low_watts') is not None and band.get('high_watts') is not None:
+        lo, hi = int(band['low_watts']), int(band['high_watts'])
+        output['band_label'] = (f'Exploratory work range: {lo}–{hi} W · not a pass mark'
+                                if exploratory else f'Prescribed work range: {lo}–{hi} W')
+        # Remove diagnostic/policy prose but retain the physical execution,
+        # warm-up, recovery, safety/stop and cool-down instructions.
+        raw = re.sub(r'^WORK TARGET:.*?\)\.\s*', '', raw, count=1, flags=re.S)
+        raw = re.sub(r'^EXPLORATORY POWER TARGET:.*?assess structure and recovery separately\.\s*',
+                     '', raw, count=1, flags=re.S)
+        raw = re.sub(r'Observed recent \d+(?:\.\d+)?-min best:.*?grading threshold\.\s*',
+                     '', raw, count=1, flags=re.S)
+        output['instructions'] = raw
+        if exploratory:
+            output['why'] = ('Unverified repeatability at this duration or recovery pattern. '
+                             'Start conservatively and only explore the upper range if you can '
+                             'reproduce the effort without compromising the next repetition.')
+        else:
+            output['why'] = re.sub(r'Observed recent \d+(?:\.\d+)?-min best:.*
+, '', why, flags=re.S).strip()
+        output['why'] = output['why'].replace('The prescribed training wattage is independent of single-effort peak records.', '').strip()
+    duration = _v1943_finite(power.get('duration_seconds'), 1, 86400)
+    watts = _v1943_finite(power.get('observed_recent_watts'), 1, 3000)
+    source = str(power.get('observed_recent_source') or '')
+    scope = 'recent 42 days'
+    if not watts or not source.startswith('DIRECT_'):
+        watts = _v1943_finite(power.get('observed_season_best_watts'), 1, 3000)
+        source = str(power.get('observed_season_source') or '')
+        scope = str(power.get('long_term_scope') or 'historical')
+    if duration and watts and source.startswith('DIRECT_'):
+        d_label = f'{int(duration / 60)} min' if duration % 60 == 0 else f'{int(duration)} sec'
+        output['reference_label'] = f'Observed single-effort best · {d_label}: {int(round(watts))} W ({scope})'
+        output['reference_caution'] = ('A single best effort, even when fresh, does not prove '
+                                       'the same power is repeatable with the prescribed recoveries.')
+    return output
+
+app.jinja_env.globals['nova_athlete_view'] = _v1967_athlete_session_view
+
+# Only UI projection changes here; the persisted main_set, why and CA stay complete.
+_old_upcoming_main = "<div class=\"v4-session-main\">{{ s.main_set|replace('See coach recommendation.','See the recommendation above.') }}</div>\n<div class=\"v4-session-why\"><strong>Why:</strong> {{ s.why }}</div>"
+_new_upcoming_main = """{% set athlete_view = nova_athlete_view(s) %}
+{% if athlete_view.band_label %}<div class="v1967-work-range">{{ athlete_view.band_label }}</div>{% endif %}
+<div class="v4-session-main">{{ athlete_view.instructions|replace('See coach recommendation.','See the recommendation above.') }}</div>
+{% if athlete_view.reference_label %}<div class="v1967-observed-reference"><strong>{{ athlete_view.reference_label }}</strong><small>{{ athlete_view.reference_caution }}</small></div>{% endif %}
+<div class="v4-session-why"><strong>Nova's note:</strong> {{ athlete_view.why }}</div>"""
+assert HOME_PAGE.count(_old_upcoming_main) == 1, 'R196.7 UI anchor drift'
+HOME_PAGE = HOME_PAGE.replace(_old_upcoming_main, _new_upcoming_main, 1)
+BASE_CSS += '''\n.v1967-work-range{font-weight:750;font-size:.96rem;margin:.65rem 0 .35rem;letter-spacing:.01em}
+.v1967-observed-reference{margin:.8rem 0;padding:.65rem .8rem;border-left:2px solid rgba(123,174,164,.65);background:rgba(123,174,164,.06);border-radius:4px}
+.v1967-observed-reference strong{display:block;font-size:.9rem}
+.v1967-observed-reference small{display:block;font-size:.78rem;line-height:1.4;opacity:.82;margin-top:.35rem}\n'''
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
