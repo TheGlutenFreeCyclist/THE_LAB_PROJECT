@@ -45051,7 +45051,7 @@ HOME_PAGE = HOME_PAGE.replace('This is the threshold reference THE LAB currently
 HOME_PAGE = HOME_PAGE.replace("{% elif fa.status == 'AGING' %}", "{% elif fa.status in ('AGING','TEST ESTIMATE') %}", 1)
 BASE_CSS += '\n.v4822-breakthrough-grid{grid-template-columns:minmax(0,1fr)}'
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.92 R196.8 · STRICT REPEATED-DOSE TRUTH + DIRECT PB REFERENCE · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.92 R196.8.1 · STRICT REPEATED-DOSE TRUTH + DIRECT PB REFERENCE · NOVA R196.2 CORE'
 
 # R196.7 — evidence for repeated work is not the best single fresh effort.
 # All seven goals use the same invariant, with no athlete-specific watts.
@@ -45161,8 +45161,7 @@ def _v1967_athlete_session_view(session):
                              'Start conservatively and only explore the upper range if you can '
                              'reproduce the effort without compromising the next repetition.')
         else:
-            output['why'] = re.sub(r'Observed recent \d+(?:\.\d+)?-min best:.*
-, '', why, flags=re.S).strip()
+            output['why'] = re.sub(r'Observed recent \d+(?:\.\d+)?-min best:.*$', '', why, flags=re.S).strip()
         output['why'] = output['why'].replace('The prescribed training wattage is independent of single-effort peak records.', '').strip()
     duration = _v1943_finite(power.get('duration_seconds'), 1, 86400)
     watts = _v1943_finite(power.get('observed_recent_watts'), 1, 3000)
