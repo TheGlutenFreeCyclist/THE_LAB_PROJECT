@@ -3491,7 +3491,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · {{ 'IN YOUR NEXT TWO' if quality_already_shown else 'AWAITING PLAN' }}</span></div>
 <h3>{{ 'Already planned in card ' ~ (upcoming.quality_index + 1) if quality_already_shown else 'Next quality not yet scheduled' }}</h3>
 <div class="v4-session-meta"><span class="v4-session-pill">{{ 'SEE CARD ' ~ (upcoming.quality_index + 1) if quality_already_shown else 'PENDING' }}</span></div>
-<div class="v4-session-main">{% if quality_already_shown %}{{ data.next_sessions[upcoming.quality_index].title }} · see its session details above. No duplicate workout is prescribed.{% else %}Nova has not yet established an executable next quality session. No date, duration, power or structure has been invented.{% endif %}</div>
+<div class="v4-session-main">{% if quality_already_shown %}{{ data.next_sessions[upcoming.quality_index].title }} · see its session details above. No duplicate workout is prescribed.{% else %}Nova has not yet established an executable next quality session. No date, duration, power or structure has been invented.{% if data.nova_prescription and data.nova_prescription.evidence_gap_guidance %}<p class="v19683-evidence-note">{{ data.nova_prescription.evidence_gap_guidance.message }}</p>{% endif %}{% endif %}</div>
 <div class="v4-session-why"><strong>Why:</strong> {{ 'The earliest validated quality is already one of the next two chronological sessions.' if quality_already_shown else 'Nova will reassess the next quality opportunity when the scientific, recovery and scheduling checks support one.' }}</div>
 {% else %}
 <div class="v4-session-slot">{% if is_quality_slot %}<span class="v1962-quality-eyebrow">NEXT QUALITY{{ ' · PROVISIONAL' if s.provisional_quality else '' }}</span>{% endif %}{% if s.date %}{{ s.date[8:10] }}/{{ s.date[5:7] }}/{{ s.date[:4] }} · {% endif %}{{ s.slot }}</div>
@@ -45051,7 +45051,7 @@ HOME_PAGE = HOME_PAGE.replace('This is the threshold reference THE LAB currently
 HOME_PAGE = HOME_PAGE.replace("{% elif fa.status == 'AGING' %}", "{% elif fa.status in ('AGING','TEST ESTIMATE') %}", 1)
 BASE_CSS += '\n.v4822-breakthrough-grid{grid-template-columns:minmax(0,1fr)}'
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.93 R196.8.2 · VERIFIED REPEATABILITY BADGES + SAFE CANDIDATE UX · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.94 R196.8.3 · HISTORICAL ANCHOR TRUTH + EVIDENCE PATH · NOVA R196.2 CORE'
 
 # R196.7 — evidence for repeated work is not the best single fresh effort.
 # All seven goals use the same invariant, with no athlete-specific watts.
@@ -45251,6 +45251,94 @@ def _v1967_athlete_session_view(session):
 
 app.jinja_env.globals["nova_athlete_view"] = _v1967_athlete_session_view
 
+
+
+# R196.8.3: an old planned anchor is history, not current execution authority.
+R19683_SCHEMA = "V4.9.94-R196.8.3-ANCHOR-EVIDENCE-1"
+
+def _v19683_effective_ledger(ledger, sessions, now=None):
+    """Pure reconciliation: never replace training history or inferred watts."""
+    if not isinstance(ledger,dict): return ledger
+    anchor=ledger.get("primary_anchor")
+    if not isinstance(anchor,dict) or str(anchor.get("status") or "").upper() not in {"PLANNED","ACTIVE"}: return ledger
+    slot=_v153_plan_slot(anchor)
+    if not isinstance(slot,tuple) or not slot or not slot[0]: return ledger
+    try:
+        if date.fromisoformat(str(slot[0])[:10]) < (now or get_rome_now()).date(): return ledger
+    except (ValueError,TypeError,AttributeError): return ledger
+    rows=[s for s in (sessions or []) if isinstance(s,dict) and _v153_plan_slot(s)==slot]
+    # Explicit same-slot easy replacement ONLY; silence or absent hard is insufficient.
+    if not rows or not all(
+        str(s.get("source") or "").upper()=="RHYTHM"
+        and str(s.get("intensity") or "").upper() in {"EASY","RECOVERY"}
+        and str(s.get("intensity_class") or "").lower() in {"recovery","endurance"}
+        and not s.get("hard_spacing_relevant") and not s.get("provisional_quality")
+        and not s.get("is_race") and not s.get("is_planned_training")
+        and str(s.get("restriction") or "NONE").upper()=="NONE"
+        and str(s.get("quality_relevance") or "").upper()!="MEANINGFUL"
+        for s in rows): return ledger
+    if anchor.get("effective_status")=="REPLACED_BY_CANONICAL_EASY": return ledger
+    out=copy.deepcopy(ledger)
+    out["primary_anchor"].update({
+        "effective_execution_authority":"NOT_IN_CURRENT_ATHLETE_PLAN",
+        "effective_status":"REPLACED_BY_CANONICAL_EASY",
+        "effective_status_schema":R19683_SCHEMA,
+        "historical_status":anchor.get("status")})
+    for item in out.get("prescription_history") or []:
+        if not isinstance(item,dict) or _v153_plan_slot(item)!=slot: continue
+        aid=str(anchor.get("nova_workout_id") or anchor.get("nova_contract_id") or "")
+        rid=str(item.get("nova_workout_id") or item.get("nova_contract_id") or "")
+        afp=str(anchor.get("prescription_fingerprint") or "")
+        rfp=str(item.get("prescription_fingerprint") or "")
+        same=bool((aid and aid==rid) or (afp and afp==rfp) or
+                  (not aid and not rid and item.get("title")==anchor.get("title")
+                   and item.get("main_set")==anchor.get("main_set")))
+        if same and str(item.get("prescription_status") or "").upper() in {"ACTIVE","PLANNED","MISSED_UNEXECUTED",""}:
+            item.update({"effective_execution_authority":"NOT_IN_CURRENT_ATHLETE_PLAN",
+                         "effective_status":"REPLACED_BY_CANONICAL_EASY",
+                         "effective_status_schema":R19683_SCHEMA})
+    out["r19683_anchor_reconciliation"]={"schema":R19683_SCHEMA,
+       "state":"HISTORICAL_NOT_EXECUTABLE","slot_date":slot[0],
+       "reason":"EXACT_CANONICAL_EASY_REPLACEMENT_NOT_A_NEW_PRESCRIPTION"}
+    return out
+
+_r19683_reconcile_before=_v1952_reconcile_ledger
+def _v1952_reconcile_ledger(ledger, sessions, now=None, decision_action=None):
+    out=_r19683_reconcile_before(ledger,sessions,now=now,decision_action=decision_action)
+    return _v19683_effective_ledger(out,sessions,now=now)
+
+_r19683_prescribe_before=build_nova_prescription
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None,
+        microcycle_ledger=None, evidence_ledger=None, power_model=None,
+        ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    out=_r19683_prescribe_before(nova_decision,coach_clock,
+        adaptive_roadmap=adaptive_roadmap,microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger,power_model=power_model,ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range,training_definitions=training_definitions)
+    if not isinstance(out,dict) or str(out.get("status") or "").upper()!="EASY_ONLY":return out
+    if str(out.get("fail_closed_reason") or "") not in {
+        "WORKOUT_LIBRARY_NO_CANDIDATE","INCOMPATIBLE_LOCK_NO_EVIDENCED_REPLACEMENT"}:return out
+    # Never schedule an unverified checkpoint or create a watt target.
+    road=adaptive_roadmap if isinstance(adaptive_roadmap,dict) else {}
+    test=road.get("test") if isinstance(road.get("test"),dict) else {}
+    state=str(test.get("state") or "").upper()
+    label=str(test.get("label") or "Goal-specific checkpoint").strip()[:100]
+    if state in {"COMPLETED","COMPLETE"}:
+        next_step="Nova will reassess comparable repeated-work evidence at the next safe opportunity."
+    elif test and state in {"BASELINE BUILD","BUILD FIRST","TEST SOON","WINDOW OPEN"}:
+        next_step=(f"{label} can build evidence only when the roadmap stage and recovery checks allow it. "
+                   "It is not scheduled now.")
+    else:
+        next_step="Nova will reconsider quality after comparable work or eligible assessment evidence becomes available."
+    out=dict(out)
+    out["evidence_gap_guidance"]={
+        "schema":R19683_SCHEMA,"state":"QUALITY_DEFERRED_FOR_EVIDENCE",
+        "message":("No defensible repeated-work dose is available for the intended quality. "
+                   "Follow the current easy plan, not a single best or historical planned watts. "+next_step),
+        "not_a_prescription":True,"no_test_scheduled":True}
+    return out
+
+BASE_CSS += "\n.v19683-evidence-note{font-size:12px;line-height:1.5;opacity:.86;margin-top:8px}"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
