@@ -18303,13 +18303,18 @@ def compute_race_readiness(form_zone, fatigue_zone, sleep_quality, personal_base
     if sleep.get("color") == "green":
         score += 4
     elif sleep.get("color") == "grey":
-        if sleep_quality not in (1, 2):
+        # Missing sleepQuality is unknown, NOT a poor-quality observation.
+        if sleep_quality in (3, 4):
             score -= 3; signals.append((1, "sleep slightly short"))
     elif sleep.get("color") == "red":
         if sleep_quality in (1, 2):
             score -= 3; signals.append((1, "sleep short but quality good"))
-        else:
+        elif sleep_quality in (3, 4):
             score -= 8; signals.append((3, "sleep well below habitual opportunity"))
+        else:
+            # Duration is observed short, quality is not observed. Keep the
+            # legitimate duration warning without assuming bad sleep quality.
+            score -= 3; signals.append((1, "sleep short; quality not reported"))
     if spo2.get("status") != "No current data":
         if spo2.get("color") == "green": score += 2
         elif spo2.get("color") == "red":
@@ -45051,7 +45056,7 @@ HOME_PAGE = HOME_PAGE.replace('This is the threshold reference THE LAB currently
 HOME_PAGE = HOME_PAGE.replace("{% elif fa.status == 'AGING' %}", "{% elif fa.status in ('AGING','TEST ESTIMATE') %}", 1)
 BASE_CSS += '\n.v4822-breakthrough-grid{grid-template-columns:minmax(0,1fr)}'
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.94 R196.8.3 · HISTORICAL ANCHOR TRUTH + EVIDENCE PATH · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.95 R196.8.4 · NEUTRAL MISSING SLEEP + CORROBORATED LOAD GATE · NOVA R196.2 CORE'
 
 # R196.7 — evidence for repeated work is not the best single fresh effort.
 # All seven goals use the same invariant, with no athlete-specific watts.
@@ -45339,6 +45344,22 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None,
     return out
 
 BASE_CSS += "\n.v19683-evidence-note{font-size:12px;line-height:1.5;opacity:.86;margin-top:8px}"
+
+# R196.8.4 — no fabricated recovery certainty from missing sleepQuality.
+# An isolated, *marginal* ATL/CTL threshold should be corroborated before
+# blocking all quality indefinitely. Keep downstream spacing/power gates.
+from nova_load_guard import refine_training_state as _v19684_refine_load
+
+_r19684_training_state_before = build_training_state
+
+def build_training_state(season_activities, season_wellness, planning_context,
+                         metrics, feeling_trend=None, now=None):
+    raw = _r19684_training_state_before(
+        season_activities, season_wellness, planning_context, metrics,
+        feeling_trend=feeling_trend, now=now)
+    return _v19684_refine_load(raw, metrics=metrics, feeling_trend=feeling_trend,
+                                planning_context=planning_context)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
