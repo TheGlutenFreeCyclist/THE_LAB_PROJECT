@@ -45902,8 +45902,16 @@ _r19688_ui_patches = (
     ("NEXT QUALITY{{ ' · PROVISIONAL' if s.provisional_quality else '' }}",
      "{{ 'FUTURE QUALITY · UNAPPROVED PREVIEW' if s.provisional_quality else 'NEXT QUALITY' }}"),
     ('⚡ CANDIDATE · REASSESS', '⚠ PREVIEW ONLY · DO NOT EXECUTE'),
-    ('<div class="v4-session-main">{{ s.main_set|replace(\'See coach recommendation.\',\'See the recommendation above.\') }}</div>',
-     '<div class="v4-session-main">{% if s.provisional_quality %}<div class="v19688-preview-warning" role="note"><strong>QUALITY NOT CLEARED.</strong> This is a future possibility, not the current training instruction. Do not execute this workout until a NEW Nova Snapshot explicitly clears it.</div><details class="v19688-preview-details"><summary>View conditional workout preview (not approved)</summary><div>{{ s.main_set|replace(\'See coach recommendation.\',\'See the recommendation above.\') }}</div></details>{% else %}{{ s.main_set|replace(\'See coach recommendation.\',\'See the recommendation above.\') }}{% endif %}</div>'),
+    ("""{% if athlete_view.band_label %}<div class="v1967-work-range">{{ athlete_view.band_label }}</div>{% endif %}
+<div class="v4-session-main">{{ athlete_view.instructions|replace('See coach recommendation.','See the recommendation above.') }}</div>
+{% if athlete_view.reference_label %}<div class="v1967-observed-reference"><strong>{{ athlete_view.reference_label }}</strong><small>{{ athlete_view.reference_caution }}</small></div>{% endif %}
+<div class="v4-session-why"><strong>Nova's note:</strong> {{ athlete_view.why }}</div>""",
+     """{% if s.provisional_quality %}<div class="v19688-preview-warning" role="note"><strong>QUALITY NOT CLEARED.</strong> This is a future possibility, not the current training instruction. Do not execute this workout until a NEW Nova Snapshot explicitly clears it.</div><details class="v19688-preview-details"><summary>View conditional workout preview (not approved)</summary>{% endif %}
+{% if athlete_view.band_label %}<div class="v1967-work-range">{{ athlete_view.band_label }}</div>{% endif %}
+<div class="v4-session-main">{{ athlete_view.instructions|replace('See coach recommendation.','See the recommendation above.') }}</div>
+{% if athlete_view.reference_label %}<div class="v1967-observed-reference"><strong>{{ athlete_view.reference_label }}</strong><small>{{ athlete_view.reference_caution }}</small></div>{% endif %}
+<div class="v4-session-why"><strong>Nova's note:</strong> {{ athlete_view.why }}</div>
+{% if s.provisional_quality %}</details>{% endif %}"""),
     ('{% set n = data.nutrition_plan[si] if s and data.nutrition_plan',
      '{% set n = data.nutrition_plan[si] if s and not s.provisional_quality and data.nutrition_plan'),
     ("{{ 'See the fueling in its chronological card.' if quality_already_shown else 'Fueling will follow the confirmed quality prescription.' if is_quality_slot else 'No fueling target available.' }}",
@@ -45922,7 +45930,7 @@ BASE_CSS += """
 .v19688-preview-warning strong{color:#f6be78}
 .v19688-preview-details{padding:4px 0 8px}.v19688-preview-details summary{cursor:pointer;font-weight:600}.v19688-preview-details div{padding:10px 0}
 """
-APP_VERSION = 'THE LAB · PRODUCT V4.9.99 R196.8.8 · QUALITY CLEARANCE AUTHORITY + PROVISIONAL PREVIEW UX · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.100 R196.8.9 · STARTUP ANCHOR FIX + QUALITY HOLD UX · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
