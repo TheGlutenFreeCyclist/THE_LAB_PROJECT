@@ -14967,6 +14967,47 @@ def _v86_first_session_summary(sessions):
     lead=f"Your next session is {title}"+(f" ({dur})" if dur else "")+"."
     return _v86_sentence_join([lead,main],limit=3)
 
+def _v19687_distribution_summary(season_stats, training_direction):
+    # Distribution truth: the season TIZ rollup and post-declaration plan window
+    # are DISTINCT samples. Never describe one window's model using the other's
+    # percentages. AUTO has no enforced distribution target; its score is only
+    # goal-stimulus alignment (never "distribution adherence").
+    low=_rhythm_num(season_stats.get("zone_low_pct"));mod=_rhythm_num(season_stats.get("zone_mod_pct"));high=_rhythm_num(season_stats.get("zone_high_pct"))
+    dist_bits=[]
+    if low is not None and mod is not None and high is not None:
+        dist_bits.append(f"Rolling season intensity (longer window): {low:.0f}% low, {mod:.0f}% moderate, {high:.0f}% high.")
+    declared=str(training_direction.get("distribution_label") or "").strip()
+    observed=str(training_direction.get("observed_zone_model") or "").strip()
+    target=str(training_direction.get("distribution_target") or "").upper()
+    active=training_direction.get("active") is True
+    plan_pct=training_direction.get("zone_pct") if isinstance(training_direction.get("zone_pct"),dict) else {}
+    pl=_rhythm_num(plan_pct.get("low"));pm=_rhythm_num(plan_pct.get("moderate"));ph=_rhythm_num(plan_pct.get("high"))
+    since=str(training_direction.get("assessment_start_display") or training_direction.get("assessment_start") or "").strip()
+    plan_window=(f"since {since}" if since else "in the declared-plan window")
+    if not active:
+        dist_bits.append("No active selected distribution/goal is being scored; these season proportions are descriptive only.")
+    else:
+        model_clause=f"Declared distribution: {declared or target or 'UNKNOWN'}"
+        if observed:
+            model_clause+=f"; observed post-selection pattern ({plan_window}): {observed}"
+            if pl is not None and pm is not None and ph is not None:
+                model_clause+=f" ({pl:.0f}% low, {pm:.0f}% moderate, {ph:.0f}% high)"
+        model_clause += "."
+        dist_bits.append(model_clause)
+        score=_rhythm_num(training_direction.get("strategy_alignment_score") if training_direction.get("strategy_alignment_score") is not None else training_direction.get("adherence_score"))
+        label=str(training_direction.get("adherence_label") or "LEARNING").strip()
+        goal=str(training_direction.get("goal_label") or "current goal").strip()
+        if target=="AUTO":
+            grade=label.removesuffix(" ALIGNMENT")+(f" ({score:.0f}%)" if score is not None else "")
+            dist_bits.append(f"AUTO monitors distribution without an enforced pattern; {goal} goal-stimulus alignment is {grade}, NOT distribution compliance.")
+        elif score is not None:
+            dist_bits.append(f"Combined declared-model and goal-stimulus strategy alignment: {label} ({score:.0f}%).")
+        else:
+            dist_bits.append("Combined strategy alignment is not yet established; this is a descriptive distribution snapshot.")
+    season_distribution=_v86_sentence_join(dist_bits,limit=5) or "The training-distribution evidence is not yet available."
+
+    return season_distribution
+
 def compose_nova_snapshot(metrics=None, season_stats=None, training_state=None, training_direction=None, question_state=None, nova_decision=None, nova_prescription=None, adaptive_roadmap=None, microcycle_ledger=None, feeling_trend=None, planning_context=None, race_repeatability=None, vo2_trend=None, metabolic_context=None, performance_evidence=None, power_achievements=None, snapshot_question=None, strength_pattern=None, session_progression=None):
     """R86 deterministic full-Snapshot prose composer.
 
@@ -14989,15 +15030,7 @@ def compose_nova_snapshot(metrics=None, season_stats=None, training_state=None, 
     if headline:load_bits.append(headline)
     training_load=_v86_sentence_join(load_bits,limit=3) or "Training load is available from the current deterministic Snapshot metrics."
 
-    # Distribution: preserve the existing 90-day TIZ semantics and declared model.
-    low=_rhythm_num(season_stats.get("zone_low_pct"));mod=_rhythm_num(season_stats.get("zone_mod_pct"));high=_rhythm_num(season_stats.get("zone_high_pct"))
-    dist_bits=[]
-    if low is not None and mod is not None and high is not None:dist_bits.append(f"Rolling intensity distribution is {low:.0f}% low, {mod:.0f}% moderate and {high:.0f}% high.")
-    declared=str(training_direction.get("distribution_label") or "").strip();observed=str(training_direction.get("observed_zone_model") or "").strip();adh=str(training_direction.get("adherence_label") or "").strip()
-    if declared and observed:dist_bits.append(f"Declared model: {declared}; observed pattern: {observed}.")
-    elif declared:dist_bits.append(f"Declared model: {declared}.")
-    if adh:dist_bits.append(f"Alignment: {adh}.")
-    season_distribution=_v86_sentence_join(dist_bits,limit=3) or "The current training-distribution model is loaded and available to Nova."
+    season_distribution=_v19687_distribution_summary(season_stats, training_direction)
 
     # Fatigue/recovery: describe statuses instead of inventing causal interpretation.
     fatigue_bits=[]
@@ -44778,13 +44811,20 @@ def build_training_direction(season_activities, planning_context=None, plan=None
     out['strategy_alignment_score'] = out.get('adherence_score')
     out['strategy_alignment_label'] = out.get('adherence_label')
     out['strategy_alignment_class'] = out.get('adherence_class')
-    out['strategy_alignment_scope'] = 'INTENSITY_DISTRIBUTION_AND_GOAL_STIMULUS_NOT_PRESCRIPTION_EXECUTION'
+    if str(out.get('distribution_target') or '').upper() == 'AUTO':
+        out['strategy_alignment_scope'] = 'GOAL_STIMULUS_ONLY_AUTO_DISTRIBUTION_MONITORED_NOT_SCORED'
+        out['method_note'] = ('AUTO monitors the observed intensity distribution without enforcing a pattern. '
+                              'The displayed strategy alignment score concerns the chosen goal stimulus only; '
+                              'it is not a distribution-fit or completed-Nova-session compliance score.')
+    else:
+        out['strategy_alignment_scope'] = 'INTENSITY_DISTRIBUTION_AND_GOAL_STIMULUS_NOT_PRESCRIPTION_EXECUTION'
     for key in ('headline','journey_summary','mesocycle_focus','method_note'):
         if isinstance(out.get(key), str):
             out[key] = out[key].replace('plan adherence', 'strategy alignment').replace('Plan adherence', 'Strategy alignment').replace('Overall plan adherence', 'Strategy alignment').replace('adherence score', 'alignment score').replace('adherence window', 'alignment window').replace('post-selection adherence', 'post-selection strategy alignment')
-    out['method_note'] = ('Strategy alignment compares observed intensity and goal stimulus with the declared model; '
-                          'it does not measure compliance with individual Nova sessions. '
-                          'Quality-session execution is reported separately only when linkable to persisted prescriptions.')
+    if str(out.get('distribution_target') or '').upper() != 'AUTO':
+        out['method_note'] = ('Strategy alignment compares observed intensity and goal stimulus with the declared model; '
+                              'it does not measure compliance with individual Nova sessions. '
+                              'Quality-session execution is reported separately only when linkable to persisted prescriptions.')
     return out
 
 
@@ -45518,6 +45558,231 @@ BASE_CSS += '''
 .v19685-quality-gate.neutral{opacity:.8}
 '''
 APP_VERSION = 'THE LAB · PRODUCT V4.9.97 R196.8.6 · DOSE-AWARE TEST EXPLORATION + QUALITY GATES · NOVA R196.2 CORE'
+
+
+
+# R196.8.7 — COACH ANALYSIS SINGLE-DECISION COHERENCE (all athletes).
+# The R171 recovery-hold projection intentionally carries a future hard workout
+# as a PROVISIONAL candidate. It must never be narrated as the "next quality
+# slot" already authorised while Nova Decision is HOLD / hard_session_allowed
+# is false. Do not change the canonical workout, test-derived exploratory
+# watt contract, historical ledger, safety gates, or the current Nova decision.
+R19687_SCHEMA = "V4.9.98-R196.8.7-COACH-ANALYSIS-COHERENCE-1"
+_r19687_recommendation_before = _v106_recommendation_projection
+_r19687_render_before = _v110_recommendation_projection
+_r19687_contract_before = _v106_recommendation_contract
+_r19687_integrity_before = _v4900_final_output_integrity_guard
+_r19687_readiness_before = compute_race_readiness
+
+
+def _v19687_is_provisional(row):
+    if not isinstance(row, dict):
+        return False
+    return bool(row.get("provisional_quality") is True or
+                row.get("future_recovery_recheck_required") is True)
+
+
+def _v19687_hard_rows(rows):
+    return [(i, row) for i, row in enumerate(rows or [])
+            if isinstance(row, dict) and _v106_session_is_hard(row)]
+
+
+def _v106_recommendation_contract(sessions):
+    # Existing hard_session_count retains its meaning (visible quality cards);
+    # add separate execution counts, never use preview cards to imply clearance.
+    contract = _r19687_contract_before(sessions)
+    if not isinstance(contract, dict):
+        return contract
+    hard = _v19687_hard_rows(sessions)
+    projected = sum(_v19687_is_provisional(row) for _, row in hard)
+    return {**contract,
+            "execution_authority_schema": R19687_SCHEMA,
+            "provisional_hard_session_count": projected,
+            "executable_hard_session_count": len(hard) - projected,
+            "all_hard_provisional": bool(hard) and projected == len(hard)}
+
+
+def _v19687_conditional_recommendation(sessions):
+    rows = [row for row in (sessions or []) if isinstance(row, dict)]
+    if not rows:
+        return "No training session is currently prescribed in this Snapshot."
+    hard = _v19687_hard_rows(rows)
+    provisional = [(idx, row) for idx, row in hard if _v19687_is_provisional(row)]
+    authorised = [(idx, row) for idx, row in hard if not _v19687_is_provisional(row)]
+    if not provisional:
+        return None  # preserve every existing confirmed-session/note path
+    first = rows[0]
+    first_slot = str(first.get("slot") or first.get("date") or "the next opportunity").strip()
+    first_title = str(first.get("title") or "the listed aerobic session").strip()
+    parts = []
+    athlete_notice = str(first.get("athlete_intent_notice") or "").strip()
+    if athlete_notice:
+        parts.extend(_v4844_sentence_list(athlete_notice)[:2])
+    if _v106_session_is_hard(first):
+        if _v19687_is_provisional(first):
+            parts.append("No hard workout is cleared for execution from this Snapshot.")
+        else:
+            parts.append(f"Next authorised session: {first_slot}: {first_title}.")
+    else:
+        parts.append(f"The next opportunity ({first_slot}) remains {first_title}: follow its easy/aerobic instructions without adding quality work.")
+    if authorised:
+        idx, row = authorised[0]
+        label = str(row.get("slot") or row.get("date") or "a later slot").strip()
+        title = str(row.get("title") or "quality workout").strip()
+        parts.append(f"The next currently authorised quality session is {label}: {title}.")
+    for idx, row in provisional[:1]:
+        label = str(row.get("slot") or row.get("date") or "a future opportunity").strip()
+        title = str(row.get("title") or "quality workout").strip()
+        parts.append(
+            f"A possible future quality workout is previewed for {label}: {title}. "
+            "It is provisional, NOT cleared for execution by this Snapshot; "
+            "its structure and any displayed exploratory watts are conditional context, not today's training instruction. "
+            "Recheck recovery, timing and availability; follow it only if a new Nova decision explicitly clears quality."
+        )
+    if len(provisional) > 1:
+        parts.append("Any additional provisional quality cards require the same new clearance.")
+    return " ".join(_v4844_dedupe_sentences(parts))[:1700].strip()
+
+
+def _v106_recommendation_projection(sessions):
+    candidate = _v19687_conditional_recommendation(sessions)
+    if candidate is not None:
+        return candidate
+    return _r19687_recommendation_before(sessions)
+
+
+def _v110_recommendation_projection(sessions, commentary=None):
+    if any(_v19687_is_provisional(row) for _, row in _v19687_hard_rows(sessions)):
+        # An external explanatory sentence cannot "approve" a conditional card.
+        commentary = None
+    return _r19687_render_before(sessions, commentary)
+
+
+def compute_race_readiness(form_zone, fatigue_zone, sleep_quality, personal_baselines):
+    # A "stable" HRV/RHR baseline must not erase red training-load context.
+    score, label, zone, reason = _r19687_readiness_before(
+        form_zone, fatigue_zone, sleep_quality, personal_baselines)
+    warnings = []
+    if str(form_zone).lower() == "red":
+        warnings.append("form/load balance favours recovery")
+    if str(fatigue_zone).lower() == "red":
+        warnings.append("recent training fatigue remains elevated")
+    if warnings:
+        pb = personal_baselines if isinstance(personal_baselines, dict) else {}
+        hrv_status = str((pb.get("hrv") or {}).get("status") or "").lower()
+        rhr_status = str((pb.get("rhr") or {}).get("status") or "").lower()
+        if hrv_status == "within baseline" and rhr_status == "within baseline":
+            marker_note = "HRV and resting HR are within their personal ranges, but this does not cancel the load warning"
+        else:
+            marker_note = "Load-based caution does not rely on any single HRV/resting-HR measurement"
+        # Retain a separately observed recovery-marker warning, if any.
+        specific = str(reason or "").strip()
+        if specific.lower() == "recovery signals are broadly stable.":
+            specific = ""
+        reason = "; ".join(warnings).capitalize() + ". " + marker_note + "."
+        if specific:
+            reason += " Other signals: " + specific.rstrip(".") + "."
+    return score, label, zone, reason
+
+
+def _v19687_coach_decision_audit(out):
+    if not isinstance(out, dict):
+        return out
+    direction = out.get("training_direction") if isinstance(out.get("training_direction"), dict) else None
+    if direction is not None and any(out.get(k) is not None for k in ("zone_low_pct", "zone_mod_pct", "zone_high_pct")):
+        out["season_distribution"] = _v19687_distribution_summary(out, direction)
+    if (str(out.get("race_readiness_zone") or "").lower() == "red" and
+            str(out.get("race_readiness_reason") or "").strip().lower() == "recovery signals are broadly stable."):
+        warnings = []
+        if str(out.get("form_zone") or "").lower() == "red":
+            warnings.append("form/load balance favours recovery")
+        if str(out.get("fatigue_zone") or "").lower() == "red":
+            warnings.append("recent training fatigue remains elevated")
+        out["race_readiness_reason"] = (
+            "; ".join(warnings).capitalize() + ". Individual stable recovery markers do not override the current load warning."
+            if warnings else
+            "The combined readiness score favours recovery; some individual measures may still be stable."
+        )
+    decision = out.get("nova_decision") if isinstance(out.get("nova_decision"), dict) else {}
+    rows = [row for row in (out.get("next_sessions") or []) if isinstance(row, dict)]
+    hard = _v19687_hard_rows(rows)
+    provisional = [(i, row) for i, row in hard if _v19687_is_provisional(row)]
+    actual = [(i, row) for i, row in hard if not _v19687_is_provisional(row)]
+    action = str(decision.get("action") or "").upper()
+    # Only a *positive* boolean veto or an explicit non-training decision can
+    # block execution. Missing fields are UNKNOWN, not an invented HOLD.
+    closed = action in {"HOLD", "MAINTAIN", "RACE_PRIORITY"} or decision.get("hard_session_allowed") is False
+    expected = _v110_recommendation_projection(rows, out.get("recommendation_ai_commentary"))
+    actual_reco = str(out.get("recommendation") or "").strip()
+    issues = []
+    if closed and actual:
+        issues.append("CLOSED_QUALITY_WINDOW_WITH_NONPROVISIONAL_HARD_SESSION")
+    if expected != actual_reco:
+        # Preserve final canonical projection; no free-text regex "correction".
+        out["recommendation"] = expected
+    if provisional and not ("provisional" in str(out.get("recommendation") or "").lower()
+                            and "not cleared" in str(out.get("recommendation") or "").lower()):
+        issues.append("PROVISIONAL_QUALITY_NOT_CONDITIONALLY_DISCLOSED")
+    if direction and str(direction.get("distribution_target") or "").upper() == "AUTO":
+        if "Alignment:" in str(out.get("season_distribution") or "") and "goal-stimulus" not in str(out.get("season_distribution") or "").lower():
+            issues.append("AUTO_MONITOR_FALSE_DISTRIBUTION_ADHERENCE")
+    if (str(out.get("race_readiness_zone") or "").lower() == "red" and
+            "recovery signals are broadly stable" in str(out.get("race_readiness_reason") or "").lower()):
+        issues.append("RED_READINESS_WITH_UNQUALIFIED_STABLE_REASON")
+    audit = {
+        "schema": R19687_SCHEMA,
+        "status": "BLOCKED" if issues else "PASS",
+        "decision_action": action or "UNKNOWN",
+        "current_quality_closed": bool(closed),
+        "visible_hard_sessions": len(hard),
+        "executable_hard_sessions": len(actual),
+        "provisional_hard_sessions": len(provisional),
+        "recommendation_resealed": expected != actual_reco,
+        "issues": issues,
+        "policy": "Only explicitly cleared, nonprovisional sessions are executable; future conditional quality does not reverse a current recovery HOLD.",
+    }
+    out["coach_analysis_consistency_audit"] = audit
+    if issues:
+        semantic = out.get("semantic_authority_audit") if isinstance(out.get("semantic_authority_audit"), dict) else {}
+        semantic["final_pass"] = False
+        semantic["pass"] = False
+        failures = semantic.get("final_issues") if isinstance(semantic.get("final_issues"), dict) else {}
+        failures["coach_analysis_consistency"] = [{"reason": x} for x in issues]
+        semantic["final_issues"] = failures
+        out["semantic_authority_audit"] = semantic
+    return out
+
+
+def _v4900_final_output_integrity_guard(parsed, adaptive_roadmap=None, microcycle_ledger=None,
+                                        power_achievements=None, snapshot_question=None,
+                                        session_progression=None):
+    out = _r19687_integrity_before(
+        parsed, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+        power_achievements=power_achievements, snapshot_question=snapshot_question,
+        session_progression=session_progression)
+    return _v19687_coach_decision_audit(out)
+
+
+# The third card can point to a preview already displayed in card 1/2. Do not
+# call that a scheduled/validated hard session when it is provisional.
+_r19687_quality_card = "{{ 'Already planned in card ' ~ (upcoming.quality_index + 1) if quality_already_shown else 'Next quality not yet scheduled' }}"
+assert HOME_PAGE.count(_r19687_quality_card) == 1, 'R196.8.7 quality-card title anchor drift'
+HOME_PAGE = HOME_PAGE.replace(_r19687_quality_card,
+    "{{ ('Conditional preview in card ' ~ (upcoming.quality_index + 1)) if quality_already_shown and data.next_sessions[upcoming.quality_index].provisional_quality else ('Already planned in card ' ~ (upcoming.quality_index + 1)) if quality_already_shown else 'Next quality not yet scheduled' }}", 1)
+_r19687_quality_why = "{{ 'The earliest validated quality is already one of the next two chronological sessions.' if quality_already_shown else 'Nova will reassess the next quality opportunity when the scientific, recovery and scheduling checks support one.' }}"
+assert HOME_PAGE.count(_r19687_quality_why) == 1, 'R196.8.7 quality-card explanation anchor drift'
+HOME_PAGE = HOME_PAGE.replace(_r19687_quality_why,
+    "{{ 'A provisional candidate appears in the next two cards, but the current plan has NOT cleared its execution; reassess at the next Snapshot.' if quality_already_shown and data.next_sessions[upcoming.quality_index].provisional_quality else 'The earliest validated quality is already one of the next two chronological sessions.' if quality_already_shown else 'Nova will reassess the next quality opportunity when the scientific, recovery and scheduling checks support one.' }}", 1)
+_r19687_quality_main = "{{ data.next_sessions[upcoming.quality_index].title }} · see its session details above. No duplicate workout is prescribed."
+assert HOME_PAGE.count(_r19687_quality_main) == 1, 'R196.8.7 quality-card explanation text drift'
+HOME_PAGE = HOME_PAGE.replace(_r19687_quality_main,
+    "{{ data.next_sessions[upcoming.quality_index].title }} · see its session details above. {{ 'This is only a conditional preview, not a cleared hard workout.' if data.next_sessions[upcoming.quality_index].provisional_quality else 'No duplicate workout is prescribed.' }}", 1)
+_r19687_quality_tag = "{{ 'IN YOUR NEXT TWO' if quality_already_shown else 'AWAITING PLAN' }}"
+assert HOME_PAGE.count(_r19687_quality_tag) == 1, 'R196.8.7 quality-card status anchor drift'
+HOME_PAGE = HOME_PAGE.replace(_r19687_quality_tag,
+    "{{ 'CANDIDATE · NOT CLEARED' if quality_already_shown and data.next_sessions[upcoming.quality_index].provisional_quality else 'IN YOUR NEXT TWO' if quality_already_shown else 'AWAITING PLAN' }}", 1)
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.98 R196.8.7 · COACH ANALYSIS SINGLE-DECISION COHERENCE · NOVA R196.2 CORE"
 
 
 if __name__ == "__main__":
