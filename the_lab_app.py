@@ -45361,11 +45361,16 @@ def build_training_state(season_activities, season_wellness, planning_context,
                                 planning_context=planning_context)
 
 
-# R196.8.5 — documented 20–29-minute test estimates can support a cautious,
-# non-punitive sustained-work *exploration*, not a verified repeated-power target.
-# The old R196.6 30-minute threshold remains required for a precise FTP starter.
-R19685_SCHEMA = "V4.9.96-R196.8.5-PROVISIONAL-SUSTAINED-EXPLORATION-1"
-R19685_SOURCE = "PROVISIONAL_TEST_20_29_MIN_EXPLORATORY"
+# R196.8.6 — evidence-anchored, DOSE-AWARE exploratory sustained power.
+# A qualified 20–29-minute effort is a performance observation; its FTP_UP is
+# an ESTIMATE, and neither establishes the repeatability of a particular set.
+# The previous blanket 79–92% of estimated FTP routinely produced tempo-like
+# ranges even for POWER_20 threshold development (e.g. 2x15 minutes).
+# Instead, constrain an exploration to the RECORDED test watts and adjust for
+# total demanding minutes, single repetition length and test recency. No
+# fixed target, no pass/fail on watts, and NO bypass of recovery/spacing gates.
+R19686_SCHEMA = "V4.9.97-R196.8.6-DOSE-AWARE-SUSTAINED-EXPLORATION-1"
+R19686_SOURCE = "OBSERVED_20_29_MIN_TEST_DOSE_AWARE_EXPLORATION"
 _r19685_band_before = _v1943_band
 
 
@@ -45373,56 +45378,95 @@ def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None
     band = _r19685_band_before(template, evidence_ledger=evidence_ledger,
                                ftp_anchor=ftp_anchor, as_of_date=as_of_date,
                                dimension=dimension)
-    # Do not override a verified dose, an unsupported workout or a safety hold.
-    if not isinstance(band, dict) or band.get('state') != 'NO_DEFENSIBLE_POWER_TARGET':
+    # Preserve every genuine repeat-work or valid-FTP contract, and do not
+    # overrule failed comparable-recovery evidence or unsupported structures.
+    if (not isinstance(band, dict)
+            or band.get('state') != 'NO_DEFENSIBLE_POWER_TARGET'
+            or band.get('reason') != 'NO_RECENT_COMPARABLE_COMPLETED_REPS_OR_VALID_FTP'):
         return band
     t = template if isinstance(template, dict) else {}
     ftp = ftp_anchor if isinstance(ftp_anchor, dict) else {}
     goal = str(t.get('goal') or '').upper()
     work = _v1943_finite(t.get('work_s'), 480, 1200)
     reps = _v1943_finite(t.get('reps'), 2, 4)
+    recovery = _v1943_finite(t.get('recovery_s'), 120, 900)
     seconds = _v1943_finite(ftp.get('effort_secs'), 1200, 1799)
-    watts = _v1943_finite(ftp.get('anchor_watts'), 80, 600)
-    tested_power = _v1943_finite(ftp.get('effort_watts'), 80, 1200)
-    if (goal not in {'POWER_20', 'TIME_TRIAL'} or
-        str(t.get('pattern') or '').upper() != 'SUSTAINED' or
-        work is None or reps is None or seconds is None or watts is None or
-        tested_power is None or
-        ftp.get('available') is not True or
-        ftp.get('evidence_schema') != R1966_SCHEMA or
-        str(ftp.get('status') or '').upper() != 'TEST ESTIMATE' or
-        ftp.get('prescription_watts') is not None):
+    estimate = _v1943_finite(ftp.get('anchor_watts'), 80, 600)
+    observed = _v1943_finite(ftp.get('effort_watts'), 80, 1200)
+    if (goal not in {'POWER_20', 'TIME_TRIAL'}
+            or str(t.get('pattern') or '').upper() != 'SUSTAINED'
+            or work is None or reps is None or recovery is None
+            or seconds is None or estimate is None or observed is None
+            or not float(reps).is_integer()
+            or ftp.get('available') is not True
+            or ftp.get('evidence_schema') != R1966_SCHEMA
+            or str(ftp.get('status') or '').upper() != 'TEST ESTIMATE'
+            or ftp.get('evidence_grade') not in {None, '20_MIN_PROVISIONAL_ESTIMATE'}
+            or ftp.get('prescription_watts') is not None):
+        return band
+    # A badly inconsistent FTP_UP signal cannot calibrate even an exploration.
+    # The directly recorded test effort, NOT the estimated FTP or rolling eFTP,
+    # remains the physical ceiling for provisional repeat-work guidance.
+    if not 0.90 <= estimate / observed <= 1.08:
+        return band
+    total_work = float(reps) * work
+    dose_ratio = total_work / seconds
+    rep_ratio = work / seconds
+    # Extrapolating a single 20-minute effort into e.g. 2x20 is not a modest
+    # starting dose. Let the library try shorter, evidenced structures instead.
+    if work > seconds or dose_ratio > 1.65:
         return band
     try:
-        observed = date.fromisoformat(str(ftp.get('anchor_date') or '')[:10])
-        planned = date.fromisoformat(str(as_of_date)[:10]) if as_of_date else get_rome_now().date()
-        age = (planned - observed).days
-    except (ValueError, TypeError):
+        tested_on = date.fromisoformat(str(ftp.get('anchor_date') or '')[:10])
+        planned_on = date.fromisoformat(str(as_of_date)[:10]) if as_of_date else get_rome_now().date()
+        age = (planned_on - tested_on).days
+    except (ValueError, TypeError, AttributeError):
         return band
     if not 0 <= age <= FTP_ANCHOR_VALID_DAYS:
         return band
-    # Deliberately below the provisional estimate; extending a single
-    # 20–29-minute effort to repetitions has NO validated same-dose precision.
-    lower = .84 if work <= 900 else .79
-    upper = .92 if work <= 900 else .87
-    low = int(round((watts * lower) / 5) * 5)
-    high = int(round((watts * upper) / 5) * 5)
+
+    # At ~same total work as the original test, explore near demonstrated
+    # sustained intensity; increasing total work or rep length costs power.
+    # This is a transparent *coaching hypothesis*, not a physiological test
+    # curve, completed-repetition proof or precision-matched power target.
+    upper_fraction = (1.01
+                      - 0.11 * max(0.0, dose_ratio - 0.90)
+                      - 0.04 * max(0.0, rep_ratio - 0.55))
+    upper_fraction = min(1.0, max(0.91, upper_fraction))
+    if str(dimension or '').upper() in {'DURABILITY', 'RACE_TRANSFER'}:
+        upper_fraction -= 0.012
+    if age > 84:
+        upper_fraction -= 0.015
+    elif age > 42:
+        upper_fraction -= 0.008
+    lower_fraction = upper_fraction - 0.045
+
+    # 5 W roundoff tolerance only; no boost above the observed tested power.
+    ceiling = int(round(observed / 5.0) * 5)
+    low = int(round(observed * lower_fraction / 5.0) * 5)
+    high = min(ceiling, int(round(observed * upper_fraction / 5.0) * 5))
     if not 80 <= low < high <= 600:
         return band
-    return {'schema': R1943_SCHEMA, 'state': 'PRESCRIBED',
-            'evidence_schema': R19685_SCHEMA, 'source': R19685_SOURCE,
-            'confidence': 'LOW', 'exploratory': True, 'non_punitive': True,
-            'scoring_policy': 'STRUCTURE_ONLY_POWER_DESCRIPTIVE',
-            'power_target_mode': 'EXPLORATORY_RANGE', 'target_watts': None,
-            'low_watts': low, 'high_watts': high, 'reps': int(reps),
-            'work_seconds': int(work), 'test_duration_seconds': int(seconds),
-            'test_date': observed.isoformat(), 'test_age_days': age,
-            'ftp_test_estimate_watts': int(round(watts)),
-            'repeatability_state': 'NOT_VERIFIED_FOR_THIS_WORKOUT',
-            'repeatability_reason': 'SINGLE_TEST_NOT_COMPLETED_REPEATS',
-            'observed_single_best_is_repeatability_proof': False,
-            'observed_repeated_work_is_direct_evidence': False,
-            'reason': 'PROVISIONAL_TEST_SUPPORTS_EXPLORATION_NOT_VALIDATED_REPEATS'}
+    return {
+        'schema': R1943_SCHEMA, 'state': 'PRESCRIBED',
+        'evidence_schema': R19686_SCHEMA, 'source': R19686_SOURCE,
+        'confidence': 'LOW', 'exploratory': True, 'non_punitive': True,
+        'scoring_policy': 'STRUCTURE_ONLY_POWER_DESCRIPTIVE',
+        'power_target_mode': 'EXPLORATORY_RANGE', 'target_watts': None,
+        'low_watts': low, 'high_watts': high, 'reps': int(reps),
+        'work_seconds': int(work), 'recovery_seconds': int(recovery),
+        'total_work_seconds': int(total_work),
+        'test_duration_seconds': int(seconds),
+        'test_date': tested_on.isoformat(), 'test_age_days': age,
+        'observed_test_effort_watts': int(round(observed)),
+        'ftp_test_estimate_watts': int(round(estimate)),
+        'test_to_work_dose_ratio': round(dose_ratio, 3),
+        'repeatability_state': 'NOT_VERIFIED_FOR_THIS_WORKOUT',
+        'repeatability_reason': 'SINGLE_TEST_NOT_COMPLETED_REPEATS',
+        'observed_single_best_is_repeatability_proof': False,
+        'observed_repeated_work_is_direct_evidence': False,
+        'reason': 'DOSE_AWARE_EXPLORATION_FROM_RECORDED_TEST_NOT_VERIFIED_REPEATS',
+    }
 
 
 _r19685_reference_only_before = _v112_reference_only_power
@@ -45431,8 +45475,8 @@ _r19685_reference_only_before = _v112_reference_only_power
 def _v112_reference_only_power(session):
     s = session if isinstance(session, dict) else {}
     band = s.get('power_prescription') or {}
-    if (isinstance(band, dict) and band.get('source') == R19685_SOURCE
-        and band.get('evidence_schema') == R19685_SCHEMA
+    if (isinstance(band, dict) and band.get('source') == R19686_SOURCE
+        and band.get('evidence_schema') == R19686_SCHEMA
         and band.get('state') == 'PRESCRIBED'
         and band.get('target_watts') is None
         and band.get('exploratory') is True and band.get('non_punitive') is True
@@ -45473,7 +45517,7 @@ BASE_CSS += '''
 .v19685-quality-gate p{font-weight:400;margin:8px 0 0;max-width:42ch}
 .v19685-quality-gate.neutral{opacity:.8}
 '''
-APP_VERSION = 'THE LAB · PRODUCT V4.9.96 R196.8.5 · EXPLORATORY SUSTAINED QUALITY + TRANSPARENT QUALITY GATES · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.97 R196.8.6 · DOSE-AWARE TEST EXPLORATION + QUALITY GATES · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
