@@ -45785,5 +45785,145 @@ HOME_PAGE = HOME_PAGE.replace(_r19687_quality_tag,
 APP_VERSION = "THE LAB · PRODUCT V4.9.98 R196.8.7 · COACH ANALYSIS SINGLE-DECISION COHERENCE · NOVA R196.2 CORE"
 
 
+# R196.8.8 — CURRENT QUALITY HOLD VS FUTURE CONDITIONAL PREVIEW.
+# Patch semantics, audit authority, and athlete-facing rendering; NEVER turn a
+# future preview into an executable prescription, or change its source watts.
+R19688_SCHEMA = "V4.9.99-R196.8.8-QUALITY-CLEARANCE-AUTHORITY-1"
+_r19688_integrity_before = _v4900_final_output_integrity_guard
+
+
+def _v19688_clearance_audit(out, adaptive_roadmap=None):
+    """Re-audit AFTER canonical authority is supplied, not a partial coach dict.
+
+    In the Nova-only composer, `parsed` holds `nova_composer.decision_action`
+    but NOT yet `parsed.nova_decision`: the full decision is provided by the
+    `adaptive_roadmap` argument. Treating the partial dict as an implicit OPEN
+    window produced UNKNOWN/PASS even when the actual Nova action was HOLD.
+    """
+    if not isinstance(out, dict):
+        return out
+    sources = []
+    def read(name, value):
+        if not isinstance(value, dict) or value.get('available') is False:
+            return
+        action = str(value.get('action') or '').upper()
+        if action:
+            sources.append((name, action, value))
+
+    read('NOVA_DECISION', out.get('nova_decision'))
+    road = adaptive_roadmap if isinstance(adaptive_roadmap, dict) else {}
+    embedded_road = out.get('adaptive_roadmap') if isinstance(out.get('adaptive_roadmap'), dict) else {}
+    read('ROADMAP_ARGUMENT_NOVA_DECISION', road.get('nova_decision'))
+    read('SNAPSHOT_ROADMAP_NOVA_DECISION', embedded_road.get('nova_decision'))
+
+    # This stamp is an independent *agreement check*, not a substitute for
+    # hard_session_allowed=True from the actual Nova Decision engine.
+    composer = out.get('nova_composer') if isinstance(out.get('nova_composer'), dict) else {}
+    composer_action = str(composer.get('decision_action') or '').upper()
+    primary_source, action, decision = (sources[0] if sources else ('UNAVAILABLE', '', {}))
+    if not action and composer_action:
+        primary_source, action = 'NOVA_COMPOSER_ACTION_ONLY', composer_action
+
+    rows = [row for row in (out.get('next_sessions') or []) if isinstance(row, dict)]
+    hard = _v19687_hard_rows(rows)
+    actual = [(i, row) for i, row in hard if not _v19687_is_provisional(row)]
+    provisional = [(i, row) for i, row in hard if _v19687_is_provisional(row)]
+    allowed = decision.get('hard_session_allowed') is True
+    clearance = bool(action in {'TRAIN', 'VALIDATE'} and allowed)
+    closed = bool(action in {'HOLD', 'MAINTAIN', 'RACE_PRIORITY'} or
+                  decision.get('hard_session_allowed') is False)
+
+    prior = out.get('coach_analysis_consistency_audit')
+    audit = dict(prior) if isinstance(prior, dict) else {}
+    issues = list(audit.get('issues') or [])
+    def issue(code):
+        if code not in issues:
+            issues.append(code)
+
+    conflicting = sorted({a for _, a, _ in sources} | ({composer_action} if composer_action else set()))
+    if len(conflicting) > 1:
+        issue('NOVA_DECISION_ACTION_MISMATCH_BETWEEN_AUTHORITIES')
+    if hard and not sources:
+        issue('QUALITY_AUDIT_MISSING_CANONICAL_NOVA_DECISION')
+    if actual and not clearance:
+        issue('NONPROVISIONAL_QUALITY_WITHOUT_EXPLICIT_NOVA_CLEARANCE')
+    if closed and actual:
+        issue('CLOSED_QUALITY_WINDOW_WITH_NONPROVISIONAL_HARD_SESSION')
+
+    # This may be a fully formed threshold structure from a deliberately
+    # hypothetical future shadow plan; it has no executable authority.
+    audit.update({
+        'schema': R19688_SCHEMA,
+        'status': 'BLOCKED' if issues else 'PASS',
+        'decision_action': action or 'UNKNOWN',
+        'decision_source': primary_source,
+        'current_quality_closed': closed,
+        'hard_session_allowed': decision.get('hard_session_allowed'),
+        'visible_hard_sessions': len(hard),
+        'executable_hard_sessions': len(actual) if clearance else 0,
+        'provisional_hard_sessions': len(provisional),
+        'cleared_executable_hard_sessions': len(actual) if clearance else 0,
+        'issues': issues,
+        'policy': ('Only Nova TRAIN/VALIDATE with hard_session_allowed=true can clear '
+                   'an executable quality workout; provisional future work never '
+                   'overrides a current HOLD.'),
+    })
+    out['coach_analysis_consistency_audit'] = audit
+    if issues:
+        semantic = out.get('semantic_authority_audit') if isinstance(out.get('semantic_authority_audit'), dict) else {}
+        semantic['final_pass'] = False
+        semantic['pass'] = False
+        failures = semantic.get('final_issues') if isinstance(semantic.get('final_issues'), dict) else {}
+        failures['coach_analysis_consistency'] = [{'reason': code} for code in issues]
+        semantic['final_issues'] = failures
+        out['semantic_authority_audit'] = semantic
+    return out
+
+
+def _v4900_final_output_integrity_guard(parsed, adaptive_roadmap=None, microcycle_ledger=None,
+                                        power_achievements=None, snapshot_question=None,
+                                        session_progression=None):
+    out = _r19688_integrity_before(
+        parsed, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+        power_achievements=power_achievements, snapshot_question=snapshot_question,
+        session_progression=session_progression)
+    return _v19688_clearance_audit(out, adaptive_roadmap=adaptive_roadmap)
+
+
+# UI copy must describe CURRENT clearance and CONDITIONAL FUTURE candidate as
+# two independent concepts; the candidate must not look actionable by default.
+_r19688_ui_patches = (
+    ('⚡ NEXT QUALITY WINDOW', '⚡ CURRENT QUALITY CLEARANCE'),
+    ('<span class="v1962-quality-eyebrow">NEXT QUALITY · {{',
+     '<span class="v1962-quality-eyebrow">QUALITY STATUS · {{'),
+    ("'Conditional preview in card '", "'Uncleared preview in card '"),
+    ("{{ 'SEE CARD ' ~ (upcoming.quality_index + 1) if quality_already_shown else 'PENDING' }}",
+     "{{ 'NOT CLEARED' if quality_already_shown and data.next_sessions[upcoming.quality_index].provisional_quality else 'SEE CARD ' ~ (upcoming.quality_index + 1) if quality_already_shown else 'PENDING' }}"),
+    ("NEXT QUALITY{{ ' · PROVISIONAL' if s.provisional_quality else '' }}",
+     "{{ 'FUTURE QUALITY · UNAPPROVED PREVIEW' if s.provisional_quality else 'NEXT QUALITY' }}"),
+    ('⚡ CANDIDATE · REASSESS', '⚠ PREVIEW ONLY · DO NOT EXECUTE'),
+    ('<div class="v4-session-main">{{ s.main_set|replace(\'See coach recommendation.\',\'See the recommendation above.\') }}</div>',
+     '<div class="v4-session-main">{% if s.provisional_quality %}<div class="v19688-preview-warning" role="note"><strong>QUALITY NOT CLEARED.</strong> This is a future possibility, not the current training instruction. Do not execute this workout until a NEW Nova Snapshot explicitly clears it.</div><details class="v19688-preview-details"><summary>View conditional workout preview (not approved)</summary><div>{{ s.main_set|replace(\'See coach recommendation.\',\'See the recommendation above.\') }}</div></details>{% else %}{{ s.main_set|replace(\'See coach recommendation.\',\'See the recommendation above.\') }}{% endif %}</div>'),
+    ('{% set n = data.nutrition_plan[si] if s and data.nutrition_plan',
+     '{% set n = data.nutrition_plan[si] if s and not s.provisional_quality and data.nutrition_plan'),
+    ("{{ 'See the fueling in its chronological card.' if quality_already_shown else 'Fueling will follow the confirmed quality prescription.' if is_quality_slot else 'No fueling target available.' }}",
+     "{{ 'Not cleared: no execution/fueling instruction.' if s and s.provisional_quality else 'Not cleared: refer to the provisional session above.' if quality_already_shown and data.next_sessions[upcoming.quality_index].provisional_quality else 'See the fueling in its chronological card.' if quality_already_shown else 'Fueling will follow a confirmed quality prescription.' if is_quality_slot else 'No fueling target available.' }}"),
+)
+for before, after in _r19688_ui_patches:
+    assert HOME_PAGE.count(before) == 1, 'R196.8.8 UI anchor drift: ' + before[:55]
+    HOME_PAGE = HOME_PAGE.replace(before, after, 1)
+
+_r19688_copy_btn = '<button class="v150-copy-workout" type="button" data-copy-workout="{{ s.title|replace(\'Coach-selected session\',\'Nova-selected session\')|e }}" aria-label="Copy workout name" title="Copy workout name">⧉<span>Copy</span></button>'
+assert HOME_PAGE.count(_r19688_copy_btn) == 1, 'R196.8.8 copy-button anchor drift'
+HOME_PAGE = HOME_PAGE.replace(_r19688_copy_btn,
+    '{% if not s.provisional_quality %}' + _r19688_copy_btn + '{% endif %}', 1)
+BASE_CSS += """
+.v19688-preview-warning{border:1px solid rgba(237,166,77,.7);background:rgba(144,87,32,.14);color:var(--text);padding:12px;border-radius:9px;margin:0 0 10px;line-height:1.45}
+.v19688-preview-warning strong{color:#f6be78}
+.v19688-preview-details{padding:4px 0 8px}.v19688-preview-details summary{cursor:pointer;font-weight:600}.v19688-preview-details div{padding:10px 0}
+"""
+APP_VERSION = 'THE LAB · PRODUCT V4.9.99 R196.8.8 · QUALITY CLEARANCE AUTHORITY + PROVISIONAL PREVIEW UX · NOVA R196.2 CORE'
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
