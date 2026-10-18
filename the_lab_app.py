@@ -45361,5 +45361,120 @@ def build_training_state(season_activities, season_wellness, planning_context,
                                 planning_context=planning_context)
 
 
+# R196.8.5 — documented 20–29-minute test estimates can support a cautious,
+# non-punitive sustained-work *exploration*, not a verified repeated-power target.
+# The old R196.6 30-minute threshold remains required for a precise FTP starter.
+R19685_SCHEMA = "V4.9.96-R196.8.5-PROVISIONAL-SUSTAINED-EXPLORATION-1"
+R19685_SOURCE = "PROVISIONAL_TEST_20_29_MIN_EXPLORATORY"
+_r19685_band_before = _v1943_band
+
+
+def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None, dimension=None):
+    band = _r19685_band_before(template, evidence_ledger=evidence_ledger,
+                               ftp_anchor=ftp_anchor, as_of_date=as_of_date,
+                               dimension=dimension)
+    # Do not override a verified dose, an unsupported workout or a safety hold.
+    if not isinstance(band, dict) or band.get('state') != 'NO_DEFENSIBLE_POWER_TARGET':
+        return band
+    t = template if isinstance(template, dict) else {}
+    ftp = ftp_anchor if isinstance(ftp_anchor, dict) else {}
+    goal = str(t.get('goal') or '').upper()
+    work = _v1943_finite(t.get('work_s'), 480, 1200)
+    reps = _v1943_finite(t.get('reps'), 2, 4)
+    seconds = _v1943_finite(ftp.get('effort_secs'), 1200, 1799)
+    watts = _v1943_finite(ftp.get('anchor_watts'), 80, 600)
+    tested_power = _v1943_finite(ftp.get('effort_watts'), 80, 1200)
+    if (goal not in {'POWER_20', 'TIME_TRIAL'} or
+        str(t.get('pattern') or '').upper() != 'SUSTAINED' or
+        work is None or reps is None or seconds is None or watts is None or
+        tested_power is None or
+        ftp.get('available') is not True or
+        ftp.get('evidence_schema') != R1966_SCHEMA or
+        str(ftp.get('status') or '').upper() != 'TEST ESTIMATE' or
+        ftp.get('prescription_watts') is not None):
+        return band
+    try:
+        observed = date.fromisoformat(str(ftp.get('anchor_date') or '')[:10])
+        planned = date.fromisoformat(str(as_of_date)[:10]) if as_of_date else get_rome_now().date()
+        age = (planned - observed).days
+    except (ValueError, TypeError):
+        return band
+    if not 0 <= age <= FTP_ANCHOR_VALID_DAYS:
+        return band
+    # Deliberately below the provisional estimate; extending a single
+    # 20–29-minute effort to repetitions has NO validated same-dose precision.
+    lower = .84 if work <= 900 else .79
+    upper = .92 if work <= 900 else .87
+    low = int(round((watts * lower) / 5) * 5)
+    high = int(round((watts * upper) / 5) * 5)
+    if not 80 <= low < high <= 600:
+        return band
+    return {'schema': R1943_SCHEMA, 'state': 'PRESCRIBED',
+            'evidence_schema': R19685_SCHEMA, 'source': R19685_SOURCE,
+            'confidence': 'LOW', 'exploratory': True, 'non_punitive': True,
+            'scoring_policy': 'STRUCTURE_ONLY_POWER_DESCRIPTIVE',
+            'power_target_mode': 'EXPLORATORY_RANGE', 'target_watts': None,
+            'low_watts': low, 'high_watts': high, 'reps': int(reps),
+            'work_seconds': int(work), 'test_duration_seconds': int(seconds),
+            'test_date': observed.isoformat(), 'test_age_days': age,
+            'ftp_test_estimate_watts': int(round(watts)),
+            'repeatability_state': 'NOT_VERIFIED_FOR_THIS_WORKOUT',
+            'repeatability_reason': 'SINGLE_TEST_NOT_COMPLETED_REPEATS',
+            'observed_single_best_is_repeatability_proof': False,
+            'observed_repeated_work_is_direct_evidence': False,
+            'reason': 'PROVISIONAL_TEST_SUPPORTS_EXPLORATION_NOT_VALIDATED_REPEATS'}
+
+
+_r19685_reference_only_before = _v112_reference_only_power
+
+
+def _v112_reference_only_power(session):
+    s = session if isinstance(session, dict) else {}
+    band = s.get('power_prescription') or {}
+    if (isinstance(band, dict) and band.get('source') == R19685_SOURCE
+        and band.get('evidence_schema') == R19685_SCHEMA
+        and band.get('state') == 'PRESCRIBED'
+        and band.get('target_watts') is None
+        and band.get('exploratory') is True and band.get('non_punitive') is True
+        and band.get('power_target_mode') == 'EXPLORATORY_RANGE'
+        and band.get('test_duration_seconds') is not None
+        and s.get('prescribed_power_low') == band.get('low_watts')
+        and s.get('prescribed_power_high') == band.get('high_watts')):
+        return False
+    return _r19685_reference_only_before(session)
+
+
+# The quality card must identify the *actual* gating layer, never colour missing
+# sleep or unrelated readiness red when Nova's timing window is already open.
+_r19685_pending_why = "<div class=\"v4-session-why\"><strong>Why:</strong> {{ 'The earliest validated quality is already one of the next two chronological sessions.' if quality_already_shown else 'Nova will reassess the next quality opportunity when the scientific, recovery and scheduling checks support one.' }}</div>"
+assert HOME_PAGE.count(_r19685_pending_why) == 1, 'R196.8.5 quality UI anchor drift'
+HOME_PAGE = HOME_PAGE.replace(_r19685_pending_why, _r19685_pending_why + '''
+{% if not quality_already_shown %}
+{% set qd = data.nova_decision or {} %}
+{% set qa = (data.nova_prescription or {}).get('workout_library') or {} %}
+{% set fg = qa.get('feasibility_gate') or {} %}
+<div class="v19685-quality-gates" aria-label="Quality prescription diagnostics">
+{% if qd.get('hard_session_allowed') == false %}
+<details class="v19685-quality-gate blocked"><summary>RECOVERY / TIMING · CLOSED</summary>
+<p>Nova's quality window is {{ qd.get('quality_window_state') or 'not established' }}. Training and spacing checks currently do not allow hard work.</p></details>
+{% elif fg.get('selected') == 'NONE' %}
+<details class="v19685-quality-gate blocked"><summary>WORKOUT EVIDENCE · BLOCKED</summary>
+<p>Recovery and timing permit evaluation, but no candidate passed the current training-dose checks.</p>
+{% if fg.get('rejected') %}<p>Recorded reasons: {% for item in fg.get('rejected') %}{{ item.get('state') or 'UNASSESSED' }}{% if not loop.last %} · {% endif %}{% endfor %}.</p>{% endif %}
+<p>A provisional FTP test is not proof of repeatable power. Nova can now offer controlled exploratory sustained work only when the documented 20–29-minute test remains eligible and the other gates pass.</p></details>
+{% else %}<span class="v19685-quality-gate neutral">QUALITY · REASSESS PENDING</span>{% endif %}
+</div>
+{% endif %}''', 1)
+BASE_CSS += '''
+.v19685-quality-gates{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.v19685-quality-gate{font-size:11px;font-weight:700;line-height:1.45;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 10px}
+.v19685-quality-gate.blocked{color:#ffc6c9;background:rgba(175,42,57,.15);border-color:rgba(239,78,96,.5)}
+.v19685-quality-gate summary{cursor:pointer;list-style-position:inside}
+.v19685-quality-gate p{font-weight:400;margin:8px 0 0;max-width:42ch}
+.v19685-quality-gate.neutral{opacity:.8}
+'''
+APP_VERSION = 'THE LAB · PRODUCT V4.9.96 R196.8.5 · EXPLORATORY SUSTAINED QUALITY + TRANSPARENT QUALITY GATES · NOVA R196.2 CORE'
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
