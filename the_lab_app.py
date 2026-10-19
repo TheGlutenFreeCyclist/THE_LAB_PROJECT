@@ -24458,7 +24458,7 @@ def _v4878_prescription_completeness_guard(
     primary = _v4841_primary_prescription_text(s)
     interval_min = _v4830_interval_minutes(primary)
     repeated = bool(re.search(r"\b\d+\s*[×x]\s*\d+(?:\.\d+)?\s*(?:s|sec(?:onds?)?|min(?:utes?)?)\b|\b(?:reps?|repeats?|intervals?)\b", primary, flags=re.I))
-    exact_work = interval_min is not None or bool(re.search(r"\b(?:TTE|time[- ]?to[- ]?exhaustion|field test|all[- ]?out test|benchmark|checkpoint|\d+(?:\.\d+)?[- ]?minute(?: power)? test|maximal \d+(?:\.\d+)?[- ]?minute effort)\b", primary, flags=re.I))
+    exact_work = interval_min is not None or _v19694_has_exact_repeated_seconds(primary) or bool(re.search(r"\b(?:TTE|time[- ]?to[- ]?exhaustion|field test|all[- ]?out test|benchmark|checkpoint|\d+(?:\.\d+)?[- ]?minute(?: power)? test|maximal \d+(?:\.\d+)?[- ]?minute effort)\b", primary, flags=re.I))
     if generic or not exact_work:
         prior = _v4878_same_slot_reference_main_set(microcycle_ledger, slot, cls)
         if prior:
@@ -24466,7 +24466,7 @@ def _v4878_prescription_completeness_guard(
             primary = _v4841_primary_prescription_text(s)
             interval_min = _v4830_interval_minutes(primary)
             repeated = bool(re.search(r"\b\d+\s*[×x]\s*\d+(?:\.\d+)?\s*(?:s|sec(?:onds?)?|min(?:utes?)?)\b|\b(?:reps?|repeats?|intervals?)\b", primary, flags=re.I))
-            exact_work = interval_min is not None or bool(re.search(r"\b(?:TTE|time[- ]?to[- ]?exhaustion|field test|all[- ]?out test)\b", primary, flags=re.I))
+            exact_work = interval_min is not None or _v19694_has_exact_repeated_seconds(primary) or bool(re.search(r"\b(?:TTE|time[- ]?to[- ]?exhaustion|field test|all[- ]?out test)\b", primary, flags=re.I))
             reasons.append("PRESCRIPTION_DETAIL_RESTORED_FROM_SAME_SLOT")
     if not exact_work:
         total = str(duration_display or "the planned duration")
@@ -46358,7 +46358,130 @@ def _v1962_locked_identity(out, decision):
             "original_dimension": "RACE_TRANSFER", "current_dimension": "RACE_TRANSFER",
             "workout_id": wid, "selected_slot_index": out.get("selected_slot_index")}
 
-APP_VERSION = "THE LAB · PRODUCT V4.9.104 R196.9.3 · EVIDENCE-BASED QUALITY CLOCK + PURPOSEFUL TRANSFER · NOVA R196.2 CORE"
+# R196.9.4 · A canonical hard workout must reach the legacy normalizer as HARD.
+# R196.9.3 checked the R194.3 numeric guard *after* session normalization.
+# The old normalizer cannot infer 30/15 (seconds) from generic intensity='HARD':
+# it labels the session ENDURANCE, then the final semantic easy-session guard
+# removes its hard mechanics. Attest the exact canonical, selected relative
+# protocol BEFORE normalization; its intensity name must carry the actual
+# mechanical family. This is NOT a new safety/spacing/athlete-intent override.
+def _v19694_has_exact_repeated_seconds(primary):
+    """Recognize an explicit, timed on/off dose; not loose seconds in prose.
+
+    The old R4878 completeness gate recognized only MINUTE repetitions and
+    would silently replace canonical 30/15 or sprint clusters with Z1–Z2
+    even after the precompile intensity classification was corrected.
+    """
+    return bool(re.search(
+        r"(?<!\d)\d+\s*[×x]\s*\(\s*\d+(?:\.\d+)?\s*"
+        r"(?:s|sec(?:ond)?s?)\b[^)]{0,110}\b\d+(?:\.\d+)?\s*"
+        r"(?:s|sec(?:ond)?s?)\b[^)]{0,40}\)",
+        str(primary or ''), flags=re.I
+    ))
+
+
+R19694_SCHEMA = "V4.9.105-R196.9.4-PRECOMPILE-RELATIVE-CLASSIFICATION-1"
+_R19694_RELATIVE_CLASSES = {
+    'MICRO_30_15': ('HARD · VO2', 'vo2'),
+    'OVER_UNDER': ('HARD · THRESHOLD', 'threshold'),
+    'SPRINT_CLUSTER': ('HARD · ANAEROBIC', 'vo2'),
+}
+_r19694_compile_before = compile_nova_prescription
+
+
+def _v19694_verified_relative_raw(prescription):
+    """Return (index, class label, expected class) ONLY for selected library HARD.
+
+    Purpose attestation is produced by the canonical selector, never inferred
+    from workout prose. A HOLD, wrong identity or absent evidence fails closed.
+    All downstream roadmap, recovery and R194.3 authority gates still run.
+    """
+    p = prescription if isinstance(prescription, dict) else {}
+    if (str(p.get('action') or '').upper() != 'TRAIN'
+            or str(p.get('status') or '').upper() not in {'PRESCRIBED', 'READY'}
+            or p.get('hard_prescription_available') is not True
+            or str(p.get('dimension') or '').upper() != 'RACE_TRANSFER'):
+        return None
+    try:
+        ix = int(p.get('selected_slot_index'))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    raws = p.get('raw_sessions') or []
+    if not isinstance(raws, list) or not 0 <= ix < len(raws):
+        return None
+    row = raws[ix]
+    if not isinstance(row, dict) or row.get('_tl_nova_deterministic') is not True:
+        return None
+    if (str(row.get('_tl_nova_reference') or '') != 'NOVA_WORKOUT_LIBRARY'
+            or not str(row.get('intensity') or '').upper().startswith('HARD')):
+        return None
+    wid = str(p.get('workout_id') or '')
+    if not wid or wid != str(row.get('_tl_nova_workout_id') or ''):
+        return None
+    attestation = ((p.get('workout_library') or {}).get('purpose_consistency') or {})
+    if (attestation.get('schema') != R19693_SCHEMA
+            or attestation.get('result') != 'STRUCTURAL_MATCH'
+            or str(attestation.get('selected_id') or '') != wid):
+        return None
+    t = next((t for t in _NOVA_WORKOUT_LIBRARY if str(t.get('id') or '') == wid), None)
+    if not isinstance(t, dict):
+        return None
+    pattern = str(t.get('pattern') or '').upper()
+    if (str(attestation.get('pattern') or '').upper() != pattern
+            or str(t.get('goal') or '').upper() != str(p.get('goal_key') or '').upper()
+            or 'RACE_TRANSFER' not in set(t.get('dimensions') or [])
+            or str(row.get('_tl_nova_template_signature') or '') != _v109_template_signature(t)
+            or str(row.get('_tl_nova_workout_library_version') or '') != str(NOVA_WORKOUT_LIBRARY_VERSION)):
+        return None
+    mapped = _R19694_RELATIVE_CLASSES.get(pattern)
+    return (ix, mapped[0], mapped[1]) if mapped else None
+
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None,
+        ftp_anchor=None, recent_activities=None, undefined_training_intent=None,
+        power_model=None, microcycle_ledger=None, coaching_contract=None,
+        adaptive_roadmap=None, strength_pattern=None, training_rhythm=None,
+        execution_model=None):
+    qualified = _v19694_verified_relative_raw(prescription)
+    p = prescription
+    if qualified:
+        ix, label, expected_class = qualified
+        p = dict(prescription)
+        p['raw_sessions'] = list(prescription.get('raw_sessions') or [])
+        p['raw_sessions'][ix] = dict(p['raw_sessions'][ix])
+        p['raw_sessions'][ix]['intensity'] = label
+        p['raw_sessions'][ix]['_tl_r19694_relative_class'] = expected_class
+    out = _r19694_compile_before(p, coach_clock,
+        training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+        recent_activities=recent_activities, undefined_training_intent=undefined_training_intent,
+        power_model=power_model, microcycle_ledger=microcycle_ledger,
+        coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
+        strength_pattern=strength_pattern, training_rhythm=training_rhythm,
+        execution_model=execution_model)
+    if not isinstance(out, dict):
+        return out
+    if qualified:
+        ix, label, expected_class = qualified
+        rows = list(out.get('sessions') or [])
+        row = rows[ix] if ix < len(rows) and isinstance(rows[ix], dict) else {}
+        approved = bool(
+            row.get('nova_workout_id') == prescription.get('workout_id')
+            and str(row.get('intensity_class') or '').lower() == expected_class
+            and (row.get('hard_spacing_relevant') or row.get('provisional_quality'))
+            and _v19693_approved_non_watt_audit(row)
+            and out.get('hard_prescription_available') is True
+        )
+        out['r19694_precompile_classification'] = {
+            'schema': R19694_SCHEMA, 'selected_index': ix,
+            'workout_id': prescription.get('workout_id'),
+            'mechanics_intensity': label,
+            'result': 'CANONICAL_HARD_PRESERVED' if approved else 'DOWNSTREAM_GATE_APPLIED',
+            'rule': 'Classification is proven from the selected canonical pattern. The existing readiness, timing, restrictions, semantics and watt guards retain veto authority.',
+        }
+    return out
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.105 R196.9.4 · CANONICAL QUALITY PRECOMPILE CLASSIFICATION · NOVA R196.2 CORE"
+
 
 
 if __name__ == "__main__":
