@@ -6716,7 +6716,7 @@ def _v4873_apply_roadmap_quality_gate(sessions, adaptive_roadmap=None):
             sess.setdefault("coherence_reasons", []).append("ROADMAP_QUALITY_GATE_BEFORE_EARLIEST" if early else f"ROADMAP_QUALITY_GATE_{state.replace(' ','_')}")
             hard = False
         sess["quality_window_state"] = state or None
-        sess["provisional_quality"] = bool(hard and watch and not explicit_hard)
+        sess["provisional_quality"] = bool(hard and watch and not explicit_hard and not _v19695_current_quality_cleared(sess, road))
         if sess["provisional_quality"]:
             sess["why"] = re.sub(r"\bgenuine quality window\b", "candidate quality window", str(sess.get("why") or ""), flags=re.I)
             sess["why"] = re.sub(r"\bthe right quality window\b", "a candidate quality window", sess["why"], flags=re.I)
@@ -6728,7 +6728,7 @@ def _v4873_apply_roadmap_quality_gate(sessions, adaptive_roadmap=None):
 def _v4873_quality_window_language_guard(text, adaptive_roadmap=None, sessions=None):
     s = str(text or "").strip()
     state = str(((adaptive_roadmap or {}).get("quality_window") or {}).get("state") or "").upper()
-    if not s or state not in {"WATCH", "RACE WATCH"}:
+    if not s or state not in {"WATCH", "RACE WATCH"} or not any(bool((x or {}).get("provisional_quality")) for x in (sessions or []) if isinstance(x, dict)):
         return s
     s = re.sub(r"\bgenuine quality window\b", "candidate quality window", s, flags=re.I)
     s = re.sub(r"\bthe right quality window\b", "a candidate quality window", s, flags=re.I)
@@ -14240,7 +14240,7 @@ def _v83_apply_nova_decision_to_roadmap(roadmap, decision):
         road["steps"]=steps;road["stage_index"]=idx;road["stage"]=steps[idx]
     road["decision_dimension"]=dec.get("dimension");road["decision_action"]=dec.get("action")
     if dec.get("dimension") not in {None,"NONE"}: road["current_focus"]=str(dec.get("dimension")).replace("_"," ").title()
-    q=dict(road.get("quality_window") or {});q["decision_action"]=dec.get("action");q["decision_dimension"]=dec.get("dimension");q["hard_session_allowed"]=bool(dec.get("hard_session_allowed"));road["quality_window"]=q
+    q=dict(road.get("quality_window") or {});q["decision_action"]=dec.get("action");q["decision_dimension"]=dec.get("dimension");q["hard_session_allowed"]=bool(dec.get("hard_session_allowed"));q["headline"]=(re.sub(r"^Provisional quality candidate:","Quality opportunity:",str(q.get("headline") or "")) if str(dec.get("action") or "").upper() in {"TRAIN","VALIDATE"} and dec.get("hard_session_allowed") is True else q.get("headline"));road["quality_window"]=q
     return road
 
 def _v83_decision_architecture_violations(proposed, title, main_set, adaptive_roadmap=None):
@@ -26763,7 +26763,7 @@ def _v4897_canonical_training_copy(truth):
     q=truth.get("quality_window") or {}
     pending=truth.get("pending_validation")
     title=str((validation_session.get("title") or test.get("label") or first.get("title") or "next session") if pending else (first.get("title") or test.get("label") or "next session")).strip()
-    completed=truth.get("formal_current")
+    completed=truth.get("formal_current") and not (not pending and first.get("hard_spacing_relevant") and not first.get("provisional_quality") and str(((road.get("nova_decision") or {}).get("action") or "")).upper()=="TRAIN" and (road.get("nova_decision") or {}).get("hard_session_allowed") is True and str(first.get("stimulus_role") or "").upper()=="TRAIN")
     reco=[]; outlook=[]
     if pending:
         reco.append(f"Your next validation opportunity is {title}; it is the planned checkpoint, not another training repeat.")
@@ -42577,7 +42577,7 @@ def _v195_analyze(prior, current, now=None):
                 row.get('prescribed_power_high') != band.get('high_watts')):
                 add('POWER_CONTRACT_MISMATCH', 'ALERT', date=str(row.get('date') or '')[:10], workout_id=wid)
         elif (str(row.get('stimulus_architecture_state') or '') == 'NOVA_CANONICAL_LIBRARY'
-              and not wid.startswith('SPR_')):
+              and not wid.startswith('SPR_') and not _v19693_approved_non_watt_audit(row)):
             add('HARD_REPEAT_WITHOUT_POWER_CONTRACT', 'WATCH', date=str(row.get('date') or '')[:10], workout_id=wid)
 
     # Cross-snapshot changes can be legitimate; an unchanged recorded core input
@@ -46482,6 +46482,85 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.105 R196.9.4 · CANONICAL QUALITY PRECOMPILE CLASSIFICATION · NOVA R196.2 CORE"
 
+
+
+# R196.9.5: Nova TRAIN + explicitly positive authority means WATCH is not an
+# automatic execution veto. Prediction of user availability never overrides
+# recovery/race/health/clock gates, but does not demand a circular new Snapshot.
+R19695_SCHEMA = "V4.9.106-R196.9.5-CURRENT-QUALITY-CLEARANCE-1"
+
+def _v19695_current_quality_cleared(session, roadmap):
+    s = session if isinstance(session, dict) else {}
+    road = roadmap if isinstance(roadmap, dict) else {}
+    q = road.get('quality_window') if isinstance(road.get('quality_window'), dict) else {}
+    d = road.get('nova_decision') if isinstance(road.get('nova_decision'), dict) else {}
+    action = str(d.get('action') or '').upper()
+    if (d.get('available') is not True or action not in {'TRAIN','VALIDATE'}
+            or d.get('hard_session_allowed') is not True
+            or d.get('quality_window_eligible') is not True
+            or str(q.get('decision_action') or '').upper() != action
+            or q.get('hard_session_allowed') is not True
+            or str(q.get('state') or '').upper() not in {'WATCH','RACE WATCH','OPEN'}
+            or str(s.get('restriction') or 'NONE').upper() != 'NONE'
+            or s.get('nova_prescription_authority') is not True
+            or not s.get('nova_workout_id')
+            or not s.get('hard_spacing_relevant')
+            or s.get('future_recovery_recheck_required') is True
+            or s.get('is_race') is True
+            or str(s.get('intensity') or '').upper() in {'EASY','RECOVERY','DEFERRED'}):
+        return False
+    if str(s.get('nova_prescription_dimension') or '').upper() != str(d.get('dimension') or '').upper():
+        return False
+    try:
+        selected = datetime.fromisoformat(str(q.get('preferred_iso') or ''))
+        current = datetime.combine(date.fromisoformat(str(s.get('date') or '')[:10]),
+                                   datetime.min.time()) + timedelta(minutes=int(s.get('start_minute')))
+        if selected != current:
+            return False
+    except (ValueError, TypeError, OverflowError):
+        return False
+    edge, _ = _v4881_parse_quality_window_local_dt(road)
+    # Release ONLY the live, upcoming same-day slot. Later learned slots stay
+    # conditional because recovery and availability may change before that day.
+    local_now = get_rome_now().replace(tzinfo=None)
+    return (edge is not None and current >= edge and current.date() == local_now.date()
+            and current >= local_now)
+
+# The previous UI injection placed the same large block inside every
+# chronological quality candidate. Keep cards 1-2 non-actionable when truly
+# provisional, with ONE explicit safety block and collapsed preview in card 3.
+_r19695_card_before = """{% if s.provisional_quality %}<div class="v19688-preview-warning" role="note"><strong>QUALITY NOT CLEARED.</strong> This is a future possibility, not the current training instruction. Do not execute this workout until a NEW Nova Snapshot explicitly clears it.</div><details class="v19688-preview-details"><summary>View conditional workout preview (not approved)</summary>{% endif %}
+{% if athlete_view.band_label %}<div class="v1967-work-range">{{ athlete_view.band_label }}</div>{% endif %}
+<div class="v4-session-main">{{ athlete_view.instructions|replace('See coach recommendation.','See the recommendation above.') }}</div>
+{% if athlete_view.reference_label %}<div class="v1967-observed-reference"><strong>{{ athlete_view.reference_label }}</strong><small>{{ athlete_view.reference_caution }}</small></div>{% endif %}
+<div class="v4-session-why"><strong>Nova's note:</strong> {{ athlete_view.why }}</div>
+{% if s.provisional_quality %}</details>{% endif %}"""
+_r19695_card_after = """{% if s.provisional_quality and not is_quality_slot %}
+<div class="v19695-chronological-preview">Conditional quality candidate; review the third card for clearance and details. This card does not authorize the workout.</div>
+{% else %}
+{% if s.provisional_quality %}<div class="v19688-preview-warning" role="note"><strong>QUALITY NOT CLEARED.</strong> This is a future possibility, not the current training instruction. Do not execute this workout until a NEW Nova Snapshot explicitly clears it.</div><details class="v19688-preview-details"><summary>View conditional workout preview (not approved)</summary>{% endif %}
+{% if athlete_view.band_label %}<div class="v1967-work-range">{{ athlete_view.band_label }}</div>{% endif %}
+<div class="v4-session-main">{{ athlete_view.instructions|replace('See coach recommendation.','See the recommendation above.') }}</div>
+{% if athlete_view.reference_label %}<div class="v1967-observed-reference"><strong>{{ athlete_view.reference_label }}</strong><small>{{ athlete_view.reference_caution }}</small></div>{% endif %}
+<div class="v4-session-why"><strong>Nova's note:</strong> {{ athlete_view.why }}</div>
+{% if s.provisional_quality %}</details>{% endif %}
+{% endif %}"""
+assert HOME_PAGE.count(_r19695_card_before) == 1, 'R196.9.5 session-card anchor drift'
+HOME_PAGE = HOME_PAGE.replace(_r19695_card_before, _r19695_card_after, 1)
+_r19695_third_before = '{% elif is_pending %}\n'
+_r19695_third_after = """{% elif is_pending %}
+{% if quality_already_shown and data.next_sessions[upcoming.quality_index].provisional_quality %}
+<div class="v19688-preview-warning" role="note"><strong>QUALITY NOT CLEARED.</strong> This is a future possibility, not the current training instruction. Do not execute this workout until a NEW Nova Snapshot explicitly clears it.</div>
+<details class="v19688-preview-details"><summary>View conditional workout preview (not approved)</summary>
+<p>{{ data.next_sessions[upcoming.quality_index].main_set }}</p>
+<p>{{ data.next_sessions[upcoming.quality_index].why }}</p>
+</details>
+{% endif %}
+"""
+assert HOME_PAGE.count(_r19695_third_before) == 1, 'R196.9.5 third-card anchor drift'
+HOME_PAGE = HOME_PAGE.replace(_r19695_third_before, _r19695_third_after, 1)
+BASE_CSS += ".v19695-chronological-preview{opacity:.8;font-size:13px;line-height:1.5}"
+APP_VERSION = "THE LAB · PRODUCT V4.9.106 R196.9.5 · CURRENT QUALITY CLEARANCE + THIRD CARD SAFETY · NOVA R196.2 CORE"
 
 
 if __name__ == "__main__":
