@@ -3079,6 +3079,9 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v4832-modal-backdrop" data-v4832-close></div><div class="v4832-modal-panel" tabindex="-1"><div class="v4832-modal-head"><div class="v4832-modal-title"><strong id="qa-actions-title">Admin QA</strong><span>Test THE LAB without replacing the Production Last Report.</span></div><button class="v4832-modal-close" type="button" data-v4832-close aria-label="Close QA actions">×</button></div><div class="v4832-modal-actions">
 <span class="v4832-menu-note">Full-context AI QA: fresh Intervals.icu data + the production deterministic Snapshot + THE LAB Standard · Gemini. Production Last Report is not replaced; provider quota/pricing applies.</span>
 <div class="v4832-menu-sep"></div>
+<span class="v4832-menu-note">Python QA: live Intervals.icu input and the deterministic Nova pipeline, read-only, zero AI-provider calls. Available even if the optional Gemini comparator is unreachable.</span>
+<form class="v4834-qa-run-form" method="post" action="{{ url_for('analyze') }}" data-v4834-qa-run="PYTHON"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="qa_mode" value="PYTHON"><button type="submit" data-v4834-qa-button data-idle-label="Run Python QA · 0 AI" data-running-label="Running Python QA…">Run Python QA · 0 AI</button></form>
+<div class="v4832-menu-sep"></div>
 <form class="v4834-qa-run-form" method="post" action="{{ url_for('analyze') }}" data-v4834-qa-run="LIVE"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="qa_mode" value="LIVE"><button type="submit" data-v4834-qa-button data-idle-label="✦ Run AI QA Test" data-running-label="Generating AI QA…">✦ Run AI QA Test</button></form>
 <div class="v4834-qa-status" id="v4834-qa-status" role="status" aria-live="polite"><i aria-hidden="true"></i><div><strong data-v4834-status-title>Generating QA Snapshot…</strong><span data-v4834-status-copy>Please keep this tab open. THE LAB will show the report automatically when generation finishes.</span></div></div>
 </div></div>
@@ -28184,7 +28187,7 @@ def admin_remote_python_qa(user_id):
 
 # R177: stable code = what failed; correlation_id = this particular occurrence.
 # Never put raw exception messages, athlete identifiers, or upstream response bodies here.
-def _r177_snapshot_incident(stage, category, error_class=None, actor_id=None):
+def _r177_snapshot_incident(stage, category, error_class=None, actor_id=None, diagnostic=None):
     safe_stage = re.sub(r"[^A-Z0-9_]+", "_", str(stage or "UNKNOWN").upper())[:48]
     family = str(category or "UNEXPECTED").upper()
     if family not in {"FETCH", "DATA_SHAPE", "DECISION", "AUTHORITY", "RENDER", "SAVE", "UNEXPECTED"}:
@@ -28192,11 +28195,22 @@ def _r177_snapshot_incident(stage, category, error_class=None, actor_id=None):
     code = "TL-SNP-" + family + "-" + ("FAILED" if family != "UNEXPECTED" else "PIPELINE")
     incident_id = "SNP-" + uuid.uuid4().hex[:16].upper()
     retryable = family in {"FETCH", "UNEXPECTED"}
+    # R196.9.1: only explicitly supplied, machine-generated diagnostic codes.
+    # Never log raw exception messages, upstream bodies or athlete data.
+    safe_diagnostic = re.sub(r"[^A-Z0-9_+\-]+", "_", str(diagnostic or "").upper())[:160]
+    if safe_diagnostic and not re.fullmatch(
+        r"(?:TL-CMAG-[A-Z0-9_+]+|AI_(?:TIMEOUT|CONNECTION|EMPTY_RESPONSE|TRUNCATED|UNAVAILABLE))",
+        safe_diagnostic,
+    ):
+        safe_diagnostic = ""
     detail = {"code":code, "stage":safe_stage,"severity":"ERROR", "release":APP_VERSION,
               "correlation_id":incident_id,"recoverable":True,"retryable":retryable,
               "error_class":re.sub(r"[^A-Za-z0-9_]+", "", str(error_class or ""))[:64]}
+    if safe_diagnostic:
+        detail["diagnostic"] = safe_diagnostic
     try:
-        app.logger.error("SNAPSHOT_INCIDENT code=%s stage=%s correlation_id=%s release=%s class=%s",code,safe_stage,incident_id,APP_VERSION,detail["error_class"])
+        app.logger.error("SNAPSHOT_INCIDENT code=%s stage=%s correlation_id=%s release=%s class=%s diagnostic=%s",
+                         code,safe_stage,incident_id,APP_VERSION,detail["error_class"],safe_diagnostic or "NONE")
     except Exception:
         pass
     try:
@@ -28205,7 +28219,8 @@ def _r177_snapshot_incident(stage, category, error_class=None, actor_id=None):
         pass
     instruction = "Try again later; if this repeats, send support the incident ID." if retryable else "Contact support with the incident ID; do not repeat the same action until it is checked."
     message = ("THE LAB could not complete the Snapshot. The new report was not confirmed as saved. Please check Last Full Report before relying on it. "
-               + instruction + " Diagnostic " + code + " · stage " + safe_stage + " · incident " + incident_id + ".")
+               + instruction + " Diagnostic " + code + " · stage " + safe_stage
+               + ((" · detail " + safe_diagnostic) if safe_diagnostic else "") + " · incident " + incident_id + ".")
     return {"message":message,**detail}
 
 def _r177_best_effort_ai_status(event_id, status, error_class=None):
@@ -28310,6 +28325,7 @@ def analyze():
         trend_arrows = compute_trend_arrows(wellness)
         health_rings = compute_health_rings(metrics)
         weight_for_power = ((metabolic_context.get("weight") or {}).get("kg") if isinstance(metabolic_context, dict) else None)
+        snapshot_fault_stage = "POWER_INTELLIGENCE"
         best_watts, best_watts_debug, power_model, current_power_payload, power_achievements = get_power_intelligence(weight_kg=weight_for_power, user_id=user["id"], persist_history=not qa_requested)
         performance_breakthrough = build_performance_breakthrough(cycling_recent_activities, now=get_rome_now(), window_days=7)
         ftp_anchor = build_ftp_anchor_context(cycling_history_activities, now=get_rome_now(), user_id=user["id"])
@@ -28344,6 +28360,7 @@ def analyze():
             _aid=str((_a or {}).get("id") or "")
             if _aid and _aid not in _detail_seen:
                 _detail_seen.add(_aid);_detail_pool.append(_a)
+        snapshot_fault_stage = "ACTIVITY_DETAILS"
         shared_training_details = fetch_activity_details([a.get("id") for a in _detail_pool]) if _detail_pool else {}
         shared_training_details, garmin_vo2_contract_probe = _v89_enrich_garmin_vo2_details(
             cycling_season_activities, shared_training_details, max_single_fetches=1, max_fit_fetches=6, user_id=user["id"]
@@ -28362,6 +28379,7 @@ def analyze():
             repeatability_history_activities, len(repeatability_history_activities), activity_details=shared_training_details
         ) if repeatability_history_activities else []
         previous_training_blocks = progression_training_blocks[:8]
+        snapshot_fault_stage = "VO2_TREND"
         vo2_trend = build_vo2max_trend(
             season_wellness, current_power_payload=current_power_payload, current_power_day=get_rome_now().date(),
             history_user_id=user["id"], include_wearable=True, activities=cycling_season_activities,
@@ -28387,6 +28405,7 @@ def analyze():
         microcycle_ledger = _v190_block_dose_evidence(microcycle_ledger, cycling_history_activities, training_direction, now=get_rome_now())
         training_direction["nova_execution"] = _v1965_verified_quality_execution(microcycle_ledger, training_direction.get("started_on"), now=get_rome_now())
         progression_training_blocks=_v492_attach_execution_quality(progression_training_blocks,microcycle_ledger);previous_training_blocks=progression_training_blocks[:8];session_progression=_v491_session_progression(progression_training_blocks)
+        snapshot_fault_stage = "EVIDENCE_LEDGER"
         evidence_ledger=build_evidence_ledger(
             repeatability_history_blocks or progression_training_blocks, overlay_blocks=progression_training_blocks,
             goal_key=training_direction.get("primary_goal"), scope_start=training_direction.get("started_on") or (strategy_plan or {}).get("started_on"),
@@ -28405,6 +28424,7 @@ def analyze():
             {"schema":performance_evidence.get("schema"),"events":performance_evidence.get("events"),"last_validation":performance_evidence.get("latest_formal_validation")},
             user_id=user["id"], read_only=qa_requested,
         )
+        snapshot_fault_stage = "ROADMAP"
         adaptive_roadmap = build_adaptive_roadmap(
             training_direction, training_rhythm, cycling_history_activities, coach_clock=coach_clock, metrics=metrics,
             planning_context=planning_context, power_achievements=power_achievements, power_model=power_model, ftp_anchor=ftp_anchor,
@@ -28461,6 +28481,7 @@ def analyze():
         performance_narrative = _v4930_performance_narrative_state(adaptive_roadmap, microcycle_ledger, previous_training_blocks, training_direction=training_direction, performance_evidence=performance_evidence, now=get_rome_now(), evidence_ledger=evidence_ledger, question_state=question_state)
         adaptive_roadmap["performance_narrative"] = performance_narrative
         scientific_progression = _v503_scientific_progression(training_direction.get("primary_goal"), adaptive_roadmap, microcycle_ledger, session_progression, previous_training_blocks, performance_narrative, performance_evidence, aerobic_metabolic_range, evidence_ledger=evidence_ledger, question_state=question_state)
+        snapshot_fault_stage = "NOVA_DECISION"
         nova_decision = build_nova_decision(training_direction.get("primary_goal"), question_state, scientific_progression, adaptive_roadmap, training_state, planning_context)
         adaptive_roadmap = _v83_apply_nova_decision_to_roadmap(adaptive_roadmap, nova_decision)
         adaptive_roadmap["scientific_progression"] = scientific_progression
@@ -28470,6 +28491,7 @@ def analyze():
         microcycle_ledger["current_objective"] = training_direction.get("microcycle_direction")
         microcycle_ledger["current_objective_source"] = "EVIDENCE_GATED_ROADMAP_PROJECTION"
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
+        snapshot_fault_stage = "NOVA_PRESCRIPTION"
         nova_prescription = build_nova_prescription(
             nova_decision, coach_clock, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
             evidence_ledger=evidence_ledger, power_model=power_model, ftp_anchor=ftp_anchor, aerobic_metabolic_range=aerobic_metabolic_range,
@@ -28562,6 +28584,7 @@ def analyze():
         }
         analysis_args = _v4890_provider_safe_analysis_args(analysis_args, cross_modal_context, legacy_metabolic=False)
         replay_bundle = _v4831_build_replay_bundle(analysis_args)
+        snapshot_fault_stage = "NOVA_COMPOSITION"
         analysis = compose_nova_snapshot(
             metrics=metrics, season_stats=season_stats, training_state=training_state, training_direction=training_direction,
             question_state=question_state, nova_decision=nova_decision, nova_prescription=nova_prescription,
@@ -28575,6 +28598,7 @@ def analyze():
             # admin-authorized QA LIVE uses the paid language-provider comparator.
             # Both paths retain identical projection and downstream authority guards.
             if qa_kind == "LIVE":
+                snapshot_fault_stage = "QA_LANGUAGE_PROVIDER"
                 commentary, snapshot_ai_event_id = _v110_polish_nova_recommendation(
                     analysis, nova_prescription=nova_prescription, snapshot_question=provider_snapshot_question,
                     ai_runtime_override=qa_ai_runtime, usage_kind=("QA_LIVE_SNAPSHOT" if qa_requested else "SNAPSHOT"),
@@ -28584,19 +28608,24 @@ def analyze():
             else:
                 analysis["recommendation_ai_commentary"] = None
                 analysis["recommendation_ai_mode"] = "NOVA_ONLY_NO_PROVIDER"
+            snapshot_fault_stage = "COACH_PROJECTION"
             analysis = _v4901_coach_call(analysis)
             analysis = _v4890_noncoached_prescription_guard(analysis, cross_modal_context)
+            snapshot_fault_stage = "SEMANTIC_COMPILATION"
             analysis = _v4897_semantic_compile_snapshot(analysis, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger, power_achievements=power_achievements, record_audit=True, snapshot_question=semantic_snapshot_question)
             # R110: context-only questions remain outside the AI training-advice lane.
             if blocked_context_only_snapshot_question:
                 analysis["recommendation_ai_commentary"] = None
-                analysis = _v4901_coach_call(analysis)
+                snapshot_fault_stage = "COACH_PROJECTION"
+            analysis = _v4901_coach_call(analysis)
+        snapshot_fault_stage = "SESSION_RECONCILIATION"
         analysis["next_sessions"] = _v4940_apply_aerobic_metabolic_range(analysis.get("next_sessions"), aerobic_metabolic_range)
         nova_prescription["sessions"] = [dict(x) for x in (analysis.get("next_sessions") or []) if isinstance(x,dict)]
         nova_prescription["finalized"] = True
         if not qa_requested:
             microcycle_ledger = update_microcycle_ledger_from_snapshot(microcycle_ledger, analysis.get("next_sessions"), user_id=user["id"])
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
+        snapshot_fault_stage = "NUTRITION_PLAN"
         nutrition_plan = build_nutrition_plan(analysis.get("next_sessions"), metabolic_context)
         snapshot_fault_stage = "SNAPSHOT_COMPOSITION"
         data = {
@@ -28673,10 +28702,13 @@ def analyze():
             "science_insights": science_context,
             "science_kb_version": SCIENCE_KB.get("version", 1),
         }
+        snapshot_fault_stage = "CROSS_MODULE_AUTHORITY"
         data = _v87_cross_module_authority_guard(data, repair=True)
+        snapshot_fault_stage = "AUTHORITY_VALIDATION"
         # Trace the exact code path selected for this Snapshot (billing is verified
         # independently in the admin usage table; no zero-cost DB event is invented).
         data["snapshot_language_provider_calls"] = 1 if qa_kind == "LIVE" else 0
+        snapshot_fault_stage = "REASONING_TRACE"
         data["nova_reasoning_trace"] = _v190_reasoning_trace(data)
         data["nova_explanation"] = _v190_human_explanation(data)
         if python_qa or not qa_requested:
@@ -28700,6 +28732,7 @@ def analyze():
                 )
                 data["qa_regression_blocked"] = True
                 data["qa_regression_issue_codes"] = _codes
+        snapshot_fault_stage = "AUTHORITY_VALIDATION"
         if not (data.get("cross_module_authority_audit") or {}).get("final_pass") and not qa_requested:
             _audit = data.get("cross_module_authority_audit") or {}
             _issues = _audit.get("issues") or []
@@ -28710,6 +28743,7 @@ def analyze():
                         details={"diagnostic_code": _identifier, "issue_codes": _codes[:20], "release": APP_VERSION})
             raise ValueError("Snapshot rejected [" + _identifier + "]. Your previous saved report remains authoritative. Share this code with THE LAB support.")
         if qa_requested:
+            snapshot_fault_stage = "QA_EXPORT"
             nova_replay_fixture = _v115_finalize_nova_replay_fixture(nova_replay_fixture, data)
             # R195.1: real Python QA (including consented remote athletes) must
             # exercise the same shadow validator as a saved Snapshot. Read the
@@ -28760,13 +28794,25 @@ def analyze():
                 pass
     except ValueError as e:
         _r177_best_effort_ai_status(snapshot_ai_event_id, "pipeline_error", e.__class__.__name__)
-        error = _r177_snapshot_incident(snapshot_fault_stage, "DECISION", e.__class__.__name__, (user or {}).get("id"))["message"]
+        # Only our own fixed-prefix, sanitized authority code is surfaced.
+        # Other ValueErrors keep their class/stage, never their raw message.
+        _authority_match = re.search(r"\[TL-CMAG-([A-Z0-9_+]+)\]", str(e))
+        _authority_code = ("TL-CMAG-" + _authority_match.group(1)) if _authority_match else None
+        error = _r177_snapshot_incident(
+            "AUTHORITY_VALIDATION" if _authority_code else snapshot_fault_stage,
+            "AUTHORITY" if _authority_code else "DECISION",
+            e.__class__.__name__, (user or {}).get("id"), diagnostic=_authority_code,
+        )["message"]
     except AIUsageLimitError as e:
         _r177_best_effort_ai_status(snapshot_ai_event_id, "pipeline_error", e.__class__.__name__)
         error = _r177_snapshot_incident(snapshot_fault_stage, "DECISION", e.__class__.__name__, (user or {}).get("id"))["message"]
     except AIProviderTransportError as e:
         _r177_best_effort_ai_status(snapshot_ai_event_id, "pipeline_error", e.__class__.__name__)
-        error = _r177_snapshot_incident(snapshot_fault_stage, "FETCH", e.__class__.__name__, (user or {}).get("id"))["message"]
+        _provider_kind = str(getattr(e, "kind", "UNAVAILABLE") or "UNAVAILABLE").upper()
+        if _provider_kind not in {"TIMEOUT", "CONNECTION", "EMPTY_RESPONSE", "TRUNCATED", "UNAVAILABLE"}:
+            _provider_kind = "UNAVAILABLE"
+        error = _r177_snapshot_incident(snapshot_fault_stage, "FETCH", e.__class__.__name__,
+                                         (user or {}).get("id"), diagnostic="AI_" + _provider_kind)["message"]
     except requests.Timeout as e:
         error = _r177_snapshot_incident(snapshot_fault_stage, "FETCH", e.__class__.__name__, (user or {}).get("id"))["message"]
     except requests.ConnectionError as e:
@@ -28813,6 +28859,11 @@ def analyze():
             pass
         _family = "DATA_SHAPE" if isinstance(e, (TypeError, IndexError)) else "UNEXPECTED"
         error = _r177_snapshot_incident(_fault_stage, _family, _fault_class, (user or {}).get("id"))["message"]
+    # R196.9.1: reject transient partially composed Snapshot payloads on ANY error.
+    # Only the separately persisted Last Full Report may be relied upon.
+    if error:
+        data = None
+        chat_context_meta = None
     try:
         return render_template_string(
             HOME_PAGE, days=DAYS_BACK, season_days=SEASON_DAYS_BACK,
@@ -45945,7 +45996,7 @@ BASE_CSS += """
 .v19688-preview-warning strong{color:#f6be78}
 .v19688-preview-details{padding:4px 0 8px}.v19688-preview-details summary{cursor:pointer;font-weight:600}.v19688-preview-details div{padding:10px 0}
 """
-APP_VERSION = 'THE LAB · PRODUCT V4.9.101 R196.9.0 · VERIFIED RECOVERY TIMING TOLERANCE · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.102 R196.9.1 · SNAPSHOT DIAGNOSTIC INTEGRITY · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
