@@ -23593,7 +23593,7 @@ def build_week_memory(recent_activities, now=None):
             "hard": bool(_v4895_activity_quality_truth(activity, family).get("quality_relevant")),
         }
         items.append(item)
-    items.sort(key=lambda x: (x["date"], x["time"]))
+    items.sort(key=lambda x: (x["date"], datetime.strptime(x["time"], "%I:%M %p").time()))
     hard_items = [x for x in items if x["hard"]]
     hard_families = []
     for x in hard_items:
@@ -28374,7 +28374,7 @@ def analyze():
             list(cycling_recent_activities or []) + list(repeatability_history_activities or []),
             (coach_clock or {}).get("completed_event_fulfillment") or [],
         )
-        progression_training_blocks = build_previous_training_blocks(cycling_recent_activities, 24, activity_details=shared_training_details)
+        (week_memory, coach_clock, training_rhythm, systemic_activity_rhythm, progression_training_blocks) = _v196911_snapshot_sync(shared_training_details, cycling_recent_activities, cycling_season_activities, cycling_history_activities, recent_activities, season_activities, history_activities, planning_context, week_memory, coach_clock, training_rhythm, systemic_activity_rhythm)
         repeatability_history_blocks = build_previous_training_blocks(
             repeatability_history_activities, len(repeatability_history_activities), activity_details=shared_training_details
         ) if repeatability_history_activities else []
@@ -47967,7 +47967,129 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
         except Exception:pass
     return blocks
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.111 R196.9.10 · RAW 30/15 + BOUNDED GARMIN · NOVA R196.2 CORE'
+# R196.9.11: evidence propagation and 15s micro-recovery signature.
+# A completed micro-workout is classified from measured power, not its title.
+# Activity-detail evidence is copied only into the ephemeral snapshot summaries.
+R196911_SCHEMA = "R196.9.11-MICRO-TRUTH-PROPAGATION-1"
+_r196911_family_baseline = classify_training_family
+_r196911_signature_baseline = _v81_repeatability_signature
+
+
+def _v196911_verified_micro(row):
+    truth = (row or {}).get('_v196910_micro_truth')
+    return bool(isinstance(truth, dict)
+                and truth.get('schema') == R196910_SCHEMA
+                and truth.get('complete_pattern_verified') is True
+                and truth.get('sets') == 2 and truth.get('reps_per_set') == 10
+                and truth.get('work_s') == 30 and truth.get('float_s') == 15
+                and not _v1954_confirmed_competition(row))
+
+
+def classify_training_family(activity):
+    if _v196911_verified_micro(activity):
+        return 'High Intensity / Mixed'
+    return _r196911_family_baseline(activity)
+
+
+def _v196911_promote_micro_truth(details, activity_groups):
+    """Join verified raw evidence by exact activity id; never by date or name."""
+    verified = {}
+    for aid, detail in (details or {}).items():
+        if _v196911_verified_micro(detail):
+            verified[str(aid)] = detail['_v196910_micro_truth']
+    promoted = set()
+    for group in activity_groups or ():
+        for activity in group or ():
+            if not isinstance(activity, dict):
+                continue
+            aid = str(activity.get('id') or '')
+            truth = verified.get(aid)
+            if not truth or _v1954_confirmed_competition(activity):
+                continue
+            activity['_v196910_micro_truth'] = truth
+            promoted.add(aid)
+    return sorted(promoted)
+
+
+def _v81_repeatability_signature(event):
+    e = event or {}
+    # The legacy 30-second bucketing rounds exactly 15 s down to zero.
+    # The raw-verified 30/15 must retain its actual recovery architecture.
+    if str(e.get('source') or '').upper() == 'ICU_RAW_WATTS_30_15':
+        reps = _rhythm_num(e.get('reps'))
+        work = _rhythm_num(e.get('interval_secs'))
+        rec = _rhythm_num(e.get('recovery_secs'))
+        if reps == 20 and work == 30 and rec == 15:
+            return '20x30s/15s'
+    return _r196911_signature_baseline(event)
+
+
+def _v196911_snapshot_sync(details, cycling_recent, cycling_season,
+                           cycling_history, recent, season, history,
+                           planning_context, week_memory, coach_clock,
+                           training_rhythm, systemic_activity_rhythm):
+    # Replace provisional summary-only classification with the VERIFIED stream
+    # classification before cadence, week-memory and prescription consumers.
+    promoted = _v196911_promote_micro_truth(details, (
+        cycling_recent, cycling_season, cycling_history, recent, season, history
+    ))
+    if promoted:
+        training_rhythm = build_training_rhythm(cycling_history)
+        systemic_activity_rhythm = build_training_rhythm(
+            season, now=get_rome_now(), scope='SYSTEMIC')
+        coach_clock = build_coach_clock(cycling_season,
+                                         planning_context=planning_context,
+                                         training_rhythm=training_rhythm)
+        week_memory = build_week_memory(cycling_recent)
+    blocks = build_previous_training_blocks(cycling_recent, 24,
+                                            activity_details=details)
+    return (week_memory, coach_clock, training_rhythm,
+            systemic_activity_rhythm, blocks)
+
+# The legacy prescription matcher cannot parse 2 sets × 10 × (30s/15s)
+# even when the raw power structure is authoritative. Scope the fallback to
+# one known template, a same-date activity and independent raw validation.
+_r196911_execution_match_baseline = _v146_match_plan_block
+
+
+def _v146_match_plan_block(plan, block, allow_fulfilled=True):
+    prior = _r196911_execution_match_baseline(plan, block, allow_fulfilled=allow_fulfilled)
+    if prior is not None:
+        return prior
+    p = plan if isinstance(plan, dict) else {}
+    b = block if isinstance(block, dict) else {}
+    if str(_v146_plan_identity(p) or '') != 'P5_2X10_30_15':
+        return None
+    status = str(p.get('prescription_status') or 'ACTIVE').upper()
+    if status in {'WITHDRAWN', 'CANCELLED'} or (not allow_fulfilled and status in {'SUPERSEDED', 'FULFILLED'}):
+        return None
+    date_value = str(p.get('date') or '')[:10]
+    if not date_value or date_value != str(b.get('date') or '')[:10]:
+        return None
+    truth = b.get('activity_truth') or {}
+    observed = b.get('micro_30_15_observed') or {}
+    rep = b.get('repeatability') or {}
+    if not (isinstance(truth, dict) and isinstance(observed, dict) and isinstance(rep, dict)
+            and truth.get('schema') == R196910_SCHEMA
+            and truth.get('complete_pattern_verified') is True
+            and observed.get('complete_pattern_verified') is True
+            and truth.get('source') == 'ICU_RAW_WATTS_30_15'
+            and rep.get('source') == 'ICU_RAW_WATTS_30_15'
+            and rep.get('reps') == 20 and rep.get('sets') == 2
+            and rep.get('reps_per_set') == 10
+            and rep.get('interval_secs') == 30 and rep.get('recovery_secs') == 15
+            and not _v1954_confirmed_competition(b)):
+        return None
+    # Preserve the original timing/authorization guard: the athlete cannot
+    # complete a prescription that was created after the activity started.
+    if not _v146_causally_eligible(p, b, explicit_identity=False):
+        return None
+    return {'score':94, 'basis':'VERIFIED_RAW_POWER_2X10_30_15',
+            'confidence':'EXACT_DATE', 'date_delta_days':0,
+            'explicit_identity':False, 'duration_match':True,
+            'reps_match':True}
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.112 R196.9.11 · RAW 30/15 TRUTH PROPAGATION + BOUNDED GARMIN · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
