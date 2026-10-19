@@ -46562,6 +46562,277 @@ HOME_PAGE = HOME_PAGE.replace(_r19695_third_before, _r19695_third_after, 1)
 BASE_CSS += ".v19695-chronological-preview{opacity:.8;font-size:13px;line-height:1.5}"
 APP_VERSION = "THE LAB · PRODUCT V4.9.106 R196.9.5 · CURRENT QUALITY CLEARANCE + THIRD CARD SAFETY · NOVA R196.2 CORE"
 
+# R196.9.6 — Universal, catalog-wide workout completeness contract.
+# The previous presentation hid the exact beta 2x12 work/recovery/power range
+# whenever the scheduling gate marked tomorrow's session conditional.
+# Mechanics and timing clearance are INDEPENDENT: display a factual preview,
+# NEVER imply that a conditional future session is executable.
+R19696_SCHEMA = 'V4.9.107-R196.9.6-UNIVERSAL-WORKOUT-COMPLETENESS-1'
+_R19696_NUMERIC_PATTERNS = frozenset({'STANDARD','SHORT_POWER','SUSTAINED'})
+_R19696_EFFORT_PATTERNS = frozenset({'SPRINT','MICRO_30_15','SPRINT_CLUSTER','OVER_UNDER'})
+_R19696_LIBRARY_INDEX = {str(t.get('id')): t for t in _NOVA_WORKOUT_LIBRARY}
+
+
+def _v19696_duration(seconds):
+    try:
+        s = float(seconds)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(s) or s <= 0: return None
+    return (f'{s / 60:g} min' if s % 60 == 0 else f'{s:g} s')
+
+
+def _v19696_execution_contract(session):
+    """One pure contract for EVERY Nova library family and goal.
+
+    No fallback from PB/FTP interpolation to invented work watts. This only
+    formats actual canonical pattern and an independently attested power policy.
+    """
+    s = session if isinstance(session, dict) else {}
+    wid = str(s.get('nova_workout_id') or '')
+    t = _R19696_LIBRARY_INDEX.get(wid)
+    if not isinstance(t, dict):
+        return {'schema':R19696_SCHEMA,'available':False,'ready':False,
+                'issues':['CANONICAL_TEMPLATE_MISSING']}
+    pat = str(t.get('pattern') or '').upper()
+    res = {'schema':R19696_SCHEMA,'available':True,'ready':False,
+           'workout_id':wid,'goal':t.get('goal'),'pattern':pat,'work':None,
+           'recovery':None,'power':None,'total':s.get('duration'),'issues':[]}
+    issues = res['issues']
+    if pat in _R19696_NUMERIC_PATTERNS | _R19696_EFFORT_PATTERNS:
+        work = _v19696_duration(t.get('work_s'))
+        if not work:issues.append('MISSING_CANONICAL_WORK_DURATION')
+        if pat in {'MICRO_30_15','SPRINT_CLUSTER'}:
+            try:sets=int(t.get('sets') or 0);reps=int(t.get('reps_per_set') or 0)
+            except (TypeError,ValueError):sets=reps=0
+            flt=_v19696_duration(t.get('float_s'))
+            rest=_v19696_duration(t.get('set_recovery_s'))
+            if sets<1 or reps<1 or not flt or (sets>1 and not rest):
+                issues.append('INCOMPLETE_ON_OFF_STRUCTURE')
+            res['work'] = f'{sets} sets × {reps} × {work or "?"} work / {flt or "?"} float'
+            res['recovery'] = f'{rest} easy between sets' if sets>1 and rest else 'Continuous set'
+        else:
+            try:reps=int(t.get('reps') or 0)
+            except (TypeError,ValueError):reps=0
+            rest=_v19696_duration(t.get('recovery_s'))
+            if reps < 1 or (reps > 1 and not rest):issues.append('MISSING_BETWEEN_REP_RECOVERY')
+            res['work'] = f'{reps} × {work or "?"}'
+            res['recovery'] = f'{rest} easy between reps' if reps>1 and rest else 'Single work interval'
+    else:
+        # Endurance remains prescribed by slot/zone rather than invented intervals.
+        res['work']='Continuous aerobic / session-specific duration'
+        res['recovery']='Not an interval workout'
+        res['power']='Z1–Z2 / source-specific aerobic guidance'
+        res['ready'] = bool(s.get('main_set')) and pat.startswith('ENDURANCE')
+        return res
+    band=s.get('power_prescription') or {}
+    mode=str(band.get('state') or '').upper()
+    if pat in _R19696_NUMERIC_PATTERNS:
+        lo=_v1943_finite(band.get('low_watts'),1,1500)
+        hi=_v1943_finite(band.get('high_watts'),1,1500)
+        slo=_v1943_finite(s.get('prescribed_power_low'),1,1500)
+        shi=_v1943_finite(s.get('prescribed_power_high'),1,1500)
+        trusted_source = str(band.get('source') or '') in {
+            'COMPARABLE_VERIFIED_REPEATED_WORK',
+            'VALID_FTP_STARTER_POLICY_NOT_OBSERVED_REPEATABILITY',
+            'OBSERVED_COUPLED_RECOVERY_DOSE',
+        }
+        if mode!='PRESCRIBED' or lo is None or hi is None or lo>hi:
+            issues.append('MISSING_DEFENSIBLE_WORK_POWER_BAND')
+        elif not trusted_source:
+            issues.append('UNATTESTED_POWER_BAND_SOURCE')
+        elif slo != lo or shi != hi:
+            issues.append('CANONICAL_POWER_BAND_MISMATCH')
+        else:
+            exploratory=(bool(band.get('exploratory')) or
+                         str(band.get('power_target_mode') or '') in {'EXPLORATORY_RANGE','PROVISIONAL_RANGE'})
+            res['power']=(f'{int(lo)}–{int(hi)} W exploratory work range; not a pass/fail target'
+                          if exploratory else f'{int(lo)}–{int(hi)} W validated prescription range')
+    elif pat == 'SPRINT':
+        res['power']='Maximal technical sprint effort; no arbitrary fixed watts'
+    else:
+        # For true RACE_TRANSFER only: effort-based work must carry the original
+        # versioned authorization, not merely a tempting workout title.
+        if not _v19693_approved_non_watt_audit(s):
+            issues.append('MISSING_ATTESTED_EFFORT_BASED_CONTRACT')
+        else:
+            res['power']='Controlled effort / canonical relative changes; no fixed watts'
+    if not str(s.get('main_set') or '').strip():issues.append('MISSING_EXECUTION_INSTRUCTIONS')
+    # A workout cannot claim a pass if its declared length is shorter than
+    # the immutable on/off architecture. Extra lead-in/cooldown remains preserved.
+    try:
+        if pat in {'MICRO_30_15','SPRINT_CLUSTER'}:
+            core=int(t['sets'])*int(t['reps_per_set'])*(float(t['work_s'])+float(t['float_s'])) + max(0,int(t['sets'])-1)*float(t['set_recovery_s'])
+        else:
+            core=int(t['reps'])*float(t['work_s'])+max(0,int(t['reps'])-1)*float(t.get('recovery_s') or 0)
+        declared=_parse_duration_minutes(s.get('duration'))
+        if declared is not None and float(declared)*60+1<core:
+            issues.append('WORKOUT_DOES_NOT_FIT_DECLARED_DURATION')
+    except (TypeError,ValueError,KeyError,OverflowError):
+        issues.append('CANONICAL_TIMING_UNREADABLE')
+    res['ready']=not issues
+    return res
+
+
+def _v19696_strip_conflicting_power_headers(main_set):
+    """Remove every stale composer prefix; never drop the mechanical main set."""
+    raw=str(main_set or '').strip()
+    raw=re.sub(r'EXPLORATORY POWER TARGET:.*?assess structure and recovery separately\.\s*',
+               '',raw,flags=re.I|re.S)
+    raw=re.sub(r'WORK TARGET:.*?\)\.\s*','',raw,flags=re.I|re.S)
+    return raw.strip()
+
+
+_r19696_view_before=_v1967_athlete_session_view
+
+def _v1967_athlete_session_view(session):
+    view=dict(_r19696_view_before(session) or {})
+    s=session if isinstance(session,dict) else {}
+    spec=_v19696_execution_contract(s)
+    view['workout_contract']=spec if spec.get('available') else None
+    band=s.get('power_prescription') or {}
+    if spec.get('ready') and spec.get('pattern') in _R19696_NUMERIC_PATTERNS:
+        # The persisted text may contain several mutually inconsistent old
+        # WORK TARGET and EXPLORATORY prefixes. Show the single canonical band.
+        view['instructions']=_v19696_strip_conflicting_power_headers(s.get('main_set'))
+        view['band_label']=spec.get('power')
+    elif spec.get('ready') and spec.get('pattern') in _R19696_EFFORT_PATTERNS:
+        view['band_label']=spec.get('power')
+    if spec.get('issues') and spec.get('available'):
+        view['workout_contract_notice']='Incomplete workout mechanics: '+', '.join(spec['issues'])
+    return view
+
+app.jinja_env.globals['nova_athlete_view']=_v1967_athlete_session_view
+
+# Replace precisely the previous targeted rendering with one common contract
+# component for chrono 1, chrono 2 and the third quality card.
+_r19696_card_before=_r19695_card_after
+_r19696_core_view='''{% if athlete_view.workout_contract and athlete_view.workout_contract.ready %}
+<div class="v19696-workout-contract" role="group" aria-label="Canonical workout execution parameters">
+<div><strong>WORK</strong> {{ athlete_view.workout_contract.work }}</div>
+<div><strong>RECOVERY</strong> {{ athlete_view.workout_contract.recovery }}</div>
+<div><strong>POWER / EFFORT</strong> {{ athlete_view.workout_contract.power }}</div>
+</div>{% endif %}
+{% if athlete_view.workout_contract_notice %}<div class="v19696-workout-incomplete">{{ athlete_view.workout_contract_notice }}</div>{% endif %}
+{% if athlete_view.band_label and not (athlete_view.workout_contract and athlete_view.workout_contract.ready) %}<div class="v1967-work-range">{{ athlete_view.band_label }}</div>{% endif %}
+<div class="v4-session-main">{{ athlete_view.instructions|replace('See coach recommendation.','See the recommendation above.') }}</div>
+{% if athlete_view.reference_label %}<div class="v1967-observed-reference"><strong>{{ athlete_view.reference_label }}</strong><small>{{ athlete_view.reference_caution }}</small></div>{% endif %}
+<div class="v4-session-why"><strong>Nova's note:</strong> {{ athlete_view.why }}</div>'''
+_r19696_card_after='''{% if s.provisional_quality and not is_quality_slot %}
+<div class="v19695-chronological-preview">Tomorrow's candidate — the full workout parameters are visible below; clearance is stated only in card 3.</div>
+{% endif %}
+{% if s.provisional_quality and is_quality_slot %}
+<div class="v19688-preview-warning" role="note"><strong>QUALITY NOT CLEARED.</strong> This is a future possibility, not the current training instruction. Do not execute this workout until a NEW Nova Snapshot explicitly clears it.</div>
+<details class="v19688-preview-details"><summary>View conditional workout preview (not approved)</summary>{% endif %}
+'''+_r19696_core_view+'''
+{% if s.provisional_quality and is_quality_slot %}</details>{% endif %}'''
+assert HOME_PAGE.count(_r19696_card_before)==1,'R196.9.6 chronology UI anchor drift'
+HOME_PAGE=HOME_PAGE.replace(_r19696_card_before,_r19696_card_after,1)
+_r19696_third_before=_r19695_third_after
+_r19696_third_after='''{% elif is_pending %}
+{% if quality_already_shown and data.next_sessions[upcoming.quality_index].provisional_quality %}
+{% set preview_row = data.next_sessions[upcoming.quality_index] %}
+{% set preview_view = nova_athlete_view(preview_row) %}
+<div class="v19688-preview-warning" role="note"><strong>QUALITY NOT CLEARED.</strong> This is a future possibility, not the current training instruction. Do not execute this workout until a NEW Nova Snapshot explicitly clears it.</div>
+<details class="v19688-preview-details"><summary>View conditional workout preview (not approved)</summary>
+{% if preview_view.workout_contract and preview_view.workout_contract.ready %}
+<p><strong>WORK:</strong> {{ preview_view.workout_contract.work }}</p>
+<p><strong>RECOVERY:</strong> {{ preview_view.workout_contract.recovery }}</p>
+<p><strong>POWER / EFFORT:</strong> {{ preview_view.workout_contract.power }}</p>
+{% endif %}
+<p>{{ preview_view.instructions }}</p>
+<p>{{ preview_view.why }}</p>
+</details>
+{% endif %}
+'''
+assert HOME_PAGE.count(_r19696_third_before)==1,'R196.9.6 quality UI anchor drift'
+HOME_PAGE=HOME_PAGE.replace(_r19696_third_before,_r19696_third_after,1)
+BASE_CSS += '''
+.v19696-workout-contract{display:grid;gap:.3rem;margin:.7rem 0;padding:.75rem .85rem;border:1px solid rgba(140,168,183,.3);border-radius:8px;font-size:.9rem;line-height:1.45}
+.v19696-workout-contract strong{margin-right:.35em;letter-spacing:.06em;font-size:.77rem;opacity:.8}
+.v19696-workout-incomplete{font-weight:650;font-size:.85rem;margin:.7rem 0}
+'''
+
+# The same validator runs on every compiled library HARD, regardless of user,
+# adaptation goal or slot. Missing executable mechanics fail closed instead of
+# presenting a convincing-looking but incomplete session.
+_r19696_compile_before=compile_nova_prescription
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None,
+        ftp_anchor=None, recent_activities=None, undefined_training_intent=None,
+        power_model=None, microcycle_ledger=None, coaching_contract=None,
+        adaptive_roadmap=None, strength_pattern=None, training_rhythm=None,
+        execution_model=None):
+    out=_r19696_compile_before(prescription,coach_clock,training_definitions=training_definitions,
+        ftp_anchor=ftp_anchor,recent_activities=recent_activities,
+        undefined_training_intent=undefined_training_intent,power_model=power_model,
+        microcycle_ledger=microcycle_ledger,coaching_contract=coaching_contract,
+        adaptive_roadmap=adaptive_roadmap,strength_pattern=strength_pattern,
+        training_rhythm=training_rhythm,execution_model=execution_model)
+    if not isinstance(out,dict):return out
+    rows=list(out.get('sessions') or [])
+    checked=[];blocked=[];normalized=[]
+    for i,original in enumerate(rows):
+        if not isinstance(original,dict):continue
+        if str(original.get('stimulus_architecture_state') or '') != 'NOVA_CANONICAL_LIBRARY':continue
+        # Check the actual HARD label too. A broken upstream flag must not
+        # silently remove an otherwise hard canonical workout from this gate.
+        hard=bool(original.get('hard_spacing_relevant') or original.get('provisional_quality')
+            or str(original.get('intensity') or '').upper().startswith('HARD')
+            or str(original.get('intensity_class') or '').lower() in {'vo2','threshold','tempo','sprint','high','hard'})
+        if not hard:continue
+        sid=str(original.get('nova_workout_id') or '')
+        spec=_v19696_execution_contract(original)
+        checked.append({'index':i,'workout_id':sid,'goal':spec.get('goal'),
+                        'pattern':spec.get('pattern'),'result':'PASS' if spec['ready'] else 'BLOCKED',
+                        'issues':list(spec['issues'])})
+        if not spec['ready']:
+            s=dict(original)
+            s.update({'title':'Easy aerobic · incomplete quality deferred',
+                      'intensity':'EASY','intensity_class':'recovery',
+                      'hard_spacing_relevant':False,'provisional_quality':False,
+                      'stimulus_architecture_state':'NOT_HARD','stimulus_role':None,
+                      'stimulus_domain':None,'nova_workout_id':None,
+                      'nova_contract_id':None,'quality_relevance':'NOT_HARD',
+                      'prescribed_power_low':None,'prescribed_power_high':None,
+                      'power_band':None,'quality_target_ratio':None,
+                      'main_set':'Easy Z1–Z2; the incomplete HARD prescription was not issued.',
+                      'why':'The canonical workout cannot be executed without a defensible full work/recovery/power contract. See the completeness audit.',
+                      'unissued_quality_reason':'R19696_INCOMPLETE_WORKOUT_CONTRACT'})
+            rows[i]=s;blocked.append(i)
+        elif spec.get('pattern') in _R19696_NUMERIC_PATTERNS:
+            s=dict(original)
+            raw=_v19696_strip_conflicting_power_headers(s.get('main_set'))
+            band=s.get('power_prescription') or {}
+            power=spec.get('power')
+            prefix='EXPLORATORY WORK RANGE: ' if ('exploratory' in str(power).lower()) else 'WORK RANGE: '
+            canonical=prefix+str(power)+'. '+raw
+            if canonical!=s.get('main_set'):
+                s['main_set']=canonical
+                rows[i]=s;normalized.append(i)
+    out['r19696_completeness_audit']={'schema':R19696_SCHEMA,'checked':checked,
+        'blocked_indices':blocked,'normalized_indices':normalized,
+        'rule':'Any selected canonical HARD needs an exact pattern, recovery and an attested numerical or effort-based dose; otherwise it is not issued.'}
+    if blocked or normalized:
+        out['sessions']=rows
+        _v145_rehash_plan(out)
+        if isinstance(out.get('single_plan_authority'),dict):
+            out['single_plan_authority']['plan_id']=out['canonical_plan_id']
+        out['hard_session_count']=sum(bool(x.get('hard_spacing_relevant')) and
+                str(x.get('intensity_class') or '').lower() in {'tempo','threshold','vo2','sprint'}
+                for x in rows if isinstance(x,dict))
+        out['hard_prescription_available']=out['hard_session_count']>0
+        if blocked and not out['hard_prescription_available']:
+            out['execution_status']='BLOCKED_INCOMPLETE_WORKOUT'
+            out['status']='BLOCKED'
+            out['workout_id']=None;out['contract_id']=None
+            if isinstance(out.get('single_plan_authority'),dict):
+                out['single_plan_authority']['workout_id']=None
+            out['fail_closed_reason']='R19696_INCOMPLETE_WORKOUT_CONTRACT'
+    return out
+
+APP_VERSION='THE LAB · PRODUCT V4.9.107 R196.9.6 · UNIVERSAL WORKOUT CONTRACT + VISIBLE CANDIDATE MECHANICS · NOVA R196.2 CORE'
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
