@@ -47055,9 +47055,206 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
     # decision, template, gate, authorization, intensity or HARD availability.
     if callable(globals().get('_v19697_complete_session_envelopes')):
         out=_v19697_complete_session_envelopes(out)
+    # R196.9.8: final low-intensity allocation decision.  It cannot touch the
+    # already-selected HARD mechanics or upstream authorization.
+    if callable(globals().get('_v19698_compose_decisions')):
+        out=_v19698_compose_decisions(out,training_rhythm,execution_model)
     return out
 
 APP_VERSION='THE LAB · PRODUCT V4.9.108 R196.9.7 · CANONICAL SESSION TIME ACCOUNTING · NOVA R196.2 CORE'
+
+
+# R196.9.8 — Evaluate the quality-vs-volume opportunity at the LAST projection
+# boundary.  This module is deliberately NOT another Nova prescriber:
+# upstream scientific dose, canonical identity, power, permission, HOLD and
+# prescription continuity retain exclusive authority for HARD mechanics.
+# A larger time window alone is NEVER evidence for extra intervals.
+R19698_SCHEMA = 'V4.9.109-R196.9.8-DOSE-VOLUME-ALLOCATION-1'
+
+
+def _v19698_candidate_dose_review(session, template, total_seconds, preparation_seconds, cooldown_seconds):
+    """Catalog comparison for QA only; NOT a selectable/approved workout.
+
+    Purpose and interval family must match. More work must actually fit the
+    same available envelope, but this *cannot* verify athlete-specific dose.
+    No candidate ID or dose suggestion appears in the athlete instruction.
+    """
+    goal = str(template.get('goal') or '').upper()
+    pat = str(template.get('pattern') or '').upper()
+    dim = str(session.get('nova_prescription_dimension') or '').upper()
+    current = _v19697_workout_core_seconds(template)
+    if not current or not dim:
+        return {'state':'NO_COMPARABLE_AUTHORIZED_DOSE','candidates':[],
+                'reason':'No purpose-compatible evidence authorizes additional HARD work.'}
+    found=[]
+    for alt in _R19696_LIBRARY_INDEX.values():
+        if (str(alt.get('id') or '') == str(template.get('id') or '') or
+            str(alt.get('goal') or '').upper() != goal or
+            str(alt.get('pattern') or '').upper() != pat or
+            dim not in set(alt.get('dimensions') or ()) or alt.get('adaptive_only')):
+            continue
+        mechanics = _v19697_workout_core_seconds(alt)
+        if not mechanics or mechanics[1] <= current[1] or mechanics[0] <= current[0]:
+            continue
+        # Headroom estimate is mechanical only; existing canonical warm-up,
+        # cooldown, watt evidence and recovery must be recalculated upstream.
+        if mechanics[0] + preparation_seconds + cooldown_seconds > total_seconds:
+            continue
+        found.append((int(round(mechanics[1])), str(alt.get('id') or '')))
+    found.sort()
+    return {'state':'UNAUTHORIZED_CATALOG_ALTERNATIVES' if found else 'NO_FITTING_LIBRARY_ALTERNATIVE',
+            'candidates':[x[1] for x in found],
+            'reason':'Same-purpose/same-family mechanical alternatives are NOT an athlete-specific escalation clearance. Existing issued dose and continuity are authoritative.'}
+
+
+def _v19698_extension_evidence(session, training_rhythm=None, execution_model=None):
+    """Describe the source of time, WITHOUT turning history into a hard cap."""
+    s=session if isinstance(session,dict) else {}
+    declared=_parse_duration_minutes(s.get('duration'))
+    hint=s.get('duration_hint_min')
+    try:
+        hint=float(hint)
+        if not math.isfinite(hint) or hint<=0:hint=None
+    except (TypeError,ValueError,OverflowError):hint=None
+    planned=s.get('is_planned_training') is True
+    cap=None
+    if planned:
+        try:
+            cap=float(s.get('expected_duration_max'))
+            if not math.isfinite(cap) or cap<=0:cap=None
+        except (TypeError,ValueError,OverflowError):cap=None
+    envelope=((execution_model or {}).get('session_envelope') or {}) if isinstance(execution_model,dict) else {}
+    learned=bool(envelope.get('available') and envelope.get('state')=='ESTABLISHED' and
+                 hint is not None and str(s.get('timing_confidence') or '').upper() in {'MODERATE','HIGH'})
+    source = ('EXPLICIT_PLANNED_SLOT' if planned else
+              'LEARNED_SINGLE_SESSION' if learned else
+              'UPSTREAM_COMPILED_SESSION')
+    conflict=(declared is not None and cap is not None and declared > cap + .25)
+    return {'source':source, 'declared_minutes':declared, 'learned_session_hint_minutes':hint if learned else None,
+            'explicit_slot_max_minutes':cap, 'conflict':conflict,
+            'note':'Learned duration is a probabilistic *single-session* reference, not a daily sum or an order to use every available minute.'}
+
+
+def _v19698_allocate(session, training_rhythm=None, execution_model=None):
+    """Final dose-vs-topper decision; never issues or mutates HARD work."""
+    s=session if isinstance(session,dict) else {}
+    wid=str(s.get('nova_workout_id') or '')
+    t=_R19696_LIBRARY_INDEX.get(wid)
+    result={'schema':R19698_SCHEMA,'workout_id':wid,'state':'NOT_APPLICABLE',
+            'decision':'UNCHANGED', 'changed':False,'issues':[]}
+    if not isinstance(t,dict) or str(t.get('pattern') or '').upper().startswith('ENDURANCE'):
+        return s,result
+    comp=s.get('session_composition') if isinstance(s.get('session_composition'),dict) else {}
+    if comp.get('schema') != R19697_SCHEMA or comp.get('state') != 'COMPLETE':
+        result.update(state='PREVIOUS_COMPOSER_NOT_COMPLETE',decision='NO_EXTENSION')
+        return s,result
+    if (str(s.get('restriction') or 'NONE').upper()!='NONE' or
+            str(s.get('stimulus_architecture_state') or '')!='NOVA_CANONICAL_LIBRARY' or
+            not s.get('hard_spacing_relevant') or
+            not _v19696_execution_contract(s).get('ready')):
+        result.update(state='UPSTREAM_SAFETY_UNCHANGED',decision='NO_EXTENSION')
+        return s,result
+    minutes=_v19698_extension_evidence(s,training_rhythm,execution_model)
+    total=int(comp.get('total_seconds') or 0)
+    fill=sum(int(x.get('duration_seconds') or 0) for x in comp.get('blocks') or []
+             if x.get('type') in {'AEROBIC_FILL','AEROBIC_TOPPER'})
+    dose=_v19698_candidate_dose_review(s,t,total,
+        int(next((b.get('duration_seconds') or 0 for b in comp.get('blocks') or [] if b.get('type')=='PREPARATION'),0)),
+        int(next((b.get('duration_seconds') or 0 for b in comp.get('blocks') or [] if b.get('type')=='COOLDOWN'),0)))
+    result.update(time_evidence=minutes,dose_review=dose,
+                  existing_quality_seconds=int(comp.get('primary_work_seconds') or 0),
+                  remaining_seconds=fill)
+    if (s.get('is_planned_training') is True and
+            str(s.get('planned_demand') or '').upper() in {'RECOVERY','EASY','ENDURANCE','NORMAL'}):
+        result.update(state='EXPLICIT_EASY_PLAN_CONFLICT',decision='NO_NEW_EXTENSION',
+                      issues=['UPSTREAM_HARD_CONTRADICTS_EXPLICIT_EASY_PLAN'])
+        warning=('The compiled HARD workout conflicts with the explicitly planned easy/endurance demand. '
+                 'Do not execute this conflicting plan before Nova issues a consistent prescription.')
+        revised=dict(s,r19697_timing_warning=warning)
+        result['changed']=revised!=s
+        return revised,result
+    if minutes['conflict']:
+        result.update(state='EXPLICIT_AVAILABILITY_CONFLICT',decision='NO_NEW_EXTENSION',
+                      issues=['DECLARED_WORKOUT_LONGER_THAN_EXPLICIT_SLOT_MAX'])
+        # Do not overwrite the working prescription or rewrite its identity;
+        # display the actual inconsistency via the existing warning surface.
+        warning=('Workout duration exceeds the explicit planned maximum. '
+                 'Do not execute this timeline before the slot and prescription are reconciled.')
+        out=dict(s,r19697_timing_warning=warning)
+        result['changed']=out!=s
+        return out,result
+    if comp.get('r19698_topper') and (s.get('r19698_extension_decision') or {}).get('decision')=='AEROBIC_TOPPER':
+        result.update(state='COMPLETE_ALREADY_APPLIED',decision='AEROBIC_TOPPER')
+        return s,result
+    if fill==0:
+        result.update(state='COMPLETE_NO_REMAINDER',decision='KEEP_AUTHORIZED_QUALITY')
+        return s,result
+    # No athlete-independent 'X% of time must be HARD' rule.  Specific-purpose
+    # work is immutable. Choose a low-intensity topper according to stimulus;
+    # sprints/short-power must not accrue extra moderate intensity by default.
+    sprint=str(t.get('pattern') or '').upper() in {'SPRINT','SPRINT_CLUSTER','SHORT_POWER'}
+    topper={'state':'AUTHORIZED_WITHIN_PREVIOUS_ENVELOPE',
+            'duration_seconds':fill,
+            'role':'POST_QUALITY_AEROBIC_TOPPER',
+            'intensity':'Z1' if sprint else 'Z1_TO_LOW_Z2',
+            'rationale':('Protect neuromuscular execution and recovery: easy Z1 volume only.' if sprint else
+                         'Develop low-intensity aerobic volume without an unapproved extra quality dose.'),
+            'dose': 'UPSTREAM_LIBRARY_HARD_UNCHANGED'}
+    text=str(s.get('main_set') or '')
+    marker=' TOPPER DECISION ('
+    clean=text.split(marker,1)[0].rstrip() if marker in text else text.rstrip()
+    directive=(f' TOPPER DECISION ({_v19697_time_label(fill)}): '
+               + ('easy Z1 only after the prescribed sprint/short-power intervals' if sprint else
+                  'conversational Z1–low-Z2 after the prescribed intervals')
+               + '; do not add further hard repetitions. '
+               'The original quality dose was selected upstream and has not been increased.')
+    new=dict(s)
+    cc=dict(comp)
+    blocks=[]
+    for b in comp.get('blocks') or []:
+        r=dict(b)
+        if r.get('type')=='AEROBIC_FILL':
+            r.update(type='AEROBIC_TOPPER',intensity=topper['intensity'],
+                     purpose=topper['rationale'])
+        blocks.append(r)
+    cc['blocks']=blocks
+    cc['schema']=R19697_SCHEMA  # same total-composition authority and schema
+    cc['r19698_topper']=topper
+    cc['policy']=str(comp.get('policy') or '')+' + PURPOSE_AWARE_AEROBIC_TOPPER_NO_EXTRA_HARD'
+    new['main_set']=clean+directive
+    new['session_composition']=cc
+    new['aerobic_fill_state']='PURPOSE_AWARE_AEROBIC_TOPPER'
+    new['r19698_extension_decision']={'schema':R19698_SCHEMA, 'decision':'AEROBIC_TOPPER',
+                                      'topper':topper,'quality_dose':'UNCHANGED_UPSTREAM'}
+    result.update(state='COMPLETE',decision='AEROBIC_TOPPER',topper=topper,changed=new!=s)
+    return new,result
+
+
+def _v19698_compose_decisions(plan, training_rhythm=None, execution_model=None):
+    if not isinstance(plan,dict):return plan
+    out=dict(plan)
+    if str(out.get('status') or '').upper() in {'BLOCKED','HOLD','DEFERRED'} or out.get('hard_prescription_available') is False:
+        out['r19698_allocation_audit']={'schema':R19698_SCHEMA,'state':'UPSTREAM_VETO_PRESERVED',
+                                        'checked':[],'modified_indices':[]}
+        return out
+    rows=[];checked=[];changed=[]
+    for i,original in enumerate(list(out.get('sessions') or [])):
+        revised,record=_v19698_allocate(original,training_rhythm,execution_model)
+        rows.append(revised)
+        if record['state']!='NOT_APPLICABLE':checked.append(dict(record,index=i))
+        if record['changed']:changed.append(i)
+    out['r19698_allocation_audit']={'schema':R19698_SCHEMA,'checked':checked,
+                                    'modified_indices':changed,
+                                    'rule':'Approved original HARD dose remains the sole quality authority; topper is low intensity within a validated, athlete-specific slot.'}
+    if changed:
+        out['sessions']=rows
+        _v145_rehash_plan(out)
+        if isinstance(out.get('single_plan_authority'),dict):
+            out['single_plan_authority']=dict(out['single_plan_authority'],plan_id=out['canonical_plan_id'])
+    return out
+
+
+APP_VERSION='THE LAB · PRODUCT V4.9.109 R196.9.8 · PURPOSE-AWARE TOPPER + DOSE REVIEW · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
