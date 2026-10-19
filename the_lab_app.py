@@ -3077,12 +3077,8 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 {% if session.get('role') == 'admin' %}<div class="v4832-modal qa" id="qa-actions-modal" role="dialog" aria-modal="true" aria-labelledby="qa-actions-title" hidden>
 <div class="v4832-modal-backdrop" data-v4832-close></div><div class="v4832-modal-panel" tabindex="-1"><div class="v4832-modal-head"><div class="v4832-modal-title"><strong id="qa-actions-title">Admin QA</strong><span>Test THE LAB without replacing the Production Last Report.</span></div><button class="v4832-modal-close" type="button" data-v4832-close aria-label="Close QA actions">×</button></div><div class="v4832-modal-actions">
-<span class="v4832-menu-note">Full-context AI QA: fresh Intervals.icu data + the production deterministic Snapshot + THE LAB Standard · Gemini. Production Last Report is not replaced; provider quota/pricing applies.</span>
-<div class="v4832-menu-sep"></div>
-<span class="v4832-menu-note">Python QA: live Intervals.icu input and the deterministic Nova pipeline, read-only, zero AI-provider calls. Available even if the optional Gemini comparator is unreachable.</span>
-<form class="v4834-qa-run-form" method="post" action="{{ url_for('analyze') }}" data-v4834-qa-run="PYTHON"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="qa_mode" value="PYTHON"><button type="submit" data-v4834-qa-button data-idle-label="Run Python QA · 0 AI" data-running-label="Running Python QA…">Run Python QA · 0 AI</button></form>
-<div class="v4832-menu-sep"></div>
-<form class="v4834-qa-run-form" method="post" action="{{ url_for('analyze') }}" data-v4834-qa-run="LIVE"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="qa_mode" value="LIVE"><button type="submit" data-v4834-qa-button data-idle-label="✦ Run AI QA Test" data-running-label="Generating AI QA…">✦ Run AI QA Test</button></form>
+<span class="v4832-menu-note">Run the same Nova Snapshot calculation and final consistency checks as Production, using live Intervals.icu data. Diagnostic results are read-only; Last Full Report is not replaced.</span>
+<form class="v4834-qa-run-form" method="post" action="{{ url_for('analyze') }}" data-v4834-qa-run="PYTHON"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="qa_mode" value="PYTHON"><button type="submit" data-v4834-qa-button data-idle-label="Run QA" data-running-label="Running QA…">Run QA</button></form>
 <div class="v4834-qa-status" id="v4834-qa-status" role="status" aria-live="polite"><i aria-hidden="true"></i><div><strong data-v4834-status-title>Generating QA Snapshot…</strong><span data-v4834-status-copy>Please keep this tab open. THE LAB will show the report automatically when generation finishes.</span></div></div>
 </div></div>
 </div>{% endif %}
@@ -3095,10 +3091,10 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <section class="v4-card v4-hero">
 <img class="v4-logo" src="data:image/png;base64,{{ logo }}" alt="The Gluten Free Cyclist Lab">
 <h1 class="v4-title">Health Snapshot</h1>
-<div class="v4-kicker">{% if is_preview %}DEMO SNAPSHOT · SAMPLE DATA · READ ONLY{% elif qa_mode %}ADMIN QA TEST · {{ 'NOVA ONLY · €0 AI' if qa_meta and qa_meta.ai_calls == 0 else 'GEMINI' }} · PRODUCTION REPORT UNCHANGED{% elif report_mode %}STORED SNAPSHOT · COMPLETE · READ ONLY{% else %}YOUR DAILY CYCLING DESK{% endif %}</div>
+<div class="v4-kicker">{% if is_preview %}DEMO SNAPSHOT · SAMPLE DATA · READ ONLY{% elif qa_mode %}ADMIN QA · NOVA · PRODUCTION REPORT UNCHANGED{% elif report_mode %}STORED SNAPSHOT · COMPLETE · READ ONLY{% else %}YOUR DAILY CYCLING DESK{% endif %}</div>
 <p class="v4-subtitle">{% if is_preview %}Full interface preview · sample athlete{% elif qa_mode and qa_meta %}{{ qa_meta.intervals_data }} · {{ qa_meta.ai_provider }} · input {{ qa_meta.input_fingerprint }}{% elif report_mode and report_meta %}Generated {{ report_meta.generated_at_local_display }} · stored snapshot{% else %}Last {{ days }} days for recovery · {{ season_days }} days for cycling context · personalized analysis{% endif %}</p>
 </section>
-{% if qa_mode and qa_meta %}<div class="v4831-qa-banner no-print"><div><strong>{{ 'NOVA-ONLY' if qa_meta.ai_calls == 0 else qa_meta.qa_kind }} QA · {{ qa_meta.ai_provider }}</strong><span>{{ qa_meta.intervals_data }} · {{ qa_meta.python_pipeline }} · Production Last Report unchanged. Input fingerprint {{ qa_meta.input_fingerprint }}.</span></div><b>ADMIN ONLY</b></div>{% endif %}
+{% if qa_mode and qa_meta %}<div class="v4831-qa-banner no-print"><div><strong>NOVA QA · READ-ONLY</strong><span>{{ qa_meta.intervals_data }} · {{ qa_meta.python_pipeline }} · Production Last Report unchanged. Input fingerprint {{ qa_meta.input_fingerprint }}.</span></div><b>ADMIN ONLY</b></div>{% endif %}
 {% if not report_mode %}
 {% if data and not is_preview and not qa_mode %}
 <div class="v4862-input-toggle-wrap no-print" id="v4862-input-toggle-wrap">
@@ -28262,11 +28258,15 @@ def analyze():
             if not PRODUCT_WORKSPACE_ENABLED_FOR_ATHLETES or not setup_gate.get("complete"):
                 return redirect(url_for("athlete_setup"))
         qa_kind = "PYTHON" if remote_target_id else str(request.form.get("qa_mode") or "").strip().upper()
-        qa_requested = qa_kind in {"LIVE", "PYTHON"}
-        python_qa = qa_kind == "PYTHON"
+        # R196.9.2: one read-only QA route. Old LIVE forms are normalized to
+        # the same deterministic pipeline; they can never invoke a provider.
+        if qa_kind == "LIVE":
+            qa_kind = "PYTHON"
+        qa_requested = qa_kind == "PYTHON"
+        python_qa = qa_requested
         if qa_requested and str(actor.get("role") or "").lower() != "admin":
             abort(403)
-        qa_ai_runtime = _v4831_admin_qa_ai_runtime(user["id"]) if qa_kind == "LIVE" else None
+        qa_ai_runtime = None  # The Snapshot QA never requires a provider.
         if qa_requested:
             strategy_plan = get_active_training_strategy_plan(user["id"])
             if not strategy_plan:
@@ -28593,31 +28593,24 @@ def analyze():
             metabolic_context=metabolic_context, performance_evidence=performance_evidence, power_achievements=power_achievements,
             snapshot_question=semantic_snapshot_question, strength_pattern=strength_pattern, session_progression=session_progression,
         )
-        if not python_qa:
-            # R122: ordinary Snapshot always Nova-only. Only explicitly requested,
-            # admin-authorized QA LIVE uses the paid language-provider comparator.
-            # Both paths retain identical projection and downstream authority guards.
-            if qa_kind == "LIVE":
-                snapshot_fault_stage = "QA_LANGUAGE_PROVIDER"
-                commentary, snapshot_ai_event_id = _v110_polish_nova_recommendation(
-                    analysis, nova_prescription=nova_prescription, snapshot_question=provider_snapshot_question,
-                    ai_runtime_override=qa_ai_runtime, usage_kind=("QA_LIVE_SNAPSHOT" if qa_requested else "SNAPSHOT"),
-                )
-                analysis["recommendation_ai_commentary"] = commentary or None
-                analysis["recommendation_ai_mode"] = "LANGUAGE_ONLY_APPEND"
-            else:
-                analysis["recommendation_ai_commentary"] = None
-                analysis["recommendation_ai_mode"] = "NOVA_ONLY_NO_PROVIDER"
-            snapshot_fault_stage = "COACH_PROJECTION"
-            analysis = _v4901_coach_call(analysis)
-            analysis = _v4890_noncoached_prescription_guard(analysis, cross_modal_context)
-            snapshot_fault_stage = "SEMANTIC_COMPILATION"
-            analysis = _v4897_semantic_compile_snapshot(analysis, adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger, power_achievements=power_achievements, record_audit=True, snapshot_question=semantic_snapshot_question)
-            # R110: context-only questions remain outside the AI training-advice lane.
-            if blocked_context_only_snapshot_question:
-                analysis["recommendation_ai_commentary"] = None
-                snapshot_fault_stage = "COACH_PROJECTION"
-            analysis = _v4901_coach_call(analysis)
+        # R196.9.2: production and read-only QA share the exact same Nova
+        # coach projection and semantic compilation. No provider comparator.
+        analysis["recommendation_ai_commentary"] = None
+        analysis["recommendation_ai_mode"] = "NOVA_ONLY_NO_PROVIDER"
+        snapshot_fault_stage = "COACH_PROJECTION"
+        analysis = _v4901_coach_call(analysis)
+        analysis = _v4890_noncoached_prescription_guard(analysis, cross_modal_context)
+        snapshot_fault_stage = "SEMANTIC_COMPILATION"
+        analysis = _v4897_semantic_compile_snapshot(
+            analysis, adaptive_roadmap=adaptive_roadmap,
+            microcycle_ledger=microcycle_ledger,
+            power_achievements=power_achievements, record_audit=True,
+            snapshot_question=semantic_snapshot_question,
+        )
+        if blocked_context_only_snapshot_question:
+            analysis["recommendation_ai_commentary"] = None
+        snapshot_fault_stage = "COACH_PROJECTION"
+        analysis = _v4901_coach_call(analysis)
         snapshot_fault_stage = "SESSION_RECONCILIATION"
         analysis["next_sessions"] = _v4940_apply_aerobic_metabolic_range(analysis.get("next_sessions"), aerobic_metabolic_range)
         nova_prescription["sessions"] = [dict(x) for x in (analysis.get("next_sessions") or []) if isinstance(x,dict)]
@@ -45997,6 +45990,93 @@ BASE_CSS += """
 .v19688-preview-details{padding:4px 0 8px}.v19688-preview-details summary{cursor:pointer;font-weight:600}.v19688-preview-details div{padding:10px 0}
 """
 APP_VERSION = 'THE LAB · PRODUCT V4.9.102 R196.9.1 · SNAPSHOT DIAGNOSTIC INTEGRITY · NOVA R196.2 CORE'
+
+
+
+# R196.9.2 · CLOSED CHECKPOINT TRANSITION AND STAGE IDENTITY
+# An accomplished validation is evidence, not a recurring reason to prevent
+# all later unresolved training questions. Stage identity persists under MAINTAIN.
+R19692_SCHEMA = "V4.9.103-R196.9.2-CHECKPOINT-TRANSITION-1"
+_r19692_science_before = _v503_scientific_progression
+_r19692_decision_before = build_nova_decision
+
+
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None,
+                                previous_blocks=None, performance_narrative=None,
+                                performance_evidence=None, aerobic_metabolic_range=None,
+                                evidence_ledger=None, question_state=None):
+    result = _r19692_science_before(
+        goal_key, roadmap, ledger, session_progression, previous_blocks,
+        performance_narrative, performance_evidence, aerobic_metabolic_range,
+        evidence_ledger=evidence_ledger, question_state=question_state,
+    )
+    road = roadmap if isinstance(roadmap, dict) else {}
+    test = road.get("test") if isinstance(road.get("test"), dict) else {}
+    chosen = str((result or {}).get("dimension") or "").upper() if isinstance(result, dict) else ""
+    # The completed checkpoint should not keep winning science ranking forever.
+    # Re-select among existing evidence-ranked alternatives using the established
+    # R196.1 anti-near-duplicate logic, with a *shadow* copy of roadmap/test.
+    # A completed test is never reopened or modified in the real roadmap.
+    if (str(test.get("state") or "").upper() != "COMPLETED"
+            or chosen not in {"REVALIDATION", "EXTENSION_OR_REVALIDATION"}):
+        return result
+    shadow = copy.deepcopy(road)
+    shadow_test = dict(shadow.get("test") or {})
+    shadow_test["state"] = "BASELINE BUILD"  # ranking-only; real test remains COMPLETED
+    shadow["test"] = shadow_test
+    alternative = _r1966_progression_before(
+        goal_key, shadow, ledger, session_progression, previous_blocks,
+        performance_narrative, performance_evidence, aerobic_metabolic_range,
+        evidence_ledger=evidence_ledger, question_state=question_state,
+    )
+    if not isinstance(alternative, dict):
+        return result
+    other = str(alternative.get("dimension") or "NONE").upper()
+    if other in {"REVALIDATION", "EXTENSION_OR_REVALIDATION"}:
+        # Never reissue the same completed validation. No invented hard fallback.
+        alternative = dict(alternative)
+        alternative.update({"dimension": "NONE", "candidate_architectures": [],
+                            "dose_contract": {"available": False, "reason": "NO_UNRESOLVED_PURPOSEFUL_STIMULUS"},
+                            "open_question": "The formal checkpoint is complete; no new evidence-backed quality purpose is available yet."})
+        other = "NONE"
+    alternative = dict(alternative)
+    if isinstance(result.get("checkpoint_stage_sync"), dict):
+        alternative["checkpoint_stage_sync"] = dict(result["checkpoint_stage_sync"])
+    alternative["completed_checkpoint_transition"] = {
+        "schema": R19692_SCHEMA,
+        "completed_state_preserved": str(test.get("state") or "").upper(),
+        "rejected_completed_dimension": chosen,
+        "selected_unresolved_dimension": other,
+        "policy": "EVIDENCE_RANKING_ONLY; NO_DIRECT_HARD_AUTHORIZATION",
+    }
+    return alternative
+
+
+def build_nova_decision(goal_key, question_state=None, scientific_progression=None,
+                        adaptive_roadmap=None, training_state=None, planning_context=None):
+    out = _r19692_decision_before(
+        goal_key, question_state=question_state,
+        scientific_progression=scientific_progression,
+        adaptive_roadmap=adaptive_roadmap,
+        training_state=training_state, planning_context=planning_context,
+    )
+    if not isinstance(out, dict):
+        return out
+    road = adaptive_roadmap if isinstance(adaptive_roadmap, dict) else {}
+    gate = road.get("stage_evidence_gate") if isinstance(road.get("stage_evidence_gate"), dict) else {}
+    stage = road.get("stage") if isinstance(road.get("stage"), dict) else {}
+    code = str(stage.get("code") or "").upper()
+    # R149 and R196.1 can choose MAINTAIN/NONE, but that does not erase the
+    # evidence-gated roadmap's stage. Stage identity != permission for HARD.
+    if gate.get("authority") == "EVIDENCE_GATED_ROADMAP" and code:
+        out = dict(out)
+        out["stage_code"] = code
+        out["roadmap_stage_code"] = code
+        out["roadmap_stage_index"] = road.get("stage_index")
+        out["stage_authority"] = "EVIDENCE_GATED_ROADMAP"
+    return out
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.103 R196.9.2 · UNIFIED QA + CHECKPOINT TRANSITION · NOVA R196.2 CORE"
 
 
 if __name__ == "__main__":
