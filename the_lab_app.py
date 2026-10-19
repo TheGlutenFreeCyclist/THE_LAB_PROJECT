@@ -48091,5 +48091,182 @@ def _v146_match_plan_block(plan, block, allow_fulfilled=True):
 
 APP_VERSION = 'THE LAB · PRODUCT V4.9.112 R196.9.11 · RAW 30/15 TRUTH PROPAGATION + BOUNDED GARMIN · NOVA R196.2 CORE'
 
+
+# R196.9.12 · RAW 30/15 AUTHORITATIVE WORKOUT ADHERENCE
+# R196.9.11 reconciles a verified Zwift micro-workout to its Nova prescription,
+# but R155's main-set scorer rejects all efforts shorter than 55 seconds.
+# Restore athlete-facing adherence on the EXACT reconciled activity without
+# widening legacy interval matching or inventing numerical watt prescriptions.
+R196912_SCHEMA = "V4.9.113-R196.9.12-RAW-30-15-ADHERENCE-1"
+_r196912_adherence_baseline = _v492_execution_quality
+
+
+def _v196912_raw_30_15_adherence(block, ledger):
+    if not isinstance(block, dict) or not isinstance(ledger, dict):
+        return None
+    if _v1954_confirmed_competition(block):
+        return None
+    # Only R146's authoritative, persisted prescription->activity reconciliation
+    # can unlock this narrow scorer. No title/date-only attribution.
+    link = _v156_execution_history_link(block, ledger)
+    if not isinstance(link, dict):
+        return None
+    p = link.get("plan") or {}
+    rec = link.get("execution") or {}
+    if not isinstance(p, dict) or not isinstance(rec, dict):
+        return None
+    aid = str(block.get("activity_id") or block.get("id") or "").strip()
+    day = str(block.get("date") or "")[:10]
+    fp = str(p.get("prescription_fingerprint") or _v136_prescription_fingerprint(p))
+    if not (aid and day and
+            str(_v146_plan_identity(p) or "") == "P5_2X10_30_15" and
+            str(rec.get("nova_workout_id") or "") == "P5_2X10_30_15" and
+            str(rec.get("activity_id") or "") == aid and
+            str(rec.get("prescription_fingerprint") or "") == fp and
+            str(rec.get("match_basis") or "") == "VERIFIED_RAW_POWER_2X10_30_15" and
+            str(rec.get("match_confidence") or "") in {"EXACT_DATE", "EXACT_IDENTITY"} and
+            str(rec.get("planned_date") or "")[:10] == day and
+            str(rec.get("actual_date") or "")[:10] == day and
+            str(p.get("date") or "")[:10] == day and
+            str(p.get("prescription_status") or "").upper() == "FULFILLED" and
+            str(p.get("executed_activity_id") or "") == aid and
+            _v146_causally_eligible(p, block, explicit_identity=False)):
+        return None
+    truth = block.get("activity_truth") or {}
+    observed = block.get("micro_30_15_observed") or {}
+    rep = block.get("repeatability") or {}
+    if not (isinstance(truth, dict) and isinstance(observed, dict) and isinstance(rep, dict) and
+            truth.get("schema") == R196910_SCHEMA and
+            truth.get("source") == "ICU_RAW_WATTS_30_15" and
+            truth.get("status") == "RESOLVED" and
+            truth.get("complete_pattern_verified") is True and
+            observed.get("source") == "ICU_RAW_WATTS_30_15" and
+            observed.get("complete_pattern_verified") is True and
+            observed.get("sets") == 2 and observed.get("reps_per_set") == 10 and
+            observed.get("work_s") == 30 and observed.get("float_s") == 15 and
+            rep.get("source") == "ICU_RAW_WATTS_30_15" and
+            rep.get("reps") == 20 and rep.get("sets") == 2 and
+            rep.get("reps_per_set") == 10 and
+            rep.get("interval_secs") == 30 and rep.get("recovery_secs") == 15):
+        return None
+    # Main-set windows, independent of any Zwift lap segmentation. The full
+    # indexed set/rep matrix must be measured; duplicates and partials fail closed.
+    rows = block.get("work_interval_evidence") or []
+    if not isinstance(rows, list) or len(rows) != 20:
+        return None
+    seen = set()
+    watts = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        try:
+            s = int(row.get("set")); r = int(row.get("rep_in_set"))
+            seconds = float(row.get("secs"))
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if s not in (1, 2) or not (1 <= r <= 10) or (s, r) in seen or not math.isfinite(seconds) or abs(seconds-30) > 2:
+            return None
+        seen.add((s, r))
+        w = _num(row.get("watts"))
+        watts.append((s, r, float(w) if w is not None and math.isfinite(w) and w >= 0 else None))
+    if len(seen) != 20:
+        return None
+    watts.sort(key=lambda x: (x[0], x[1]))
+    measured = [w for _, _, w in watts]
+    known = [w for w in measured if w is not None]
+    low = _num(p.get("prescribed_power_low"))
+    high = _num(p.get("prescribed_power_high"))
+    valid_band = bool(low is not None and high is not None and math.isfinite(low) and math.isfinite(high) and 0 < low <= high)
+    band_complete = valid_band and len(known) == 20
+    if valid_band:
+        within = sum(low <= w <= high for w in known)
+        above = sum(w > high for w in known)
+        below = sum(w < low for w in known)
+        if len(known) < 20:
+            state, label = "POWER_INCOMPLETE", "POWER DATA INCOMPLETE"
+        elif within == 20:
+            state, label = "IN_TARGET", "IN TARGET"
+        elif above == 20:
+            state, label = "ABOVE_TARGET", "ABOVE TARGET"
+        elif below == 20:
+            state, label = "BELOW_TARGET", "BELOW TARGET"
+        else:
+            state, label = "MIXED_DEVIATION", "MIXED POWER DEVIATION"
+    else:
+        within = above = below = None
+        state, label = "EXPLORATORY_NOT_GRADED", "POWER OBSERVED · NOT GRADED"
+    structure = {
+        "state": "COMPLETE", "complete": True,
+        "completed_reps": 20, "prescribed_reps": 20, "completion_percent": 100,
+        "prescribed_interval_seconds": 30.0,
+        "observed_interval_seconds": [float(row.get("secs")) for row in rows],
+        "prescribed_recovery_seconds": 15.0,
+        "observed_set_recovery_seconds": _num(observed.get("set_recovery_s")),
+        "sets": 2, "reps_per_set": 10, "scope": "PRESCRIBED_MAIN_SET_ONLY",
+        "structure_truth_source": "ICU_RAW_WATTS_30_15",
+    }
+    power = {
+        "state": state, "label": label, "available": bool(band_complete),
+        "in_target_reps": within, "above_target_reps": above,
+        "below_target_reps": below, "known_power_reps": len(known),
+        "missing_power_reps": 20 - len(known), "prescribed_reps": 20,
+        "in_target_percent": round(100*within/20) if band_complete else None,
+        "observed_power_min_w": min(known) if known else None,
+        "observed_power_max_w": max(known) if known else None,
+        "observed_power_watts": measured,
+        "prescribed_power_low_w": float(low) if valid_band else None,
+        "prescribed_power_high_w": float(high) if valid_band else None,
+        "power_band_rule": "STRICT_PRESCRIBED_RANGE_OR_EXPLORATORY_NO_INVENTED_TARGET",
+    }
+    adherence = {
+        "available": True, "schema": R183_SCHEMA,
+        "source_schema": R196912_SCHEMA, "score": None,
+        "score_semantics": "NO_GLOBAL_PERCENTAGE__INDEPENDENT_AXES",
+        "label": "MAIN SET COMPLETE · " + label,
+        "detail": "20/20 measured 30s efforts, 15s recoveries; power assessed only against explicit numerical target",
+        "presentation": "INDEPENDENT_STRUCTURE_AND_POWER",
+        "adherence_scope": "PRESCRIBED_MAIN_SET_ONLY",
+        "structure": structure, "power_band": power,
+        "link_mode": "R156_AUTHORITATIVE_EXECUTION_HISTORY",
+        "link_source": "PRESCRIPTION_EXECUTION_HISTORY",
+        "link_confidence": rec.get("match_confidence"),
+        "match_basis": rec.get("match_basis"),
+        "execution_timing": rec.get("execution_timing"),
+        "planned_date": day, "actual_date": day,
+        "nova_workout_id": p.get("nova_workout_id"),
+        "canonical_plan_id": p.get("nova_canonical_plan_id"),
+        "prescription_fingerprint": fp, "executed_activity_id": aid,
+        "recovery": {"state": "NOT_GRADED_BY_THIS_CONTRACT",
+                     "reason": "Recovery and total load evaluated elsewhere, not scored as workout adherence."},
+        "supplemental_effort_affects_main_set_scoring": False,
+        "historical_binary_check": {"score": None, "do_not_display_as_global_adherence": True},
+    }
+    return {"available": True, "adherence": adherence, "degradation": None,
+            "adherence_scope": "PRESCRIBED_MAIN_SET_ONLY", "adherence_schema": R183_SCHEMA,
+            "authoritative_micro_30_15_adherence": True,
+            "raw_micro_adherence_schema": R196912_SCHEMA}
+
+
+def _v492_execution_quality(block, ledger=None):
+    out = _r196912_adherence_baseline(block, ledger)
+    # Preserve established adherence, including all longer-workout families.
+    if not isinstance(out, dict) or ((out.get("adherence") or {}).get("available")):
+        return out
+    try:
+        repaired = _v196912_raw_30_15_adherence(block, ledger or {})
+    except Exception:
+        # Optional subsystem isolation: never jeopardise Snapshot persistence.
+        return out
+    if not repaired:
+        return out
+    result = dict(out)
+    result.update(repaired)
+    # Do not overwrite independent repetition-variation measurements.
+    if isinstance(out.get("degradation"), dict):
+        result["degradation"] = out["degradation"]
+    return result
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.113 R196.9.12 · RAW 30/15 WORKOUT ADHERENCE + BOUNDED GARMIN · NOVA R196.2 CORE"
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
