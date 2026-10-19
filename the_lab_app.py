@@ -46582,6 +46582,73 @@ def _v19696_duration(seconds):
     return (f'{s / 60:g} min' if s % 60 == 0 else f'{s:g} s')
 
 
+# R196.9.13 · An explicitly authored R196.8.6 exploration has its own
+# auditable, NON-GRADED provenance; do not accidentally reject it as an
+# unattested repeat-work watt target. This does not change the recovery gate.
+R196913_SCHEMA = "V4.9.114-R196.9.13-QUALITY-CONTINUITY-1"
+
+def _v196913_attested_exploration(s, t, band):
+    if not all(isinstance(v, dict) for v in (s, t, band)):
+        return False
+    if (str(t.get('pattern') or '').upper() != 'SUSTAINED'
+            or str(t.get('goal') or '').upper() not in {'POWER_20', 'TIME_TRIAL'}
+            or str(band.get('source') or '') != R19686_SOURCE
+            or str(band.get('evidence_schema') or '') != R19686_SCHEMA
+            or str(band.get('schema') or '') != R1943_SCHEMA
+            or str(band.get('state') or '') != 'PRESCRIBED'
+            or str(band.get('power_target_mode') or '') != 'EXPLORATORY_RANGE'
+            or str(band.get('scoring_policy') or '') != 'STRUCTURE_ONLY_POWER_DESCRIPTIVE'
+            or band.get('confidence') != 'LOW'
+            or band.get('exploratory') is not True
+            or band.get('non_punitive') is not True
+            or band.get('target_watts') is not None
+            or band.get('observed_single_best_is_repeatability_proof') is not False
+            or band.get('observed_repeated_work_is_direct_evidence') is not False
+            or band.get('repeatability_state') != 'NOT_VERIFIED_FOR_THIS_WORKOUT'
+            or band.get('reason') != 'DOSE_AWARE_EXPLORATION_FROM_RECORDED_TEST_NOT_VERIFIED_REPEATS'):
+        return False
+    try:
+        reps=int(t['reps']);work=int(t['work_s']); recovery=int(t['recovery_s'])
+        test_d=int(band['test_duration_seconds'])
+        observed=float(band['observed_test_effort_watts'])
+        estimate=float(band['ftp_test_estimate_watts'])
+        lo=int(band['low_watts']);hi=int(band['high_watts'])
+        ratio=float(band['test_to_work_dose_ratio'])
+        test_date=date.fromisoformat(str(band['test_date'])[:10]); plan_date=date.fromisoformat(str(s['date'])[:10])
+        test_age=(plan_date-test_date).days
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+    if (not all(math.isfinite(x) for x in (observed,estimate,ratio))
+            or not 2<=reps<=4 or not 480<=work<=1200 or not 120<=recovery<=900
+            or not 1200<=test_d<=1799
+            or work>test_d or (reps*work/test_d)>1.65
+            or test_age<0 or test_age>FTP_ANCHOR_VALID_DAYS
+            or band.get('test_age_days') != test_age
+            or not 0.90<=estimate/observed<=1.08
+            or not 80<=observed<=1200
+            or not 80<=lo<hi<=600
+            or band.get('reps') != reps or band.get('work_seconds') != work
+            or band.get('recovery_seconds') != recovery
+            or band.get('total_work_seconds') != reps*work
+            or abs(ratio-reps*work/test_d)>0.002):
+        return False
+    dose_ratio=reps*work/test_d
+    rep_ratio=work/test_d
+    upper_fraction=1.01 - 0.11*max(0.0,dose_ratio-0.90) - 0.04*max(0.0,rep_ratio-0.55)
+    upper_fraction=min(1.0,max(0.91,upper_fraction))
+    if str(s.get('nova_prescription_dimension') or '').upper() in {'DURABILITY','RACE_TRANSFER'}:
+        upper_fraction-=0.012
+    if test_age>84:upper_fraction-=0.015
+    elif test_age>42:upper_fraction-=0.008
+    ceiling=int(round(observed/5.0)*5)
+    expected_low=int(round(observed*(upper_fraction-0.045)/5.0)*5)
+    expected_high=min(ceiling,int(round(observed*upper_fraction/5.0)*5))
+    return (lo==expected_low and hi==expected_high
+            and _v1943_finite(s.get('prescribed_power_low'),1,1500)==lo
+            and _v1943_finite(s.get('prescribed_power_high'),1,1500)==hi
+            and str(s.get('nova_workout_id') or '')==str(t.get('id') or ''))
+
+
 def _v19696_execution_contract(session):
     """One pure contract for EVERY Nova library family and goal.
 
@@ -46636,7 +46703,8 @@ def _v19696_execution_contract(session):
             'COMPARABLE_VERIFIED_REPEATED_WORK',
             'VALID_FTP_STARTER_POLICY_NOT_OBSERVED_REPEATABILITY',
             'OBSERVED_COUPLED_RECOVERY_DOSE',
-        }
+        } or (callable(globals().get('_v196913_attested_exploration'))
+              and _v196913_attested_exploration(s, t, band))
         if mode!='PRESCRIBED' or lo is None or hi is None or lo>hi:
             issues.append('MISSING_DEFENSIBLE_WORK_POWER_BAND')
         elif not trusted_source:
@@ -48267,6 +48335,29 @@ def _v492_execution_quality(block, ledger=None):
     return result
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.113 R196.9.12 · RAW 30/15 WORKOUT ADHERENCE + BOUNDED GARMIN · NOVA R196.2 CORE"
+
+# Athlete-facing continuity: a persisted ACTIVE hard workout may be on hold.
+# Keep it visible as history/context, never a second executable prescription.
+_R196913_UI_MARKER = "{% elif is_pending %}\n{% if quality_already_shown and data.next_sessions[upcoming.quality_index].provisional_quality %}"
+assert HOME_PAGE.count(_R196913_UI_MARKER) == 1, 'R196.9.13 pending-quality UI anchor drift'
+HOME_PAGE = HOME_PAGE.replace(_R196913_UI_MARKER, """{% elif is_pending %}
+{% set carried=namespace(row=none) %}
+{% if not quality_already_shown and data.microcycle_ledger and data.microcycle_ledger.prescription_history and data.next_sessions and data.next_sessions[0] %}
+  {% for prior in data.microcycle_ledger.prescription_history %}
+    {% if carried.row is none and prior.prescription_status == 'ACTIVE' and prior.date == data.next_sessions[0].date and prior.intensity_class in ['tempo','threshold','vo2','sprint','high','hard'] and prior.nova_workout_id %}
+      {% set carried.row=prior %}
+    {% endif %}
+  {% endfor %}
+{% endif %}
+{% if carried.row %}
+<div class="v19688-preview-warning" role="note"><strong>PREVIOUSLY ISSUED QUALITY · CURRENTLY ON HOLD</strong></div>
+<p><strong>{{ carried.row.date }} · {{ carried.row.title }}</strong></p>
+<p>The original Nova prescription remains in training history. It is NOT authorized for execution while the current recovery/contract gates are closed.</p>
+<p><strong>Current gate:</strong> {{ data.adaptive_roadmap.quality_window.state if data.adaptive_roadmap and data.adaptive_roadmap.quality_window else 'NOT CLEARED' }}{% if data.nova_prescription and data.nova_prescription.fail_closed_reason %} · Contract: {{ data.nova_prescription.fail_closed_reason }}{% endif %}. Reassess with a fresh Snapshot. Do not execute the historical watt range as a current prescription.</p>
+{% endif %}
+{% if quality_already_shown and data.next_sessions[upcoming.quality_index].provisional_quality %}""",1)
+APP_VERSION = "THE LAB · PRODUCT V4.9.114 R196.9.13 · QUALITY CONTINUITY + EXPLORATORY CONTRACT RECONCILIATION · NOVA R196.2 CORE"
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
