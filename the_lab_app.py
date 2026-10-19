@@ -47617,5 +47617,357 @@ compile_nova_prescription = _v19699_compile_nova_prescription
 APP_VERSION = 'THE LAB · PRODUCT V4.9.110 R196.9.9 · DOSE DECISION V1 (CANDIDATE) · NOVA R196.2 CORE'
 
 
+# R196.9.10 — bounded Garmin Connect adapter and read-only, power-stream
+# reconstruction of unmarked 30/15 blocks (all users, not a profile-specific fix).
+# Leaves the 161 canonical prescriptions, FTP authorities and dose decisions intact.
+R196910_SCHEMA = "R196.9.10-RAW-30-15-1"
+
+# Garmin Connect's official client can hang in login/API calls. Never let it
+# become a blocking dependency of an athlete Snapshot. A single daemon worker
+# is allowed: timed-out workers cannot multiply on successive requests.
+import threading as _r196910_threading
+import time as _r196910_time
+_r196910_garmin_lock = _r196910_threading.Lock()
+_r196910_garmin_job = None
+_r196910_garmin_cache = None
+_r196910_garmin_baseline = _v99_fetch_garmin_connect_current_vo2
+
+
+def _v196910_fetch_garmin_bounded(user_id=None, now=None):
+    global _r196910_garmin_job, _r196910_garmin_cache
+    today = (now or get_rome_now()).date().isoformat()
+    status = {'status': 'NOT_CONFIGURED', 'value': None, 'source': 'GARMIN_CONNECT_CURRENT',
+              'retrieved_date': today, 'adapter_schema': R196910_SCHEMA}
+    # Owner-only authorization remains at the synchronous entry point.
+    if not _v99_garmin_owner_allowed(user_id):
+        return dict(status, status='OWNER_ONLY')
+    if GarminConnectClient is None:
+        return dict(status, status='DEPENDENCY_MISSING')
+    if not (GARMIN_EMAIL and GARMIN_PASSWORD):
+        return status
+    deadline = max(.1, min(3.0, float(os.environ.get('THE_LAB_GARMIN_VO2_WAIT_SECONDS', '1.5'))))
+    with _r196910_garmin_lock:
+        now_mono = _r196910_time.monotonic()
+        cache = _r196910_garmin_cache
+        if cache is not None and now_mono - cache['at'] < (900 if cache['result'].get('status') == 'FOUND' else 90):
+            return dict(cache['result'], adapter_schema=R196910_SCHEMA, bounded_cache=True)
+        job = _r196910_garmin_job
+        if job is None or job['done'].is_set():
+            if job is not None:
+                raw = job.get('result') or dict(status, status='ERROR')
+                _r196910_garmin_cache = {'at': now_mono, 'result': raw}
+                return dict(raw, adapter_schema=R196910_SCHEMA, bounded_cache=True)
+            job = {'done': _r196910_threading.Event(), 'result': None}
+            def _run():
+                try:
+                    job['result'] = _r196910_garmin_baseline(user_id, now)
+                except Exception as exc:
+                    job['result'] = dict(status, status='ERROR', error_type=type(exc).__name__)
+                finally:
+                    job['done'].set()
+            _r196910_garmin_job = job
+            _r196910_threading.Thread(target=_run, daemon=True, name='the-lab-garmin-vo2').start()
+    if not job['done'].wait(deadline):
+        return dict(status, status='TIMEOUT', timeout_seconds=deadline,
+                    fallback='INTERVALS_WELLNESS_OR_LAST_DATED_HISTORY')
+    with _r196910_garmin_lock:
+        raw = job.get('result') or dict(status, status='ERROR')
+        _r196910_garmin_cache = {'at': _r196910_time.monotonic(), 'result': raw}
+    return dict(raw, adapter_schema=R196910_SCHEMA, bounded_cache=False)
+
+
+_v99_fetch_garmin_connect_current_vo2 = _v196910_fetch_garmin_bounded
+
+
+def _v196910_raw_power_samples(payload):
+    """Time-aligned, bounded watts from ICU raw streams. Missing != zero."""
+    if not isinstance(payload, (list, dict)):
+        return None
+    if isinstance(payload, list):
+        streams = {str(x.get('type') or '').lower(): x.get('data')
+                   for x in payload if isinstance(x, dict)}
+    else:
+        streams = {str(k).lower(): v.get('data') if isinstance(v, dict) else v
+                   for k, v in payload.items()}
+    ts = streams.get('time')
+    if ts is None: ts = streams.get('secs')
+    watts = streams.get('watts')
+    if ts is None or watts is None or not isinstance(ts, list) or not isinstance(watts, list):
+        return None
+    if len(ts) != len(watts) or len(ts) < 480 or len(ts) > 60000:
+        return None
+    readings = {}
+    for t, w in zip(ts, watts):
+        try:
+            sec = float(t)
+            val = float(w)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not (math.isfinite(sec) and math.isfinite(val) and 0 <= val <= 1600):
+            continue
+        if 0 <= sec <= 21600 and abs(sec - round(sec)) <= .55:
+            readings[int(round(sec))] = val
+    if not readings:
+        return None
+    duration = max(readings) + 1
+    if duration > 21600 or len(readings) < 480:
+        return None
+    dense = [None] * duration
+    for t, w in readings.items():
+        dense[t] = w
+    return dense
+
+
+def _v196910_find_micro_30_15(samples):
+    """Extract OBSERVED 30/15 morphology, not title-/plan-imputed intervals.
+
+    Match two independent 10-repeat sets. Each window must have measured watts
+    on at least 85% of its seconds, contrast on at least 9 of 10 reps, positive
+    work/float separation in both sets and a plausible inter-set recovery.
+    All sample means and boundaries remain actual stream observations.
+    """
+    if not isinstance(samples, list) or not 900 <= len(samples) <= 21600:
+        return None
+    count = [0]; power = [0.]
+    for w in samples:
+        ok = isinstance(w, (int, float)) and math.isfinite(w) and 0 <= w <= 1600
+        count.append(count[-1] + int(ok))
+        power.append(power[-1] + (float(w) if ok else 0.))
+    def _mean(start, sec):
+        if start < 0 or start + sec > len(samples): return None
+        n = count[start+sec] - count[start]
+        if n < math.ceil(sec*.85): return None
+        return (power[start+sec] - power[start]) / n
+    # Avoid slow nested processing: 10 constant-time prefix window lookups per start.
+    eligible = []
+    for begin in range(0, len(samples)-450+1):
+        high = []; low = []; passing = 0
+        valid = True
+        for idx in range(10):
+            h = _mean(begin + idx*45, 30)
+            l = _mean(begin + idx*45 + 30, 15)
+            if h is None or l is None:
+                valid = False; break
+            high.append(h); low.append(l)
+            if h-l >= max(30, .16*h): passing += 1
+        if not valid or passing < 9: continue
+        if statistics.median(high) < max(85, statistics.median(low)*1.25): continue
+        if statistics.median(high) - statistics.median(low) < 35: continue
+        contrasts = [h-l for h,l in zip(high,low)]
+        # Aggregate concordance matters more than one exaggerated peak.
+        score = passing*50 + statistics.median(contrasts) - 0.04*sum(abs(v-statistics.median(contrasts)) for v in contrasts)
+        eligible.append((begin, score, high, low, passing))
+    if not eligible: return None
+    # Pick best separated two-set pairing; do not count overlapping sliding windows.
+    # Canonical 240 s set recovery is allowed observed variation, not presumed.
+    rank = sorted(eligible, key=lambda x: (-x[1], x[0]))[:1500]
+    best = None
+    for x in rank:
+        for y in rank:
+            space = y[0] - x[0] - 450
+            if not 150 <= space <= 420: continue
+            # Penalise departure from prescribed rest but preserve the observed rest.
+            score = x[1] + y[1] - .04*abs(space-240)
+            if best is None or score > best[0]:
+                best = (score, x, y, space)
+    if best is None: return None  # One set is not 2x10.
+    _, first, second, between = best
+    # A set may be shifted 1-2 seconds by recording alignment; report measured means.
+    reps = []
+    seq = []
+    for set_num, item in enumerate((first, second), 1):
+        begin, _, highs, floats, passing = item
+        for idx, (h, l) in enumerate(zip(highs, floats), 1):
+            start = begin+(idx-1)*45
+            work_row = {'type':'WORK', 'moving_time':30,'elapsed_time':30,
+                        'start_time':start,'end_time':start+30,'average_watts':round(h,2),
+                        'set':set_num, 'rep_in_set':idx, '_v196910_observed':True}
+            float_row = {'type':'RECOVERY','moving_time':15,'elapsed_time':15,
+                         'start_time':start+30,'end_time':start+45,
+                         'average_watts':round(l,2),'set':set_num,'rep_in_set':idx,
+                         '_v196910_observed':True}
+            seq.extend((work_row, float_row));reps.append(work_row)
+        if set_num == 1:
+            # This is an observed interval; no claim that the break was exactly 240 s.
+            rest_w = _mean(begin+450, between)
+            if rest_w is not None:
+                seq.append({'type':'RECOVERY','moving_time':between,'elapsed_time':between,
+                            'start_time':begin+450, 'end_time':begin+450+between,
+                            'average_watts':round(rest_w,2), 'between_sets':True,
+                            '_v196910_observed':True})
+    seq.sort(key=lambda x:(x['start_time'], x['type'] != 'WORK'))
+    for idx, row in enumerate(seq): row['_truth_pos'] = idx
+    watts = [r['average_watts'] for r in reps]
+    return {'schema':R196910_SCHEMA, 'status':'RESOLVED',
+            'source':'ICU_RAW_WATTS_30_15','confidence':'HIGH',
+            'pattern':'MICRO_30_15', 'sets':2,'reps_per_set':10,'work_s':30,
+            'float_s':15,'set_recovery_s':between, 'prescribed_set_recovery_s':240,
+            'repeated_work_count':len(reps),'interval_secs':30,
+            'sequence':seq,'work_rows':reps,'corrections':[],
+            'recovery_median_secs':15,'raw_icu_work_count':0,
+            'set_start_secs':[first[0], second[0]],
+            'measured_work_watts':watts,
+            'coverage_rule':'EACH_30S_AND_15S_WINDOW_AT_LEAST_85_PERCENT_SAMPLES',
+            'contrast_rule':'AT_LEAST_9_OF_10_IN_EACH_SET_AND_AGGREGATE_SEPARATION',
+            'verified_set_pass_counts':[first[4], second[4]],
+            'complete_pattern_verified':True}
+
+
+_r196910_fetch_detail_baseline = fetch_activity_details
+
+
+def fetch_activity_details(activity_ids):
+    details = _r196910_fetch_detail_baseline(activity_ids)
+    if not isinstance(details, dict) or not details:
+        return details
+    # Only newest two candidates, no supplementary networking on all 24-history
+    # rides. This is a read-only probe and does not alter ICU intervals or FIT.
+    candidates = sorted((d for d in details.values() if isinstance(d,dict) and d.get('id')),
+                        key=lambda d: str(d.get('start_date_local') or ''), reverse=True)
+    attempted = 0
+    for d in candidates:
+        if attempted >= 2: break
+        if not _v4887_is_cycling_activity(d) or _v1954_confirmed_competition(d): continue
+        # Do not trust automatic ICU work boundaries to rule out raw micro sets.
+        aid = str(d['id']); attempted += 1
+        out = dict(d)
+        probe = {'schema':R196910_SCHEMA,'status':'NOT_CHECKED','activity_id':aid,
+                 'source':'INTERVALS_RAW_STREAMS_READ_ONLY'}
+        try:
+            runtime = _resolve_intervals_runtime()
+            response = requests.get(f'https://intervals.icu/api/v1/activity/{aid}/streams.json',
+                                    headers=get_intervals_headers(runtime),
+                                    params={'types':'time,watts'}, timeout=(2.0,4.0))
+            probe['http_status'] = int(response.status_code)
+            response.raise_for_status()
+            samples = _v196910_raw_power_samples(response.json())
+            if samples is None:
+                probe['status']='TIME_OR_WATTS_UNAVAILABLE'
+            else:
+                detected = _v196910_find_micro_30_15(samples)
+                probe['status']='TWO_SETS_VERIFIED' if detected else 'NO_VERIFIED_2X10_30_15'
+                probe['sample_duration_seconds']=len(samples)
+                if detected:
+                    out['_v196910_micro_truth']=detected
+        except Exception as exc:
+            probe['status']='STREAM_PROBE_FAILED'
+            probe['error_type']=type(exc).__name__
+        out['_v196910_stream_probe']=probe
+        details[aid]=out
+    return details
+
+
+_r196910_truth_baseline = _v79_activity_interval_truth
+
+
+def _v79_activity_interval_truth(detail):
+    detected = (detail or {}).get('_v196910_micro_truth')
+    if isinstance(detected, dict) and detected.get('complete_pattern_verified') is True and not _v1954_confirmed_competition(detail):
+        return dict(detected)
+    return _r196910_truth_baseline(detail)
+
+
+_r196910_truth_summary_baseline = _v79_activity_truth_summary
+
+
+def _v79_activity_truth_summary(truth):
+    out = _r196910_truth_summary_baseline(truth)
+    if (truth or {}).get('schema') == R196910_SCHEMA:
+        out.update({'schema':R196910_SCHEMA,'pattern':truth.get('pattern'),
+                    'sets':truth.get('sets'),'reps_per_set':truth.get('reps_per_set'),
+                    'work_s':truth.get('work_s'),'float_s':truth.get('float_s'),
+                    'set_recovery_s':truth.get('set_recovery_s'),
+                    'set_start_secs':truth.get('set_start_secs'),
+                    'verified_set_pass_counts':truth.get('verified_set_pass_counts'),
+                    'complete_pattern_verified':truth.get('complete_pattern_verified'),
+                    'coverage_rule':truth.get('coverage_rule'),
+                    'contrast_rule':truth.get('contrast_rule')})
+    return out
+
+
+_r196910_stats_baseline = _v4879_repeatability_stats
+
+
+def _v4879_repeatability_stats(intervals, source=None):
+    if str(source or '').upper() != 'ICU_RAW_WATTS_30_15':
+        return _r196910_stats_baseline(intervals, source=source)
+    works=[r for r in (intervals or []) if isinstance(r,dict) and r.get('type')=='WORK'
+           and r.get('_v196910_observed') is True]
+    if len(works)!=20 or len({r.get('set') for r in works})!=2:
+        return None
+    watts=[float(x['average_watts']) for x in works]
+    floats=[float(x['average_watts']) for x in (intervals or [])
+            if isinstance(x,dict) and x.get('type')=='RECOVERY' and x.get('moving_time')==15]
+    if len(floats)!=20:return None
+    avg=statistics.mean(watts);first,last=watts[0],watts[-1]
+    early,late=statistics.mean(watts[:2]),statistics.mean(watts[-2:])
+    change=(last-first)/first*100 if first else None
+    return {'reps':20,'sets':2,'reps_per_set':10,'interval_secs':30,
+            'interval_label':'30 sec','recovery_secs':15,
+            'set_recovery_secs':next((r.get('moving_time') for r in intervals if r.get('between_sets')),None),
+            'recovery_avg_watts':round(statistics.median(floats),1),
+            'recovery_label':'15 sec', 'watts':[round(w) for w in watts],
+            'avg_watts':round(avg,1),'min_watts':round(min(watts)),
+            'max_watts':round(max(watts)),'spread_watts':round(max(watts)-min(watts)),
+            'first_watts':round(first),'last_watts':round(last),
+            'first_to_last_delta_watts':round(last-first),
+            'first_to_last_change_pct':round(change,1) if change is not None else None,
+            'first_to_last_decay_pct':round(max(0,-change),1) if change is not None else None,
+            'cv_pct':round(statistics.pstdev(watts)/avg*100,1) if avg else None,
+            'early_rep_avg_watts':round(early,1),'late_rep_avg_watts':round(late,1),
+            'late_rep_retention_pct':round(late/early*100,1) if early else None,
+            'source':source,'activity_truth_source':source,
+            'r196910_raw_verified':True}
+
+
+_r196910_quality_baseline = _v4895_activity_quality_truth
+
+
+def _v4895_activity_quality_truth(activity=None, family=None):
+    result = _r196910_quality_baseline(activity, family)
+    # Classification from raw samples only, not from workout title or HR alone.
+    if ((activity or {}).get('_v196910_micro_truth') or {}).get('complete_pattern_verified') is True \
+            and not _v1954_confirmed_competition(activity):
+        return {'quality_relevant':True,'basis':'VERIFIED_RAW_POWER_2X10_30_15'}
+    return result
+
+
+_r196910_blocks_baseline = build_previous_training_blocks
+
+
+def build_previous_training_blocks(recent_activities, limit=3, activity_details=None):
+    blocks = _r196910_blocks_baseline(recent_activities,limit=limit,activity_details=activity_details)
+    details = activity_details if isinstance(activity_details,dict) else {}
+    changed = False
+    for block in blocks or []:
+        if not isinstance(block,dict) or _v1954_confirmed_competition(block):continue
+        aid=str(block.get('activity_id') or '')
+        detail=details.get(aid) or {}
+        truth=detail.get('_v196910_micro_truth')
+        if not isinstance(truth,dict) or truth.get('complete_pattern_verified') is not True:continue
+        block['micro_30_15_observed'] = {k:truth.get(k) for k in (
+            'schema','status','source','confidence','sets','reps_per_set','work_s',
+            'float_s','set_recovery_s','set_start_secs','verified_set_pass_counts',
+            'complete_pattern_verified','coverage_rule','contrast_rule')}
+        block['interval_structure_source'] = 'ICU_RAW_WATTS_30_15'
+        block['activity_truth'] = _v79_activity_truth_summary(truth)
+        block['repeatability'] = _v4879_repeatability_stats(truth['sequence'], 'ICU_RAW_WATTS_30_15')
+        block['quality_relevant']=True
+        block['quality_basis']='VERIFIED_RAW_POWER_2X10_30_15'
+        block['work_interval_evidence']=[{'secs':30,'watts':round(float(r['average_watts']),1),
+                                          'set':r['set'],'rep_in_set':r['rep_in_set']}
+                                         for r in truth['work_rows']]
+        block['intervals']=['2 sets × 10 × 30s work / 15s float',
+                            f"Observed between-set recovery: {truth['set_recovery_s']}s",
+                            f"20 measured work intervals · source: raw power stream"]
+        block['consideration']='⚡ Verified raw 30/15 quality · count actual high-intensity load for recovery spacing.'
+        changed = True
+    if changed:
+        try:_V146_BLOCK_CONTEXT.set(tuple(_v4831_json_clone(b) for b in blocks if isinstance(b,dict)))
+        except Exception:pass
+    return blocks
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.111 R196.9.10 · RAW 30/15 + BOUNDED GARMIN · NOVA R196.2 CORE'
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
