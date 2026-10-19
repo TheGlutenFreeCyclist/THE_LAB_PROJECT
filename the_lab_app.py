@@ -45129,8 +45129,17 @@ def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None
         actual = _v1943_finite(band.get('evidence_interval_seconds'), 1)
         prescribed_recovery = _v1943_finite((template or {}).get('recovery_s'), 1)
         observed_recovery = _v1943_finite((event or {}).get('recovery_secs'), 1)
-        comparable_recovery = bool(prescribed_recovery and observed_recovery
-                                   and observed_recovery <= prescribed_recovery + 1)
+        # R196.9.0 — device lap boundaries commonly differ by a few seconds.
+        # Recovery *duration* comparability is not a millisecond-precision test:
+        # allow at most 5%, capped at 20 s (and at least 5 s) of timing jitter.
+        # A materially longer/easier recovery remains noncomparable; unknown
+        # recovery never silently passes. No change to reps, source, CV, age,
+        # interval-duration or NOVA recovery/spacing safety gates.
+        recovery_tolerance_s = (min(20.0, max(5.0, prescribed_recovery * 0.05))
+                                if prescribed_recovery is not None else 0.0)
+        comparable_recovery = bool(prescribed_recovery is not None
+                                   and observed_recovery is not None
+                                   and observed_recovery <= prescribed_recovery + recovery_tolerance_s)
         comparable_repetitions = bool(event and int(_v1943_finite(event.get('reps'), 1) or 0)
                                       >= int(band.get('reps') or 0))
         if not comparable_repetitions or not comparable_recovery or not actual or not work:
@@ -45139,6 +45148,12 @@ def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None
                          'repeatability_reason':'MISSING_CANONICAL_REPEATS_OR_COMPARABLE_RECOVERY',
                          'reason':'MISSING_CANONICAL_REPEATS_OR_COMPARABLE_RECOVERY'})
             return band
+        # Make the tolerance auditable; do not claim that a shorter verified
+        # repeat proves watt-level repeatability for a longer workout.
+        band['observed_recovery_seconds'] = observed_recovery
+        band['planned_recovery_seconds'] = prescribed_recovery
+        band['recovery_timing_tolerance_seconds'] = round(recovery_tolerance_s, 2)
+        band['recovery_duration_comparable'] = comparable_recovery
         novel_context = str(dimension or '').upper() in {'RACE_TRANSFER', 'DURABILITY'}
         if actual + 1 < work or novel_context:
             reason = ('SHORTER_INTERVAL_TRANSFER' if actual + 1 < work
@@ -45930,7 +45945,7 @@ BASE_CSS += """
 .v19688-preview-warning strong{color:#f6be78}
 .v19688-preview-details{padding:4px 0 8px}.v19688-preview-details summary{cursor:pointer;font-weight:600}.v19688-preview-details div{padding:10px 0}
 """
-APP_VERSION = 'THE LAB · PRODUCT V4.9.100 R196.8.9 · STARTUP ANCHOR FIX + QUALITY HOLD UX · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.101 R196.9.0 · VERIFIED RECOVERY TIMING TOLERANCE · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
