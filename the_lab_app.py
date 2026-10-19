@@ -42364,6 +42364,22 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
         # Genuine maximal sprints are prescribed by effort and technique, not one arbitrary watt number.
         if any(t.get('id')==sid and str(t.get('pattern') or '').upper()=='SPRINT' for t in _NOVA_WORKOUT_LIBRARY):continue
         if sid!=str(candidate.get('_tl_nova_workout_id') or ''):continue
+        # R196.9.3: allow a VERSIONED, evidenced self-paced race-transfer
+        # protocol through the numerical R194.3 guard without fabricating
+        # fixed watts. The power contract remains explicitly STRUCTURE_ONLY;
+        # non-verified, improvised or non-transfer patterns still fail closed.
+        if (str((prescription or {}).get('dimension') or '').upper() == 'RACE_TRANSFER'
+                and _v19693_authorized_relative_transfer(prescription, sess, sid)):
+            sess['power_prescription'] = {
+                'schema': R19693_SCHEMA, 'state': 'STRUCTURE_ONLY_EFFORT_BASED',
+                'source': 'EVIDENCED_CANONICAL_RELATIVE_TRANSFER',
+                'power_target_mode': 'NO_FIXED_WATT_TARGET',
+                'validated_repeatability_not_implied': True,
+                'rule': 'Controlled self-paced work with explicit canonical mechanics; execution evidence is assessed later. No invented watt target.'}
+            sess['quality_relevance'] = 'MEANINGFUL'
+            sessions[i] = sess
+            out['sessions'] = sessions
+            continue
         band=candidate.get('_tl_v1943_power_band') or _v1960_coupled_power_band(candidate,sess,adaptive_roadmap) or {}
         if band.get('state')!='PRESCRIBED':
             # A hard structured session must not ask the athlete to guess the
@@ -44675,7 +44691,7 @@ def _v1962_snapshot_consistency(data):
     for row in hard:
         if row.get('nova_workout_id') and row.get('power_prescription'):
             pp=row['power_prescription']
-            if (pp.get('state')!='PRESCRIBED' and not any(t.get('id') == row.get('nova_workout_id') and str(t.get('pattern') or '').upper() == 'SPRINT' for t in _NOVA_WORKOUT_LIBRARY)):
+            if (pp.get('state')!='PRESCRIBED' and not _v19693_approved_non_watt_audit(row) and not any(t.get('id') == row.get('nova_workout_id') and str(t.get('pattern') or '').upper() == 'SPRINT' for t in _NOVA_WORKOUT_LIBRARY)):
                 fail('HARD_WORKOUT_WITHOUT_VERIFIED_POWER_CONTRACT')
     return {'schema':R1962_SCHEMA,'status':'PASS' if not issues else 'BLOCKED',
             'goal_key':(d.get('training_direction') or {}).get('primary_goal'),
@@ -46077,6 +46093,272 @@ def build_nova_decision(goal_key, question_state=None, scientific_progression=No
     return out
 
 APP_VERSION = "THE LAB · PRODUCT V4.9.103 R196.9.2 · UNIFIED QA + CHECKPOINT TRANSITION · NOVA R196.2 CORE"
+
+
+# R196.9.3 · PURPOSE BEFORE PREFERENCE; STRUCTURE BEFORE LABEL
+# All gates execute upstream as before. These adapters only select from EXISTING
+# eligible clock slots and VERSIONED canonical workouts. No new hard clearance,
+# recovery credit, manual athlete override or invented watt prescription.
+R19693_SCHEMA = "V4.9.104-R196.9.3-PURPOSE-CLOCK-STRUCTURE-1"
+_r19693_quality_window_before = _v117_select_quality_window
+_r19693_library_before = _v109_select_workout_template
+
+
+def _v19693_established_weekday_evidence(cadence, weekday):
+    """Avoid turning a short recent dip into erased established training history.
+
+    A sample can support a *timing preference*, never readiness or eligibility.
+    Count independent observed days, not hard-start occurrences or smoothing
+    priors. Missing/ambiguous data stays unknown, not automatically positive.
+    """
+    context = (cadence or {}).get("weekly_session_role") or {}
+    counts = context.get("weekday_counts") or {}
+    row = counts.get(weekday, counts.get(str(weekday), {})) or {}
+    if not isinstance(row, dict):
+        return None
+    try:
+        training, quality = int(row.get("training_days")), int(row.get("quality_days"))
+    except (ValueError, TypeError):
+        return None
+    if training < 4 or quality < 2 or quality > training:
+        return None
+    if context.get("shift_detected") and weekday in set(context.get("shift_weekdays") or []):
+        return None
+    rate = quality / training
+    # Established-day pattern can support an early candidate even if the
+    # 21-day blended rate crosses an arbitrary 0.5 classification boundary.
+    return {"training_days": training, "quality_days": quality,
+            "observed_quality_rate": round(rate, 3)} if rate >= 0.5 else None
+
+
+def _v19693_comparable_quality_time(row, cadence, preferred_row):
+    dt = row.get("dt"); later = preferred_row.get("dt")
+    if not isinstance(dt, datetime) or not isinstance(later, datetime):
+        return False
+    if (dt.hour < 12) != (later.hour < 12):
+        return False
+    habitual = str((cadence or {}).get("hard_daypart") or "").upper()
+    confidence = str((cadence or {}).get("time_confidence") or "").upper()
+    if habitual in {"AM", "PM"} and confidence in {"MODERATE", "HIGH"}:
+        if ("AM" if dt.hour < 12 else "PM") != habitual:
+            return False
+    minute = (cadence or {}).get("hard_start_minute")
+    if minute is not None and confidence in {"MODERATE", "HIGH"}:
+        try:
+            habitual_min = float(minute)
+            earlier_delta = abs((dt.hour * 60 + dt.minute) - habitual_min)
+            later_delta = abs((later.hour * 60 + later.minute) - habitual_min)
+            if earlier_delta > later_delta + 90:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_delay, second_hard=False):
+    result = _r19693_quality_window_before(candidates, last_end, spacing, cadence,
+        extra_delay, second_hard=second_hard)
+    if not isinstance(result, tuple) or len(result) != 4:
+        return result
+    earliest, preferred, reason, chosen = result
+    if not isinstance(earliest, datetime) or not isinstance(preferred, datetime) or earliest >= preferred:
+        return result
+    try:
+        if float(extra_delay) != 0.0:  # no recovered-early override with a penalty
+            return result
+        lower = last_end + timedelta(hours=float((spacing or {}).get("earliest_hours") or 36)) if last_end else None
+        preferred_min = last_end + timedelta(hours=float((spacing or {}).get("preferred_hours") or 48)) if last_end else None
+        valid = sorted([r for r in (candidates or []) if isinstance(r, dict)
+                        and isinstance(r.get("dt"), datetime)
+                        and (lower is None or r["dt"] >= lower)], key=lambda r: r["dt"])
+        if not valid or any(r.get("explicit") for r in valid):
+            return result  # explicit athlete/Calendar intent stays authoritative
+        if chosen is None or chosen.get("explicit"):
+            return result
+        for row in valid:
+            t = row["dt"]
+            if t >= preferred:
+                break
+            if preferred_min is not None and t < preferred_min:
+                continue  # not yet at the native preferred physiological spacing
+            if not _v19693_comparable_quality_time(row, cadence, chosen):
+                continue
+            support = _v19693_established_weekday_evidence(cadence, t.weekday())
+            if not support:
+                continue
+            # The native filter has already removed blocked calendar/note/race
+            # days and enforced recovery. No new slot is invented.
+            return earliest, t, "R19693_ESTABLISHED_EARLIER_ELIGIBLE_QUALITY", row
+    except (TypeError, ValueError, OverflowError, KeyError):
+        return result
+    return result
+
+
+# RACE_TRANSFER requires actual varying-intensity mechanics. The old library
+# advertised every generic STANDARD interval as RACE_TRANSFER and the renderer
+# attached merely three short warm-up surges, allowing a near-duplicate hard
+# main set to masquerade as a different physiological training question.
+# Do not remove generic templates from other dimensions or change seven goals.
+_R19693_TRANSFER_PATTERNS = frozenset({"MICRO_30_15", "SPRINT_CLUSTER", "OVER_UNDER"})
+
+
+def _v19693_race_purpose_candidates(goal, dimension, slot, evidence_ledger):
+    duration_hint = _rhythm_num((slot or {}).get("duration_hint_min")) or _parse_duration_minutes(
+        (slot or {}).get("duration_hint_label"))
+    events = ((evidence_ledger or {}).get("repeatability") or {}).get("events") or []
+    latest_day = None
+    for e in events:
+        try:
+            d = date.fromisoformat(str(e.get("date") or "")[:10])
+            latest_day = max(latest_day, d) if latest_day else d
+        except (ValueError, TypeError):
+            pass
+    ranked = []
+    for template in _NOVA_WORKOUT_LIBRARY:
+        if (str(template.get("goal") or "").upper() != goal
+                or dimension not in set(template.get("dimensions") or ())
+                or template.get("adaptive_only")
+                or str(template.get("pattern") or "").upper() not in _R19693_TRANSFER_PATTERNS):
+            continue
+        est = _v109_template_estimated_session_min(template, dimension)
+        if duration_hint is not None and est > float(duration_hint) + 5:
+            continue
+        sig = _v109_template_signature(template)
+        # Canonical identical previously executed structure is not a new lever.
+        duplicate = False
+        for evt in events:
+            if _v109_event_signature(evt) != sig:
+                continue
+            try:
+                age = (latest_day - date.fromisoformat(str(evt.get("date") or "")[:10])).days
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if 0 <= age <= 14:
+                duplicate = True
+                break
+        if duplicate:
+            continue
+        score = float(template.get("priority") or 50)
+        if duration_hint is not None:
+            score -= abs(float(duration_hint) - est) * 0.10
+        ranked.append((score, str(template.get("id") or ""), template, est))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return ranked
+
+
+def _v19693_strong_transfer_background(evidence_ledger):
+    """At least two independent, dated, canonical strong exposures; no PB-only proof."""
+    events = ((evidence_ledger or {}).get('repeatability') or {}).get('events') or []
+    days = set()
+    for ev in events:
+        if not isinstance(ev, dict) or ev.get('strong') is not True:
+            continue
+        provenance = str(ev.get('activity_truth_source') or ev.get('source') or '').upper()
+        if provenance not in {'DEVICE_LAPS', 'ICU_INTERVALS_CANONICAL',
+                              'ORIGINAL_ACTIVITY_FIT_LAP', 'ORIGINAL_FIT_LAPS'}:
+            continue
+        try:
+            day = date.fromisoformat(str(ev.get('date') or '')[:10])
+        except (TypeError, ValueError):
+            continue
+        days.add(day)
+    return len(days) >= 2
+
+
+def _v19693_approved_non_watt_audit(row):
+    if not isinstance(row, dict):
+        return False
+    protocol = row.get('power_prescription') or {}
+    if (protocol.get('schema') != R19693_SCHEMA
+            or protocol.get('state') != 'STRUCTURE_ONLY_EFFORT_BASED'
+            or protocol.get('source') != 'EVIDENCED_CANONICAL_RELATIVE_TRANSFER'):
+        return False
+    wid = str(row.get('nova_workout_id') or '')
+    return any(str(t.get('id') or '') == wid and str(t.get('pattern') or '').upper() in _R19693_TRANSFER_PATTERNS
+               for t in _NOVA_WORKOUT_LIBRARY)
+
+
+def _v19693_authorized_relative_transfer(prescription, session, wid):
+    if not isinstance(session, dict) or not isinstance(prescription, dict):
+        return False
+    if str(prescription.get('dimension') or '').upper() != 'RACE_TRANSFER':
+        return False
+    audit = (prescription.get('workout_library') or {}).get('purpose_consistency') or {}
+    if not (audit.get('schema') == R19693_SCHEMA and audit.get('result') == 'STRUCTURAL_MATCH'
+            and str(audit.get('selected_id') or '') == str(wid or '')):
+        return False
+    family = next((t for t in _NOVA_WORKOUT_LIBRARY if str(t.get('id') or '') == str(wid or '')), None)
+    if not family or str(family.get('pattern') or '').upper() not in _R19693_TRANSFER_PATTERNS:
+        return False
+    return bool(session.get('hard_spacing_relevant') or session.get('provisional_quality'))
+
+
+def _v109_select_workout_template(goal, dimension, evidence_ledger=None, training_definitions=None, slot=None):
+    t, audit = _r19693_library_before(goal, dimension, evidence_ledger=evidence_ledger,
+        training_definitions=training_definitions, slot=slot)
+    goal = str(goal or "").upper(); dim = str(dimension or "").upper()
+    if dim != "RACE_TRANSFER":
+        return t, audit
+    if not _v19693_strong_transfer_background(evidence_ledger):
+        base = dict(audit or {})
+        base['reason'] = 'R19693_NO_INDEPENDENT_STRONG_TRANSFER_BASELINE'
+        base['purpose_consistency'] = {'schema': R19693_SCHEMA,
+            'result': 'INSUFFICIENT_CANONICAL_BACKGROUND', 'dimension': dim}
+        return None, base
+    base = dict(audit or {})
+    if (isinstance(t, dict) and str(t.get("pattern") or "").upper()
+            in _R19693_TRANSFER_PATTERNS):
+        base["purpose_consistency"] = {"schema": R19693_SCHEMA, "result": "STRUCTURAL_MATCH",
+            "dimension": dim, "pattern": t.get("pattern"), "selected_id": t.get("id")}
+        return t, base
+    ranked = _v19693_race_purpose_candidates(goal, dim, slot, evidence_ledger)
+    if ranked:
+        score, ident, selected, est = ranked[0]
+        base.update({"selected_id": ident, "selected_score": round(score, 2),
+                     "selected_signature": _v109_template_signature(selected),
+                     "reason": "R19693_MECHANICS_MATCH_SELECTED_SCIENTIFIC_QUESTION",
+                     "purpose_consistency": {"schema": R19693_SCHEMA, "result": "STRUCTURAL_MATCH",
+                        "dimension": dim, "pattern": selected.get("pattern"),
+                        "selected_id": ident, "estimated_session_min": est,
+                        "previous_candidate": (t or {}).get("id") if isinstance(t, dict) else None,
+                        "rule": "Changing recovery/power context only in wording cannot create transfer evidence."}})
+        return dict(selected), base
+    base["reason"] = "R19693_NO_STRUCTURAL_TRANSFER_CANDIDATE"
+    base["purpose_consistency"] = {"schema": R19693_SCHEMA, "result": "NO_SUPPORTED_STRUCTURE",
+        "dimension": dim, "previous_candidate": (t or {}).get("id") if isinstance(t, dict) else None,
+        "rule": "No hard workout is invented for a scientific dimension that the current library cannot implement."}
+    return None, base
+
+
+# R153 continuity is binding for a valid previously issued plan, but cannot
+# resurrect a generic easy-recovery main set under a changed RACE_TRANSFER
+# question. R196.2 already has the read-only shadow-replay path to reconcile
+# invalidated commitments; extend its existing incompatibility test, not its
+# persistence/ledger side effects.
+_r19693_locked_identity_before = _v1962_locked_identity
+
+
+def _v1962_locked_identity(out, decision):
+    mismatch = _r19693_locked_identity_before(out, decision)
+    if mismatch:
+        return mismatch
+    if not isinstance(out, dict) or str(out.get("source") or "") != "PRESCRIPTION_CONTINUITY_LOCK":
+        return None
+    if str((decision or {}).get("dimension") or "").upper() != "RACE_TRANSFER":
+        return None
+    wid = str(out.get("workout_id") or "")
+    family = next((t for t in _NOVA_WORKOUT_LIBRARY if str(t.get("id") or "") == wid), None)
+    if not isinstance(family, dict):
+        return {"reason": "UNKNOWN_PRIOR_WORKOUT_CANNOT_PROVE_TRANSFER_STRUCTURE",
+                "original_dimension": "UNKNOWN", "current_dimension": "RACE_TRANSFER",
+                "workout_id": wid, "selected_slot_index": out.get("selected_slot_index")}
+    if str(family.get("pattern") or "").upper() in _R19693_TRANSFER_PATTERNS:
+        return None
+    return {"reason": "PERSISTED_WORKOUT_LACKS_TRANSFER_MECHANICS",
+            "original_dimension": "RACE_TRANSFER", "current_dimension": "RACE_TRANSFER",
+            "workout_id": wid, "selected_slot_index": out.get("selected_slot_index")}
+
+APP_VERSION = "THE LAB · PRODUCT V4.9.104 R196.9.3 · EVIDENCE-BASED QUALITY CLOCK + PURPOSEFUL TRANSFER · NOVA R196.2 CORE"
 
 
 if __name__ == "__main__":
