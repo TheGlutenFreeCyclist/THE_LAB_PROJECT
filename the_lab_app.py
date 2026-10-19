@@ -46677,6 +46677,12 @@ def _v19696_execution_contract(session):
 def _v19696_strip_conflicting_power_headers(main_set):
     """Remove every stale composer prefix; never drop the mechanical main set."""
     raw=str(main_set or '').strip()
+    # R196.9.7: compiler re-entry must not stack its own canonical range.
+    # Only erase a byte-identifiable prefix authored by the R196.9.6 compiler;
+    # do not touch observational watts, pacing cues or arbitrary free text.
+    prefix=r'^(?:EXPLORATORY )?WORK RANGE:\s*\d+(?:\s*[–-]\s*\d+)?\s*W\s+(?:exploratory work range; not a pass/fail target|validated prescription range)\.\s*'
+    while re.match(prefix,raw,flags=re.I):
+        raw=re.sub(prefix,'',raw,count=1,flags=re.I).strip()
     raw=re.sub(r'EXPLORATORY POWER TARGET:.*?assess structure and recovery separately\.\s*',
                '',raw,flags=re.I|re.S)
     raw=re.sub(r'WORK TARGET:.*?\)\.\s*','',raw,flags=re.I|re.S)
@@ -46700,6 +46706,10 @@ def _v1967_athlete_session_view(session):
         view['band_label']=spec.get('power')
     if spec.get('issues') and spec.get('available'):
         view['workout_contract_notice']='Incomplete workout mechanics: '+', '.join(spec['issues'])
+    if s.get('r19697_timing_warning'):
+        # Do not display a time-infeasible HARD as though it were executable.
+        # The original HARD decision is not silently converted to an EASY.
+        view['workout_contract_notice']=s['r19697_timing_warning']
     return view
 
 app.jinja_env.globals['nova_athlete_view']=_v1967_athlete_session_view
@@ -46752,6 +46762,218 @@ BASE_CSS += '''
 .v19696-workout-contract strong{margin-right:.35em;letter-spacing:.06em;font-size:.77rem;opacity:.8}
 .v19696-workout-incomplete{font-weight:650;font-size:.85rem;margin:.7rem 0}
 '''
+
+# R196.9.7 — Complete the AVAILABLE canonical session envelope without changing
+# the selected HARD stimulus, evidence, clearance, safety gates or workout ID.
+# The selected intervals are a DOSE, not the entire booked training duration.
+# No extra HIIT intervals/sprints are added to fill a longer slot.
+R19697_SCHEMA = 'V4.9.108-R196.9.7-CANONICAL-SESSION-ENVELOPE-1'
+
+
+def _v19697_workout_core_seconds(t):
+    """Compute immutable library on/off time, including the final float."""
+    try:
+        pat = str(t.get('pattern') or '').upper()
+        if pat in {'MICRO_30_15', 'SPRINT_CLUSTER'}:
+            sets = int(t['sets']); reps = int(t['reps_per_set'])
+            work = float(t['work_s']); flt = float(t['float_s'])
+            set_rest = float(t['set_recovery_s']) if sets > 1 else 0.0
+            if sets < 1 or reps < 1 or min(work,flt) <= 0 or set_rest < 0:
+                return None
+            core = sets * reps * (work + flt) + (sets - 1) * set_rest
+            return (core, sets * reps * work, sets * reps * flt + (sets - 1) * set_rest)
+        reps = int(t['reps']); work = float(t['work_s'])
+        rest = float(t['recovery_s']) if reps > 1 else 0.0
+        if reps < 1 or work <= 0 or rest < 0:
+            return None
+        core = reps * work + (reps - 1) * rest
+        return (core, reps * work, (reps - 1) * rest)
+    except (KeyError, ValueError, TypeError, OverflowError):
+        return None
+
+
+def _v19697_time_label(seconds):
+    seconds = round(float(seconds))
+    minutes, remainder = divmod(seconds, 60)
+    if not remainder: return f'{minutes} min'
+    return f'{minutes} min {remainder} s' if minutes else f'{remainder} s'
+
+
+def _v19697_session_envelope(session):
+    """Pure time accounting. Only already-cleared canonical HARDs get a timeline.
+
+    PRESERVE quality authority and the original training dose. Availability from
+    Nova's upstream owner/rhythm/plan gates is not overwritten. A physically
+    impossible or unparseable length is AUDITED, not silently repaired with
+    fabricated repetitions or a misleading 'full session' claim.
+    """
+    s = session if isinstance(session, dict) else {}
+    wid = str(s.get('nova_workout_id') or '')
+    t = _R19696_LIBRARY_INDEX.get(wid)
+    audit = {'schema': R19697_SCHEMA, 'workout_id': wid,
+             'state': 'NOT_APPLICABLE', 'issues': [], 'modified': False}
+    if not t or str(t.get('pattern') or '').startswith('ENDURANCE'):
+        return s, audit
+    is_hard = (bool(s.get('hard_spacing_relevant') or s.get('provisional_quality'))
+               or str(s.get('intensity') or '').upper().startswith('HARD')
+               or str(s.get('intensity_class') or '').lower() in {'vo2','threshold','tempo','sprint'})
+    if not is_hard or str(s.get('stimulus_architecture_state') or '') != 'NOVA_CANONICAL_LIBRARY':
+        return s, audit
+    if str(s.get('restriction') or 'NONE').upper() != 'NONE':
+        audit.update(state='RESTRICTION_PRESERVED',issues=['UPSTREAM_RESTRICTION'])
+        return s, audit
+    # Preserve all previous R196.9.6 gates. Do not create a new way of issuing
+    # a HARD, or accidentally reconstitute a session already converted to EASY.
+    if not _v19696_execution_contract(s).get('ready'):
+        audit.update(state='PREVIOUS_COMPLETENESS_GATE_NOT_PASSED', issues=['R19696_NOT_READY'])
+        return s, audit
+    core = _v19697_workout_core_seconds(t)
+    duration_min = _parse_duration_minutes(s.get('duration'))
+    if not core or duration_min is None or not math.isfinite(float(duration_min)) or duration_min <= 0:
+        audit.update(state='UNASSESSED_DURATION', issues=['MISSING_VALID_SESSION_DURATION'])
+        return s, audit
+    total_seconds = round(float(duration_min) * 60)
+    if total_seconds > 6 * 3600:
+        audit.update(state='UNASSESSED_UNUSUAL_ENVELOPE', issues=['LONG_ENVELOPE_NEEDS_EXPLICIT_PURPOSE'])
+        return s, audit
+    text = str(s.get('main_set') or '')
+    dimension = str(s.get('nova_prescription_dimension') or '').upper()
+    prescribed_preload = None
+    if dimension == 'RACE_TRANSFER' and re.search(r'\b20\s*min\s+progressive aerobic lead-in\b', text, re.I):
+        prescribed_preload = (20 * 60, 'the original 20 min progressive race-transfer lead-in, including its controlled surges')
+    elif dimension == 'DURABILITY' and re.search(r'\b30\s*min\s+low[- ]?Z2 aerobic preload\b', text, re.I):
+        prescribed_preload = (30 * 60, 'the original 30 min low-Z2 durability preload')
+    elif re.search(r'\b(?:\d+\s*min)\s+(?:aerobic )?(?:preload|lead-in)\b', text, re.I):
+        # Do not replace an unknown pre-existing preload with a guessed 15min.
+        audit.update(state='UNASSESSED_EXISTING_PRELOAD', issues=['UNMODELED_PRESCRIBED_LEAD_IN'])
+        return s, audit
+    explicit_warm = re.search(r'\bWarm[- ]?up:\s*(\d+(?:\.\d+)?)\s*min\b', text, re.I)
+    explicit_cool = re.search(r'\bCool[- ]?down:\s*(\d+(?:\.\d+)?)\s*min\b', text, re.I)
+    warm_seconds = (prescribed_preload[0] if prescribed_preload else
+                    round(float(explicit_warm.group(1)) * 60) if explicit_warm else
+                    (15 if str(t.get('pattern') or '').upper() in {'SPRINT','SPRINT_CLUSTER','SHORT_POWER'} else 12) * 60)
+    cool_seconds = round(float(explicit_cool.group(1)) * 60) if explicit_cool else 8 * 60
+    required = round(core[0]) + warm_seconds + cool_seconds
+    audit.update(state='ASSESSED', declared_seconds=total_seconds,
+                 core_seconds=round(core[0]), quality_work_seconds=round(core[1]),
+                 recovery_seconds=round(core[2]), preparation_seconds=warm_seconds,
+                 cooldown_seconds=cool_seconds, min_required_seconds=required)
+    if min(warm_seconds, cool_seconds) < 0 or required > total_seconds:
+        audit.update(state='INFEASIBLE_ENVELOPE',
+                     issues=['FULL_WORKOUT_COMPONENTS_EXCEED_DECLARED_DURATION'])
+        return s, audit
+    fill_seconds = total_seconds - required
+    # This is a purpose gate, NOT a new safety/quality decision: an abnormally
+    # large empty envelope cannot become hours of 'free training' without an
+    # independent durability/aerobic purpose.
+    if fill_seconds > 75 * 60 and dimension not in {'DURABILITY','RACE_TRANSFER'}:
+        audit.update(state='UNASSESSED_LONG_FILL',
+                     issues=['AEROBIC_FILL_REQUIRES_PURPOSE_AT_THIS_LENGTH'])
+        return s, audit
+    blocks = [
+        {'type':'PREPARATION', 'duration_seconds':warm_seconds,
+         'duration_min':round(warm_seconds / 60, 2),
+         'intensity':'AS_ORIGINALLY_PRESCRIBED' if prescribed_preload else 'Z1_TO_LOW_Z2'},
+        {'type':'CANONICAL_INTERVALS', 'duration_seconds':round(core[0]),
+         'duration_min':round(core[0] / 60, 2),
+         'quality_work_seconds':round(core[1]),'recovery_seconds':round(core[2]),
+         'intensity':'CANONICAL_LIBRARY_UNCHANGED'},
+    ]
+    if fill_seconds:
+        blocks.append({'type':'AEROBIC_FILL','duration_seconds':fill_seconds,
+                       'duration_min':round(fill_seconds / 60, 2),'intensity':'Z1_TO_LOW_Z2'})
+    blocks.append({'type':'COOLDOWN','duration_seconds':cool_seconds,
+                   'duration_min':round(cool_seconds / 60, 2),'intensity':'Z1'})
+    assert sum(b['duration_seconds'] for b in blocks) == total_seconds
+    if prescribed_preload:
+        warm_label = prescribed_preload[1]
+    else:
+        warm_label = f'{_v19697_time_label(warm_seconds)} progressive Z1–low-Z2 warm-up'
+    parts = [warm_label,
+             (f'{_v19697_time_label(core[0])} for the EXACT original canonical intervals '
+              f'({_v19697_time_label(core[1])} work + {_v19697_time_label(core[2])} float / recovery)')]
+    if fill_seconds:
+        parts.append(f'{_v19697_time_label(fill_seconds)} conversational Z1–low-Z2 aerobic completion; NO extra hard reps')
+    parts.append(f'{_v19697_time_label(cool_seconds)} very easy Z1 cool-down')
+    timeline = (f'SESSION TIMELINE ({_v19697_time_label(total_seconds)} total; original quality dose unchanged): '
+                + '; '.join(f'{i+1}) {v}' for i,v in enumerate(parts)) + '.')
+    # Idempotence and controlled replacement of the older generic finish only.
+    marker = 'SESSION TIMELINE ('
+    older = text.split(marker, 1)[0].rstrip() if marker in text else text
+    older = re.sub(r'\s*Finish with easy spinning to complete [^.]+, without adding an unplanned hard finisher\.\s*',
+                   ' ', older, flags=re.I).strip()
+    main = older.rstrip() + ' ' + timeline
+    comp = {
+        'schema': R19697_SCHEMA, 'state':'COMPLETE', 'total_duration':s.get('duration'),
+        'total_seconds':total_seconds, 'total_min_low':round(total_seconds / 60, 2),
+        'total_min_high':round(total_seconds / 60, 2),
+        'primary_duration_min':round(core[1] / 60, 2),
+        'primary_work_seconds':round(core[1]),
+        'interval_recovery_seconds':round(core[2]),
+        'aerobic_fill_min_low':round(fill_seconds / 60, 2),
+        'aerobic_fill_min_high':round(fill_seconds / 60, 2),
+        'blocks':blocks,
+        'policy':'UNCHANGED_CANONICAL_WORKOUT + PRESCRIBED_OR_CONSERVATIVE_PREPARATION + NO_NEW_HARD_STIMULUS + AEROBIC_COMPLETION + Z1_COOLDOWN',
+    }
+    # Validation checkpoints have their own R27 composition and are NOT ours.
+    if s.get('session_composition') not in (None, {}) and (s.get('session_composition') or {}).get('schema') != R19697_SCHEMA:
+        audit.update(state='EXISTING_COMPOSITION_PRESERVED',issues=['OTHER_AUTHORITY_OWNS_COMPOSITION'])
+        return s, audit
+    out = dict(s)
+    out.pop('r19697_timing_warning',None)  # a corrected envelope clears its old warning
+    out['main_set'] = main
+    out['session_composition'] = comp
+    out['aerobic_fill_state'] = 'PLANNED_LOW_Z2' if fill_seconds else 'NOT_REQUIRED'
+    out['aerobic_fill_minutes'] = _v19697_time_label(fill_seconds) if fill_seconds else None
+    changed = any(out.get(key) != s.get(key) for key in
+                  ('main_set','session_composition','aerobic_fill_state',
+                   'aerobic_fill_minutes','r19697_timing_warning'))
+    audit.update(state='COMPLETE', modified=changed, aerobic_fill_seconds=fill_seconds,
+                 accounted_seconds=sum(b['duration_seconds'] for b in blocks))
+    return out, audit
+
+
+def _v19697_complete_session_envelopes(p):
+    """Project into FINAL compiled sessions; NEVER select or promote a HARD."""
+    if not isinstance(p, dict): return p
+    out = dict(p)
+    original_rows = list(out.get('sessions') or [])
+    rows=[]; checks=[]; modified=[]
+    if str(out.get('status') or '').upper() in {'BLOCKED','HOLD','DEFERRED'} or out.get('hard_prescription_available') is False:
+        out['r19697_composition_audit']={'schema':R19697_SCHEMA,'checked':[],
+            'modified_indices':[], 'state':'UPSTREAM_VETO_PRESERVED'}
+        return out
+    for i, row in enumerate(original_rows):
+        updated, audit = _v19697_session_envelope(row)
+        if isinstance(row,dict) and audit['state'] in {
+            'INFEASIBLE_ENVELOPE','UNASSESSED_DURATION',
+            'UNASSESSED_EXISTING_PRELOAD','UNASSESSED_LONG_FILL',
+            'UNASSESSED_UNUSUAL_ENVELOPE'}:
+            if audit['state']=='INFEASIBLE_ENVELOPE':
+                warning=(f"Workout timing is INFEASIBLE as written: {_v19697_time_label(audit['min_required_seconds'])} "
+                         f"are needed for the planned mechanics, preparation and cooldown, "
+                         f"but only {_v19697_time_label(audit['declared_seconds'])} are declared. "
+                         "Do not execute this incomplete version; it needs a new feasible prescription.")
+            else:
+                warning=('Workout timing is not fully verified for this duration. '
+                         'Keep the existing quality decision unchanged, but do not treat '
+                         'this as a complete ready-to-execute timeline.')
+            updated=dict(row,r19697_timing_warning=warning)
+            audit['modified']=updated!=row
+        rows.append(updated)
+        if audit['state'] != 'NOT_APPLICABLE':
+            checks.append(dict(audit,index=i))
+        if audit['modified']:modified.append(i)
+    out['r19697_composition_audit'] = {
+        'schema':R19697_SCHEMA, 'checked':checks, 'modified_indices':modified,
+        'rule':'Time must be accounted for without adding work intervals or changing authorization; unfillable envelopes are reported, not disguised.'}
+    if modified:
+        out['sessions']=rows
+        _v145_rehash_plan(out)
+        if isinstance(out.get('single_plan_authority'),dict):
+            out['single_plan_authority']=dict(out['single_plan_authority'],plan_id=out['canonical_plan_id'])
+    return out
+
 
 # The same validator runs on every compiled library HARD, regardless of user,
 # adaptation goal or slot. Missing executable mechanics fail closed instead of
@@ -46829,9 +47051,13 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
             if isinstance(out.get('single_plan_authority'),dict):
                 out['single_plan_authority']['workout_id']=None
             out['fail_closed_reason']='R19696_INCOMPLETE_WORKOUT_CONTRACT'
+    # Composition is a POST-COMPILE projection only. It never edits the
+    # decision, template, gate, authorization, intensity or HARD availability.
+    if callable(globals().get('_v19697_complete_session_envelopes')):
+        out=_v19697_complete_session_envelopes(out)
     return out
 
-APP_VERSION='THE LAB · PRODUCT V4.9.107 R196.9.6 · UNIVERSAL WORKOUT CONTRACT + VISIBLE CANDIDATE MECHANICS · NOVA R196.2 CORE'
+APP_VERSION='THE LAB · PRODUCT V4.9.108 R196.9.7 · CANONICAL SESSION TIME ACCOUNTING · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
