@@ -44579,7 +44579,7 @@ _r1962_prescription_before = build_nova_prescription
 
 def _v1962_call_prescriber(decision, clock, roadmap, ledger, evidence, power, ftp,
                            aerobic, definitions):
-    scope = _r1962_power_scope.set({'ftp_anchor':ftp, 'as_of':(clock or {}).get('date')})
+    scope = _r1962_power_scope.set({'ftp_anchor':ftp, 'as_of':(clock or {}).get('date'), 'decision':decision, 'roadmap':roadmap, 'ledger':ledger})
     try:
         return _r1962_prescription_before(decision, clock, adaptive_roadmap=roadmap,
             microcycle_ledger=ledger, evidence_ledger=evidence, power_model=power,
@@ -47255,6 +47255,366 @@ def _v19698_compose_decisions(plan, training_rhythm=None, execution_model=None):
 
 
 APP_VERSION='THE LAB · PRODUCT V4.9.109 R196.9.8 · PURPOSE-AWARE TOPPER + DOSE REVIEW · NOVA R196.2 CORE'
+
+
+# R196.9.9 — DOSE DECISION V1 (upstream canonical selection, no downstream prescriber)
+# The original R111/R196.2/R196.9.3 selector and its safety checks are always
+# executed first. The only permitted extra HARD dose is a canonical library
+# variant whose EXACT interval architecture and power/effort authority are
+# supported by independent completed training evidence. The composer stays the
+# owner of easy completion, not intensity progression.
+R19699_SCHEMA = 'V4.9.110-R196.9.9-DOSE-DECISION-V1'
+R19699_DOSE_ENABLED = True
+_r19699_selector_before = _v109_select_workout_template
+
+
+def _v19699_number(value, lower=0.0, upper=1e6):
+    try:
+        v = float(value)
+        return v if math.isfinite(v) and lower <= v <= upper else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _v19699_slot_limit(slot):
+    """Single selected slot only; explicit planning limit takes precedence."""
+    s = slot if isinstance(slot, dict) else {}
+    hint = (_v19699_number(s.get('duration_hint_min'), 1, 360)
+            if str(s.get('timing_confidence') or '').upper() in {'HIGH', 'MODERATE'}
+            else None)
+    if hint is None and str(s.get('timing_confidence') or '').upper() in {'HIGH', 'MODERATE'}:
+        hint = _v19699_number(_parse_duration_minutes(s.get('duration_hint_label')), 1, 360)
+    planned = s.get('is_planned_training') is True
+    explicit = _v19699_number(s.get('expected_duration_max'), 1, 360) if planned else None
+    # Unconfirmed rhythm is not a hard cap, but without any reliable envelope
+    # there is no defensible reason to enlarge a quality prescription.
+    return explicit if explicit is not None else hint
+
+
+def _v19699_locked(slot, ledger):
+    """Never silently replace any still-live prescription in this exact slot."""
+    s = slot if isinstance(slot, dict) else {}
+    target = (str(s.get('date') or '')[:10], str(s.get('period') or ''))
+    if not all(target):
+        return True  # no identifiable slot => no escalation
+    ld = ledger if isinstance(ledger, dict) else {}
+    rows = list(ld.get('prescription_history') or [])
+    if isinstance(ld.get('primary_anchor'), dict):
+        rows.append(ld['primary_anchor'])
+    return any(_v153_plan_slot(row) == target and _v153_is_training_plan(row)
+               for row in rows if isinstance(row, dict))
+
+
+def _v19699_structure_step(original, proposed):
+    """A single monotonic, bounded progression lever; never change rest/pattern."""
+    a, b = original or {}, proposed or {}
+    if a.get('goal') != b.get('goal') or a.get('pattern') != b.get('pattern'):
+        return False
+    pattern = str(a.get('pattern') or '').upper()
+    if pattern.startswith('ENDURANCE'):
+        return False
+    # Matching interval, float and recovery is mandatory; unknown terms fail.
+    for key in ('work_s', 'recovery_s', 'float_s', 'set_recovery_s'):
+        if key in a or key in b:
+            if _v19699_number(a.get(key)) != _v19699_number(b.get(key)):
+                return False
+    if pattern in {'MICRO_30_15', 'SPRINT_CLUSTER'}:
+        old_sets, new_sets = a.get('sets'), b.get('sets')
+        old_reps, new_reps = a.get('reps_per_set'), b.get('reps_per_set')
+        if not all(isinstance(x, int) and x > 0 for x in (old_sets, new_sets, old_reps, new_reps)):
+            return False
+        return ((new_sets == old_sets + 1 and new_reps == old_reps) or
+                (new_sets == old_sets and new_reps == old_reps + 1)) and (
+                    new_sets * new_reps <= old_sets * old_reps * 1.25)
+    if pattern not in {'STANDARD', 'SHORT_POWER', 'SPRINT', 'SUSTAINED', 'OVER_UNDER'}:
+        return False
+    n0, n1 = a.get('reps'), b.get('reps')
+    return (isinstance(n0, int) and isinstance(n1, int) and n0 > 0
+            and n1 == n0 + 1 and n1 <= n0 * 1.25)
+
+
+def _v19699_comparable_events(original, evidence, as_of):
+    """Two dated independent verified executions of the *exact* base protocol.
+
+    A peak PB, a suggested workout, a neighboring interval length, or a strong
+    but unstructured 5-minute event cannot certify a 30/15 or sprint cluster.
+    """
+    t = original or {}
+    pattern = str(t.get('pattern') or '').upper()
+    events = (((evidence or {}).get('repeatability') or {}).get('events') or [])
+    try:
+        day0 = date.fromisoformat(str(as_of)[:10])
+    except (TypeError, ValueError):
+        return []
+    approved = {}
+    for e in events:
+        if not isinstance(e, dict) or e.get('strong') is not True:
+            continue
+        source = str(e.get('activity_truth_source') or e.get('source') or '').upper()
+        if source not in {'DEVICE_LAPS', 'ICU_INTERVALS_CANONICAL',
+                          'ORIGINAL_ACTIVITY_FIT_LAP', 'ORIGINAL_FIT_LAPS'}:
+            continue
+        try:
+            d = date.fromisoformat(str(e.get('date') or '')[:10])
+            age = (day0 - d).days
+        except (ValueError, TypeError):
+            continue
+        if not 0 <= age <= 42:
+            continue
+        id_ = str(e.get('activity_id') or '')
+        if not id_ or _v19699_number(e.get('interval_secs'), .1, 1800) is None:
+            continue
+        work = _v19699_number(t.get('work_s'), .1, 1800)
+        if work is None or abs(float(e['interval_secs']) - work) > max(2.0, work * .02):
+            continue
+        if pattern in {'MICRO_30_15', 'SPRINT_CLUSTER', 'OVER_UNDER'}:
+            if str(e.get('pattern') or '').upper() != pattern:
+                continue
+            keys = ('sets', 'reps_per_set', 'float_s', 'set_recovery_s') if pattern != 'OVER_UNDER' else ('recovery_secs',)
+            expected = dict(t)
+            if pattern == 'OVER_UNDER':
+                expected['recovery_secs'] = t.get('recovery_s')
+            if any(_v19699_number(e.get(k)) is None or
+                   abs(float(e[k]) - float(expected.get(k) or 0)) > 2 for k in keys):
+                continue
+            if _v19699_number(e.get('reps'), 1, 500) is None:
+                # Explicit documented micro-block total, not prose inferred.
+                if _v19699_number(e.get('completed_reps'), 1, 500) is None:
+                    continue
+                executed = e['completed_reps']
+            else:
+                executed = e['reps']
+            minimum = int(t.get('sets') or 0) * int(t.get('reps_per_set') or 0) if pattern != 'OVER_UNDER' else int(t.get('reps') or 0)
+            if executed < minimum:
+                continue
+        else:
+            if _v19699_number(e.get('reps'), 1, 100) is None or float(e['reps']) < (t.get('reps') or 0):
+                continue
+            prescribed_rest = _v19699_number(t.get('recovery_s'), 0, 3600)
+            observed_rest = _v19699_number(e.get('recovery_secs'), 0, 3600)
+            if prescribed_rest is None or observed_rest is None or abs(observed_rest - prescribed_rest) > max(3.0, prescribed_rest * .05):
+                continue
+        if pattern in {'SPRINT', 'SPRINT_CLUSTER', 'SHORT_POWER'} and str(
+                e.get('execution_quality_state') or '').upper() != 'PASSED':
+            continue
+        if _v19699_number(e.get('cv_pct'), 0, 100) is None or float(e['cv_pct']) > 6:
+            continue
+        # One activity cannot become two independent exposures.
+        approved[d.isoformat()] = id_
+    return [{'date':k, 'activity_id':v} for k, v in sorted(approved.items())]
+
+
+def _v19699_dose_decision(original, goal, dimension, slot, evidence, context):
+    """Bounded evidence-based choice, never a replacement for Nova Decision."""
+    t = original or {}
+    context = context if isinstance(context, dict) else {}
+    dec = context.get('decision') if isinstance(context.get('decision'), dict) else {}
+    audit = {'schema': R19699_SCHEMA, 'decision': 'KEEP_ORIGINAL',
+             'initial_workout_id': t.get('id'), 'proposed_workout_id': t.get('id'),
+             'eligible_alternatives': [], 'rejected_reasons': []}
+    if not t or str(goal or '').upper() == 'ENDURANCE_BASE':
+        audit['decision'] = 'UPSTREAM_VETO' if not t else 'KEEP_ORIGINAL'
+        audit['rejected_reasons'].append('ENDURANCE_OR_NO_CANONICAL_HARD')
+        return t, audit
+    if (str(dec.get('action') or '').upper() != 'TRAIN' or
+            dec.get('hard_session_allowed') is not True or
+            str(dec.get('quality_window_state') or '').upper() != 'OPEN' or
+            str((slot or {}).get('quality_window_state') or 'OPEN').upper() in
+                {'WATCH', 'HOLD', 'CLOSED', 'PROVISIONAL'} or
+            (slot or {}).get('provisional_quality') is True or
+            str((slot or {}).get('restriction') or 'NONE').upper() != 'NONE' or
+            ((slot or {}).get('is_planned_training') is True and
+             str((slot or {}).get('planned_demand') or '').upper() in
+                {'EASY', 'RECOVERY', 'ENDURANCE', 'NORMAL'})):
+        audit['rejected_reasons'].append('NOT_CLEARED_UPSTREAM_OPEN_QUALITY')
+        return t, audit
+    if _v19699_locked(slot, context.get('ledger')):
+        audit['rejected_reasons'].append('CONTINUITY_LOCK_OR_UNIDENTIFIED_SLOT')
+        return t, audit
+    minutes = _v19699_slot_limit(slot)
+    if minutes is None:
+        audit['rejected_reasons'].append('NO_TRUSTWORTHY_SINGLE_SLOT_ENVELOPE')
+        return t, audit
+    evidence_rows = _v19699_comparable_events(t, evidence, (slot or {}).get('date') or context.get('as_of'))
+    audit['comparable_exposures'] = evidence_rows
+    if len(evidence_rows) < 2:
+        audit['rejected_reasons'].append('NO_TWO_INDEPENDENT_COMPARABLE_EXPOSURES')
+        return t, audit
+    current = _v19697_workout_core_seconds(t)
+    if current is None:
+        audit['rejected_reasons'].append('INVALID_ORIGINAL_MECHANICS')
+        return t, audit
+    # R196.9.7 uses 20/30min canonical preludes for these dimensions; otherwise
+    # 12/15min preparation and 8min cooldown. Never trim the preload to fit HARD.
+    pattern = str(t.get('pattern') or '').upper()
+    prep = 20 if dimension == 'RACE_TRANSFER' else (30 if dimension == 'DURABILITY' else
+           (15 if pattern in {'SPRINT', 'SPRINT_CLUSTER', 'SHORT_POWER'} else 12))
+    candidates = []
+    for alt in _NOVA_WORKOUT_LIBRARY:
+        if (alt.get('goal') != goal or dimension not in set(alt.get('dimensions') or ())
+                or alt.get('adaptive_only') or not _v19699_structure_step(t, alt)):
+            continue
+        core = _v19697_workout_core_seconds(alt)
+        if not core or core[1] <= current[1] or core[0] + (prep + 8) * 60 > minutes * 60:
+            continue
+        if pattern in {'STANDARD', 'SUSTAINED', 'SHORT_POWER'}:
+            band = _v1943_band(alt, evidence_ledger=evidence,
+                              ftp_anchor=context.get('ftp_anchor'),
+                              as_of_date=(slot or {}).get('date') or context.get('as_of'),
+                              dimension=dimension)
+            if band.get('state') != 'PRESCRIBED' or band.get('source') != 'COMPARABLE_VERIFIED_REPEATED_WORK':
+                continue
+        # R196.9.3 already vetted RACE_TRANSFER on original; the same
+        # canonical purpose and precise pattern are preserved here.
+        candidates.append((core[1], core[0], str(alt.get('id') or ''), alt))
+    candidates.sort(key=lambda row: (row[0], row[1], row[2]))
+    audit['eligible_alternatives'] = [c[2] for c in candidates]
+    if not candidates:
+        audit['rejected_reasons'].append('NO_EVIDENCED_CANONICAL_STEP_FITTING_ENVELOPE')
+        return t, audit
+    candidate = dict(candidates[0][3])
+    audit.update(decision='APPROVE_CANONICAL_ESCALATION', proposed_workout_id=candidate['id'],
+                 selected_dose_reason='Two independent strong completed comparable exposures; same exact interval/rest architecture and single bounded progression lever; full canonical duration fits one slot.')
+    return candidate, audit
+
+
+def _v19699_select_workout_template(goal, dimension, evidence_ledger=None,
+                                   training_definitions=None, slot=None):
+    """R196.9.9 selector adapter; R196.9.3 and R196.2 retain first veto."""
+    original, audit = _r19699_selector_before(goal, dimension,
+        evidence_ledger=evidence_ledger,
+        training_definitions=training_definitions, slot=slot)
+    if not R19699_DOSE_ENABLED:
+        return original, audit  # byte-for-byte compatible policy-off path
+    if not isinstance(original, dict):
+        return original, audit  # old safety authority remains sovereign
+    s = slot if isinstance(slot, dict) else {}
+    if s.get('is_planned_training') is True:
+        # The old selector penalizes estimated overrun but may still choose an
+        # impossible candidate. Never allow postcompile warnings to masquerade
+        # as permission to execute beyond an explicit scheduled time limit.
+        forbidden = str(s.get('planned_demand') or '').upper() in {'RECOVERY', 'EASY', 'ENDURANCE', 'NORMAL'}
+        cap = _v19699_number(s.get('expected_duration_max'), 1, 360)
+        core = _v19697_workout_core_seconds(original)
+        dim = str(dimension or '').upper()
+        pat = str(original.get('pattern') or '').upper()
+        prep = 20 if dim == 'RACE_TRANSFER' else (30 if dim == 'DURABILITY' else
+               (15 if pat in {'SPRINT', 'SPRINT_CLUSTER', 'SHORT_POWER'} else 12))
+        over = cap is not None and (not core or core[0] + (prep + 8) * 60 > (cap + .25) * 60)
+        if forbidden or over:
+            blocked = dict(audit or {})
+            blocked.update(reason='R19699_EXPLICIT_SLOT_NOT_EXECUTABLE',
+                dose_decision_v1={'schema':R19699_SCHEMA,'decision':'UPSTREAM_VETO',
+                    'initial_workout_id':original.get('id'), 'proposed_workout_id':None,
+                    'rejected_reasons':['EXPLICIT_EASY_PLAN' if forbidden else 'EXPLICIT_DURATION_CONFLICT']})
+            return None, blocked
+    selected, dose = _v19699_dose_decision(
+        original, str(goal or '').upper(), str(dimension or '').upper(),
+        slot, evidence_ledger, _r1962_power_scope.get())
+    meta = dict(audit or {})
+    meta['dose_decision_v1'] = dose
+    if selected.get('id') != original.get('id'):
+        meta.update(selected_id=selected.get('id'),
+                    selected_signature=_v109_template_signature(selected),
+                    reason='R19699_EVIDENCED_CANONICAL_ESCALATION')
+        if isinstance(meta.get('purpose_consistency'), dict):
+            meta['purpose_consistency'] = dict(meta['purpose_consistency'],
+                    selected_id=selected.get('id'), pattern=selected.get('pattern'))
+        if isinstance(meta.get('feasibility_gate'), dict):
+            # Re-evaluated canonical numeric authority above, not a forged copy.
+            meta['feasibility_gate'] = dict(meta['feasibility_gate'],
+                    selected='R19699_EVIDENCED_CANONICAL_ESCALATION',
+                    candidate_id=selected.get('id'))
+    return selected, meta
+
+# No duplicate definition of the legacy named selector: preserve AST lineage.
+_v109_select_workout_template = _v19699_select_workout_template
+
+
+# Final projection reconcile: only describe the actual emitted canonical dose.
+# It is not a quality composer and cannot select/increase any interval work.
+_r19699_compile_before = compile_nova_prescription
+
+
+def _v19699_compile_nova_prescription(prescription, coach_clock,
+        training_definitions=None, ftp_anchor=None, recent_activities=None,
+        undefined_training_intent=None, power_model=None, microcycle_ledger=None,
+        coaching_contract=None, adaptive_roadmap=None, strength_pattern=None,
+        training_rhythm=None, execution_model=None):
+    out = _r19699_compile_before(prescription, coach_clock,
+        training_definitions=training_definitions, ftp_anchor=ftp_anchor,
+        recent_activities=recent_activities,
+        undefined_training_intent=undefined_training_intent,
+        power_model=power_model, microcycle_ledger=microcycle_ledger,
+        coaching_contract=coaching_contract, adaptive_roadmap=adaptive_roadmap,
+        strength_pattern=strength_pattern, training_rhythm=training_rhythm,
+        execution_model=execution_model)
+    if not isinstance(out, dict) or not isinstance(prescription, dict):
+        return out
+    dose = ((prescription.get('workout_library') or {}).get('dose_decision_v1') or {})
+    if dose.get('schema') != R19699_SCHEMA or dose.get('decision') != 'APPROVE_CANONICAL_ESCALATION':
+        return out
+    selected = str(dose.get('proposed_workout_id') or '')
+    emitted = str(out.get('workout_id') or '')
+    if (not selected or emitted != selected or
+            out.get('hard_prescription_available') is not True or
+            str(out.get('status') or '').upper() != 'PRESCRIBED'):
+        # A late continuity/safety gate might have declined this intended step.
+        # Never claim scientific escalation when the emitted plan differs.
+        out = dict(out)
+        audit = dict(out.get('workout_library') or {})
+        failed = dict(dose, decision='KEEP_ORIGINAL', proposed_workout_id=emitted or None,
+                      rejected_reasons=list(dose.get('rejected_reasons') or []) +
+                          ['FINAL_AUTHORITY_DID_NOT_EMIT_PROPOSED_CANONICAL_DOSE'])
+        audit['dose_decision_v1'] = failed
+        out['workout_library'] = audit
+        return out
+    out = dict(out)
+    rows = []
+    modified = False
+    for old in out.get('sessions') or []:
+        if not isinstance(old, dict) or str(old.get('nova_workout_id') or '') != selected:
+            rows.append(old)
+            continue
+        row = dict(old)
+        row['dose_decision_v1'] = {'schema': R19699_SCHEMA,
+            'decision': 'APPROVE_CANONICAL_ESCALATION',
+            'initial_workout_id': dose.get('initial_workout_id'),
+            'proposed_workout_id': selected,
+            'selected_dose_reason': dose.get('selected_dose_reason')}
+        previous = row.get('r19698_extension_decision')
+        if isinstance(previous, dict):
+            row['r19698_extension_decision'] = dict(previous,
+                quality_dose='EVIDENCED_CANONICAL_ESCALATION_UPSTREAM')
+        main = str(row.get('main_set') or '')
+        main = main.replace('original quality dose unchanged',
+            'current canonical quality dose authorized upstream')
+        main = main.replace('The original quality dose was selected upstream and has not been increased.',
+            'The canonical quality dose was increased upstream with comparable completed-work evidence; add no further HARD work.')
+        row['main_set'] = main
+        rows.append(row)
+        modified = modified or row != old
+    if modified:
+        out['sessions'] = rows
+        # Align R196.9.8 allocation audit with the upstream dose we actually emit.
+        summary = dict(out.get('r19698_allocation_audit') or {})
+        checks = []
+        for record in summary.get('checked') or []:
+            result = dict(record)
+            if str(result.get('workout_id') or '') == selected:
+                result['upstream_quality_dose'] = 'EVIDENCED_CANONICAL_ESCALATION_UPSTREAM'
+            checks.append(result)
+        summary['checked'] = checks
+        out['r19698_allocation_audit'] = summary
+        _v145_rehash_plan(out)
+        if isinstance(out.get('single_plan_authority'), dict):
+            out['single_plan_authority'] = dict(out['single_plan_authority'],
+                plan_id=out['canonical_plan_id'])
+    return out
+
+compile_nova_prescription = _v19699_compile_nova_prescription
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.110 R196.9.9 · DOSE DECISION V1 (CANDIDATE) · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
