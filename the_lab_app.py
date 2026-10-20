@@ -28652,6 +28652,9 @@ def analyze():
         }
         analysis_args = _v4890_provider_safe_analysis_args(analysis_args, cross_modal_context, legacy_metabolic=False)
         replay_bundle = _v4831_build_replay_bundle(analysis_args)
+        # Preserve the compiled authority across all provider/semantic passes.
+        # A shallow copy is not enough: nested power prescriptions can mutate.
+        _r196927_original_authority = copy.deepcopy(nova_prescription)
         snapshot_fault_stage = "NOVA_COMPOSITION"
         analysis = compose_nova_snapshot(
             metrics=metrics, season_stats=season_stats, training_state=training_state, training_direction=training_direction,
@@ -28681,8 +28684,12 @@ def analyze():
         analysis = _v4901_coach_call(analysis)
         snapshot_fault_stage = "SESSION_RECONCILIATION"
         analysis["next_sessions"] = _v4940_apply_aerobic_metabolic_range(analysis.get("next_sessions"), aerobic_metabolic_range)
-        nova_prescription["sessions"] = [dict(x) for x in (analysis.get("next_sessions") or []) if isinstance(x,dict)]
-        nova_prescription["finalized"] = True
+        # R196.9.27: attest the semantic projection against the sealed *compiled*
+        # prescription, never against a projection that has just overwritten it.
+        # This runs before any metadata-restoring compatibility adapter and
+        # before writes to the athlete's ledger.
+        analysis["next_sessions"] = _v196927_attest_final_contract(
+            analysis.get("next_sessions"), _r196927_original_authority)
         # The FINAL coach/semantic/safety projection must still contain the
         # exact same R27 contract. A removed/changed session cannot enter ledger.
         if _r196920_review.get('issued'):
@@ -28692,6 +28699,10 @@ def analyze():
             analysis.get('next_sessions'), nova_prescription)
         analysis['next_sessions'] = _v196926_final_attestation(
             analysis.get('next_sessions'), nova_prescription)
+        # Only after independent attestations may the projected plan become
+        # the public finalized list. The sealed original remains a local variable.
+        nova_prescription['sessions'] = copy.deepcopy(analysis.get('next_sessions') or [])
+        nova_prescription['finalized'] = True
         _r196920_final = _v196920_final_projection(
             analysis.get('next_sessions'), _r196920_review, nova_prescription)
         if _r196920_review.get('issued') and not _r196920_final.get('issued'):
@@ -28704,9 +28715,13 @@ def analyze():
                 if not _r196920_final.get('persisted'):
                     raise ValueError('R196920_VALIDATION_LEDGER_NOT_PERSISTED')
         _r196920_review = _r196920_final if _r196920_review.get('issued') else _r196920_review
+        if not qa_requested:
+            _v196927_attest_issued_ledger(microcycle_ledger, analysis.get('next_sessions'),
+                                           _r196927_original_authority)
         nova_prescription['evidence_acquisition_backlog'] = _v196926_build_evidence_backlog({
             'nova_decision':nova_decision,'adaptive_roadmap':adaptive_roadmap,
-            'nova_prescription':nova_prescription})
+            'nova_prescription':nova_prescription,'question_state':question_state,
+            'evidence_cycle_review':_r196920_review})
         nova_prescription['evidence_cycle_review'] = _r196920_review
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
         snapshot_fault_stage = "NUTRITION_PLAN"
@@ -51941,7 +51956,222 @@ assert HOME_PAGE.count(_R196926_BLUETEXT)==1,'R196.9.26 initial blueprint disclo
 HOME_PAGE=HOME_PAGE.replace(_R196926_BLUETEXT,
  '''<p><b>Stato:</b> {% if initial.issued %}emesso dall'ultimo Snapshot per la finestra confermata{% else %}richiesta di prova, non ancora autorizzata{% endif %}. Se la finestra o le condizioni cambiano serve una nuova verifica.</p>''',1)
 # Existing 25 UI state is preserved by the mapping; consent POST uses SAME token.
-APP_VERSION='THE LAB · PRODUCT V4.9.127 R196.9.26 · EVIDENCE ACQUISITION AND INITIAL CANONICAL OBSERVATION · NOVA R196.2 CORE'
+# ---------------------------------------------------------------------------
+# R196.9.27 · GOAL-AGNOSTIC ACQUISITION, SEALED CONTRACT & LEDGER ATTESTATION
+# No owner-specific watts, fixed-goal exceptions or fabricated science tests.
+# Cumulative with R196.9.24/25/26 and all pre-existing scientific owners.
+# ---------------------------------------------------------------------------
+R196927_SCHEMA = 'V4.9.128-R196.9.27-GENERAL_EVIDENCE_CONTINUITY-1'
+
+
+def _v196927_attest_final_contract(sessions, compiled):
+    """Fail closed if a signed evidence workout changes in semantic projection.
+
+    The caller passes a *deep copy* taken BEFORE any coach/semantic transforms.
+    Missing optional provenance is restored by legacy adapters after this check;
+    an altered mechanical field, schedule, contract or prescribed power is NEVER
+    restored by this function. Works for any workout goal in the catalog.
+    """
+    p = compiled if isinstance(compiled, dict) else {}
+    rows = sessions if isinstance(sessions, list) else []
+    originals = p.get('sessions') or []
+    bridges = (
+        ('initial_evidence_bridge', 'CANONICAL_OBSERVATION_COMPILED',
+         _R196926_PROTOCOL, 'R196927_INITIAL'),
+        ('coupled_evidence_bridge', 'CANONICAL_ASSESSMENT_COMPILED',
+         'COUPLED_CANONICAL_MEASUREMENT_V1', 'R196927_COUPLED'),
+    )
+    active = [(key, p[key], protocol, code) for key, state, protocol, code in bridges
+              if isinstance(p.get(key), dict) and p[key].get('state') == state]
+    if not active:
+        return [dict(x) if isinstance(x,dict) else x for x in rows]
+    if len(active) != 1 or len(originals) != len(rows):
+        raise ValueError('R196927_CANONICAL_PLAN_CARDINALITY_CHANGED')
+    key, bridge, protocol, code = active[0]
+    request = bridge.get('request') or {}
+    index = request.get('index')
+    if (type(index) is not int or index < 0 or index >= len(rows) or
+        not isinstance(originals[index], dict) or
+        not isinstance(rows[index], dict)):
+        raise ValueError(code + '_SESSION_MISSING')
+    original = originals[index]
+    final = rows[index]
+    signed_token = bridge.get('agreed_request_id')
+    if (not bridge.get('issued') or not signed_token or
+        signed_token != request.get('request_id') or
+        original.get('nova_evidence_protocol') != protocol or
+        original.get('nova_evidence_request_id') != signed_token or
+        original.get('nova_canonical_plan_id') != bridge.get('canonical_plan_id') or
+        original.get('nova_canonical_plan_id') != p.get('canonical_plan_id')):
+        raise ValueError(code + '_ORIGINAL_AUTHORITY_INVALID')
+    if p.get('status') != 'PRESCRIBED' or not p.get('hard_prescription_available'):
+        raise ValueError(code + '_ORIGINAL_NOT_PRESCRIBED')
+    if p.get('selected_slot_index') != index:
+        raise ValueError(code + '_SIGNED_SLOT_DIVERGED')
+    if (str(original.get('date') or '')[:10] != request.get('date') or
+        original.get('start_minute') != request.get('start_minute')):
+        raise ValueError(code + '_ORIGINAL_WINDOW_DIVERGED')
+    # Source contract properties that determine what is executed, measured and
+    # later reconciled. Missing values are NOT treated as optional.
+    exact = ('date', 'start_minute', 'title', 'duration', 'intensity_class',
+             'main_set', 'nova_workout_id', 'nova_contract_id',
+             'nova_canonical_plan_id', 'hard_spacing_relevant',
+             'provisional_quality', 'prescribed_power_low',
+             'prescribed_power_high', 'power_band', 'quality_target_ratio',
+             'power_prescription', 'nova_workout_library_version',
+             'nova_template_signature')
+    # Preserve old projection semantics only for optional measurement metadata.
+    for field in exact:
+        if original.get(field) != final.get(field):
+            raise ValueError(code + '_FINAL_CONTRACT_DRIFT_' + field.upper())
+    for field in ('nova_evidence_protocol', 'nova_evidence_request_id',
+                  'assessment_only', 'work_band_exploratory',
+                  'watt_band_is_a_ceiling', 'no_performance_pass_mark'):
+        if field in final and final[field] != original.get(field):
+            raise ValueError(code + '_FINAL_PROVENANCE_CONFLICT_' + field.upper())
+    if (not final.get('hard_spacing_relevant') or final.get('provisional_quality') or
+        sum(bool(x.get('hard_spacing_relevant')) for x in rows if isinstance(x,dict)) != 1 or
+        sum(str(x.get('intensity_class') or '').lower() in {'tempo','threshold','vo2'}
+            for x in rows if isinstance(x,dict)) != 1):
+        raise ValueError(code + '_HARD_SPACING_DIVERGED')
+    if key == 'initial_evidence_bridge':
+        if (final.get('prescribed_power_low') is not None or
+            final.get('prescribed_power_high') is not None or
+            final.get('power_band') is not None):
+            raise ValueError(code + '_SYNTHETIC_POWER_FORBIDDEN')
+        template=request.get('template') or {}
+        if (original.get('nova_workout_id') != template.get('template_id') or
+            original.get('nova_template_signature') != template.get('template_signature')):
+            raise ValueError(code + '_LIBRARY_TEMPLATE_DIVERGED')
+    return [dict(x) if isinstance(x,dict) else x for x in rows]
+
+
+def _v196927_attest_issued_ledger(ledger, sessions, compiled):
+    """A signed hard evidence test must have one matching ledger record.
+
+    The existing ledger writer remains the sole persistence owner. Never write
+    independent history or fabricate a completed activity as an alternative.
+    """
+    p=compiled if isinstance(compiled,dict) else {}
+    bridges=(('initial_evidence_bridge',_R196926_PROTOCOL),
+             ('coupled_evidence_bridge','COUPLED_CANONICAL_MEASUREMENT_V1'))
+    active=[(p[key],protocol) for key,protocol in bridges if
+            isinstance(p.get(key),dict) and p[key].get('issued') and
+            p[key].get('state') in {'CANONICAL_OBSERVATION_COMPILED','CANONICAL_ASSESSMENT_COMPILED'}]
+    if not active:return {'state':'NOT_APPLICABLE'}
+    if len(active)!=1:raise ValueError('R196927_LEDGER_MULTIPLE_EVIDENCE_CONTRACTS')
+    bridge,protocol=active[0]
+    request=bridge.get('request') or {}
+    matches=[x for x in sessions or [] if isinstance(x,dict) and
+             x.get('nova_evidence_protocol')==protocol and
+             x.get('nova_evidence_request_id')==bridge.get('agreed_request_id')]
+    if len(matches)!=1:raise ValueError('R196927_LEDGER_SESSION_NOT_UNIQUE')
+    ses=matches[0]
+    history=(ledger or {}).get('prescription_history') or []
+    recorded=[x for x in history if isinstance(x,dict) and
+              x.get('nova_evidence_protocol')==protocol and
+              x.get('nova_evidence_request_id')==bridge.get('agreed_request_id')]
+    if len(recorded)!=1:raise ValueError('R196927_LEDGER_EVIDENCE_NOT_PERSISTED')
+    stored=recorded[0]
+    if (str(stored.get('prescription_status') or '').upper() in
+            {'WITHDRAWN','SUPERSEDED','FULFILLED','CANCELLED','CANCELED'} or
+            stored.get('executed_activity_id')):
+        raise ValueError('R196927_LEDGER_NOT_AN_ACTIVE_MEASUREMENT')
+    for field in ('date','main_set','nova_workout_id','nova_contract_id',
+                  'nova_canonical_plan_id'):
+        if stored.get(field)!=ses.get(field):
+            raise ValueError('R196927_LEDGER_IDENTITY_DIVERGED_' + field.upper())
+    if ((request.get('date') and stored.get('date')!=request['date']) or
+        stored.get('nova_canonical_plan_id')!=bridge.get('canonical_plan_id')):
+        raise ValueError('R196927_LEDGER_SIGNED_WINDOW_DIVERGED')
+    return {'state':'ATTESTED','protocol':protocol,
+            'request_id':bridge.get('agreed_request_id')}
+
+
+# General scientific backlog: use the actual goal-scoped question_state produced
+# by the canonical evidence ledger, not an unpopulated roadmap.questions alias.
+# Scope includes all unclosed dimensions, with open_dimensions as priority.
+# A protocol from a different scientific owner is NEVER invented or auto-issued.
+def _v196926_build_evidence_backlog(snapshot):
+    d=snapshot if isinstance(snapshot,dict) else {}
+    decision=d.get('nova_decision') or {}
+    roadmap=d.get('adaptive_roadmap') or {}
+    prescription=d.get('nova_prescription') or {}
+    scientific=roadmap.get('scientific_progression') or {}
+    goal=str(decision.get('goal_key') or roadmap.get('goal_key') or '').upper()
+    dimension=str(decision.get('dimension') or scientific.get('dimension') or 'NONE').upper()
+    qs=d.get('question_state') or roadmap.get('question_state') or {}
+    qs=qs if isinstance(qs,dict) else {}
+    dimensions=qs.get('dimensions') or {}
+    selected=set(str(x).upper() for x in qs.get('open_dimensions') or [])
+    initial=prescription.get('initial_evidence_bridge') or {}
+    coupled=prescription.get('coupled_evidence_bridge') or {}
+    primary=roadmap.get('test') or {}
+    if initial:
+        state=initial.get('state') or 'NEEDS_EVIDENCE'
+        req=initial.get('request') or {}
+        next_action=('EXECUTE_AND_LINK_MEASURED_OBSERVATION' if initial.get('issued')
+                     else req.get('next_action') or 'REQUEST_OR_IMPORT_EVIDENCE')
+        active_protocol=_R196926_PROTOCOL
+    elif coupled:
+        state=coupled.get('state') or 'NEEDS_EVIDENCE'
+        next_action=('EXECUTE_MEASURED_COUPLED_PROTOCOL' if coupled.get('issued')
+                     else 'REQUEST_CONSENT_TO_MEASURE_COUPLED_RECOVERY')
+        active_protocol='COUPLED_CANONICAL_MEASUREMENT_V1'
+    elif str(primary.get('state') or '').upper() not in {'COMPLETE','COMPLETED'}:
+        state='PRIMARY_TEST_REQUIRED'
+        next_action='RUN_EXISTING_R27_GOAL_TEST'
+        active_protocol='R27_GOAL_PRIMARY_TEST' if primary else None
+    else:
+        state='EVIDENCE_MONITORING'
+        next_action='EVALUATE_NEW_ACTIVITIES_AND_PROGRESS_OPEN_QUESTION'
+        active_protocol=None
+    issues=[]
+    for key,record in (dimensions.items() if isinstance(dimensions,dict) else []):
+        if not isinstance(record,dict):continue
+        name=str(key).upper(); status=str(record.get('state') or 'UNKNOWN').upper()
+        exiting=record.get('exit_satisfied')
+        closed=(exiting is True or (exiting is None and record.get('closed') is True))
+        if closed:continue
+        relevant=(name==dimension)
+        protocol=(active_protocol if relevant else
+                  ('R27_GOAL_PRIMARY_TEST' if name=='FRESH_CAPACITY' and primary else None))
+        authorized=bool(relevant and (
+            initial.get('issued') or coupled.get('issued')))
+        is_priority=name in selected or relevant
+        issues.append({'dimension':name,'question':name,'state':status,
+            'exit_satisfied':False,'evidence_count':record.get('evidence_count'),
+            'last_evidence_date':record.get('last_evidence_date'),
+            'missing_reason':record.get('reason') or 'DIRECT_CANONICAL_EVIDENCE_NOT_YET_SUFFICIENT',
+            'evidence_source':record.get('source'),
+            'priority_scope':'ACTIVE_ROADMAP' if is_priority else 'GOAL_SCIENCE_TRACKING',
+            'acquisition_protocol':protocol,
+            'protocol_state':('ISSUED_AWAITING_MEASURED_ACTIVITY' if authorized else
+                'EXISTING_PROTOCOL_REQUIRES_CURRENT_SAFETY_AND_CONSENT' if protocol else
+                'OWNER_VALIDATION_REQUIRED'),
+            'next_action':next_action if relevant else
+                'SEARCH_CANONICAL_NATIVE_ACTIVITIES_THEN_REQUEST_GOAL_SPECIFIC_VALIDATED_PROTOCOL',
+            'science_owner_must_validate':not bool(protocol),
+            'auto_promotion_from_consent':False})
+    issues.sort(key=lambda i:(0 if i['dimension']==dimension else
+                             1 if i['priority_scope']=='ACTIVE_ROADMAP' else 2,
+                             i['dimension']))
+    previous=d.get('evidence_cycle_review') or prescription.get('evidence_cycle_review') or {}
+    return {'schema':'V4.9.128-R196.9.27-GENERAL_EVIDENCE_CONTINUITY-1','goal_key':goal,'current_dimension':dimension,
+        'state':state,'next_action':next_action,'issues':issues,
+        'open_issue_count':len(issues),
+        'active_roadmap_issue_count':sum(x['priority_scope']=='ACTIVE_ROADMAP' for x in issues),
+        'question_state_source':'CANONICAL_QUESTION_STATE_DIMENSIONS' if isinstance(dimensions,dict) and dimensions else
+            'QUESTION_STATE_UNAVAILABLE',
+        'legacy_validation_review':{'owner':'R196920_R27_VALIDATION_ONLY',
+            'state':previous.get('state'),'issued':bool(previous.get('issued'))},
+        'acquisition_owner':'R196924_R196926_CANONICAL_EVIDENCE',
+        'never_infer_watts':True,'execution_requires_current_safety_and_consent':True,
+        'no_automatic_success_from_consent':True,
+        'activity_reconciliation':'R149_NATIVE_ORIGINAL_ACTIVITY'}
+
+
+APP_VERSION='THE LAB · PRODUCT V4.9.128 R196.9.27 · UNIVERSAL EVIDENCE CONTINUITY AND SEALED ATTESTATION · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
