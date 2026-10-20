@@ -28822,10 +28822,13 @@ def analyze():
                 'schema': 'R196916-EXACT-REFERENCE-COVERAGE-1', 'state': 'UNASSESSED',
                 'error_class': type(_coverage_error).__name__, 'shadow_only': True}
         snapshot_fault_stage = "CROSS_MODULE_AUTHORITY"
-        data = _v87_cross_module_authority_guard(data, repair=True)
+        # R196.9.29: scientific narrative cleanup MUST precede the final R106
+        # projection seal. Previously R196.9.28 edited sealed prose after the
+        # guard, so the strict save-time guard rejected it as a RuntimeError.
         data = _v196928_scientific_semantic_integrity(
             data,question_state=question_state,adaptive_roadmap=adaptive_roadmap,
             repair=True)
+        data = _v87_cross_module_authority_guard(data, repair=True)
         snapshot_fault_stage = "AUTHORITY_VALIDATION"
         # Trace the exact code path selected for this Snapshot (billing is verified
         # independently in the admin usage table; no zero-cost DB event is invented).
@@ -28901,7 +28904,19 @@ def analyze():
         except Exception as report_exc:
             # A failed/uncertain commit must never be displayed as a valid new Snapshot.
             _r177_best_effort_ai_status(snapshot_ai_event_id, "save_error", report_exc.__class__.__name__)
-            incident = _r177_snapshot_incident("SAVE_REPORT", "SAVE", report_exc.__class__.__name__, (user or {}).get("id"))
+            # Give operations a stable, non-sensitive subtype.  A RuntimeError
+            # alone cannot distinguish a veto from a data-storage failure.
+            _known_save_faults = {
+                'Cross-module authority guard blocked report persistence':
+                    'TL-CMAG-SAVE_AUTHORITY_SEAL',
+                'R187_EXECUTED_SAME_DAY_HARD_REISSUE_BLOCKED':
+                    'TL-CMAG-SAVE_EXECUTED_HARD_DUPLICATE',
+                'R187_EXECUTED_HARD_MISCLASSIFIED_AS_MISSED':
+                    'TL-CMAG-SAVE_EXECUTION_JOURNAL_CONFLICT',
+            }
+            incident = _r177_snapshot_incident('SAVE_REPORT', 'SAVE',
+                report_exc.__class__.__name__, (user or {}).get('id'),
+                diagnostic=_known_save_faults.get(str(report_exc)))
             error = incident["message"]
             data = None
             chat_context_meta = None
@@ -51402,8 +51417,8 @@ def nova_initial_evidence():
                     target_user_id=owner['id'],details={'protocol':R196925_SCHEMA,
                      'request':token[:16],'activity_reference_submitted':True})
     else:abort(409)
-    return redirect(url_for('home',notice='RICHIESTA EVIDENZE REGISTRATA',
-        detail='Aggiorna lo Snapshot per verificare la tua attività reale. Il consenso non emette automaticamente una quality.',code=303))
+    return redirect(url_for('home',notice='EVIDENCE REQUEST RECORDED',
+        detail='Generate a new Snapshot to verify your native activity. Consent alone never issues a hard workout.',code=303))
 
 
 def _v196919_save_initial_agreement(user_id,request_id,action):
@@ -51436,7 +51451,7 @@ def _v196918_calibration_request(snapshot):
                       'template':baseline.get('blueprint'),'session_state':'NOT_ISSUED',
                       'watts':None},
                 next_step=baseline.get('next_step'),
-                question='Serve la prima prova reale di lavoro e recupero ripetuti: collega una tua attività con intervalli e potenza verificabili, oppure richiedi il protocollo iniziale. Nessun watt è inventato.',
+                question='A first real measured work-and-recovery observation is needed: link a native activity with verified intervals and power, or request a validated initial protocol. No watts are invented.',
                 baseline_request=baseline,auto_executable=False,auto_scheduled=False)
 
 app.jinja_env.globals['nova_initial_evidence_ui']=_v196925_ui
@@ -52311,18 +52326,23 @@ def _v196928_scientific_semantic_integrity(out, question_state=None,
         if failed:
             invalid.extend((field,x[:200]) for x in failed)
             if repair:
+                # The R106 recommendation is an exact signed projection. Never
+                # silently edit it after the cross-module seal was computed.
+                # Otherwise report saving rejects a legitimate evidence cycle.
+                sealed=bool(isinstance(out.get('cross_module_authority_audit'),dict)
+                    and out['cross_module_authority_audit'].get('final_pass') is True)
+                if field=='recommendation' and sealed:
+                    raise ValueError('R196929_SIGNED_RECOMMENDATION_CLOSURE_CONFLICT')
                 out[field]=' '.join(x for x in sentences if x not in failed).strip()
     if invalid and not repair:
         raise ValueError('R196928_CURRENT_QUESTION_FALSE_CLOSURE_AFTER_PROJECTION')
     if repair:
-        # The earlier composer does not receive the final prescription bridge;
-        # enrich only the fully assembled signed Snapshot, not a shadow plan.
+        # R196.9.29: acquisition guidance is independent UI content, not an
+        # append to the byte-exact R106 recommendation.  The previous R196.9.28
+        # append made every signed Snapshot with an evidence bridge unsavable.
         pres=out.get('nova_prescription') or {}
         if isinstance(pres,dict) and (pres.get('coupled_evidence_bridge') or pres.get('initial_evidence_bridge')):
-            action=_v196928_acquisition_instruction(truth)
-            current=str(out.get('recommendation') or '')
-            if action not in current:
-                out['recommendation']=(current+' '+action).strip()[:1800]
+            out['nova_evidence_next_action_message']=_v196928_acquisition_instruction(truth)
         check={'schema':R196928_SCHEMA,'dimension':truth.get('current_question_dimension'),
                'exit_satisfied':truth.get('current_question_closed'),
                'truth_source':truth.get('current_question_truth_source'),
@@ -52454,6 +52474,127 @@ BASE_CSS+='''\n.v196928-consent-home{margin:14px 0;padding:17px 19px;border:2px 
 .v196928-consent-home label{display:block;font-size:12px;line-height:1.5;margin:12px 0}.v196928-consent-home button{padding:10px 12px;border-radius:9px;margin:8px 8px 0 0}
 @media(max-width:560px){.v196928-consent-home{padding:13px}.v196928-consent-home button{width:100%;margin:8px 0}}\n'''
 APP_VERSION='THE LAB · PRODUCT V4.9.129 R196.9.28 · UNIVERSAL SCIENCE TRUTH AND VISIBLE CONSENT · NOVA R196.2 CORE'
+
+# R196.9.29 · SIGNED NARRATIVE SAVE FIX + ENGLISH CONSENT UI
+# Retain the R106 exact recommendation seal; render the evidence acquisition
+# instruction as a separate read-only block. Never change session, watt, plan,
+# consent, owner or journal authority on this path.
+_R196929_NARRATIVE_ANCHOR = '<section class="v4-card v4-hero">'
+assert HOME_PAGE.count(_R196929_NARRATIVE_ANCHOR)==1
+HOME_PAGE=HOME_PAGE.replace(_R196929_NARRATIVE_ANCHOR,
+    '''{% if data and data.nova_evidence_next_action_message and not is_preview and not qa_mode %}
+<div class="v196929-evidence-next-action" role="note" aria-label="NOVA evidence acquisition next step">
+<strong>NOVA · NEXT EVIDENCE STEP</strong>
+<p>{{ data.nova_evidence_next_action_message }}</p>
+</div>
+{% endif %}
+''' + _R196929_NARRATIVE_ANCHOR,1)
+BASE_CSS += '''\n.v196929-evidence-next-action{margin:14px 0;padding:14px 17px;border:1px solid rgba(110,216,234,.65);border-radius:12px;background:rgba(18,102,135,.10)}
+.v196929-evidence-next-action strong{display:block;font-size:14px}.v196929-evidence-next-action p{font-size:13px;line-height:1.55;margin:8px 0 0}\n'''
+
+# Translate the entire evidence/consent flow, including historic embedded
+# panels, not only the new Home card.  No translation of scientific identifiers
+# or POST field names, and no change to acceptance semantics.
+_R196929_UI_TRANSLATIONS = (
+    ("NOVA · CONSENSO ALLA PROVA DI ACQUISIZIONE EVIDENZE", "NOVA · EVIDENCE ASSESSMENT CONSENT"),
+    ("La proposta salvata non e' piu' confermabile: la finestra o i requisiti di sicurezza sono cambiati. Genera un nuovo Snapshot; NOVA definira' nuovamente una finestra valida. Nessuna prova e' autorizzata.", "The saved proposal can no longer be confirmed: its time window or safety conditions changed. Generate a new Snapshot to receive a current proposal. No assessment is authorized."),
+    ("<b>Quando:</b>", "<b>When:</b>"),
+    ("minuti misurati. Questa e' una richiesta di acquisizione, non una seduta gia' autorizzata.", "measured minutes. This is a request for evidence, not an authorized workout."),
+    ("PROTOCOLLO EMESSO.", "PROTOCOL ISSUED."),
+    ("Riferisciti all'ultimo Snapshot autorizzato, non a questo riquadro. Il consenso non dimostra che la prova sia stata eseguita.", "Follow only the latest authorized Snapshot, not this consent panel. Consent is not proof of execution."),
+    ("CONSENSO REGISTRATO.", "CONSENT RECORDED."),
+    ("Ora premi GENERATE SNAPSHOT qui sotto: NOVA ricontrollera' sicurezza, disponibilita' e contratto prima di emettere qualsiasi seduta.", "Select GENERATE SNAPSHOT below. NOVA will recheck safety, availability and the canonical contract before issuing any workout."),
+    ("Prima di procedere, conferma entrambe le condizioni per la finestra esatta. Non eseguire questi intervalli finche' un nuovo Snapshot non li autorizza.", "Confirm both conditions for the exact proposed time. Do not perform these intervals unless a new Snapshot expressly authorizes them."),
+    ("Sono disponibile il", "I am available on"),
+    ("alle {{ evidence_consent.time }}", "at {{ evidence_consent.time }}"),
+    ("Acconsento alla prova misurata; i watt di partenza non sono un voto ne' un obbligo", "I agree to a measured assessment; suggested starting watts are not a pass mark or mandatory target"),
+    ("CONFERMA DISPONIBILITA' E RICHIEDI LA PROVA", "CONFIRM TIME AND REQUEST ASSESSMENT"),
+    ("Non ora", "Not now"),
+    ("NOVA · PRIMA EVIDENZA DA ACQUISIRE", "NOVA · FIRST EVIDENCE TO COLLECT"),
+    ("NOVA non ha ancora una prova comparabile sufficiente. Puoi collegare una tua attività nativa o richiedere un protocollo iniziale, se esiste una finestra sicura. Non inventare watt e non eseguire il test soltanto perché viene proposto.", "NOVA has no sufficiently comparable measured evidence yet. Link an existing native activity or request a first observation when a safe time is available. Never treat a proposal as authorization to train."),
+    ("Finestra candidata:", "Proposed time window:"),
+    ("ID di una tua attività già eseguita su Intervals.icu", "ID of your existing Intervals.icu activity"),
+    ("COLLEGA ATTIVITA' MISURATA", "LINK MEASURED ACTIVITY"),
+    ("Segui soltanto l'ultimo Snapshot autorizzato e rivaluta dopo l'importazione dell'attività.", "Follow only the latest authorized Snapshot and reassess after the activity has been imported."),
+    ("RICHIESTA REGISTRATA.", "REQUEST RECORDED."),
+    ("Premi GENERATE SNAPSHOT per verificare l'eventuale emissione.", "Select GENERATE SNAPSHOT to review possible issuance."),
+    ("Accetto di misurare il lavoro e il recupero senza obiettivo di watt obbligatorio", "I agree to measure work and recovery without a mandatory power target"),
+    ("Confermo la finestra esatta proposta", "I confirm the exact proposed time window"),
+    ("RICHIEDI PROTOCOLLO INIZIALE", "REQUEST INITIAL OBSERVATION"),
+    ("Prima serve un test primario del catalogo NOVA, con il suo consenso dedicato. Genera un nuovo Snapshot per aprire quel percorso.", "A primary test from the NOVA catalog is required first, with separate consent. Generate a new Snapshot to review that path."),
+    ("La finestra o il protocollo non sono ancora validi per l'emissione. Genera un nuovo Snapshot quando disponibili; puoi intanto collegare un'attività già eseguita.", "The time window or protocol is not yet eligible for issuance. Generate a new Snapshot when conditions allow; meanwhile you can link a completed activity."),
+    ("EVIDENZA NECESSARIA · PROTOCOLLO DEFINITO", "EVIDENCE NEEDED · PROTOCOL DEFINED"),
+    ("NOVA ha individuato una prova confrontabile già completata. Manca la misura della capacità di ripetere lavoro con recupero progressivamente più attivo.", "NOVA found a comparable completed effort. Measured evidence of repeatable work with progressively more active recovery is still needed."),
+    ("Non ancora autorizzata all'esecuzione.", "Not yet authorized for execution."),
+    ("Vedi il protocollo e la provenienza dei watt", "View the protocol and source of power values"),
+    ("Range di partenza del lavoro:", "Suggested starting work range:"),
+    ("puoi superarli se li sostieni con tecnica pulita", "you may exceed it if you maintain controlled technique"),
+    ("Non sono un voto, un limite fisiologico né una soglia di successo.", "These are not a score, a physiological ceiling or a pass mark."),
+    ("Recupero controllato", "Controlled recovery"),
+    ("non aumentarlo arbitrariamente.", "do not increase it arbitrarily."),
+    ("Se non mantieni qualità tecnica o recupero, alleggerisci o interrompi.", "If technique or recovery deteriorates, ease off or stop."),
+    ("La prova deve registrare ogni intervallo di lavoro e recupero. Nessun punteggio automatico.", "The assessment must record every work and recovery interval. No automatic performance score."),
+    ("PROVA EMESSA NELLO SNAPSHOT PRECEDENTE.", "ASSESSMENT ISSUED IN THE PREVIOUS SNAPSHOT."),
+    ("Segui soltanto l'ultimo Snapshot autorizzato.", "Follow only the latest authorized Snapshot."),
+    ("NOVA · LA PROSSIMA PROVA UTILE", "NOVA · NEXT USEFUL EVIDENCE"),
+    ("Per avanzare serve una prova di lavoro e recupero misurati. NOVA cerca prima le tue attività già eseguite; se non bastano, definisce il test dal proprio catalogo. Nessun watt presunto.", "To progress, NOVA needs measured work and recovery. It searches completed activities first; when they are insufficient, it proposes a test from its validated catalog. No invented watts."),
+    ("NOVA · SERVE UNA MISURA REALE", "NOVA · MEASURED EVIDENCE NEEDED"),
+    ("Non esiste ancora una prova completa e confrontabile del tuo lavoro ripetuto con recupero misurato. Puoi collegare una tua attività già eseguita: NOVA la verifica, non accetta watt dichiarati a mano.", "There is not yet a complete comparable work-and-recovery record. You can link a completed activity: NOVA verifies the native measurements and does not accept manually claimed power."),
+    ("Quale prova servirebbe, senza inventare watt?", "What evidence is needed without guessing watts?"),
+    ("Meccanica del catalogo NOVA", "NOVA library structure"),
+    ("ripetizioni di", "repetitions of"),
+    ("min, con", "min, with"),
+    ("min di recupero. Lavoro a sensazione controllata, in modalità libera; registra ogni watt effettivo, sia nel lavoro che nel recupero. Nessun tetto o soglia minima di watt.", "min recovery. Use a controlled, self-selected effort and record actual work and recovery watts. No assumed power ceiling or minimum."),
+    ("<b>Stato:</b>", "<b>Status:</b>"),
+    ("emesso dall'ultimo Snapshot per la finestra confermata", "issued in the latest Snapshot for the confirmed slot"),
+    ("richiesta di prova, non ancora autorizzata", "evidence request, not yet authorized"),
+    ("Se la finestra o le condizioni cambiano serve una nuova verifica.", "A new review is required if timing or conditions change."),
+    ("Attività collegata:", "Linked activity:"),
+    ("Dati osservati riconosciuti; il motore li rivaluterà nel prossimo Snapshot, senza promuovere automaticamente la prestazione.", "Measured data recognized; NOVA will reassess them in the next Snapshot without automatically promoting performance."),
+    ("Serve importare o completare il dato nativo prima di considerarlo evidenza.", "The native activity must be imported or completed before it counts as evidence."),
+    ("ID attività Intervals.icu già eseguita (dal tuo account):", "ID of a completed Intervals.icu activity (your account):"),
+    ("Collega e verifica l'attività", "Link and verify activity"),
+    ("Richiesta iniziale registrata. In attesa di emissione con i controlli canonici: non eseguire ancora il test proposto.", "Initial request recorded. Awaiting canonical authorization: do not perform the proposed assessment yet."),
+    ("Ritira la richiesta", "Withdraw request"),
+    ("Richiedo una misurazione con watt osservati e senza voto o target obbligatorio.", "I request a measured observation without a pass mark or mandatory watt target."),
+    ("Confermo la finestra esatta indicata sopra. Se non sono disponibile, non autorizzo la seduta.", "I confirm the exact slot above. If I am unavailable, I do not authorize the workout."),
+    ("Richiedi protocollo iniziale", "Request initial observation"),
+    ("Per questo obiettivo manca prima il riferimento primario. Utilizza il consenso e il test canonico R27 già presente: non sostituirlo con una prova ripetuta inventata.", "A primary reference is required for this goal. Use the separate consent and existing canonical R27 test; do not substitute an invented repeatability test."),
+    ("I controlli di sicurezza, la definizione del protocollo o una finestra adatta non sono ancora sufficienti per richiederne l'emissione. Puoi comunque collegare una seduta già completata.", "Safety checks, protocol definition or an eligible time window are not yet sufficient for issuance. You may still link a completed activity."),
+    ("Storico della quality non autorizzata", "Historical quality · not authorized"),
+    ("Prima evidenza lavoro e recupero", "Initial work and recovery evidence"),
+    ("<b>Importante:</b> è un protocollo osservativo proposto, non una quality eseguibile finché un nuovo Snapshot non la autorizza esplicitamente. Non sostituire autonomamente una seduta facile con questi intervalli.", "<b>Important:</b> this is an observation proposal, not an executable hard workout until a new Snapshot explicitly authorizes it. Do not replace an easy session with these intervals on your own."),
+    ("Questa è una prescrizione storica, non eseguibile nello Snapshot corrente.", "This is a historical prescription and is not executable in the current Snapshot."),
+)
+for _it,_en in _R196929_UI_TRANSLATIONS:
+    if _it in HOME_PAGE:
+        HOME_PAGE=HOME_PAGE.replace(_it,_en)
+
+
+
+_R196929_UI_TRANSLATIONS_EXTRA = (
+    ("La revoca annulla la seduta non eseguita nel ledger; genera poi un nuovo Snapshot.", "Withdrawing cancels an unexecuted plan in the ledger; generate a new Snapshot afterward."),
+    ("Revoca la prova non eseguita", "Withdraw unexecuted assessment"),
+    ("Richiesta registrata. Esegui un nuovo Snapshot per verificare stato, calendario e compilazione definitiva.", "Request recorded. Generate a new Snapshot to review current safety, timing and final compilation."),
+    ("Revoca richiesta non emessa", "Withdraw pending request"),
+    ("Confermo di essere disponibile in questa data e a quest'ora", "I confirm I am available at this date and time"),
+    ("Accetto una prova misurata, non un obiettivo di watt obbligatorio", "I agree to a measured assessment, not a mandatory power target"),
+    ("Richiedi prova di acquisizione evidenze", "Request evidence assessment"),
+    (" min con recuperi misurati.", " min with measured recovery."),
+    (", senza inseguire un massimale.", ", without chasing a maximal power output."),
+    ("La richiesta di prova è stata accettata.", "The evidence request has been accepted."),
+    ("Consenso registrato. Esegui un nuovo Snapshot per l'autorizzazione corrente: solo la comparsa del protocollo come seduta eseguibile ti autorizza a farlo.", "Consent recorded. Generate a new Snapshot for current authorization: perform the assessment only if it appears as an explicitly executable workout."),
+    ("Protocollo autorizzato nell'ultimo Snapshot.", "Protocol authorized in the latest Snapshot."),
+    ("Segui soltanto la seduta corrente con il medesimo identificativo. Il dato verrà verificato dopo l'attività.", "Follow only the latest workout bearing the same identifier. Its measurement will be verified after the activity."),
+    ("Revoca se non eseguito", "Withdraw if not executed"),
+    ("Se non sono disponibile, non autorizzo la seduta.", "If unavailable, I do not authorize the workout."),
+)
+for _it,_en in _R196929_UI_TRANSLATIONS_EXTRA:
+    if _it in HOME_PAGE:
+        HOME_PAGE=HOME_PAGE.replace(_it,_en)
+
+APP_VERSION='THE LAB · PRODUCT V4.9.130 R196.9.29 · SEALED RECOMMENDATION SAVE AND ENGLISH CONSENT · NOVA R196.2 CORE'
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
