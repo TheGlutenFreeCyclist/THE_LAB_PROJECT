@@ -28690,6 +28690,8 @@ def analyze():
                 analysis.get('next_sessions'), _r196920_review, nova_prescription)
         analysis['next_sessions'] = _v196924_final_restore(
             analysis.get('next_sessions'), nova_prescription)
+        analysis['next_sessions'] = _v196926_final_attestation(
+            analysis.get('next_sessions'), nova_prescription)
         _r196920_final = _v196920_final_projection(
             analysis.get('next_sessions'), _r196920_review, nova_prescription)
         if _r196920_review.get('issued') and not _r196920_final.get('issued'):
@@ -28702,6 +28704,9 @@ def analyze():
                 if not _r196920_final.get('persisted'):
                     raise ValueError('R196920_VALIDATION_LEDGER_NOT_PERSISTED')
         _r196920_review = _r196920_final if _r196920_review.get('issued') else _r196920_review
+        nova_prescription['evidence_acquisition_backlog'] = _v196926_build_evidence_backlog({
+            'nova_decision':nova_decision,'adaptive_roadmap':adaptive_roadmap,
+            'nova_prescription':nova_prescription})
         nova_prescription['evidence_cycle_review'] = _r196920_review
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
         snapshot_fault_stage = "NUTRITION_PLAN"
@@ -51136,6 +51141,807 @@ HOME_PAGE=HOME_PAGE.replace(_R196924_HISTORY_EXPANDED,"""<details class="v196924
 </details>""",1)
 
 APP_VERSION='THE LAB · PRODUCT V4.9.125 R196.9.24 · CANONICAL COUPLED EVIDENCE BRIDGE · NOVA R196.2 CORE'
+
+
+# R196.9.25 — ZERO-COMPARABLE-EVIDENCE ACQUISITION (GENERAL OWNER PATH)
+# The existing canonical R27 owner is the sole issuer of a missing primary test.
+# This separate path collects real repeated work/recovery evidence; it never
+# fabricates fixed watts, marks a collected activity as success, or overrides
+# an EASY_ONLY canonical workout with an uncompiled hard prescription.
+R196925_SCHEMA='V4.9.126-R196.9.25-ZERO-EVIDENCE-ACQUISITION-1'
+_R196925_SCOPE='ONE_INITIAL_OBSERVATION_REQUEST'
+_R196925_TRUSTED={'ICU_RAW_WATTS_30_15','ICU_INTERVALS_CANONICAL','ORIGINAL_ACTIVITY_FIT_LAP',
+                  'ORIGINAL_FIT_LAPS','DEVICE_LAPS','ICU_RAW_WATTS_CANONICAL'}
+
+
+def _v196925_observation_blueprint(goal):
+    """Read-only mechanics FROM the versioned workout catalog, not ad-hoc test."""
+    pool=[]
+    for row in _NOVA_WORKOUT_LIBRARY:
+        if str(row.get('goal') or '')!=str(goal or '').upper():continue
+        if str(row.get('pattern') or '') not in {'STANDARD','SUSTAINED'}:continue
+        try:
+            reps=int(row['reps']);work=int(row['work_s']);recovery=int(row['recovery_s'])
+            if not (2<=reps<=5 and 120<=work<=900 and recovery>=work*.4 and recovery<=1800):continue
+        except (KeyError,TypeError,ValueError,OverflowError):continue
+        pool.append((reps*work,work,reps,str(row['id']),row))
+    if not pool:return None
+    _,_,_,_,selected=sorted(pool,key=lambda x:(x[0],x[1],x[2],x[3]))[0]
+    return {'library_version':NOVA_WORKOUT_LIBRARY_VERSION,'template_id':selected['id'],
+            'reps':int(selected['reps']),'work_seconds':int(selected['work_s']),
+            'recovery_seconds':int(selected['recovery_s']),
+            'effort':'SELF_PACED_SUBMAXIMAL_OBSERVATION',
+            'work_watts':None,'recovery_watts':None,
+            'work_is_uncapped':True,'score_or_fail_target':None,
+            'required_evidence':['linked_owner_activity_id','raw_time_aligned_power',
+               'exact_repetition_boundaries','measured_recovery_power','observed_work_power',
+               'full_activity_date','source_provenance'],
+            'notes':'This is an evidence-acquisition blueprint, not an issued workout. '
+                    'Until the canonical prescription is explicitly cleared, do not replace an easy session '
+                    'with hard intervals. Athlete-recorded power is evidence; no invented target or pass mark.'}
+
+
+def _v196925_request(snapshot):
+    """Single deterministic request for any athlete with no comparable pair."""
+    d=snapshot if isinstance(snapshot,dict) else {}
+    dec=d.get('nova_decision') if isinstance(d.get('nova_decision'),dict) else {}
+    road=d.get('adaptive_roadmap') if isinstance(d.get('adaptive_roadmap'),dict) else {}
+    pres=d.get('nova_prescription') if isinstance(d.get('nova_prescription'),dict) else {}
+    sci=road.get('scientific_progression') if isinstance(road.get('scientific_progression'),dict) else {}
+    dose=sci.get('dose_contract') if isinstance(sci.get('dose_contract'),dict) else {}
+    test=road.get('test') if isinstance(road.get('test'),dict) else {}
+    goal=str(dec.get('goal_key') or road.get('goal_key') or '').upper()
+    dim=str(dec.get('dimension') or sci.get('dimension') or '').upper()
+    state=str(dose.get('stage') or '').upper()
+    result={'schema':R196925_SCHEMA,'goal_key':goal,'dimension':dim,
+            'state':'NOT_REQUIRED','consent_required':False,'issued':False,
+            'executable':False,'numeric_watts_prescribed':False}
+    if goal not in R1962_GOALS or dim!='RECOVERY_UNDER_LOAD':return result
+    if state==_R196924_ASSESSMENT or (pres.get('coupled_evidence_bridge') or {}).get('request'):
+        return dict(result,state='MEASURED_COUPLED_REFERENCE_ALREADY_AVAILABLE')
+    if dose.get('available') is True:return dict(result,state='RECOVERY_DOSE_AVAILABLE')
+    # Already completed formal primary capacity validation is not a new R27.
+    if str(test.get('state') or '').upper() not in {'COMPLETE','COMPLETED'}:
+        return dict(result,state='PRIMARY_REFERENCE_REQUIRED',
+               action='USE_EXISTING_GOAL_OWNED_R27_IF_ELIGIBLE',
+               next_step='REQUEST_GOAL_OWNED_PRIMARY_TEST_WITH_EXISTING_R27_CONSENT')
+    template=_v196925_observation_blueprint(goal)
+    if not template:
+        signature={'schema':R196925_SCHEMA,'goal':goal,'dimension':dim,
+                   'mode':'LINK_EXISTING_ACTIVITY_ONLY'}
+        token=hashlib.sha256(json.dumps(signature,sort_keys=True,
+              separators=(',',':')).encode()).hexdigest()
+        return dict(result,state='ACTIVITY_EVIDENCE_REQUESTED',request_id=token,
+                    action='LINK_COMPLETED_CANONICAL_WORK_RECOVERY_ACTIVITY',
+                    next_step='IMPORT_ACTUAL_REPEATED_POWER_ACTIVITY')
+    window=road.get('quality_window') if isinstance(road.get('quality_window'),dict) else {}
+    # The candidate is diagnostic and NEVER an executable workout by itself.
+    preferred_iso=str(window.get('preferred_iso') or '')
+    try:
+        when=datetime.fromisoformat(preferred_iso)
+        if when.date()<get_rome_now().date():preferred_iso=''
+    except (TypeError,ValueError,OverflowError):preferred_iso=''
+    slots=((d.get('coach_clock') or {}).get('next_slots') or [])
+    candidates=[]
+    if preferred_iso:
+        for slot in slots:
+            if not isinstance(slot,dict):continue
+            try:
+                minute=int(slot.get('start_minute'))
+                exact=(str(slot.get('date') or '')[:10]==preferred_iso[:10]
+                       and minute==int(preferred_iso[11:13])*60+int(preferred_iso[14:16]))
+            except (ValueError,TypeError,OverflowError):exact=False
+            if exact and not slot.get('is_race') and str(slot.get('restriction') or 'NONE').upper()=='NONE':
+                candidates.append(slot)
+    context=d.get('planning_context') or {}
+    ready=(dec.get('hard_session_allowed') is True and
+           str(dec.get('action') or '').upper()=='TRAIN' and
+           str(window.get('state') or '').upper() in {'OPEN','WATCH'} and
+           len(candidates)==1 and not context.get('health_override') and
+           not (str(pres.get('status') or '').upper()=='PRESCRIBED'
+                and pres.get('hard_prescription_available') is True))
+    sig={'schema':R196925_SCHEMA,'goal':goal,'dimension':dim,
+         'template_id':template['template_id'],'library_version':template['library_version'],
+         'test_identity':{k:test.get(k) for k in ('state','seconds','mode')},
+         'gap':str(dose.get('reason') or pres.get('fail_closed_reason') or ''),
+         'quality_window':preferred_iso if ready else None}
+    token=hashlib.sha256(json.dumps(sig,sort_keys=True,ensure_ascii=False,
+                  separators=(',',':'),default=str).encode('utf-8')).hexdigest()
+    return dict(result,state='REQUEST_INITIAL_WORK_RECOVERY_BASELINE' if ready else 'WAIT_FOR_SAFETY',
+        action='LINK_VERIFIED_ACTIVITY_OR_REQUEST_INITIAL_MEASUREMENT',
+        next_step='OBTAIN_FIRST_MEASURED_REPEATABILITY_SESSION',
+        blueprint=template,request_id=token,window_candidate=preferred_iso if ready else None,
+        consent_required=True,evidence_required=True,
+        gap_reason=sig['gap'],
+        note='The blueprint is not a scheduled workout. A new safely cleared canonical quality must be issued before replacing an easy prescription.')
+
+
+def _v196925_assess_activity(snapshot,activity_id):
+    """Owner's current fetched activity only; never accept a claimed watt number."""
+    d=snapshot if isinstance(snapshot,dict) else {}
+    activity_id=str(activity_id or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_-]{3,80}',activity_id):
+        return {'state':'INVALID_ACTIVITY_ID','verified':False}
+    blocks=d.get('previous_training_blocks') or []
+    matching=[b for b in blocks if isinstance(b,dict) and
+              str(b.get('activity_id') or '')==activity_id]
+    if len(matching)!=1:return {'state':'AWAITING_OWNER_ACTIVITY_IMPORT' if not matching
+                                else 'DUPLICATE_ACTIVITY_IDENTITIES','verified':False}
+    block=matching[0]
+    truth=block.get('activity_truth') or {}
+    repetition=block.get('repeatability') or {}
+    if not isinstance(truth,dict) or not isinstance(repetition,dict):
+        return {'state':'STRUCTURED_INTERVALS_MISSING','verified':False}
+    source=str(truth.get('source') or block.get('interval_structure_source') or '').upper()
+    if (str(truth.get('status') or '').upper()!='RESOLVED' or
+            str(truth.get('confidence') or '').upper()!='HIGH' or
+            source not in _R196925_TRUSTED):
+        return {'state':'NEEDS_AUTHORITATIVE_RAW_POWER','verified':False,
+                'source':source or None}
+    def number(key):
+        try:
+            value=float(repetition.get(key));return value if math.isfinite(value) else None
+        except (TypeError,ValueError,OverflowError):return None
+    reps=number('reps'); seconds=number('interval_secs'); rest=number('recovery_secs')
+    watts=number('avg_watts');restwatts=number('recovery_avg_watts')
+    if None in (reps,seconds,rest,watts,restwatts):
+        return {'state':'FULL_WORK_RECOVERY_STREAM_REQUIRED','verified':False}
+    if (not 2<=reps<=30 or not 30<=seconds<=1800 or not 20<=rest<=1800 or
+        not 50<=watts<=1500 or not 0<=restwatts<watts):
+        return {'state':'WORK_RECOVERY_STRUCTURE_NOT_COMPARABLE','verified':False}
+    try:
+        day=date.fromisoformat(str(block['date'])[:10]);age=(get_rome_now().date()-day).days
+    except (KeyError,TypeError,ValueError):return {'state':'ACTIVITY_DATE_INVALID','verified':False}
+    if not 0<=age<=28:return {'state':'EVIDENCE_OUTSIDE_CURRENT_28D_WINDOW','verified':False}
+    return {'state':'OBSERVED_PAIR_TO_REPROCESS','verified':True,
+            'activity_id':activity_id,'date':day.isoformat(),'reps':int(reps),
+            'interval_seconds':int(seconds),'recovery_seconds':int(rest),
+            'observed_work_watts':round(watts,1),'observed_recovery_watts':round(restwatts,1),
+            'observed_provenance':source,'strong':bool(repetition.get('strong')),
+            'next_step':'RUN_FULL_NOVA_SNAPSHOT_TO_REEVALUATE_QUESTION_STATE',
+            'mastery_awarded':False,'workout_issued':False}
+
+
+def _v196925_latest_link(user_id,request_id):
+    _db_execute('''CREATE TABLE IF NOT EXISTS nova_initial_evidence_links (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, request_id TEXT NOT NULL,
+      activity_id TEXT NOT NULL, created_at_utc TEXT NOT NULL)''')
+    rows=_db_execute('''SELECT activity_id FROM nova_initial_evidence_links
+      WHERE user_id=? AND request_id=? ORDER BY created_at_utc DESC,id DESC LIMIT 1''',
+      (str(user_id),request_id),fetch=True)
+    return str(rows[0]['activity_id']) if rows else None
+
+
+def _v196925_ui(snapshot):
+    if not has_request_context() or getattr(g,'r169_qa_target_user_id',None):return None
+    owner=current_user(touch=False)
+    if not owner:return None
+    d=snapshot if isinstance(snapshot,dict) else {}
+    req=_v196925_request(d)
+    if req.get('state') in {'NOT_REQUIRED','MEASURED_COUPLED_REFERENCE_ALREADY_AVAILABLE',
+                             'RECOVERY_DOSE_AVAILABLE'}:return None
+    out=dict(req)
+    if req.get('request_id'):
+        out['agreement']=_v196919_latest_agreement(owner['id'],req['request_id'])
+        linked=_v196925_latest_link(owner['id'],req['request_id'])
+        if linked:
+            out['linked_activity_id']=linked
+            out['evidence_review']=_v196925_assess_activity(d,linked)
+    iso=req.get('window_candidate')
+    out['window_it']=(iso[8:10]+'/'+iso[5:7]+'/'+iso[:4]+' '+iso[11:16]) if iso else None
+    return out
+
+
+@app.route('/nova/initial-evidence',methods=['POST'])
+def nova_initial_evidence():
+    owner=current_user(touch=True)
+    if not owner:return redirect(url_for('login'))
+    if getattr(g,'r169_qa_target_user_id',None):abort(403)
+    payload=load_latest_report(include_payload=True,owner_user_id=owner['id']) or {}
+    snap=payload.get('data') if isinstance(payload.get('data'),dict) else {}
+    req=_v196925_request(snap)
+    token=str(request.form.get('request_id') or '')
+    if (not req.get('request_id') or not hmac.compare_digest(req['request_id'],token)):
+        abort(409)
+    action=str(request.form.get('decision') or '').upper()
+    if action in {'ACCEPT','DECLINE','WITHDRAW'}:
+        if action=='ACCEPT':
+            if str(request.form.get('confirm_observation') or '')!='YES':abort(409)
+            if str(request.form.get('confirm_exact_slot') or '')!='YES':abort(409)
+            if req['state']!='REQUEST_INITIAL_WORK_RECOVERY_BASELINE':abort(409)
+        if action=='WITHDRAW':
+            cancellation=_v196926_cancel_unexecuted(owner['id'],snap,token)
+            if cancellation.get('state') not in {'WITHDRAWN','NO_ISSUED_PLAN','ALREADY_WITHDRAWN'}:
+                abort(409)
+        _v196919_save_initial_agreement(owner['id'],token,action)
+        audit_event('NOVA_INITIAL_EVIDENCE_'+action,actor_user_id=owner['id'],
+                    target_user_id=owner['id'],details={'protocol':R196925_SCHEMA,
+                     'request':token[:16],'issued':False})
+    elif action=='LINK_ACTIVITY':
+        activity_id=str(request.form.get('activity_id') or '').strip()
+        if not re.fullmatch(r'[A-Za-z0-9_-]{3,80}',activity_id):abort(409)
+        _db_execute('''CREATE TABLE IF NOT EXISTS nova_initial_evidence_links (
+           id TEXT PRIMARY KEY,user_id TEXT NOT NULL,request_id TEXT NOT NULL,
+           activity_id TEXT NOT NULL,created_at_utc TEXT NOT NULL)''')
+        _db_execute('''INSERT INTO nova_initial_evidence_links
+           (id,user_id,request_id,activity_id,created_at_utc) VALUES (?,?,?,?,?)''',
+           (str(uuid.uuid4()),str(owner['id']),token,activity_id,
+            datetime.now(ZoneInfo('UTC')).isoformat(timespec='microseconds')))
+        audit_event('NOVA_INITIAL_EVIDENCE_ACTIVITY_LINK',actor_user_id=owner['id'],
+                    target_user_id=owner['id'],details={'protocol':R196925_SCHEMA,
+                     'request':token[:16],'activity_reference_submitted':True})
+    else:abort(409)
+    return redirect(url_for('home',notice='RICHIESTA EVIDENZE REGISTRATA',
+        detail='Aggiorna lo Snapshot per verificare la tua attività reale. Il consenso non emette automaticamente una quality.',code=303))
+
+
+def _v196919_save_initial_agreement(user_id,request_id,action):
+    if action not in {'ACCEPT','DECLINE','WITHDRAW'} or not re.fullmatch('[a-f0-9]{64}',request_id):
+        raise ValueError('Invalid initial evidence agreement')
+    _db_execute('''CREATE TABLE IF NOT EXISTS nova_evidence_agreements (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, request_id TEXT NOT NULL,
+        decision TEXT NOT NULL, scope TEXT NOT NULL, created_at_utc TEXT NOT NULL)''')
+    _db_execute('''INSERT INTO nova_evidence_agreements
+        (id,user_id,request_id,decision,scope,created_at_utc)
+        VALUES (?,?,?,?,?,?)''',
+        (str(uuid.uuid4()),str(user_id),request_id,action,_R196925_SCOPE,
+         datetime.now(ZoneInfo('UTC')).isoformat(timespec='microseconds')))
+
+# The actual canonical hard-session owner is NOT overridden: an observational
+# data request must never masquerade as an authorized workout.
+_r196925_old_acquisition=_v196918_calibration_request
+
+def _v196918_calibration_request(snapshot):
+    existing=_r196925_old_acquisition(snapshot)
+    baseline=_v196925_request(snapshot)
+    if baseline.get('state') not in {'REQUEST_INITIAL_WORK_RECOVERY_BASELINE',
+                                     'WAIT_FOR_SAFETY','ACTIVITY_EVIDENCE_REQUESTED'}:
+        return existing
+    return dict(existing,schema=R196925_SCHEMA,
+                state='ASK_FOR_INITIAL_BASELINE' if baseline['state']=='REQUEST_INITIAL_WORK_RECOVERY_BASELINE'
+                  else baseline['state'],
+                gap_kind='COUPLED_INITIAL_REPEATABILITY',
+                test={'protocol':'CANONICAL_LIBRARY_INITIAL_OBSERVATION_BLUEPRINT',
+                      'template':baseline.get('blueprint'),'session_state':'NOT_ISSUED',
+                      'watts':None},
+                next_step=baseline.get('next_step'),
+                question='Serve la prima prova reale di lavoro e recupero ripetuti: collega una tua attività con intervalli e potenza verificabili, oppure richiedi il protocollo iniziale. Nessun watt è inventato.',
+                baseline_request=baseline,auto_executable=False,auto_scheduled=False)
+
+app.jinja_env.globals['nova_initial_evidence_ui']=_v196925_ui
+_R196925_ANCHOR='{% if data.aerobic_volume_advice %}'
+assert HOME_PAGE.count(_R196925_ANCHOR)==1,'R196.9.25 initial evidence UI anchor drift'
+HOME_PAGE=HOME_PAGE.replace(_R196925_ANCHOR,r'''{% if data and not is_preview and not qa_mode and not report_mode %}
+{% set initial = nova_initial_evidence_ui(data) %}
+{% if initial %}
+<section class="v196925-evidence" aria-label="Prima evidenza lavoro e recupero">
+<strong>NOVA · SERVE UNA MISURA REALE</strong>
+<p>Non esiste ancora una prova completa e confrontabile del tuo lavoro ripetuto con recupero misurato. Puoi collegare una tua attività già eseguita: NOVA la verifica, non accetta watt dichiarati a mano.</p>
+{% if initial.window_it %}<p><b>Finestra candidata:</b> {{ initial.window_it }}. Non è una seduta autorizzata.</p>{% endif %}
+{% if initial.blueprint %}
+<details><summary>Quale prova servirebbe, senza inventare watt?</summary>
+<p>Meccanica del catalogo NOVA {{ initial.blueprint.template_id }}: {{ initial.blueprint.reps }} ripetizioni di {{ (initial.blueprint.work_seconds / 60)|round(1) }} min, con {{ (initial.blueprint.recovery_seconds / 60)|round(1) }} min di recupero. Lavoro a sensazione controllata, in modalità libera; registra ogni watt effettivo, sia nel lavoro che nel recupero. Nessun tetto o soglia minima di watt.</p>
+<p><b>Importante:</b> è un protocollo osservativo proposto, non una quality eseguibile finché un nuovo Snapshot non la autorizza esplicitamente. Non sostituire autonomamente una seduta facile con questi intervalli.</p>
+</details>
+{% endif %}
+{% if initial.linked_activity_id %}
+<p><b>Attività collegata:</b> {{ initial.linked_activity_id }} · {{ initial.evidence_review.state }}. {% if initial.evidence_review.verified %}Dati osservati riconosciuti; il motore li rivaluterà nel prossimo Snapshot, senza promuovere automaticamente la prestazione.{% else %}Serve importare o completare il dato nativo prima di considerarlo evidenza.{% endif %}</p>
+{% endif %}
+{% if initial.request_id %}
+<form action="{{ url_for('nova_initial_evidence') }}" method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="request_id" value="{{ initial.request_id }}">
+<label>ID attività Intervals.icu già eseguita (dal tuo account):
+<input name="activity_id" type="text" maxlength="80" placeholder="i123456789" autocomplete="off"></label>
+<button name="decision" value="LINK_ACTIVITY" type="submit">Collega e verifica l'attività</button>
+</form>
+{% endif %}
+{% if initial.state == 'REQUEST_INITIAL_WORK_RECOVERY_BASELINE' %}
+<form action="{{ url_for('nova_initial_evidence') }}" method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="request_id" value="{{ initial.request_id }}">
+{% if initial.agreement and initial.agreement.decision == 'ACCEPT' %}
+<p>Richiesta iniziale registrata. In attesa di emissione con i controlli canonici: non eseguire ancora il test proposto.</p>
+<button name="decision" value="WITHDRAW" type="submit">Ritira la richiesta</button>
+{% else %}
+<label><input type="checkbox" name="confirm_observation" value="YES" required>
+Richiedo una misurazione con watt osservati e senza voto o target obbligatorio.</label>
+<button name="decision" value="ACCEPT" type="submit">Richiedi protocollo iniziale</button>
+<button name="decision" value="DECLINE" type="submit" formnovalidate>Non ora</button>
+{% endif %}
+</form>
+{% elif initial.state == 'PRIMARY_REFERENCE_REQUIRED' %}
+<p>Per questo obiettivo manca prima il riferimento primario. Utilizza il consenso e il test canonico R27 già presente: non sostituirlo con una prova ripetuta inventata.</p>
+{% else %}<p>I controlli di sicurezza, la definizione del protocollo o una finestra adatta non sono ancora sufficienti per richiederne l'emissione. Puoi comunque collegare una seduta già completata.</p>{% endif %}
+</section>
+{% endif %}
+{% endif %}
+''' + _R196925_ANCHOR,1)
+BASE_CSS+='''\n.v196925-evidence{margin:12px 0;padding:14px;border:1px solid rgba(115,165,211,.42);border-radius:13px;background:rgba(65,112,142,.08)}
+.v196925-evidence p{margin:9px 0;font-size:13px}.v196925-evidence label{display:block;font-size:12px;margin:10px 0}
+.v196925-evidence input[type=text]{display:block;width:100%;max-width:290px;padding:10px;margin:6px 0}
+.v196925-evidence button{padding:9px 13px;margin:7px 8px 7px 0;border-radius:9px}
+.v196925-evidence details{padding:7px 0;border-top:1px solid rgba(150,180,205,.3)}
+'''
+
+APP_VERSION='THE LAB · PRODUCT V4.9.126 R196.9.25 · INITIAL EVIDENCE REQUEST AND OWNER ACTIVITY VALIDATION · NOVA R196.2 CORE'
+
+
+# R196.9.26 · Evidence acquisition is a prescribed action, not a dead-end label.
+# Cumulative with R196.9.24-25. Do not deploy this extension alone.
+R196926_SCHEMA='V4.9.127-R196.9.26-SELF_BUILDING_EVIDENCE_CYCLE-1'
+_R196926_SCOPE=_R196925_SCOPE
+_R196926_PROTOCOL='INITIAL_CANONICAL_WORK_RECOVERY_OBSERVATION_V1'
+_R196926_REQUIRED=('activity_id','source','date','work_watts','recovery_watts','interval_boundaries')
+
+
+def _v196926_canonical_baseline_template(goal,slot=None):
+    """Choose a real versioned library identity. Never infer an unattested watt target.
+
+    Choose a mechanically appropriate form for the goal, and fit it to the
+    observed slot envelope. The use of a library template is auditable and
+    does not claim that the athlete has demonstrated its watts.
+    """
+    goal=str(goal or '').upper(); candidates=[]
+    for x in _NOVA_WORKOUT_LIBRARY:
+        if not isinstance(x,dict) or x.get('goal')!=goal or x.get('adaptive_only'):continue
+        pattern=str(x.get('pattern') or '')
+        if pattern not in {'STANDARD','SUSTAINED','SHORT_POWER','SPRINT'}:continue
+        try:
+            reps=int(x.get('reps')); work=int(x.get('work_s')); rec=int(x.get('recovery_s'))
+        except (ValueError,TypeError):continue
+        if reps<2 or reps>8 or work<6 or work>900 or rec<20 or rec>900:continue
+        if goal in {'POWER_5','VO2MAX','POWER_20','TIME_TRIAL'} and not (work>=120 and reps<=5):continue
+        if goal=='POWER_1' and not (20<=work<=120 and reps<=6):continue
+        if goal=='SPRINTER' and not (6<=work<=20 and 3<=reps<=8):continue
+        session_min=20+(reps*work+(reps-1)*rec)/60+8
+        try:
+            max_min=float((slot or {}).get('duration_hint_min') or 60)
+        except (TypeError,ValueError):max_min=60
+        if session_min>max_min+1:continue
+        # De-risk starting observations: avoid excessive intervals and volume.
+        objective=(abs(work-300) if goal=='POWER_5' else
+                   abs(work-240) if goal=='VO2MAX' else
+                   abs(work-480) if goal in {'POWER_20','TIME_TRIAL'} else
+                   abs(work-45) if goal=='POWER_1' else abs(work-8))
+        candidates.append((objective,session_min,reps,str(x['id']),x))
+    if not candidates:return None
+    _,minutes,reps,_,template=min(candidates,key=lambda r:(r[0],r[1],r[2],r[3]))
+    return {'schema':R196926_SCHEMA,'template_id':template['id'],
+        'library_version':NOVA_WORKOUT_LIBRARY_VERSION,
+        'template_signature':_v109_template_signature(template),
+        'reps':reps,'work_seconds':int(template['work_s']),
+        'recovery_seconds':int(template['recovery_s']),
+        'duration_minutes':int(math.ceil(minutes)),
+        'work_watts_low':None,'work_watts_high':None,
+        'recovery_watts_low':None,'recovery_watts_high':None,
+        'effort':'SUBMAXIMAL_SELF_PACED_REPEATED_WORK',
+        'required_evidence':list(_R196926_REQUIRED),
+        'stop_rule':'Stop if pain, illness, unsafe symptoms, loss of control, or inability to recover.',
+        'no_watt_ceiling':True,'pass_mark':None}
+
+
+def _v196926_initial_request(decision,road,clock,prescription=None):
+    """Build one deterministic, single-slot request from CURRENT authority."""
+    d=decision if isinstance(decision,dict) else {}
+    r=road if isinstance(road,dict) else {}
+    c=clock if isinstance(clock,dict) else {}
+    p=prescription if isinstance(prescription,dict) else {}
+    sci=r.get('scientific_progression') or {};dose=sci.get('dose_contract') or {}
+    dim=str(d.get('dimension') or sci.get('dimension') or '').upper()
+    goal=str(d.get('goal_key') or r.get('goal_key') or '').upper()
+    base={'schema':R196926_SCHEMA,'goal_key':goal,'dimension':dim,
+          'issued':False,'executable':False,'purpose':'FIRST_MEASURED_REPEATED_WORK_RECOVERY'}
+    if goal not in R1962_GOALS or goal=='ENDURANCE_BASE' or dim in {'','NONE','REVALIDATION','EXTENSION_OR_REVALIDATION'}:
+        return dict(base,state='OTHER_SCIENCE_OWNER')
+    if dose.get('available') is True:
+        return dict(base,state='EXISTING_CONTRACT_AVAILABLE')
+    if (p.get('coupled_evidence_bridge') or {}).get('request'):
+        return dict(base,state='COMPARABLE_EVIDENCE_PATH_AVAILABLE')
+    test=r.get('test') or {}
+    if str(test.get('state') or '').upper() not in {'COMPLETED','COMPLETE'}:
+        return dict(base,state='PRIMARY_REFERENCE_TEST_REQUIRED',
+                    next_action='ISSUE_EXISTING_R27_PRIMARY_TEST_WITH_GOAL_CONSENT')
+    window=r.get('quality_window') or {}
+    iso=str(window.get('preferred_iso') or '')
+    try:
+        dt=datetime.fromisoformat(iso)
+        if dt.date()<get_rome_now().date():raise ValueError('past window')
+        minute=dt.hour*60+dt.minute; day=dt.date().isoformat()
+    except (ValueError,TypeError,OverflowError):
+        return dict(base,state='WAIT_FOR_SAFE_SLOT',next_action='REASSESS_NEXT_QUALITY_WINDOW')
+    slots=c.get('next_slots') or []
+    matches=[(i,s) for i,s in enumerate(slots) if isinstance(s,dict) and
+        str(s.get('date') or '')[:10]==day and s.get('start_minute')==minute]
+    if len(matches)!=1:
+        return dict(base,state='WAIT_FOR_SAFE_SLOT',next_action='RECONCILE_EXACT_CLOCK_WINDOW')
+    idx,slot=matches[0]
+    if (d.get('hard_session_allowed') is not True or
+        str(d.get('action') or '').upper()!='TRAIN' or
+        str(window.get('state') or '').upper() not in {'WATCH','OPEN'} or
+        str(slot.get('restriction') or 'NONE').upper()!='NONE' or slot.get('is_race') or
+        (p.get('hard_prescription_available') is True and p.get('status')=='PRESCRIBED')):
+        return dict(base,state='WAIT_FOR_SAFETY',next_action='REASSESS_SAFE_WINDOW')
+    template=_v196926_canonical_baseline_template(goal,slot)
+    if not template:
+        return dict(base,state='REQUIRES_SMALLER_CANONICAL_SLOT',
+                    next_action='FIND_SAFE_ENVELOPE_OR_EXISTING_ACTIVITY')
+    sig={'schema':R196926_SCHEMA,'goal':goal,'dimension':dim,
+         'template_id':template['template_id'],'signature':template['template_signature'],
+         'library_version':template['library_version'],'date':day,'minute':minute,
+         'quality_window':iso,'last_hard_end':window.get('last_hard_end'),
+         'primary_state':test.get('state'),'primary_when':test.get('when'),
+         'gap':dose.get('reason')}
+    token=hashlib.sha256(json.dumps(sig,sort_keys=True,ensure_ascii=False,
+                          default=str,separators=(',',':')).encode('utf-8')).hexdigest()
+    return dict(base,state='CONSENT_REQUIRED',request_id=token,
+        index=idx,date=day,start_minute=minute,window_iso=iso,
+        template=template,consent_scope=_R196926_SCOPE,
+        next_action='REQUEST_FIRST_CANONICAL_OBSERVATION',
+        safety_eligible=True,availability_confirmed=False,
+        observed_watts_only=True,not_a_performance_grade=True)
+
+
+def _v196926_prepare_first_observation(decision,road,clock,p):
+    """No quality is issued without owner-specific consent and exact slot."""
+    req=_v196926_initial_request(decision,road,clock,p)
+    result=copy.deepcopy(p or {})
+    if req['state'] in {'OTHER_SCIENCE_OWNER','EXISTING_CONTRACT_AVAILABLE','COMPARABLE_EVIDENCE_PATH_AVAILABLE'}:
+        return result
+    result['initial_evidence_bridge']={'schema':R196926_SCHEMA,'state':req['state'],
+                                      'request':req,'issued':False}
+    if req['state']!='CONSENT_REQUIRED':return result
+    agreement=_v196924_agreement(req['request_id'])
+    if not agreement or agreement.get('scope')!=_R196926_SCOPE or agreement.get('decision')!='ACCEPT':
+        return result
+    # An agreement is authorization to attempt canonical compilation, not a
+    # declaration that a workout has already been safely issued.
+    slot=(clock.get('next_slots') or [])[req['index']]
+    w=(road.get('quality_window') or {})
+    if (slot.get('is_race') or str(slot.get('restriction') or 'NONE').upper()!='NONE' or
+        w.get('preferred_iso')!=req['window_iso']):return result
+    slot['availability_confirmed']=True
+    slot['availability_source']='ATHLETE_EXACT_INITIAL_MEASUREMENT_CONSENT'
+    w['availability_confirmed']=True
+    w['availability_source']='ATHLETE_EXACT_INITIAL_MEASUREMENT_CONSENT'
+    result['initial_evidence_bridge']=dict(result['initial_evidence_bridge'],
+        state='CONSENTED_FOR_CANONICAL_COMPILATION',agreed_request_id=req['request_id'])
+    return result
+
+
+def _v196926_compile_first_observation(out,prescription,clock):
+    """Compile from an already safety-checked Nova session, not from user watts.
+
+    The canonical source of mechanics is the versioned Nova catalog. All
+    downstream semantic projections must retain the exact signed identity.
+    """
+    p=prescription or {}; b=p.get('initial_evidence_bridge') or {}
+    if b.get('state')!='CONSENTED_FOR_CANONICAL_COMPILATION':return out
+    req=b.get('request') or {}; t=req.get('template') or {}
+    source=next((x for x in _NOVA_WORKOUT_LIBRARY
+                 if x.get('id')==t.get('template_id') and x.get('goal')==req.get('goal_key')),None)
+    slots=(clock or {}).get('next_slots') or []
+    rows=(out or {}).get('sessions') or []
+    idx=req.get('index')
+    ok=bool(source and source.get('reps')==t.get('reps') and
+       source.get('work_s')==t.get('work_seconds') and
+       source.get('recovery_s')==t.get('recovery_seconds') and
+       source.get('pattern') in {'STANDARD','SUSTAINED','SHORT_POWER','SPRINT'} and
+       isinstance(rows,list) and type(idx) is int and idx<len(rows) and idx<len(slots) and
+       rows[idx].get('date')==req.get('date') and
+       rows[idx].get('start_minute')==req.get('start_minute') and
+       slots[idx].get('availability_confirmed') is True and
+       not slots[idx].get('is_race') and
+       str(slots[idx].get('restriction') or 'NONE').upper()=='NONE' and
+       str((rows[idx].get('restriction') or 'NONE')).upper()=='NONE' and
+       rows[idx].get('provisional_quality') is not True and
+       len([x for x in rows if str(x.get('intensity_class') or '').lower() in {'vo2','tempo','threshold'}])==0)
+    if not ok:
+        held=copy.deepcopy(out or {})
+        held['initial_evidence_bridge']=dict(b,state='COMPILER_REFUSED',issued=False)
+        return held
+    work=t['work_seconds'];rest=t['recovery_seconds'];reps=t['reps']
+    work_m=f'{work//60}m {work%60}s' if work%60 else f'{work//60} min'
+    rest_m=f'{rest//60}m {rest%60}s' if rest%60 else f'{rest//60} min'
+    instruction=(f'20 min progressive Z1–Z2 warm-up; then {reps}×{work_m} in free/resistance mode, '
+      f'with {rest_m} VERY EASY Z1 after each repetition except the last. '
+      f'Start conservatively at a self-chosen repeatable effort; use the first repetition to calibrate '
+      f'what is sustainable today. No prescribed work or recovery watts: the values are measured, '
+      f'not invented. You MAY ride above your initial self-chosen work power if the efforts remain '
+      f'controlled and repeatable, or reduce power whenever needed. '
+      f'Keep 8 min very easy Z1 cooldown; record all work and recovery watts and exact lap boundaries. '
+      f'Never chase a power mark, never sprint to pass, and stop for unsafe symptoms.')
+    compiled=copy.deepcopy(out)
+    sessions=[dict(x) for x in rows]
+    raw=sessions[idx]
+    # Safety guard: a fitter, recovered athlete may measure a submaximal protocol
+    # but its watts still stay unknown until the original activity is imported.
+    raw.update({'title':'Prima evidenza · lavoro e recupero misurati',
+      'intensity':'HARD · OBSERVATION', 'intensity_class':'vo2' if req.get('goal_key') in {'POWER_5','VO2MAX','POWER_1','SPRINTER'} else 'threshold',
+      'duration':f"{t['duration_minutes']} min", 'main_set':instruction,
+      'why':('NOVA has an open work/recovery evidence question and no recent verified comparable pair. '
+             'This is an athlete-consented first observation, not an earned progression or maximal performance test; it does not independently close the selected scientific question.'),
+      'quality_relevance':'MEANINGFUL','hard_spacing_relevant':True,
+      'nova_workout_id':t['template_id'],'nova_contract_id':t['template_id'],
+      'nova_workout_library_version':t['library_version'],
+      'nova_template_signature':t['template_signature'],
+      'nova_prescription_authority':True,
+      'stimulus_role':'VALIDATE','stimulus_architecture_state':'NOVA_CANONICAL_LIBRARY',
+      'provisional_quality':False,'prescribed_power_low':None,'prescribed_power_high':None,
+      'power_band':None,'quality_target_ratio':None,'assessment_only':True,
+      'work_band_exploratory':True,'watt_band_is_a_ceiling':False,
+      'no_performance_pass_mark':True,'nova_evidence_protocol':_R196926_PROTOCOL,
+      'nova_evidence_request_id':req['request_id'],
+      'session_duration_feasibility':{'available':True,'state':'PASS',
+        'min_required':t['duration_minutes'],'declared_min':t['duration_minutes'],
+        'source':'CANONICAL_LIBRARY_INDEPENDENT_ATTESTATION'},
+      'evidence_required':list(_R196926_REQUIRED)})
+    sessions[idx]=raw
+    compiled.update({'sessions':sessions,'status':'PRESCRIBED','compiled':True,
+      'hard_prescription_available':True,'selected_slot_index':idx,
+      'source':'R196926_CANONICAL_LIBRARY_OBSERVATION_COMPILER',
+      'workout_id':t['template_id'],'contract_id':t['template_id'],
+      'hard_session_count':1})
+    _v145_rehash_plan(compiled)
+    compiled['single_plan_authority']={**(compiled.get('single_plan_authority') or {}),
+        'plan_id':compiled['canonical_plan_id']}
+    compiled['initial_evidence_bridge']=dict(b,state='CANONICAL_OBSERVATION_COMPILED',
+      issued=True,canonical_plan_id=compiled['canonical_plan_id'])
+    return compiled
+
+
+def _v196926_final_attestation(sessions,prescription):
+    """Check final semantic workout then restore *metadata only* if stripped.
+
+    Never recreate missing hard mechanics or re-authorize a different session.
+    The input compiled canonical session is retained for exact comparison.
+    """
+    rows=[dict(x) if isinstance(x,dict) else x for x in (sessions or [])]
+    p=prescription if isinstance(prescription,dict) else {}
+    bridge=p.get('initial_evidence_bridge') or {}
+    if bridge.get('state')!='CANONICAL_OBSERVATION_COMPILED':return rows
+    req=bridge.get('request') or {};t=req.get('template') or {};idx=req.get('index')
+    originals=p.get('sessions') or []
+    if type(idx) is not int or idx<0 or idx>=len(rows) or idx>=len(originals):
+        raise ValueError('R196926_FINAL_EVIDENCE_SESSION_MISSING')
+    canonical=originals[idx]; final=rows[idx]
+    core=('date','start_minute','title','intensity_class','main_set',
+          'nova_workout_id','nova_contract_id','nova_canonical_plan_id')
+    if (not isinstance(canonical,dict) or not isinstance(final,dict) or
+        any(final.get(key)!=canonical.get(key) for key in core) or
+        canonical.get('nova_evidence_protocol')!=_R196926_PROTOCOL or
+        canonical.get('nova_evidence_request_id')!=req.get('request_id') or
+        final.get('nova_workout_id')!=t.get('template_id') or
+        final.get('nova_canonical_plan_id')!=bridge.get('canonical_plan_id') or
+        final.get('date')!=req.get('date') or
+        final.get('start_minute')!=req.get('start_minute') or
+        final.get('prescribed_power_low') is not None or
+        final.get('prescribed_power_high') is not None or
+        final.get('provisional_quality') or not final.get('hard_spacing_relevant') or
+        sum(str(x.get('intensity_class') or '').lower() in {'vo2','tempo','threshold'}
+            for x in rows if isinstance(x,dict))!=1):
+        raise ValueError('R196926_FINAL_EVIDENCE_PROTOCOL_DIVERGED')
+    # Projection may remove optional provenance fields. Restore those *only*
+    # after validating actual identical mechanics and authority.
+    for key in ('nova_evidence_protocol','nova_evidence_request_id',
+        'assessment_only','work_band_exploratory','watt_band_is_a_ceiling',
+        'no_performance_pass_mark','evidence_required'):
+        if key in final and final[key]!=canonical[key]:
+            raise ValueError('R196926_FINAL_EVIDENCE_METADATA_CONFLICT')
+        final[key]=copy.deepcopy(canonical[key])
+    rows[idx]=final
+    return rows
+
+
+def _v196926_build_evidence_backlog(snapshot):
+    """Persistent explainable next action for any science dimension, not a fake test.
+
+    No unsupported objective test is invented for dimensions without a validated
+    catalog protocol. The gap remains actionable: source, missing measurement,
+    acquisition protocol owner and safe next action are explicitly recorded.
+    """
+    d=snapshot if isinstance(snapshot,dict) else {}
+    dec=d.get('nova_decision') or {};road=d.get('adaptive_roadmap') or {}
+    pres=d.get('nova_prescription') or {};sci=road.get('scientific_progression') or {}
+    dim=str(dec.get('dimension') or sci.get('dimension') or 'NONE').upper()
+    goal=str(dec.get('goal_key') or road.get('goal_key') or '').upper()
+    initial=(pres.get('initial_evidence_bridge') or {})
+    paired=(pres.get('coupled_evidence_bridge') or {})
+    primary=road.get('test') or {}
+    if initial:
+        state=initial.get('state') or 'NEEDS_EVIDENCE'
+        request=initial.get('request') or {}
+        next_step='EXECUTE_AND_LINK_MEASURED_OBSERVATION' if initial.get('issued') else (request.get('next_action') or 'REQUEST_OR_IMPORT_EVIDENCE')
+    elif paired:
+        state=paired.get('state') or 'NEEDS_EVIDENCE'
+        next_step='EXECUTE_MEASURED_COUPLED_PROTOCOL' if paired.get('issued') else 'REQUEST_CONSENT_TO_MEASURE_COUPLED_RECOVERY'
+    elif str(primary.get('state') or '').upper() not in {'COMPLETE','COMPLETED'}:
+        state='PRIMARY_TEST_REQUIRED';next_step='RUN_EXISTING_R27_GOAL_TEST'
+    else:
+        state='EVIDENCE_MONITORING';next_step='EVALUATE_NEW_ACTIVITIES_AND_PROGRESS_OPEN_QUESTION'
+    candidates=[]
+    questions=(road.get('question_state') or {}).get('questions') or {}
+    if isinstance(questions,dict):
+        for key,v in questions.items():
+            if isinstance(v,dict) and not v.get('closed'):
+                candidates.append({'question':str(key),'state':v.get('state'),
+                  'missing_reason':v.get('reason'),'next_action':'ACQUIRE_DIRECT_MEASURED_ACTIVITY_OR_GOAL_SPECIFIC_TEST'})
+    return {'schema':R196926_SCHEMA,'goal_key':goal,'current_dimension':dim,
+        'state':state,'next_action':next_step,'issues':candidates,
+        'never_infer_watts':True,'execution_requires_current_safety_and_consent':True,
+        'no_automatic_success_from_consent':True,'activity_reconciliation':'R149_NATIVE_ORIGINAL_ACTIVITY'}
+
+# Invalidate withdrawal of a signed, unexecuted initial observation, never
+# silently erase an already executed activity. Uses the same CAS helper as R196.9.24
+# but the plan identity is independent and purpose-scoped.
+def _v196926_cancel_unexecuted(user_id,snapshot,request_id):
+    d=snapshot if isinstance(snapshot,dict) else {}
+    b=((d.get('nova_prescription') or {}).get('initial_evidence_bridge') or {})
+    req=b.get('request') or {}
+    if req.get('request_id')!=request_id:return {'state':'MISMATCHED_REQUEST'}
+    led=d.get('microcycle_ledger') or {}
+    if not led.get('ledger_id'):return {'state':'NO_ISSUED_PLAN'}
+    conn=_db_connect()
+    try:
+        cur=conn.cursor()
+        if not _db_is_postgres():cur.execute('BEGIN IMMEDIATE')
+        sql='SELECT ledger_json FROM microcycle_ledgers WHERE id=? AND user_id=?'
+        if _db_is_postgres():sql+=' FOR UPDATE'
+        cur.execute(_db_sql(sql),(str(led['ledger_id']),str(user_id)))
+        fetched=cur.fetchone()
+        if not fetched:conn.rollback();return {'state':'NO_ISSUED_PLAN'}
+        old=fetched[0];payload=json.loads(old)
+        matches=[r for r in payload.get('prescription_history') or [] if isinstance(r,dict) and
+                 r.get('nova_evidence_protocol')==_R196926_PROTOCOL and
+                 hmac.compare_digest(str(r.get('nova_evidence_request_id') or ''),request_id)]
+        if not matches:conn.rollback();return {'state':'NO_ISSUED_PLAN'}
+        if len(matches)!=1:conn.rollback();return {'state':'DUPLICATE_PLAN_IDENTITY'}
+        row=matches[0];status=str(row.get('prescription_status') or '').upper()
+        if status=='WITHDRAWN':conn.rollback();return {'state':'ALREADY_WITHDRAWN'}
+        if (status not in {'ACTIVE','PLANNED','ISSUED'} or row.get('executed_activity_id')):
+            conn.rollback();return {'state':'ALREADY_EXECUTED_OR_NOT_ACTIVE'}
+        row.update({'prescription_status':'WITHDRAWN','withdrawn_request_id':request_id,
+          'withdrawn_reason':'ATHLETE_WITHDREW_INITIAL_EVIDENCE_CONSENT',
+          'withdrawn_at_local':get_rome_now().isoformat(timespec='seconds')})
+        anchor=payload.get('primary_anchor') or {}
+        if isinstance(anchor,dict) and anchor.get('prescription_fingerprint')==row.get('prescription_fingerprint'):
+            anchor.update({'status':'WITHDRAWN','prescription_lock':False})
+        payload['primary_anchor']=anchor
+        new=json.dumps(payload,ensure_ascii=False,separators=(',',':'),default=_report_json_default)
+        cur.execute(_db_sql('UPDATE microcycle_ledgers SET ledger_json=?,updated_at_utc=? WHERE id=? AND user_id=? AND ledger_json=?'),
+          (new,_now_utc_text(),str(led['ledger_id']),str(user_id),old))
+        if cur.rowcount!=1:conn.rollback();return {'state':'CONCURRENT_LEDGER_UPDATE'}
+        conn.commit();return {'state':'WITHDRAWN'}
+    except (ValueError,TypeError,KeyError,json.JSONDecodeError):
+        conn.rollback();return {'state':'MALFORMED_LEDGER'}
+    finally:conn.close()
+
+
+# Integration hooks. No self-invoking recompile loop.
+_r196926_before_prescription=build_nova_prescription
+
+def build_nova_prescription(nova_decision,coach_clock,adaptive_roadmap=None,
+        microcycle_ledger=None,evidence_ledger=None,power_model=None,
+        ftp_anchor=None,aerobic_metabolic_range=None,training_definitions=None):
+    p=_r196926_before_prescription(nova_decision,coach_clock,
+      adaptive_roadmap=adaptive_roadmap,microcycle_ledger=microcycle_ledger,
+      evidence_ledger=evidence_ledger,power_model=power_model,
+      ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+      training_definitions=training_definitions)
+    if not isinstance(p,dict):return p
+    return _v196926_prepare_first_observation(nova_decision,adaptive_roadmap or {},coach_clock or {},p)
+
+_r196926_before_compile=compile_nova_prescription
+
+def compile_nova_prescription(prescription,coach_clock,training_definitions=None,
+        ftp_anchor=None,recent_activities=None,undefined_training_intent=None,
+        power_model=None,microcycle_ledger=None,coaching_contract=None,
+        adaptive_roadmap=None,strength_pattern=None,training_rhythm=None,
+        execution_model=None):
+    out=_r196926_before_compile(prescription,coach_clock,
+       training_definitions=training_definitions,ftp_anchor=ftp_anchor,
+       recent_activities=recent_activities,undefined_training_intent=undefined_training_intent,
+       power_model=power_model,microcycle_ledger=microcycle_ledger,
+       coaching_contract=coaching_contract,adaptive_roadmap=adaptive_roadmap,
+       strength_pattern=strength_pattern,training_rhythm=training_rhythm,
+       execution_model=execution_model)
+    return _v196926_compile_first_observation(out,prescription,coach_clock)
+
+_r196926_before_summary=_v4840_ledger_session_summary
+
+def _v4840_ledger_session_summary(s):
+    out=_r196926_before_summary(s)
+    if isinstance(s,dict) and s.get('nova_evidence_protocol')==_R196926_PROTOCOL:
+        out=dict(out,nova_evidence_protocol=_R196926_PROTOCOL,
+            nova_evidence_request_id=s.get('nova_evidence_request_id'),
+            assessment_only=True,work_band_exploratory=True,
+            no_performance_pass_mark=True,initial_evidence=True)
+    return out
+
+# Revised UI: replace the R196.9.25 educational-only branch with actual issued
+# state and current request, without repeating its huge card content.
+app.jinja_env.globals['nova_initial_evidence_ui']=_v196925_ui
+
+_R196926_UI_BEFORE='''<p>Richiesta iniziale registrata. In attesa di emissione con i controlli canonici: non eseguire ancora il test proposto.</p>'''
+if _R196926_UI_BEFORE not in HOME_PAGE:
+    raise AssertionError('R196.9.26 missing previous initial evidence UI invariant')
+HOME_PAGE=HOME_PAGE.replace(_R196926_UI_BEFORE,
+ '''<p>Consenso registrato. Esegui un nuovo Snapshot per l'autorizzazione corrente: solo la comparsa del protocollo come seduta eseguibile ti autorizza a farlo.</p>''',1)
+
+APP_VERSION='THE LAB · PRODUCT V4.9.127 R196.9.26 · SELF BUILDING EVIDENCE ACQUISITION · NOVA R196.2 CORE'
+
+# Make UI, consent POST, and the compiler compute *the same* request identity.
+_r196926_educational_request=_v196925_request
+
+def _v196925_request(snapshot):
+    d=snapshot if isinstance(snapshot,dict) else {}
+    dec=d.get('nova_decision') or {};road=d.get('adaptive_roadmap') or {}
+    clock=d.get('coach_clock') or {};p=d.get('nova_prescription') or {}
+    if (p.get('initial_evidence_bridge') or {}).get('issued'):
+        # An already emitted identical protocol is still revocable if not
+        # executed; recompute against its original easy-only context.
+        p=dict(p,status='EASY_ONLY',hard_prescription_available=False)
+    req=_v196926_initial_request(dec,road,clock,p)
+    state=req.get('state')
+    mapped={'CONSENT_REQUIRED':'REQUEST_INITIAL_WORK_RECOVERY_BASELINE',
+        'PRIMARY_REFERENCE_TEST_REQUIRED':'PRIMARY_REFERENCE_REQUIRED',
+        'EXISTING_CONTRACT_AVAILABLE':'RECOVERY_DOSE_AVAILABLE',
+        'COMPARABLE_EVIDENCE_PATH_AVAILABLE':'MEASURED_COUPLED_REFERENCE_ALREADY_AVAILABLE',
+        'OTHER_SCIENCE_OWNER':'NOT_REQUIRED',
+        'WAIT_FOR_SAFE_SLOT':'WAIT_FOR_SAFETY',
+        'REQUIRES_SMALLER_CANONICAL_SLOT':'WAIT_FOR_SAFETY'}
+    out=dict(req,state=mapped.get(state,state),
+        blueprint=req.get('template'),window_candidate=req.get('window_iso'),
+        action=req.get('next_action'),
+        numeric_watts_prescribed=False,
+        consent_required=state=='CONSENT_REQUIRED')
+    if isinstance((p.get('initial_evidence_bridge') or {}),dict):
+        bridge=p.get('initial_evidence_bridge') or {}
+        if bridge.get('issued') and bridge.get('agreed_request_id')==req.get('request_id'):
+            out['issued']=True;out['executable']=True
+            out['session_state']='ISSUED_AFTER_SNAPSHOT'
+    return out
+
+_r196926_previous_ui=_v196925_ui
+
+def _v196925_ui(snapshot):
+    out=_r196926_previous_ui(snapshot)
+    if not out:return out
+    d=snapshot if isinstance(snapshot,dict) else {}
+    b=((d.get('nova_prescription') or {}).get('initial_evidence_bridge') or {})
+    if b.get('issued') and b.get('agreed_request_id')==out.get('request_id'):
+        out['issued']=True
+        out['session_state']='ISSUED'
+    return out
+
+app.jinja_env.globals['nova_initial_evidence_ui']=_v196925_ui
+# Compact and truthful surface, no duplicate paragraph stack.
+_R196926_NOTE='<strong>NOVA · SERVE UNA MISURA REALE</strong>'
+assert HOME_PAGE.count(_R196926_NOTE)==1,'R196.9.26 initial evidence UI headline drift'
+HOME_PAGE=HOME_PAGE.replace(_R196926_NOTE,'<strong>NOVA · LA PROSSIMA PROVA UTILE</strong>',1)
+_R196926_INTRO='''<p>Non esiste ancora una prova completa e confrontabile del tuo lavoro ripetuto con recupero misurato. Puoi collegare una tua attività già eseguita: NOVA la verifica, non accetta watt dichiarati a mano.</p>'''
+assert HOME_PAGE.count(_R196926_INTRO)==1,'R196.9.26 initial evidence description drift'
+HOME_PAGE=HOME_PAGE.replace(_R196926_INTRO,
+ '''<p>Per avanzare serve una prova di lavoro e recupero misurati. NOVA cerca prima le tue attività già eseguite; se non bastano, definisce il test dal proprio catalogo. Nessun watt presunto.</p>''',1)
+_R196926_CONSENT_BEFORE='''Richiedo una misurazione con watt osservati e senza voto o target obbligatorio.</label>'''
+assert HOME_PAGE.count(_R196926_CONSENT_BEFORE)==1,'R196.9.26 consent text drift'
+HOME_PAGE=HOME_PAGE.replace(_R196926_CONSENT_BEFORE,
+ """Richiedo una misurazione con watt osservati e senza voto o target obbligatorio.</label>
+<label><input type="checkbox" name="confirm_exact_slot" value="YES" required>
+Confermo la finestra esatta indicata sopra. Se non sono disponibile, non autorizzo la seduta.</label>""",1)
+_R196926_ALREADY='''{% if initial.agreement and initial.agreement.decision == 'ACCEPT' %}'''
+assert HOME_PAGE.count(_R196926_ALREADY)==1,'R196.9.26 initial agreement UI drift'
+HOME_PAGE=HOME_PAGE.replace(_R196926_ALREADY,
+ '''{% if initial.issued %}<p><strong>Protocollo autorizzato nell'ultimo Snapshot.</strong> Segui soltanto la seduta corrente con il medesimo identificativo. Il dato verrà verificato dopo l'attività.</p>
+<button name="decision" value="WITHDRAW" type="submit">Revoca se non eseguito</button>
+{% elif initial.agreement and initial.agreement.decision == 'ACCEPT' %}''',1)
+# Do not show a generic "not issued" label when actual signed session exists.
+_R196926_BLUETEXT='''<p><b>Importante:</b> è un protocollo osservativo proposto, non una quality eseguibile finché un nuovo Snapshot non la autorizza esplicitamente. Non sostituire autonomamente una seduta facile con questi intervalli.</p>'''
+assert HOME_PAGE.count(_R196926_BLUETEXT)==1,'R196.9.26 initial blueprint disclosure drift'
+HOME_PAGE=HOME_PAGE.replace(_R196926_BLUETEXT,
+ '''<p><b>Stato:</b> {% if initial.issued %}emesso dall'ultimo Snapshot per la finestra confermata{% else %}richiesta di prova, non ancora autorizzata{% endif %}. Se la finestra o le condizioni cambiano serve una nuova verifica.</p>''',1)
+# Existing 25 UI state is preserved by the mapping; consent POST uses SAME token.
+APP_VERSION='THE LAB · PRODUCT V4.9.127 R196.9.26 · EVIDENCE ACQUISITION AND INITIAL CANONICAL OBSERVATION · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
