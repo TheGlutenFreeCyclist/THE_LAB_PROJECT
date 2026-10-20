@@ -50548,9 +50548,20 @@ _ri=HOME_PAGE.index(_r196922_gate_open)
 _rj=HOME_PAGE.index('</div>\n{% endif %}',_ri) + len('</div>')
 _gate=HOME_PAGE[_ri:_rj]
 HOME_PAGE=HOME_PAGE[:_ri] + '<details class="v196922-quality-technical"><summary>How Nova checked this decision</summary>' + _gate + '</details>' + HOME_PAGE[_rj:]
-_r196922_duplicate_why = "<div class=\"v4-session-why\"><strong>Why:</strong> {{ 'The earliest validated quality is already one of the next two chronological sessions.' if quality_already_shown else 'Nova will reassess the next quality opportunity when the scientific, recovery and scheduling checks support one.' }}</div>"
-assert HOME_PAGE.count(_r196922_duplicate_why)==1,'R196.9.22 third-card explanation anchor drift'
-HOME_PAGE=HOME_PAGE.replace(_r196922_duplicate_why,'''<details class="v196922-quality-explain"><summary>What happens next?</summary><p>{{ 'Your next quality is already shown in an earlier session card; no additional workout has been prescribed.' if quality_already_shown else 'Nova will review the next safe quality opportunity when the training, recovery, evidence and scheduling checks allow it.' }}</p></details>''',1)
+# R196.9.23 boot hotfix: R196.8.7 already replaced the pending-quality
+# explanation with a THREE-way conditional including a provisional safety veto.
+# Anchor to that final canonical text, not the pre-R196.8.7 two-way version.
+# Keep the provisional NOT-CLEARED warning intact and put only explanation
+# behind progressive disclosure; no decision/consent/safety policy changes.
+_r196922_duplicate_why = (
+    '<div class="v4-session-why"><strong>Why:</strong> '
+    "{{ 'A provisional candidate appears in the next two cards, but the current plan has NOT cleared its execution; reassess at the next Snapshot.' if quality_already_shown and data.next_sessions[upcoming.quality_index].provisional_quality else 'The earliest validated quality is already one of the next two chronological sessions.' if quality_already_shown else 'Nova will reassess the next quality opportunity when the scientific, recovery and scheduling checks support one.' }}"
+    '</div>'
+)
+assert HOME_PAGE.count(_r196922_duplicate_why)==1,'R196.9.23 third-card explanation canonical anchor drift'
+HOME_PAGE=HOME_PAGE.replace(_r196922_duplicate_why,
+    '<details class="v196922-quality-explain"><summary>What happens next?</summary>'
+    + _r196922_duplicate_why + '</details>',1)
 BASE_CSS += r"""
 .v196922-quality-explain,.v196922-quality-technical{margin:10px 0 0;border-top:1px solid rgba(255,255,255,.13);padding:8px 0 0}
 .v196922-quality-explain>summary,.v196922-quality-technical>summary{font-size:12px;font-weight:650;cursor:pointer;color:#b5d4dd}
@@ -50581,7 +50592,7 @@ BASE_CSS += r"""
 .v196922-detail-content{padding:14px 10px 7px;min-width:0}
 @media(max-width:760px){.v196922-recovery-summary{padding:12px}.v196922-detail-content{padding:12px 6px 7px}}
 """
-APP_VERSION = 'THE LAB · PRODUCT V4.9.123 R196.9.22 · ATHLETE-FIRST PHYSIOLOGY UI + PERSONAL REFERENCE SAFETY · NOVA R196.2 CORE' 
+APP_VERSION = 'THE LAB · PRODUCT V4.9.124 R196.9.23 · THIRD-CARD BOOT HOTFIX · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
