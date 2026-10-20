@@ -51037,6 +51037,62 @@ BASE_CSS+='''\n.v196924-assessment{margin:14px 0;padding:15px;border:1px solid r
 
 # A consented assessment must be linked through the ordinary compiled
 # prescription and ledger identity, not a separate or fake activity record.
+# R196.9.30: shared evidence assessment gate diagnostic, independent of goal.
+# This is a reporter of the original compiler outcome; it does not turn an
+# un-cleared future preview into an executable hard workout.
+def _v196930_coupled_compile_checks(compiled,clock,request_info):
+    out=compiled if isinstance(compiled,dict) else {}
+    req=request_info if isinstance(request_info,dict) else {}
+    slots=(clock or {}).get('next_slots') or []
+    rows=out.get('sessions') or []
+    idx=req.get('index')
+    errors=[]
+    if out.get('status')!='PRESCRIBED':errors.append('UPSTREAM_NOT_PRESCRIBED')
+    if out.get('workout_id')!=_R196924_WORKOUT:errors.append('WORKOUT_ID_MISMATCH')
+    if type(idx) is not int or not 0<=idx<len(rows) or not 0<=idx<len(slots):
+        errors.append('SIGNED_SLOT_NOT_IN_COMPILED_PLAN')
+        return {'blocking_checks':errors,'provisional':False,'future_slot':False,
+            'safe_to_issue':False,'candidate_status':str(out.get('status') or 'UNKNOWN'),
+            'schema':'R196930-COMPILE-DIAGNOSTIC-1'}
+    row=rows[idx] if isinstance(rows[idx],dict) else {}
+    slot=slots[idx] if isinstance(slots[idx],dict) else {}
+    if str(row.get('nova_workout_id') or '')!=_R196924_WORKOUT:errors.append('SESSION_WORKOUT_ID_MISMATCH')
+    if str(row.get('date') or '')[:10]!=req.get('date'):
+        errors.append('SIGNED_DATE_MISMATCH')
+    if str(row.get('intensity_class') or '').lower() not in {'vo2','threshold','tempo'}:
+        errors.append('SESSION_NOT_CANONICAL_HARD')
+    if (row.get('power_prescription') or {}).get('source')!='OBSERVED_COUPLED_RECOVERY_DOSE':
+        errors.append('NATIVE_COUPLED_POWER_EVIDENCE_MISSING')
+    if (row.get('session_duration_feasibility') or {}).get('state')=='FAIL':
+        errors.append('SESSION_DURATION_UNFEASIBLE')
+    if slot.get('availability_confirmed') is not True:
+        errors.append('EXACT_SLOT_AVAILABILITY_NOT_CONFIRMED')
+    if slot.get('is_race') or str(slot.get('restriction') or 'NONE').upper()!='NONE':
+        errors.append('SLOT_SAFETY_RESTRICTION')
+    if str(row.get('restriction') or 'NONE').upper()!='NONE':
+        errors.append('COMPILED_SAFETY_RESTRICTION')
+    try:
+        # Use the signed local day (not UI language, athlete goal, or an assumed
+        # weekday).  Same-day safety recheck remains mandatory before issuing.
+        future=date.fromisoformat(str(req.get('date') or '')[:10])>get_rome_now().date()
+    except (ValueError,TypeError):
+        future=False
+        errors.append('INVALID_SIGNED_DATE')
+    try:
+        signed_time=datetime.combine(date.fromisoformat(str(req.get('date') or '')[:10]),
+            datetime.min.time())+timedelta(minutes=int(req.get('start_minute')))
+        if signed_time<=get_rome_now().replace(tzinfo=None):
+            errors.append('SIGNED_SLOT_ALREADY_PASSED')
+    except (ValueError,TypeError,OverflowError):
+        if 'INVALID_SIGNED_DATE' not in errors:errors.append('INVALID_SIGNED_TIME')
+    provisional=row.get('provisional_quality') is True
+    return {'schema':'R196930-COMPILE-DIAGNOSTIC-1',
+        'candidate_status':str(out.get('status') or 'UNKNOWN'),
+        'blocking_checks':errors,'provisional':provisional,'future_slot':future,
+        'safe_to_issue':not errors and not provisional,
+        'next_required_check':('DAY_OF_RECOVERY_AND_CANONICAL_COMPILATION' if future and provisional and not errors else
+            'CURRENT_SAFETY_AND_COMPILER_REVIEW' if errors or provisional else None)}
+
 _r196924_before_compile=compile_nova_prescription
 
 def compile_nova_prescription(prescription,coach_clock,training_definitions=None,
@@ -51055,26 +51111,37 @@ def compile_nova_prescription(prescription,coach_clock,training_definitions=None
     if b.get('state')!='CONSENTED_EXACT_SLOT_FOR_CANONICAL_COMPILATION':return out
     rows=out.get('sessions') if isinstance(out,dict) else None
     req=b.get('request') or {};idx=req.get('index')
-    valid=bool(isinstance(rows,list) and type(idx) is int and 0<=idx<len(rows)
-        and isinstance(rows[idx],dict) and out.get('status')=='PRESCRIBED'
-        and out.get('workout_id')==_R196924_WORKOUT
-        and str(rows[idx].get('nova_workout_id') or '')==_R196924_WORKOUT
-        and str(rows[idx].get('date') or '')[:10]==req.get('date')
-        and str(rows[idx].get('intensity_class') or '').lower() in {'vo2','threshold','tempo'}
-        and (rows[idx].get('power_prescription') or {}).get('source')=='OBSERVED_COUPLED_RECOVERY_DOSE'
-        and rows[idx].get('session_duration_feasibility',{}).get('state')!='FAIL'
-        and not rows[idx].get('provisional_quality')
-        and (coach_clock.get('next_slots') or [])[idx].get('availability_confirmed') is True)
+    # R196.9.30: collect independent compile vetoes from the ACTUAL canonical
+    # compiler.  A future quality preview is not an executable session, but it
+    # is not an invalid consent either.  Avoid the circular future-slot veto:
+    # retain the accepted request and let a day-of Snapshot reconsider safety.
+    checks=_v196930_coupled_compile_checks(out,coach_clock,req)
+    blocked=checks['blocking_checks']
+    is_pending=(not blocked and checks['provisional'] and checks['future_slot'])
+    valid=not blocked and not checks['provisional']
     if not valid:
-        # No partial/invalid evidence test is published, even with consent.
+        # Neither a future preview nor a rejected candidate goes into the
+        # athlete's executable ledger.  A single exact-slot agreement remains
+        # recorded: no repeat consent is requested after successful acceptance.
         held=copy.deepcopy(prescription or {})
         held.update({'status':'EASY_ONLY','workout_id':None,'contract_id':None,
             'hard_prescription_available':False,'selected_slot_index':None,
-            'fail_closed_reason':'COUPLED_ASSESSMENT_COMPILER_REJECTED',
+            'fail_closed_reason':('FUTURE_OBSERVATION_AWAITING_DAY_OF_SAFETY' if is_pending else
+                                  'COUPLED_ASSESSMENT_COMPILER_REJECTED'),
             'raw_sessions':[_v84_easy_raw(s,{}) for s in (coach_clock or {}).get('next_slots') or []]})
         held.pop('future_quality_candidate',None)
         safe=_r196924_before_compile(held,coach_clock,**kwargs)
-        safe['coupled_evidence_bridge']=dict(b,state='CANONICAL_COMPILER_REJECTED',issued=False)
+        safe['status']='EASY_ONLY'
+        safe['hard_prescription_available']=False
+        safe['workout_id']=None
+        safe['contract_id']=None
+        safe['fail_closed_reason']=held['fail_closed_reason']
+        safe['coupled_evidence_bridge']=dict(b,
+            state=('CONSENTED_PENDING_SAME_DAY_RECHECK' if is_pending else 'CONSENTED_COMPILER_BLOCKED'),
+            issued=False,consent_recognized=True,not_executable=True,
+            next_action=('RECHECK_SIGNED_SLOT_ON_DAY' if is_pending else 'REVIEW_CANONICAL_COMPILER_VETO'),
+            compiler_diagnostic=checks,
+            candidate_date=req.get('date'),candidate_start_minute=req.get('start_minute'))
         return safe
     stamped=copy.deepcopy(out)
     target=dict(rows[idx])
@@ -51684,7 +51751,31 @@ def _v196926_compile_first_observation(out,prescription,clock):
        len([x for x in rows if str(x.get('intensity_class') or '').lower() in {'vo2','tempo','threshold'}])==0)
     if not ok:
         held=copy.deepcopy(out or {})
-        held['initial_evidence_bridge']=dict(b,state='COMPILER_REFUSED',issued=False)
+        held['initial_evidence_bridge']=dict(b,state='COMPILER_REFUSED',issued=False,
+            next_action='REVIEW_CURRENT_CANONICAL_SAFETY_OR_LIBRARY_REQUIREMENTS')
+        return held
+    # A first observation is subject to the SAME day-of safety boundary as
+    # measured coupled work.  Signed consent does not grant future clearance.
+    try:
+        future=date.fromisoformat(str(req.get('date') or '')[:10])>get_rome_now().date()
+    except (ValueError,TypeError):
+        future=False
+    if future:
+        held=copy.deepcopy(out or {})
+        held['initial_evidence_bridge']=dict(b,
+            state='CONSENTED_PENDING_SAME_DAY_RECHECK',issued=False,not_executable=True,
+            next_action='RECHECK_SIGNED_SLOT_ON_DAY',candidate_date=req.get('date'))
+        return held
+    try:
+        signed_time=datetime.combine(date.fromisoformat(str(req.get('date') or '')[:10]),
+            datetime.min.time())+timedelta(minutes=int(req.get('start_minute')))
+        expired=signed_time<=get_rome_now().replace(tzinfo=None)
+    except (ValueError,TypeError,OverflowError):
+        expired=True
+    if expired:
+        held=copy.deepcopy(out or {})
+        held['initial_evidence_bridge']=dict(b,state='SIGNED_SLOT_EXPIRED',issued=False,
+            not_executable=True,next_action='REPLAN_FROM_NEW_SAFE_WINDOW')
         return held
     work=t['work_seconds'];rest=t['recovery_seconds'];reps=t['reps']
     work_m=f'{work//60}m {work%60}s' if work%60 else f'{work//60} min'
@@ -52593,7 +52684,92 @@ for _it,_en in _R196929_UI_TRANSLATIONS_EXTRA:
     if _it in HOME_PAGE:
         HOME_PAGE=HOME_PAGE.replace(_it,_en)
 
-APP_VERSION='THE LAB · PRODUCT V4.9.130 R196.9.29 · SEALED RECOMMENDATION SAVE AND ENGLISH CONSENT · NOVA R196.2 CORE'
+# R196.9.30 · Consented future evidence is pending, not rejected or executable.
+# The exact accepted scope is not converted into a second consent request.
+R196930_SCHEMA = 'V4.9.131-R196.9.30-SIGNED-EVIDENCE-FUTURE-RECHECK-1'
+_r196930_backlog_before=_v196926_build_evidence_backlog
+
+def _v196926_build_evidence_backlog(snapshot):
+    out=_r196930_backlog_before(snapshot)
+    p=(snapshot or {}).get('nova_prescription') or {}
+    for key in ('coupled_evidence_bridge','initial_evidence_bridge'):
+        bridge=p.get(key) or {}
+        if not isinstance(bridge,dict) or not bridge.get('agreed_request_id'):
+            continue
+        if bridge.get('issued'):
+            out['next_action']='EXECUTE_ONLY_THE_CURRENT_AUTHORIZED_SNAPSHOT_AND_LINK_MEASURED_ACTIVITY'
+        elif bridge.get('state')=='CONSENTED_PENDING_SAME_DAY_RECHECK':
+            out['next_action']='RECHECK_SIGNED_SLOT_ON_DAY_WITHOUT_NEW_CONSENT'
+        else:
+            out['next_action']='REVIEW_VALID_CONSENT_AND_CURRENT_COMPILER_VETO'
+        out['consent_recognized']=True
+        out['consent_request_id']=bridge['agreed_request_id']
+        out['acquisition_state']=bridge.get('state')
+        for issue in out.get('issues') or []:
+            if isinstance(issue,dict) and issue.get('dimension')==out.get('current_dimension'):
+                issue['next_action']=out['next_action']
+                issue['protocol_state']=('CONSENTED_PENDING_DAY_OF_SAFETY' if
+                    bridge.get('state')=='CONSENTED_PENDING_SAME_DAY_RECHECK' else
+                    'ISSUED_AWAITING_MEASURED_ACTIVITY' if bridge.get('issued') else
+                    'CONSENTED_NEEDS_COMPILER_REVIEW')
+        break
+    return out
+
+_r196930_copy_before=_v196928_acquisition_instruction
+
+def _v196928_acquisition_instruction(truth):
+    snap=truth.get('_v196928_snapshot') or {}
+    p=snap.get('nova_prescription') or {}
+    bridges=[p.get('coupled_evidence_bridge') or {},p.get('initial_evidence_bridge') or {}]
+    for b in bridges:
+        if not isinstance(b,dict) or not b.get('agreed_request_id'):
+            continue
+        if b.get('issued'):
+            return ('Evidence observation issued in the current authorized Snapshot. '
+                'Import the original measured work and recovery to progress the scientific question.')
+        if b.get('state')=='CONSENTED_PENDING_SAME_DAY_RECHECK':
+            r=b.get('request') or {}
+            return ('Your consent has been recorded for the exact proposed assessment on '
+                +str(r.get('date') or 'the confirmed date')+'. No second consent is needed. '
+                'The session is PENDING a same-day recovery and safety recheck; '
+                'it is not executable in this Snapshot. Generate a new Snapshot on the '
+                'scheduled day before the session to receive the current decision.')
+        diag=b.get('compiler_diagnostic') or {}
+        codes=', '.join(diag.get('blocking_checks') or []) or 'CURRENT_SAFETY_RECHECK_REQUIRED'
+        return ('Your assessment consent is recorded. No further consent is required '
+            'for this unchanged, signed request. The assessment has not been issued '
+            'because the canonical compiler reports: '+codes+'. '
+            'Do not execute it until an authorized Snapshot clears the checks.')
+    return _r196930_copy_before(truth)
+
+_r196930_ui_before=_v196924_ui_bridge
+
+def _v196924_ui_bridge(snapshot):
+    entry=_r196930_ui_before(snapshot)
+    if entry is None:return None
+    out=dict(entry)
+    b=(((snapshot or {}).get('nova_prescription') or {}).get('coupled_evidence_bridge') or {})
+    out['pending_day_of_review']=bool(b.get('state')=='CONSENTED_PENDING_SAME_DAY_RECHECK'
+        and out.get('decision')=='ACCEPT')
+    out['consent_valid']=bool(out.get('decision')=='ACCEPT')
+    out['compiler_reason']=', '.join(((b.get('compiler_diagnostic') or {}).get('blocking_checks') or []))
+    return out
+app.jinja_env.globals['nova_coupled_assessment_ui']=_v196924_ui_bridge
+
+# Present the accepted, NON-EXECUTABLE protocol truth on Home and Snapshot.
+# Do not tell an already-consented athlete to press the same consent button.
+_R196930_HOME_OLD=('''<p><strong>CONSENT RECORDED.</strong> Select GENERATE SNAPSHOT below. NOVA will recheck safety, availability and the canonical contract before issuing any workout.</p>''')
+_R196930_HOME_NEW=('''{% if evidence_consent.pending_day_of_review %}<p><strong>CONSENT ACCEPTED · ASSESSMENT PENDING.</strong> Your exact proposed time is retained. No new consent is required. A new Snapshot ON THE SCHEDULED DAY must clear current recovery and safety before any hard assessment is executable.</p>{% elif evidence_consent.compiler_reason %}<p><strong>CONSENT ACCEPTED · SAFETY/COMPILER REVIEW REQUIRED.</strong> No new consent for the unchanged request. Current blocker: {{ evidence_consent.compiler_reason }}. No assessment is executable.</p>{% else %}<p><strong>CONSENT RECORDED.</strong> Generate a new Snapshot for a current safety decision. Do not execute a proposed assessment until it is explicitly issued.</p>{% endif %}''')
+assert HOME_PAGE.count(_R196930_HOME_OLD)==1,'R196930 Home accepted-consent branch moved'
+HOME_PAGE=HOME_PAGE.replace(_R196930_HOME_OLD,_R196930_HOME_NEW,1)
+
+# The report's consent panel uses the same status and does not contradict it.
+_R196930_EMBED_OLD=('''<p>Request recorded. Generate a new Snapshot to review current safety, timing and final compilation.</p>''')
+_R196930_EMBED_NEW=('''{% if coupled_req.pending_day_of_review %}<p><strong>CONSENT ACCEPTED · AWAITING DAY-OF SAFETY CHECK.</strong> The signed assessment remains pending; no second consent is required. Do not execute it based on this preview.</p>{% elif coupled_req.compiler_reason %}<p><strong>CONSENT ACCEPTED · COMPILER REVIEW REQUIRED.</strong> Current reason: {{ coupled_req.compiler_reason }}. No executable session has been issued.</p>{% else %}<p>Consent accepted. A new Snapshot must clear current safety before issuing the assessment.</p>{% endif %}''')
+assert HOME_PAGE.count(_R196930_EMBED_OLD)==1,'R196930 embedded consent branch moved'
+HOME_PAGE=HOME_PAGE.replace(_R196930_EMBED_OLD,_R196930_EMBED_NEW,1)
+
+APP_VERSION='THE LAB · PRODUCT V4.9.131 R196.9.30 · CONSENTED EVIDENCE PENDING DAY-OF SAFETY · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
