@@ -11945,8 +11945,15 @@ def home():
             if not state or (state.get("requested_at_utc") and not state.get("responded_at_utc")):
                 return redirect(url_for("beta_qa_consent_gate"))
     latest_report_meta = get_latest_report_meta()
+    # R196.9.28: HOME renders with data=None. Offer only the currently signed,
+    # owner-scoped consent request from the last saved real Snapshot, never QA.
+    _consent_saved = (load_latest_report(include_payload=True, owner_user_id=user["id"])
+                      if latest_report_meta else None) or {}
+    consent_snapshot_data = (_consent_saved.get("data")
+                             if isinstance(_consent_saved.get("data"), dict) else None)
     return render_template_string(
         HOME_PAGE, days=DAYS_BACK, season_days=SEASON_DAYS_BACK,
+        consent_snapshot_data=consent_snapshot_data,
         data=None, error=None, css=BASE_CSS, logo=LOGO_B64, brand_wordmark=BRAND_WORDMARK_B64, favicon=FAVICON_B64,
         notes=load_notes(), chat_answer=None, chat_error=None,
         feelings=load_feelings(), latest_feeling=get_latest_feeling(),
@@ -28683,6 +28690,9 @@ def analyze():
         snapshot_fault_stage = "COACH_PROJECTION"
         analysis = _v4901_coach_call(analysis)
         snapshot_fault_stage = "SESSION_RECONCILIATION"
+        analysis = _v196928_scientific_semantic_integrity(
+            analysis,question_state=question_state,adaptive_roadmap=adaptive_roadmap,
+            repair=True)
         analysis["next_sessions"] = _v4940_apply_aerobic_metabolic_range(analysis.get("next_sessions"), aerobic_metabolic_range)
         # R196.9.27: attest the semantic projection against the sealed *compiled*
         # prescription, never against a projection that has just overwritten it.
@@ -28813,6 +28823,9 @@ def analyze():
                 'error_class': type(_coverage_error).__name__, 'shadow_only': True}
         snapshot_fault_stage = "CROSS_MODULE_AUTHORITY"
         data = _v87_cross_module_authority_guard(data, repair=True)
+        data = _v196928_scientific_semantic_integrity(
+            data,question_state=question_state,adaptive_roadmap=adaptive_roadmap,
+            repair=True)
         snapshot_fault_stage = "AUTHORITY_VALIDATION"
         # Trace the exact code path selected for this Snapshot (billing is verified
         # independently in the admin usage table; no zero-cost DB event is invented).
@@ -28842,6 +28855,9 @@ def analyze():
                 data["qa_regression_blocked"] = True
                 data["qa_regression_issue_codes"] = _codes
         snapshot_fault_stage = "AUTHORITY_VALIDATION"
+        _v196928_scientific_semantic_integrity(
+            data,question_state=question_state,adaptive_roadmap=adaptive_roadmap,
+            repair=False)
         if not (data.get("cross_module_authority_audit") or {}).get("final_pass") and not qa_requested:
             _audit = data.get("cross_module_authority_audit") or {}
             _issues = _audit.get("issues") or []
@@ -52173,6 +52189,271 @@ def _v196926_build_evidence_backlog(snapshot):
 
 APP_VERSION='THE LAB · PRODUCT V4.9.128 R196.9.27 · UNIVERSAL EVIDENCE CONTINUITY AND SEALED ATTESTATION · NOVA R196.2 CORE'
 
+
+
+# R196.9.28 · SCIENCE TRUTH, ACCESSIBLE CONSENT, ONE CONTINUOUS CYCLE
+# All goals/dimensions. A completed historic benchmark is not the proof that
+# the *currently selected* Question State dimension has met its exit criteria.
+R196928_SCHEMA = 'V4.9.129-R196.9.28-QUESTION_TRUTH_AND_CONSENT_PATH-1'
+_r196928_truth_before = _v4897_truth_packet
+
+def _v4897_truth_packet(snapshot=None, adaptive_roadmap=None, microcycle_ledger=None,
+                        sessions=None, power_achievements=None):
+    out = _r196928_truth_before(snapshot=snapshot, adaptive_roadmap=adaptive_roadmap,
+        microcycle_ledger=microcycle_ledger, sessions=sessions,
+        power_achievements=power_achievements)
+    snap = snapshot if isinstance(snapshot,dict) else {}
+    road = adaptive_roadmap if isinstance(adaptive_roadmap,dict) else (snap.get('adaptive_roadmap') or {})
+    dec = snap.get('nova_decision') or road.get('nova_decision') or {}
+    sci = road.get('scientific_progression') or {}
+    dim = str(dec.get('dimension') or sci.get('dimension') or '').upper()
+    qs = snap.get('question_state') or road.get('question_state') or {}
+    dims = qs.get('dimensions') or {} if isinstance(qs,dict) else {}
+    rec = dims.get(dim) if isinstance(dims,dict) else None
+    if isinstance(rec,dict):
+        # Only the science owner may certify an exit. SUPPORTED is not closure.
+        closed = rec.get('exit_satisfied') is True
+        source = 'CANONICAL_QUESTION_STATE_DIMENSIONS'
+    elif type(dec.get('question_exit_satisfied')) is bool:
+        closed = dec['question_exit_satisfied']
+        source = 'NOVA_DECISION_EXIT_ATTESTATION'
+    else:
+        closed = None  # unknown never licenses a claim of closure
+        source = 'NO_CURRENT_QUESTION_EXIT_ATTESTATION'
+    out.update(_v196928_snapshot=snap,current_question_dimension=dim,current_question_closed=closed,
+               current_question_truth_source=source,
+               historical_checkpoint_completed=bool(out.get('formal_current')))
+    return out
+
+_r196928_sentence_before = _v4897_sentence_violation
+
+def _v196928_false_current_closure(sentence,truth):
+    if truth.get('current_question_closed') is True:
+        return False
+    low=str(sentence or '').lower()
+    # Scope matters: a completed *previous* benchmark is valid historical data.
+    # Only present-tense statements that close the current scientific question
+    # without the current dimension's exit witness are rejected.
+    return bool(re.search(
+        r'\b(?:current|active|selected|present)\s+(?:scientific\s+|validation\s+|progression\s+)?'
+        r'(?:question|dimension|objective|stage|validation|progression)\s+'
+        r'(?:is|was|has\s+been|has)\s+(?:already\s+)?'
+        r'(?:closed|completed?|resolved|proven|validated|established|passed)\b'
+        r'|\b(?:current|active|selected)\s+(?:scientific\s+)?question\s+is\s+closed\b',
+        low,flags=re.I))
+
+def _v4897_sentence_violation(sentence,truth,field_name=''):
+    if _v196928_false_current_closure(sentence,truth):
+        return 'CURRENT_SCIENTIFIC_QUESTION_FALSE_CLOSURE'
+    return _r196928_sentence_before(sentence,truth,field_name)
+
+_r196928_copy_before = _v4897_canonical_training_copy
+
+def _v196928_acquisition_instruction(truth):
+    snap=truth.get('_v196928_snapshot') or {}
+    pres=snap.get('nova_prescription') or {}
+    bridge=pres.get('coupled_evidence_bridge') or {}
+    initial=pres.get('initial_evidence_bridge') or {}
+    if bridge.get('request') and not bridge.get('issued'):
+        return ('To acquire the missing evidence, open NOVA evidence consent in THE LAB, '
+                'confirm the exact proposed time and measurement, then generate a new Snapshot. '
+                'The proposed assessment is NOT an authorized workout until that Snapshot issues it.')
+    if initial.get('request') and not initial.get('issued'):
+        return ('NOVA has requested an initial measured observation. Open its consent panel '
+                'in THE LAB, confirm the exact slot and generate a new Snapshot; '
+                'the request itself does not authorize hard training.')
+    if bridge.get('issued') or initial.get('issued'):
+        return ('The signed observation may be executed only as shown in the current '
+                'authorized Snapshot; its measured activity is still needed before the question can close.')
+    return ('The current question needs verified activity evidence or a validated '
+            'measurement protocol. No new workout is authorized by the evidence request alone.')
+
+def _v4897_canonical_training_copy(truth):
+    if truth.get('current_question_closed') is True:
+        return _r196928_copy_before(truth)
+    # Legacy formal_current still means that a former R27 benchmark was done.
+    # It must not route current scientific progress into the CLOSED branch.
+    copy_truth=dict(truth,formal_current=False)
+    if not truth.get('pending_validation'):
+        copy_truth['pending_validation']=False
+    recommendation,outlook=_r196928_copy_before(copy_truth)
+    dim=truth.get('current_question_dimension') or 'the active adaptation dimension'
+    benign_outlook=[x for x in outlook if not _v196928_false_current_closure(x,truth)]
+    if truth.get('current_question_dimension'):
+        outlook=[f'The current scientific question ({dim}) remains open until its own measured evidence meets the exit criteria.']
+    else:
+        outlook=['NOVA has not verified that the currently selected scientific question is closed.']
+    outlook.extend(benign_outlook[:2])
+    if truth.get('historical_checkpoint_completed'):
+        outlook.append('An earlier benchmark was recorded, but it is not proof that this new question has been resolved.')
+    recommendation=list(recommendation)
+    recommendation.append(_v196928_acquisition_instruction(truth))
+    return recommendation,outlook
+
+_r196928_semantic_before=_v4897_semantic_compile_snapshot
+
+def _v196928_scientific_semantic_integrity(out, question_state=None,
+                                            adaptive_roadmap=None, repair=False):
+    if not isinstance(out,dict):return out
+    d=dict(out)
+    if isinstance(question_state,dict) and question_state:
+        d['question_state']=question_state
+    road=adaptive_roadmap if isinstance(adaptive_roadmap,dict) else (d.get('adaptive_roadmap') or {})
+    truth=_v4897_truth_packet(snapshot=d,adaptive_roadmap=road,sessions=d.get('next_sessions'))
+    if truth.get('current_question_closed') is True:
+        return out
+    invalid=[]
+    for field in ('recommendation','season_outlook','training_load','season_distribution','fatigue_signals'):
+        value=out.get(field)
+        if not isinstance(value,str):continue
+        sentences=_v4844_sentence_list(value)
+        failed=[x for x in sentences if _v196928_false_current_closure(x,truth)]
+        if failed:
+            invalid.extend((field,x[:200]) for x in failed)
+            if repair:
+                out[field]=' '.join(x for x in sentences if x not in failed).strip()
+    if invalid and not repair:
+        raise ValueError('R196928_CURRENT_QUESTION_FALSE_CLOSURE_AFTER_PROJECTION')
+    if repair:
+        # The earlier composer does not receive the final prescription bridge;
+        # enrich only the fully assembled signed Snapshot, not a shadow plan.
+        pres=out.get('nova_prescription') or {}
+        if isinstance(pres,dict) and (pres.get('coupled_evidence_bridge') or pres.get('initial_evidence_bridge')):
+            action=_v196928_acquisition_instruction(truth)
+            current=str(out.get('recommendation') or '')
+            if action not in current:
+                out['recommendation']=(current+' '+action).strip()[:1800]
+        check={'schema':R196928_SCHEMA,'dimension':truth.get('current_question_dimension'),
+               'exit_satisfied':truth.get('current_question_closed'),
+               'truth_source':truth.get('current_question_truth_source'),
+               'false_closure_statements_removed':len(invalid),'final_pass':True}
+        out['current_question_consistency_audit']=check
+        audit=out.get('semantic_authority_audit')
+        if isinstance(audit,dict):
+            audit=dict(audit)
+            audit['current_question_consistency']=check
+            if invalid:
+                removed=audit.get('removed') if isinstance(audit.get('removed'),dict) else {}
+                removed=dict(removed)
+                removed['current_question_false_closure']=[{'field':x,'sentence':y} for x,y in invalid]
+                audit['removed']=removed
+            out['semantic_authority_audit']=audit
+    return out
+
+def _v4897_semantic_compile_snapshot(parsed,adaptive_roadmap=None,microcycle_ledger=None,
+                                      power_achievements=None,record_audit=True,snapshot_question=None):
+    # Keep the actual canonical Question State in the truth packet during the
+    # original compiler call; the wrapper above checks before and after edits.
+    source=parsed if isinstance(parsed,dict) else {}
+    _snap=source
+    # The original compiler builds its own truth packet with this input;
+    # _v4897_truth_packet reads the authoritative science owner, not test.state.
+    out=_r196928_semantic_before(parsed,adaptive_roadmap=adaptive_roadmap,
+        microcycle_ledger=microcycle_ledger,power_achievements=power_achievements,
+        record_audit=record_audit,snapshot_question=snapshot_question)
+    return _v196928_scientific_semantic_integrity(out,
+        question_state=source.get('question_state'),adaptive_roadmap=adaptive_roadmap,
+        repair=True) if record_audit else out
+
+# Avoid displaying a silently expired request as a place to click. Instead
+# keep an actionable navigation message: a new real Snapshot is needed.
+_r196928_coupled_ui_before=_v196924_ui_bridge
+
+def _v196924_ui_bridge(snapshot):
+    found=_r196928_coupled_ui_before(snapshot)
+    if found:
+        found=dict(found)
+        found['needs_snapshot']=False
+        return found
+    if not has_request_context() or getattr(g,'r169_qa_target_user_id',None):return None
+    athlete=current_user(touch=False)
+    if not athlete:return None
+    p=(snapshot or {}).get('nova_prescription') or {}
+    b=p.get('coupled_evidence_bridge') or {}
+    req=b.get('request') or {}
+    if not req.get('request_id') or b.get('schema')!=R196924_SCHEMA:return None
+    return {'needs_snapshot':True,'issued':False,'decision':None,
+            'status':'STALE_OR_UNSAFE_REQUEST_REFRESH_REQUIRED'}
+
+app.jinja_env.globals['nova_coupled_assessment_ui']=_v196924_ui_bridge
+
+# The landing / route has data=None even after a successful consent POST.
+# Place a real, secure consent form above the Snapshot controls, visible upon
+# return to Home and never in saved/QA/preview reports. It uses the same token,
+# URL, POST checks and ledger gates as the original embedded consent UI.
+_R196928_CONSENT_INSERT='<section class="v4-card v4-hero">'
+assert HOME_PAGE.count(_R196928_CONSENT_INSERT)==1,'R196928 hero consent anchor drift'
+HOME_PAGE=HOME_PAGE.replace(_R196928_CONSENT_INSERT,r'''{% if not data and not is_preview and not report_mode and not qa_mode and consent_snapshot_data is defined and consent_snapshot_data %}
+{% set evidence_consent = nova_coupled_assessment_ui(consent_snapshot_data) %}
+{% if evidence_consent %}
+<section class="v196928-consent-home no-print" id="nova-evidence-consent" aria-label="NOVA evidence consent">
+<strong>NOVA · CONSENSO ALLA PROVA DI ACQUISIZIONE EVIDENZE</strong>
+{% if evidence_consent.needs_snapshot %}
+<p>La proposta salvata non e' piu' confermabile: la finestra o i requisiti di sicurezza sono cambiati. Genera un nuovo Snapshot; NOVA definira' nuovamente una finestra valida. Nessuna prova e' autorizzata.</p>
+{% else %}
+<p><b>Quando:</b> {{ evidence_consent.date_it }} alle {{ evidence_consent.time }} · {{ evidence_consent.reps }} × {{ evidence_consent.interval_minutes }} minuti misurati. Questa e' una richiesta di acquisizione, non una seduta gia' autorizzata.</p>
+{% if evidence_consent.issued %}
+<p><strong>PROTOCOLLO EMESSO.</strong> Riferisciti all'ultimo Snapshot autorizzato, non a questo riquadro. Il consenso non dimostra che la prova sia stata eseguita.</p>
+{% elif evidence_consent.decision == 'ACCEPT' %}
+<p><strong>CONSENSO REGISTRATO.</strong> Ora premi GENERATE SNAPSHOT qui sotto: NOVA ricontrollera' sicurezza, disponibilita' e contratto prima di emettere qualsiasi seduta.</p>
+{% else %}
+<p>Prima di procedere, conferma entrambe le condizioni per la finestra esatta. Non eseguire questi intervalli finche' un nuovo Snapshot non li autorizza.</p>
+<form method="post" action="{{ url_for('nova_coupled_assessment_consent') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="request_id" value="{{ evidence_consent.request_id }}">
+<label><input type="checkbox" name="confirm_exact_slot" value="YES" required> Sono disponibile il {{ evidence_consent.date_it }} alle {{ evidence_consent.time }}</label>
+<label><input type="checkbox" name="confirm_measurement" value="YES" required> Acconsento alla prova misurata; i watt di partenza non sono un voto ne' un obbligo</label>
+<button type="submit" name="decision" value="ACCEPT">CONFERMA DISPONIBILITA' E RICHIEDI LA PROVA</button>
+<button type="submit" name="decision" value="DECLINE" formnovalidate>Non ora</button>
+</form>
+{% endif %}
+{% endif %}
+</section>
+{% endif %}
+{% if not evidence_consent %}
+{% set initial_consent = nova_initial_evidence_ui(consent_snapshot_data) %}
+{% if initial_consent %}
+<section class="v196928-consent-home no-print" id="nova-initial-evidence-consent" aria-label="NOVA initial evidence request">
+<strong>NOVA · PRIMA EVIDENZA DA ACQUISIRE</strong>
+<p>NOVA non ha ancora una prova comparabile sufficiente. Puoi collegare una tua attività nativa o richiedere un protocollo iniziale, se esiste una finestra sicura. Non inventare watt e non eseguire il test soltanto perché viene proposto.</p>
+{% if initial_consent.window_it %}<p><b>Finestra candidata:</b> {{ initial_consent.window_it }}.</p>{% endif %}
+{% if initial_consent.request_id %}
+<form method="post" action="{{ url_for('nova_initial_evidence') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="request_id" value="{{ initial_consent.request_id }}">
+<label>ID di una tua attività già eseguita su Intervals.icu <input type="text" name="activity_id" maxlength="80" placeholder="i123456789"></label>
+<button type="submit" name="decision" value="LINK_ACTIVITY">COLLEGA ATTIVITA' MISURATA</button>
+</form>
+{% endif %}
+{% if initial_consent.issued %}
+<p><strong>PROTOCOLLO EMESSO.</strong> Segui soltanto l'ultimo Snapshot autorizzato e rivaluta dopo l'importazione dell'attività.</p>
+{% elif initial_consent.state == 'REQUEST_INITIAL_WORK_RECOVERY_BASELINE' and initial_consent.request_id and initial_consent.window_it %}
+{% if initial_consent.agreement and initial_consent.agreement.decision == 'ACCEPT' %}
+<p><strong>RICHIESTA REGISTRATA.</strong> Premi GENERATE SNAPSHOT per verificare l'eventuale emissione.</p>
+{% else %}
+<form method="post" action="{{ url_for('nova_initial_evidence') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="request_id" value="{{ initial_consent.request_id }}">
+<label><input type="checkbox" name="confirm_observation" value="YES" required> Accetto di misurare il lavoro e il recupero senza obiettivo di watt obbligatorio</label>
+<label><input type="checkbox" name="confirm_exact_slot" value="YES" required> Confermo la finestra esatta proposta</label>
+<button type="submit" name="decision" value="ACCEPT">RICHIEDI PROTOCOLLO INIZIALE</button>
+</form>
+{% endif %}
+{% elif initial_consent.state == 'PRIMARY_REFERENCE_REQUIRED' %}
+<p>Prima serve un test primario del catalogo NOVA, con il suo consenso dedicato. Genera un nuovo Snapshot per aprire quel percorso.</p>
+{% else %}
+<p>La finestra o il protocollo non sono ancora validi per l'emissione. Genera un nuovo Snapshot quando disponibili; puoi intanto collegare un'attività già eseguita.</p>
+{% endif %}
+</section>
+{% endif %}
+{% endif %} 
+{% endif %}
+''' + _R196928_CONSENT_INSERT,1)
+BASE_CSS+='''\n.v196928-consent-home{margin:14px 0;padding:17px 19px;border:2px solid rgba(110,216,234,.66);border-radius:14px;background:rgba(18,102,135,.16)}
+.v196928-consent-home>strong{display:block;color:#a8edf7;font-size:14px;line-height:1.5}.v196928-consent-home p{font-size:13px;line-height:1.55;margin:10px 0}
+.v196928-consent-home label{display:block;font-size:12px;line-height:1.5;margin:12px 0}.v196928-consent-home button{padding:10px 12px;border-radius:9px;margin:8px 8px 0 0}
+@media(max-width:560px){.v196928-consent-home{padding:13px}.v196928-consent-home button{width:100%;margin:8px 0}}\n'''
+APP_VERSION='THE LAB · PRODUCT V4.9.129 R196.9.28 · UNIVERSAL SCIENCE TRUTH AND VISIBLE CONSENT · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
