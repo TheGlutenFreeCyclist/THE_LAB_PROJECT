@@ -28688,6 +28688,8 @@ def analyze():
         if _r196920_review.get('issued'):
             analysis['next_sessions'] = _v196920_restore_final_attestation(
                 analysis.get('next_sessions'), _r196920_review, nova_prescription)
+        analysis['next_sessions'] = _v196924_final_restore(
+            analysis.get('next_sessions'), nova_prescription)
         _r196920_final = _v196920_final_projection(
             analysis.get('next_sessions'), _r196920_review, nova_prescription)
         if _r196920_review.get('issued') and not _r196920_final.get('issued'):
@@ -50593,6 +50595,547 @@ BASE_CSS += r"""
 @media(max-width:760px){.v196922-recovery-summary{padding:12px}.v196922-detail-content{padding:12px 6px 7px}}
 """
 APP_VERSION = 'THE LAB · PRODUCT V4.9.124 R196.9.23 · THIRD-CARD BOOT HOTFIX · NOVA R196.2 CORE'
+
+
+# R196.9.24 — EVIDENCE → COUPLED-ASSESSMENT → CANONICAL PRESCRIPTION
+# A scoped coupled assessment is not an ordinary hard repeat and is never
+# silently enabled from green readiness. Work band is exploratory, not a pass
+# mark or physiological ceiling. Recovery progression stays bounded.
+R196924_SCHEMA='V4.9.125-R196.9.24-COUPLED-EVIDENCE-BRIDGE-1'
+_R196924_ASSESSMENT='INTRODUCTORY_COUPLED_EVIDENCE_ASSESSMENT'
+_R196924_WORKOUT='RECOVERY_UNDER_LOAD_EVIDENCE_DOSE_V1'
+_R196924_SCOPE='ONE_COUPLED_ASSESSMENT_AND_EXACT_SLOT'
+_r196924_prior_dose=_v1959_recovery_dose_contract
+
+
+def _v196924_reference(features):
+    """Select an actual *comparable* completed strong pair, not latest raw 30/15.
+
+    The chronological most recent repeatability remains visible in the ledger;
+    short floats and noncanonical history are not promoted to 3×5' evidence.
+    """
+    f=features if isinstance(features,dict) else {}
+    good=[]
+    for h in f.get('recovery_dose_history') or []:
+        if not isinstance(h,dict) or not h.get('strong'):continue
+        try:
+            age=(get_rome_now().date()-date.fromisoformat(str(h['date'])[:10])).days
+            if not 0<=age<=28:continue
+            if not (2<=int(h['reps'])<=20 and 20<=float(h['recovery_secs'])<=1800
+                    and 60<=float(h['interval_secs'])<=1800 and float(h['ftp'])>0
+                    and 80<=float(h['work_watts'])<=1200
+                    and 40<=float(h['recovery_watts'])<600
+                    and 80<=float(h['ftp'])<=600
+                    and float(h['work_watts'])>float(h['recovery_watts'])*1.1
+                    and 0<=float(h['recovery_watts'])/float(h['ftp'])<.70):continue
+        except (KeyError,TypeError,ValueError,OverflowError,ZeroDivisionError):continue
+        good.append(h)
+    return sorted(good,key=lambda h:(h['date'],h['activity_id']),reverse=True)[0] if good else None
+
+
+def _v1959_recovery_dose_contract(goal, dimension, features):
+    base=_r196924_prior_dose(goal,dimension,features)
+    if str(dimension or '').upper()!='RECOVERY_UNDER_LOAD' or base.get('available'):
+        return base
+    h=_v196924_reference(features)
+    if h is None:return base
+    f=dict(features or {})
+    f['latest_repeatability']={
+        'date':h['date'],'strong':True,'reps':h['reps'],
+        'interval_secs':h['interval_secs'],'recovery_secs':h['recovery_secs'],
+        'avg_watts':h['work_watts'],'recovery_avg_watts':h['recovery_watts'],
+        'ftp':h['ftp'],'source': 'CANONICAL_MATCHED_WORK_RECOVERY_PAIR',
+    }
+    coupled=_r196924_prior_dose(goal,dimension,f)
+    if coupled.get('available'):
+        return dict(coupled,reference_selection={'schema':R196924_SCHEMA,
+            'activity_id':h['activity_id'],'date':h['date'],
+            'reason':'LATEST_COMPARABLE_FULL_WORK_RECOVERY_NOT_LATEST_UNRELATED_INTERVAL'})
+    # Do not bypass any safety/quality hold, stale history, strength failure,
+    # unverified recovery, work-capacity floor, or meaningful-load gate.
+    if coupled.get('reason')!='NO_MEANINGFUL_LOADED_RECOVERY_STIMULUS':
+        return dict(coupled,reference_selection={'schema':R196924_SCHEMA,
+            'activity_id':h['activity_id'],'reason':'RETAIN_PRIOR_FAIL_CLOSED_GATE'})
+    ftp=float(h['ftp']); work=float(h['work_watts']); rec=float(h['recovery_watts'])
+    ratio=rec/ftp
+    if not .15<=ratio<.55:return base
+    # Same observed mechanics, one bounded measurement increment, deliberately
+    # de-rated work. No automatic award; not a disguised new hard progression.
+    floor5=lambda x:int(math.floor(float(x)/5)*5)
+    rec_high=floor5(min(rec+ftp*.06,ftp*.55))
+    rec_low=floor5(max(rec+2,rec_high-10))
+    work_high=floor5(work*.98);work_low=floor5(work*.94)
+    if (rec_high<=rec+2 or rec_low>=rec_high or work_low<=0 or
+            work_high<=work_low or work_high>=work or rec_high>rec+ftp*.0601):
+        return dict(base,reason='COUPLED_EVIDENCE_STEP_NOT_QUANTIFIABLE')
+    return {
+        'schema':R1959_SCHEMA,'available':True,
+        'stage':_R196924_ASSESSMENT,
+        'protocol_schema':R196924_SCHEMA,
+        'requires_explicit_athlete_agreement':True,
+        'normal_training_progression_authorized':False,
+        'assessment_only':True,'no_performance_pass_mark':True,
+        'reference':{
+            'date':h['date'],'activity_id':h['activity_id'],
+            'reps':int(h['reps']),'interval_secs':int(h['interval_secs']),
+            'recovery_secs':int(h['recovery_secs']),
+            'work_avg_watts':round(work,1),'recovery_avg_watts':round(rec,1),
+            'ftp':round(ftp,1),'recovery_ratio':round(ratio,3),
+            'recent_best_repeated_work_watts':round(work,1),
+            'minimum_meaningful_work_watts':round(work*.88,1),
+            'last_verified_recovery_watts':round(rec,1),
+            'last_verified_recovery_ratio':round(ratio,3),
+            'matched_completed_sessions':1,
+        },
+        'prescription':{
+            'reps':int(h['reps']),'interval_secs':int(h['interval_secs']),
+            'recovery_secs':int(h['recovery_secs']),
+            'work_watts_low':work_low,'work_watts_high':work_high,
+            'recovery_watts_low':rec_low,'recovery_watts_high':rec_high,
+            'recovery_ratio_low':round(rec_low/ftp,3),
+            'recovery_ratio_high':round(rec_high/ftp,3),
+        },
+        'reference_selection':{'schema':R196924_SCHEMA,
+            'activity_id':h['activity_id'],'date':h['date'],
+            'reason':'LATEST_STRONG_CANONICAL_MATCHED_PAIR; SHORT_RECOVERY_FLOAT_EXCLUDED'},
+        'rule':('An athlete-consented, single-slot, objectively measured assessment of coupled work and recovery. '
+                'Recovery power is limited to one small increase from a canonical measured baseline. '
+                'The WORK watt range is an optional exploratory starting point, not a ceiling or pass mark; '
+                'stronger sustainable work may be observed voluntarily. The athlete can reduce or stop. '
+                'Do not award loaded-recovery mastery without two independently proven meaningful successes.'),
+        'evidence_basis':'Exact completed canonical repeated work and recovery, not a single PB or estimated FTP power curve.',
+    }
+
+
+_r196924_before_repair=_v503_scientific_hard_repair
+
+def _v503_scientific_hard_repair(ledger,road,power_model,ftp_anchor=None):
+    r=_r196924_before_repair(ledger,road,power_model,ftp_anchor=ftp_anchor)
+    dc=(((road or {}).get('scientific_progression') or {}).get('dose_contract') or {})
+    if not r or dc.get('stage')!=_R196924_ASSESSMENT:return r
+    title,intensity,main,why,arch=r
+    # Preserve the canonical interval parser's watt/rep structure. Do not edit
+    # the numeric safety contract: only remove the false 'hard watt ceiling'.
+    main=main.replace('This is not a reassessment or PB attempt: keep work inside the prescribed band and progress recovery load only.',
+        'This is one consented measurement, NOT a mandatory watt test. The indicated WORK band is exploratory, not a maximum: the athlete MAY ride above it if able to maintain technically clean repetitions without forcing effort. Recorded actual watts determine the evidence, not compliance with this range.')
+    main+=' Recovery remains bounded by the prescribed bridge; do not jump to Z3/tempo. Stop the quality set if form, recovery or repeatability degrades. Record ALL work and recovery intervals; no watt-based failure or automatic skill award.'
+    return ('Coupled work/recovery · observed assessment',intensity,main,
+         'The preceding strong canonical repeatability is the mechanical reference. This is an evidence acquisition session after explicit athlete agreement, not a progression award or an automatically scheduled workout.',
+         dict(arch or {},assessment_only=True,requires_consent=True,
+              protocol_schema=R196924_SCHEMA,role='VALIDATE'))
+
+
+def _v196924_request(decision,road,clock,prescription=None):
+    """Stable exact-slot, exact-evidence token; never a global athlete switch."""
+    dec=decision if isinstance(decision,dict) else {}
+    sci=((road or {}).get('scientific_progression') or {})
+    dose=sci.get('dose_contract') or {}
+    slots=(clock or {}).get('next_slots') or []
+    match=(prescription or {}).get('quality_slot_match') or {}
+    idx=match.get('index')
+    # The quality-window authority owns selection. A stale future-quality
+    # match from a historical plan is never permission to use a different day.
+    iso=str(((road or {}).get('quality_window') or {}).get('preferred_iso') or '')
+    try:
+        canonical_minute=int(iso[11:13])*60+int(iso[14:16])
+        canonical_day=date.fromisoformat(iso[:10]).isoformat()
+    except (ValueError,TypeError,OverflowError):
+        return None
+    eligible_indices=[i for i,s in enumerate(slots) if isinstance(s,dict) and
+       str(s.get('date') or '')[:10]==canonical_day and
+       str(s.get('start_minute') or '')==str(canonical_minute)]
+    if len(eligible_indices)!=1:return None
+    idx=eligible_indices[0]  # same exact slot for prompt, agreement and compiler
+    if (dose.get('stage')!=_R196924_ASSESSMENT or
+            str(sci.get('dimension') or '').upper()!='RECOVERY_UNDER_LOAD' or
+            dec.get('hard_session_allowed') is not True or
+            str(dec.get('action') or '').upper()!='TRAIN' or
+            type(idx) is not int or idx<0 or idx>=len(slots)):
+        return None
+    slot=slots[idx]
+    if not isinstance(slot,dict):return None
+    day=str(slot.get('date') or '')[:10]
+    try:
+        if date.fromisoformat(day)<get_rome_now().date():return None
+        minute=int(slot.get('start_minute'))
+        if not 0<=minute<1440:return None
+    except (ValueError,TypeError):return None
+    if slot.get('is_race') or str(slot.get('restriction') or 'NONE').upper()!='NONE':return None
+    window=(road or {}).get('quality_window') or {}
+    if str(window.get('state') or '').upper() not in {'WATCH','OPEN'}:return None
+    proof=dose.get('reference') or {};p=dose.get('prescription') or {}
+    signature={'schema':R196924_SCHEMA,'goal':dec.get('goal_key'),
+        'dimension':'RECOVERY_UNDER_LOAD','stage':dose.get('stage'),
+        'reference':{k:proof.get(k) for k in ('date','activity_id','reps','interval_secs','recovery_secs','work_avg_watts','recovery_avg_watts','ftp')},
+        'prescription':{k:p.get(k) for k in ('reps','interval_secs','recovery_secs','work_watts_low','work_watts_high','recovery_watts_low','recovery_watts_high')},
+        'slot':{'date':day,'start_minute':minute},
+        'window':window.get('preferred_iso'),
+        'last_hard_end':window.get('last_hard_end'),
+    }
+    token=hashlib.sha256(json.dumps(signature,sort_keys=True,ensure_ascii=False,
+                              separators=(',',':'),default=str).encode()).hexdigest()
+    return {'schema':R196924_SCHEMA,'request_id':token,'index':idx,'date':day,
+            'start_minute':minute,'reps':p.get('reps'),
+            'interval_seconds':p.get('interval_secs'),
+            'work_low':p.get('work_watts_low'),'work_high':p.get('work_watts_high'),
+            'recovery_low':p.get('recovery_watts_low'),
+            'recovery_high':p.get('recovery_watts_high'),
+            'reference_date':proof.get('date'),'reference_activity_id':proof.get('activity_id'),
+            'availability_confirmed':bool(slot.get('availability_confirmed'))}
+
+
+def _v196924_agreement(request_id):
+    if not has_request_context() or getattr(g,'r169_qa_target_user_id',None):return None
+    if request.endpoint!='analyze' or str(request.form.get('qa_mode') or '').upper() in {'PYTHON','LIVE'}:return None
+    athlete=current_user(touch=False)
+    return _v196919_latest_agreement(athlete['id'],request_id) if athlete else None
+
+
+_r196924_before_prescription=build_nova_prescription
+
+def build_nova_prescription(nova_decision,coach_clock,adaptive_roadmap=None,
+        microcycle_ledger=None,evidence_ledger=None,power_model=None,
+        ftp_anchor=None,aerobic_metabolic_range=None,training_definitions=None):
+    p=_r196924_before_prescription(nova_decision,coach_clock,
+        adaptive_roadmap=adaptive_roadmap,microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger,power_model=power_model,
+        ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions)
+    if not isinstance(p,dict):return p
+    sci=((adaptive_roadmap or {}).get('scientific_progression') or {})
+    dose=sci.get('dose_contract') or {}
+    if dose.get('stage')!=_R196924_ASSESSMENT:return p
+    request_info=_v196924_request(nova_decision,adaptive_roadmap,coach_clock,p)
+    result=copy.deepcopy(p)
+    result['coupled_evidence_bridge']={'schema':R196924_SCHEMA,'state':'EVIDENCE_PROTOCOL_DEFINED' if request_info else 'AWAITING_SAFE_SLOT',
+        'request':request_info,'requires_consent':True,'assessed':False,
+        'reference_id':(dose.get('reference') or {}).get('activity_id'),
+        'assessment_only':True,'not_a_performance_grade':True}
+    # No request, agreement, confirmed availability, or secure user request:
+    # never create an executable assessment just because science wants data.
+    agreement=_v196924_agreement(request_info['request_id']) if request_info else None
+    authorized=bool(request_info and agreement and agreement.get('decision')=='ACCEPT' and
+        agreement.get('scope')==_R196924_SCOPE and
+        p.get('status')=='PRESCRIBED' and p.get('workout_id')==_R196924_WORKOUT)
+    if authorized:
+        idx=request_info['index']; slots=(coach_clock or {}).get('next_slots') or []
+        # Explicit acceptance is consent to this exact date/time too. A changed
+        # window changes the signed token and invalidates the earlier acceptance.
+        slot=slots[idx] if idx<len(slots) else None
+        if not isinstance(slot,dict) or str(slot.get('restriction') or 'NONE').upper()!='NONE' or slot.get('is_race'):
+            authorized=False
+        else:
+            slot['availability_confirmed']=True
+            slot['availability_source']='ATHLETE_EXPLICIT_COUPLED_SLOT_CONFIRMATION'
+            # R196.9.15 reads the ROADMAP quality window, not the session.
+            # Consent must not become a false second availability authority.
+            window=(adaptive_roadmap or {}).get('quality_window') or {}
+            if (not isinstance(window,dict) or
+                    str(window.get('preferred_iso') or '')[:16] !=
+                    f"{request_info['date']}T{request_info['start_minute']//60:02d}:{request_info['start_minute']%60:02d}"):
+                authorized=False
+            else:
+                window['availability_confirmed']=True
+                window['availability_source']='ATHLETE_EXPLICIT_COUPLED_SLOT_CONFIRMATION'
+    if authorized:
+        result['coupled_evidence_bridge']['state']='CONSENTED_EXACT_SLOT_FOR_CANONICAL_COMPILATION'
+        result['coupled_evidence_bridge']['agreed_request_id']=request_info['request_id']
+        result['coupled_evidence_bridge']['assessment_only']=True
+        return result
+    raw=[_v84_easy_raw(s,nova_decision or {}) for s in (coach_clock or {}).get('next_slots') or []]
+    result.update({'status':'EASY_ONLY','source':'R196924_COUPLED_EVIDENCE_CONSENT_GATE',
+        'selected_slot_index':None,'workout_id':None,'contract_id':None,
+        'hard_prescription_available':False,'raw_sessions':raw,
+        'fail_closed_reason':'COUPLED_ASSESSMENT_REQUIRES_EXACT_SLOT_CONSENT',
+        'future_quality_candidate':None})
+    return result
+
+
+_r196924_before_calibration=_v196918_calibration_request
+
+def _v196918_calibration_request(snapshot):
+    d=snapshot if isinstance(snapshot,dict) else {}
+    p=d.get('nova_prescription') if isinstance(d.get('nova_prescription'),dict) else {}
+    bridge=p.get('coupled_evidence_bridge') or {}
+    if not bridge or bridge.get('schema')!=R196924_SCHEMA:
+        return _r196924_before_calibration(snapshot)
+    req=bridge.get('request') or {}
+    if not req:
+        return dict(_r196924_before_calibration(snapshot),state='WAIT_FOR_SAFETY',
+            gap_kind='COUPLED_REPEATABILITY',next_step='AWAIT_ELIGIBLE_QUALITY_WINDOW',
+            question='A completed repeated-work reference is available, but no safe, exact future window has been established.')
+    return {'schema':R196924_SCHEMA,'goal_key':(d.get('nova_decision') or {}).get('goal_key'),
+        'scientific_dimension':'RECOVERY_UNDER_LOAD','gap_kind':'COUPLED_REPEATABILITY',
+        'state':'ASK_FOR_COUPLED_EVIDENCE','test':{'protocol':'CANONICAL_COUPLED_MEASUREMENT_V1',
+          'session_state':'DEFINED_NOT_ISSUED','date':req.get('date'),
+          'work_watts_low':req.get('work_low'),'work_watts_high':req.get('work_high'),
+          'recovery_watts_low':req.get('recovery_low'),'recovery_watts_high':req.get('recovery_high')},
+        'question':'NOVA has a verified repeated-work reference. The missing proof is recovery under progressively greater load. One measured session can test this after your exact-slot consent; no hard session has been issued.',
+        'next_step':'AGREE_TO_MEASURE_EXACT_WORK_RECOVERY_SESSION',
+        'watt_target':None,'auto_scheduled':False,'auto_executable':False,
+        'requires_explicit_athlete_agreement':True,
+        'work_range_is_exploratory_not_ceiling':True,
+        'no_performance_pass_mark':True,'test_state':'DEFINED_NOT_ISSUED'}
+
+
+def _v196924_ui_bridge(snapshot):
+    if not has_request_context() or getattr(g,'r169_qa_target_user_id',None):return None
+    u=current_user(touch=False)
+    if not u:return None
+    d=snapshot if isinstance(snapshot,dict) else {}
+    p=d.get('nova_prescription') if isinstance(d.get('nova_prescription'),dict) else {}
+    b=p.get('coupled_evidence_bridge') or {};req=b.get('request') or {}
+    if b.get('schema')!=R196924_SCHEMA or not req or not req.get('request_id'):return None
+    fresh=_v196924_request(d.get('nova_decision'),d.get('adaptive_roadmap'),d.get('coach_clock'),p)
+    if not fresh or fresh.get('request_id')!=req.get('request_id'):return None
+    agreement=_v196919_latest_agreement(u['id'],req['request_id'])
+    return {'request_id':req['request_id'],'date_it':req['date'][8:10]+'/'+req['date'][5:7]+'/'+req['date'][:4],
+        'time':f"{req['start_minute']//60:02d}:{req['start_minute']%60:02d}",
+        'work_low':req['work_low'],'work_high':req['work_high'],
+        'recovery_low':req['recovery_low'],'recovery_high':req['recovery_high'],
+        'reps':req['reps'],'interval_minutes':round(req['interval_seconds']/60,1),
+        'decision':(agreement or {}).get('decision'),
+        'issued':bool(b.get('state')=='CANONICAL_ASSESSMENT_COMPILED')}
+
+
+@app.route('/nova/coupled-assessment-consent',methods=['POST'])
+def nova_coupled_assessment_consent():
+    athlete=current_user(touch=True)
+    if not athlete:return redirect(url_for('login'))
+    if getattr(g,'r169_qa_target_user_id',None):abort(403)
+    report=load_latest_report(include_payload=True,owner_user_id=athlete['id']) or {}
+    snap=report.get('data') if isinstance(report.get('data'),dict) else {}
+    d=snap.get('nova_decision') or {};road=snap.get('adaptive_roadmap') or {}
+    clock=snap.get('coach_clock') or {};p=snap.get('nova_prescription') or {}
+    req=_v196924_request(d,road,clock,p)
+    action=str(request.form.get('decision') or '').upper()
+    token=str(request.form.get('request_id') or '')
+    if (not req or action not in {'ACCEPT','DECLINE','WITHDRAW'} or
+            not hmac.compare_digest(req['request_id'],token)):
+        abort(409)
+    if action=='ACCEPT':
+        if str(request.form.get('confirm_exact_slot') or '')!='YES':abort(409)
+        if str(request.form.get('confirm_measurement') or '')!='YES':abort(409)
+    # Separate scope from R27. A coupled agreement is never a single-effort
+    # benchmark permission; only this user and exact signed slot may reuse it.
+    if action=='WITHDRAW':
+        result=_v196924_cancel_unexecuted(athlete['id'],snap,token)
+        if result.get('state') not in {'WITHDRAWN','NO_ISSUED_PLAN','ALREADY_WITHDRAWN'}:
+            abort(409)
+    _v196919_save_coupled_agreement(athlete['id'],token,action)
+    audit_event('NOVA_COUPLED_ASSESSMENT_'+action,actor_user_id=athlete['id'],
+        target_user_id=athlete['id'],details={'protocol':R196924_SCHEMA,
+           'request_id':token[:16],'issued':False,'date':req['date']})
+    return redirect(url_for('home',notice='EVIDENCE REQUEST RECORDED',
+        detail='Run a new Snapshot for current safety and canonical compilation. Consent alone does not issue a workout.',code=303))
+
+
+def _v196919_save_coupled_agreement(user_id,request_id,action):
+    if action not in {'ACCEPT','DECLINE','WITHDRAW'} or not re.fullmatch('[0-9a-f]{64}',request_id):
+        raise ValueError('Invalid coupled assessment consent')
+    _db_execute('''CREATE TABLE IF NOT EXISTS nova_evidence_agreements (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, request_id TEXT NOT NULL,
+        decision TEXT NOT NULL, scope TEXT NOT NULL, created_at_utc TEXT NOT NULL)''')
+    _db_execute('''INSERT INTO nova_evidence_agreements
+        (id,user_id,request_id,decision,scope,created_at_utc)
+        VALUES (?,?,?,?,?,?)''',
+        (str(uuid.uuid4()),str(user_id),request_id,action,_R196924_SCOPE,
+         datetime.now(ZoneInfo('UTC')).isoformat(timespec='microseconds')))
+
+
+app.jinja_env.globals['nova_coupled_assessment_ui']=_v196924_ui_bridge
+_R196924_UI_ANCHOR='{% if data.aerobic_volume_advice %}'
+assert HOME_PAGE.count(_R196924_UI_ANCHOR)==1,'R196.9.24 coupled consent UI anchor drift'
+HOME_PAGE=HOME_PAGE.replace(_R196924_UI_ANCHOR,r'''{% if data and not is_preview and not qa_mode and not report_mode %}
+{% set coupled_req = nova_coupled_assessment_ui(data) %}
+{% if coupled_req %}
+<section class="v196924-assessment" aria-label="NOVA evidence protocol">
+<strong>EVIDENZA NECESSARIA · PROTOCOLLO DEFINITO</strong>
+<p>NOVA ha individuato una prova confrontabile già completata. Manca la misura della capacità di ripetere lavoro con recupero progressivamente più attivo.</p>
+<p><b>Finestra candidata:</b> {{ coupled_req.date_it }} · {{ coupled_req.time }}. Non ancora autorizzata all'esecuzione.</p>
+<details><summary>Vedi il protocollo e la provenienza dei watt</summary>
+<p>{{ coupled_req.reps }}×{{ coupled_req.interval_minutes }} min con recuperi misurati. Range di partenza del lavoro: {{ coupled_req.work_low }}–{{ coupled_req.work_high }} W; <b>puoi superarli se li sostieni con tecnica pulita</b>, senza inseguire un massimale. Non sono un voto, un limite fisiologico né una soglia di successo.</p>
+<p>Recupero controllato {{ coupled_req.recovery_low }}–{{ coupled_req.recovery_high }} W; non aumentarlo arbitrariamente. Se non mantieni qualità tecnica o recupero, alleggerisci o interrompi. La prova deve registrare ogni intervallo di lavoro e recupero. Nessun punteggio automatico.</p>
+</details>
+<form action="{{ url_for('nova_coupled_assessment_consent') }}" method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="request_id" value="{{ coupled_req.request_id }}">
+{% if coupled_req.issued and coupled_req.decision != 'WITHDRAW' %}
+<p><strong>PROVA EMESSA NELLO SNAPSHOT PRECEDENTE.</strong> Segui soltanto l'ultimo Snapshot autorizzato. La revoca annulla la seduta non eseguita nel ledger; genera poi un nuovo Snapshot.</p>
+<button type="submit" name="decision" value="WITHDRAW">Revoca la prova non eseguita</button>
+{% elif coupled_req.decision == 'ACCEPT' %}
+<p>Richiesta registrata. Esegui un nuovo Snapshot per verificare stato, calendario e compilazione definitiva.</p>
+<button type="submit" name="decision" value="WITHDRAW">Revoca richiesta non emessa</button>
+{% else %}
+<label><input type="checkbox" name="confirm_exact_slot" value="YES" required> Confermo di essere disponibile in questa data e a quest'ora</label>
+<label><input type="checkbox" name="confirm_measurement" value="YES" required> Accetto una prova misurata, non un obiettivo di watt obbligatorio</label>
+<button type="submit" name="decision" value="ACCEPT">Richiedi prova di acquisizione evidenze</button>
+<button type="submit" name="decision" value="DECLINE" formnovalidate>Non ora</button>
+{% endif %}
+</form>
+</section>
+{% endif %}
+{% endif %}
+''' + _R196924_UI_ANCHOR,1)
+BASE_CSS+='''\n.v196924-assessment{margin:14px 0;padding:15px;border:1px solid rgba(105,168,215,.48);border-radius:12px;background:rgba(51,99,133,.09);line-height:1.5}
+.v196924-assessment strong{color:#9bdbe6}.v196924-assessment p{margin:8px 0}.v196924-assessment label{display:block;margin:12px 0;font-size:12px}
+.v196924-assessment label input{margin-right:7px}.v196924-assessment details{border-top:1px solid rgba(255,255,255,.15);padding-top:9px}
+.v196924-assessment button{margin:8px 10px 0 0;padding:9px 13px;border-radius:8px}
+'''
+
+
+# A consented assessment must be linked through the ordinary compiled
+# prescription and ledger identity, not a separate or fake activity record.
+_r196924_before_compile=compile_nova_prescription
+
+def compile_nova_prescription(prescription,coach_clock,training_definitions=None,
+        ftp_anchor=None,recent_activities=None,undefined_training_intent=None,
+        power_model=None,microcycle_ledger=None,coaching_contract=None,
+        adaptive_roadmap=None,strength_pattern=None,training_rhythm=None,
+        execution_model=None):
+    kwargs=dict(training_definitions=training_definitions,ftp_anchor=ftp_anchor,
+        recent_activities=recent_activities,undefined_training_intent=undefined_training_intent,
+        power_model=power_model,microcycle_ledger=microcycle_ledger,
+        coaching_contract=coaching_contract,adaptive_roadmap=adaptive_roadmap,
+        strength_pattern=strength_pattern,training_rhythm=training_rhythm,
+        execution_model=execution_model)
+    out=_r196924_before_compile(prescription,coach_clock,**kwargs)
+    b=(prescription or {}).get('coupled_evidence_bridge') or {}
+    if b.get('state')!='CONSENTED_EXACT_SLOT_FOR_CANONICAL_COMPILATION':return out
+    rows=out.get('sessions') if isinstance(out,dict) else None
+    req=b.get('request') or {};idx=req.get('index')
+    valid=bool(isinstance(rows,list) and type(idx) is int and 0<=idx<len(rows)
+        and isinstance(rows[idx],dict) and out.get('status')=='PRESCRIBED'
+        and out.get('workout_id')==_R196924_WORKOUT
+        and str(rows[idx].get('nova_workout_id') or '')==_R196924_WORKOUT
+        and str(rows[idx].get('date') or '')[:10]==req.get('date')
+        and str(rows[idx].get('intensity_class') or '').lower() in {'vo2','threshold','tempo'}
+        and (rows[idx].get('power_prescription') or {}).get('source')=='OBSERVED_COUPLED_RECOVERY_DOSE'
+        and rows[idx].get('session_duration_feasibility',{}).get('state')!='FAIL'
+        and not rows[idx].get('provisional_quality')
+        and (coach_clock.get('next_slots') or [])[idx].get('availability_confirmed') is True)
+    if not valid:
+        # No partial/invalid evidence test is published, even with consent.
+        held=copy.deepcopy(prescription or {})
+        held.update({'status':'EASY_ONLY','workout_id':None,'contract_id':None,
+            'hard_prescription_available':False,'selected_slot_index':None,
+            'fail_closed_reason':'COUPLED_ASSESSMENT_COMPILER_REJECTED',
+            'raw_sessions':[_v84_easy_raw(s,{}) for s in (coach_clock or {}).get('next_slots') or []]})
+        held.pop('future_quality_candidate',None)
+        safe=_r196924_before_compile(held,coach_clock,**kwargs)
+        safe['coupled_evidence_bridge']=dict(b,state='CANONICAL_COMPILER_REJECTED',issued=False)
+        return safe
+    stamped=copy.deepcopy(out)
+    target=dict(rows[idx])
+    target.update({'nova_evidence_protocol':'COUPLED_CANONICAL_MEASUREMENT_V1',
+        'nova_evidence_request_id':b['agreed_request_id'],
+        'assessment_only':True,'work_band_exploratory':True,
+        'watt_band_is_a_ceiling':False,'no_performance_pass_mark':True})
+    updated=list(rows);updated[idx]=target
+    stamped['sessions']=updated
+    stamped['coupled_evidence_bridge']=dict(b,state='CANONICAL_ASSESSMENT_COMPILED',
+        issued=True,canonical_plan_id=out.get('canonical_plan_id'))
+    return stamped
+
+
+_r196924_before_ledger_summary=_v4840_ledger_session_summary
+
+def _v4840_ledger_session_summary(s):
+    out=_r196924_before_ledger_summary(s)
+    if isinstance(s,dict) and s.get('nova_evidence_protocol')=='COUPLED_CANONICAL_MEASUREMENT_V1':
+        out=dict(out,nova_evidence_protocol=s['nova_evidence_protocol'],
+                 nova_evidence_request_id=s.get('nova_evidence_request_id'),
+                 assessment_only=True,work_band_exploratory=True,
+                 no_performance_pass_mark=True)
+    return out
+
+
+def _v196924_final_restore(sessions,prescription):
+    """Attest final semantic projection before DB writes; never invent output."""
+    rows=[dict(x) if isinstance(x,dict) else x for x in (sessions or [])]
+    b=(prescription or {}).get('coupled_evidence_bridge') or {}
+    if b.get('state')!='CANONICAL_ASSESSMENT_COMPILED':return rows
+    matched=[(i,s) for i,s in enumerate(rows) if isinstance(s,dict) and
+        s.get('nova_workout_id')==_R196924_WORKOUT and
+        str(s.get('nova_canonical_plan_id') or '')==str(b.get('canonical_plan_id') or '')]
+    if len(matched)!=1:
+        raise ValueError('R196924_FINAL_COUPLED_CONTRACT_DIVERGED')
+    idx,s=matched[0];req=b.get('request') or {}
+    if (str(s.get('date') or '')[:10]!=req.get('date') or
+        (s.get('power_prescription') or {}).get('source')!='OBSERVED_COUPLED_RECOVERY_DOSE' or
+        not s.get('hard_spacing_relevant') or s.get('provisional_quality')):
+        raise ValueError('R196924_FINAL_COUPLED_DOSE_INVALID')
+    rows[idx].update({'nova_evidence_protocol':'COUPLED_CANONICAL_MEASUREMENT_V1',
+        'nova_evidence_request_id':b['agreed_request_id'],
+        'assessment_only':True,'work_band_exploratory':True,
+        'watt_band_is_a_ceiling':False,'no_performance_pass_mark':True})
+    return rows
+
+
+def _v196924_cancel_unexecuted(user_id,snapshot,request_id):
+    """CAS-cancel only the exact owner, protocol, token and unexecuted plan."""
+    d=snapshot if isinstance(snapshot,dict) else {}
+    led=d.get('microcycle_ledger') or {}
+    if not led.get('ledger_id'):return {'state':'NO_ISSUED_PLAN'}
+    init_memory_db()
+    conn=_db_connect()
+    try:
+        cur=conn.cursor()
+        if not _db_is_postgres():cur.execute('BEGIN IMMEDIATE')
+        query='SELECT ledger_json FROM microcycle_ledgers WHERE id=? AND user_id=?'
+        if _db_is_postgres():query+=' FOR UPDATE'
+        cur.execute(_db_sql(query),(str(led['ledger_id']),str(user_id)))
+        fetched=cur.fetchone()
+        if not fetched:
+            conn.rollback();return {'state':'LEDGER_NOT_FOUND'}
+        old=fetched[0];payload=json.loads(old)
+        history=payload.get('prescription_history') or []
+        selected=[r for r in history if isinstance(r,dict) and
+            r.get('nova_workout_id')==_R196924_WORKOUT and
+            r.get('nova_evidence_protocol')=='COUPLED_CANONICAL_MEASUREMENT_V1' and
+            hmac.compare_digest(str(r.get('nova_evidence_request_id') or ''),request_id)]
+        if not selected:
+            conn.rollback();return {'state':'NO_ISSUED_PLAN'}
+        if len(selected)!=1:
+            conn.rollback();return {'state':'DUPLICATE_PLAN_IDENTITY'}
+        row=selected[0];state=str(row.get('prescription_status') or '').upper()
+        if state=='WITHDRAWN':
+            conn.rollback();return {'state':'ALREADY_WITHDRAWN'}
+        if state not in {'ACTIVE','PLANNED','ISSUED'} or row.get('executed_activity_id'):
+            conn.rollback();return {'state':'ALREADY_EXECUTED_OR_NOT_ACTIVE'}
+        row.update({'prescription_status':'WITHDRAWN',
+            'withdrawn_request_id':request_id,
+            'withdrawn_reason':'ATHLETE_WITHDREW_COUPLED_MEASUREMENT',
+            'withdrawn_at_local':get_rome_now().isoformat(timespec='seconds')})
+        anchor=payload.get('primary_anchor') or {}
+        if isinstance(anchor,dict) and anchor.get('prescription_fingerprint')==row.get('prescription_fingerprint'):
+            anchor.update({'status':'WITHDRAWN','prescription_lock':False})
+            payload['primary_anchor']=anchor
+        payload['prescription_history']=history
+        new=json.dumps(payload,ensure_ascii=False,separators=(',',':'),default=_report_json_default)
+        cur.execute(_db_sql('UPDATE microcycle_ledgers SET ledger_json=?,updated_at_utc=? WHERE id=? AND user_id=? AND ledger_json=?'),
+            (new,_now_utc_text(),str(led['ledger_id']),str(user_id),old))
+        if cur.rowcount!=1:
+            conn.rollback();return {'state':'CONCURRENT_LEDGER_UPDATE'}
+        conn.commit();return {'state':'WITHDRAWN'}
+    except (ValueError,TypeError,KeyError,json.JSONDecodeError):
+        conn.rollback();return {'state':'MALFORMED_LEDGER'}
+    finally:conn.close()
+
+
+
+# Historical (non-cleared) quality remains visible as a warning, not four
+# paragraphs implying a future session on the historical date.
+_R196924_HISTORY_EXPANDED = ("""<p><strong>{{ carried.date }} · {{ carried.title }}</strong></p>
+<p>This is a historical prescription, NOT an executable workout in the current Snapshot.</p>
+<p><strong>Current status:</strong> Not cleared for execution. {{ nova_quality_history_message(carried) }}</p>""")
+assert HOME_PAGE.count(_R196924_HISTORY_EXPANDED)==1, 'R196924 historical non-cleared card anchor drift'
+HOME_PAGE=HOME_PAGE.replace(_R196924_HISTORY_EXPANDED,"""<details class="v196924-historical"><summary>Storico della quality non autorizzata</summary>
+<p><strong>{{ carried.date[8:10] }}/{{ carried.date[5:7] }}/{{ carried.date[:4] }} · {{ carried.title }}</strong></p>
+<p>Questa è una prescrizione storica, non eseguibile nello Snapshot corrente. {{ nova_quality_history_message(carried) }}</p>
+</details>""",1)
+
+APP_VERSION='THE LAB · PRODUCT V4.9.125 R196.9.24 · CANONICAL COUPLED EVIDENCE BRIDGE · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
