@@ -3669,6 +3669,12 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v4865-macro-copy"><h2>PHYSIOLOGY & ADAPTATION</h2><p>Recovery signals · sleep · health · heat adaptation</p></div>
 </div>
 <div class="v4865-macro-panel" id="v4865-physiology-panel">
+{# R196.9.22 · athlete-first view; no new scientific decision or safety clearance. #}
+<div class="v196922-recovery-summary" aria-label="Recovery summary">
+ <div class="v196922-summary-line"><span>YOUR RECOVERY CONTEXT</span><strong>{{ data.race_readiness_label or 'Assessment pending' }}</strong></div>
+ {% if data.race_readiness_reason %}<p>{{ data.race_readiness_reason }}</p>{% endif %}
+ <small>This describes current signals; it is not medical clearance or permission to start a hard session. Nova checks training safety and timing separately.</small>
+</div>
 <div class="v4-metric-grid">
 <article class="v4-card v4-metric"><div class="v4-metric-label">Resting HR</div><div class="v4-ring"><svg viewBox="0 0 100 100"><circle class="v4-ring-track" cx="50" cy="50" r="40" pathLength="100"/><circle class="v4-ring-progress {{ data.health_rings.rhr.color }}" cx="50" cy="50" r="40" pathLength="100" stroke-dasharray="{{ data.health_rings.rhr.pct }} 100"/></svg><div class="v4-ring-center"><div class="v4-ring-value">{{ data.latest_rhr }}</div><div class="v4-ring-sub">bpm</div></div></div><div class="v4-metric-status {{ data.health_rings.rhr.color }}">{{ data.health_rings.rhr.status }}{% if data.latest_rhr_note %}<small class="v4818-provenance">{{ data.latest_rhr_note }}</small>{% endif %}</div></article>
 <article class="v4-card v4-metric"><div class="v4-metric-label">HRV</div><div class="v4-ring"><svg viewBox="0 0 100 100"><circle class="v4-ring-track" cx="50" cy="50" r="40" pathLength="100"/><circle class="v4-ring-progress {{ data.health_rings.hrv.color }}" cx="50" cy="50" r="40" pathLength="100" stroke-dasharray="{{ data.health_rings.hrv.pct }} 100"/></svg><div class="v4-ring-center"><div class="v4-ring-value">{{ data.latest_hrv }}</div><div class="v4-ring-sub">ms</div></div></div><div class="v4-metric-status {{ data.health_rings.hrv.color }}">{{ data.health_rings.hrv.status }}</div></article>
@@ -3680,13 +3686,18 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div><span>Sleeping HR</span><strong>{% if data.latest_sleeping_hr is not none %}{{ data.latest_sleeping_hr }} bpm{% else %}No current value{% endif %}</strong></div>
 {% if data.latest_readiness is not none %}<div><span>Wearable readiness</span><strong>{{ data.latest_readiness }}</strong></div>{% endif %}
 </div>
-<section class="lab-accordion v7-baselines" data-lab-accordion data-open="false"><div class="lab-accordion-trigger" role="button" tabindex="0" aria-expanded="false"><strong class="v7-baselines-title">Personal Baselines</strong><span class="v7-baselines-subtitle">Garmin physiology + adaptive sleep</span><span class="lab-accordion-sign" aria-hidden="true">+</span></div><div class="lab-accordion-panel" hidden><div class="v7-baseline-table">
+<details class="v196922-physiology-detail">
+<summary><span>Explore physiology details</span><small>Personal baselines · sleep patterns · system signals · heat adaptation · measurements</small></summary>
+<div class="v196922-detail-content">
+<section class="lab-accordion v7-baselines" data-lab-accordion data-open="false"><div class="lab-accordion-trigger" role="button" tabindex="0" aria-expanded="false"><strong class="v7-baselines-title">Personal Baselines</strong><span class="v7-baselines-subtitle">Your references + adaptive sleep</span><span class="lab-accordion-sign" aria-hidden="true">+</span></div><div class="lab-accordion-panel" hidden><div class="v7-baseline-table">
 <div><span>HRV</span><strong>{{ data.personal_baselines.hrv.garmin }}</strong><small>{{ data.personal_baselines.days }}d {{ data.personal_baselines.hrv.recent }}</small></div>
 <div><span>Resting / sleeping HR</span><strong>{{ data.personal_baselines.rhr.garmin }}</strong><small>{{ data.personal_baselines.days }}d RHR {{ data.personal_baselines.rhr.recent }}</small></div>
 {% if data.adaptive_sleep %}<div><span>Sleep opportunity</span><strong>{{ data.adaptive_sleep.kind|title }} habitual · {{ data.adaptive_sleep.habitual_label }}</strong><small>{{ data.adaptive_sleep.days }}d learned baseline · manual sleep reference shown only when supplied</small></div>{% else %}<div><span>Sleep</span><strong>{{ data.personal_baselines.sleep.garmin }}</strong><small>{{ data.personal_baselines.days }}d {{ data.personal_baselines.sleep.recent }}</small></div>{% endif %}
 <div><span>Sleep score</span><strong>{{ data.personal_baselines.sleep_score.garmin }}</strong><small>{{ data.personal_baselines.days }}d {{ data.personal_baselines.sleep_score.recent }}</small></div>
 <div><span>SpO₂</span><strong>{{ data.personal_baselines.spo2.garmin }}</strong><small>{{ data.personal_baselines.days }}d {{ data.personal_baselines.spo2.recent }}</small></div>
-<div><span>Respiration</span><strong>11 sleep · 13–14 awake</strong><small>Garmin reference · live values not synced</small></div>
+{% set sr = (data.personal_baselines or {}).get('sleeping_respiration') or {} %}
+{% set arsp = (data.personal_baselines or {}).get('awake_respiration') or {} %}
+<div><span>Respiration references</span><strong>{{ sr.get('garmin') or 'No sleep reference' }} · {{ arsp.get('garmin') or 'No awake reference' }}</strong><small>Reference values only; not live respiration readings</small></div>
 </div></div></section>
 {% if data.planning_context.health_override %}
 <div class="v10-override-banner"><div class="v10-override-icon">⚕</div><div><span>HEALTH OVERRIDE ACTIVE</span><strong>{{ data.planning_context.health_override.kind }} · through {{ data.planning_context.health_override.until }}</strong><p>Health/restriction context outranks CTL, ATL and TSB. THE LAB will not label illness/injury-driven freshness as tapering or peaking.</p></div></div>
@@ -3716,7 +3727,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v35-sleep-box"><span>MON–FR HABITUAL</span><strong>{{ data.adaptive_sleep.weekday_label }}</strong><small>{% if data.adaptive_sleep.weekday_iqr %}Typical middle range {{ data.adaptive_sleep.weekday_iqr }} · {% endif %}{{ data.adaptive_sleep.weekday_samples }} nights</small></div>
 <div class="v35-sleep-box"><span>WEEKEND HABITUAL</span><strong>{{ data.adaptive_sleep.weekend_label }}</strong><small>{% if data.adaptive_sleep.weekend_iqr %}Typical middle range {{ data.adaptive_sleep.weekend_iqr }} · {% endif %}{{ data.adaptive_sleep.weekend_samples }} nights</small></div>
 </div>
-<div class="v35-sleep-reference"><strong>Reference ≠ daily penalty target.</strong> Garmin 7h38m remains visible as a reference; THE LAB judges today's duration primarily against the matching {{ data.adaptive_sleep.kind|lower }} opportunity. 14d trend: {{ data.adaptive_sleep.trend_label }}{% if data.adaptive_sleep.trend_delta_min is not none %} ({{ '%+d'|format(data.adaptive_sleep.trend_delta_min) }} min){% endif %}.</div>
+<div class="v35-sleep-reference"><strong>Reference ≠ daily penalty target.</strong> {% if data.adaptive_sleep.reference_label and data.adaptive_sleep.reference_label != 'No manual sleep reference' %}{{ data.adaptive_sleep.reference_label }} is a reference, not a daily penalty target.{% else %}No manual sleep reference has been supplied.{% endif %} Today's duration is compared with the learned {{ data.adaptive_sleep.kind|lower }} habit. 14d trend: {{ data.adaptive_sleep.trend_label }}{% if data.adaptive_sleep.trend_delta_min is not none %} ({{ '%+d'|format(data.adaptive_sleep.trend_delta_min) }} min){% endif %}.</div>
 </article>
 </div>
 {% endif %}
@@ -3753,6 +3764,9 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <section class="lab-accordion v4-details" data-lab-accordion data-open="false"><div class="lab-accordion-trigger" role="button" tabindex="0" aria-expanded="false">Fatigue Signals<span class="lab-accordion-sign" aria-hidden="true">+</span></div><div class="lab-accordion-panel" hidden><p>{{ data.fatigue_signals }}</p></div></section>
 </div>
 </div></section>
+</div>
+</details>
+
 </div>
 </section>
 <section class="v4865-macro" data-v4865-macro="performance" data-open="false">
@@ -26313,18 +26327,18 @@ def personal_baseline_text(metrics):
     sleep_line = (
         f"- Sleep duration: habitual {adaptive.get('kind', 'n/a')} {adaptive.get('habitual_label', 'n/a')} "
         f"({SLEEP_BASELINE_DAYS}d adaptive; weekday {adaptive.get('weekday_label', 'n/a')} / weekend {adaptive.get('weekend_label', 'n/a')}) "
-        f"| current delta {adaptive.get('current_delta_min', 'n/a')} min | Garmin 7h38m retained as reference, not daily penalty target"
+        f"| current delta {adaptive.get('current_delta_min', 'n/a')} min | {adaptive.get('reference_label') or 'No manual sleep reference'} (reference only, not a daily penalty target)"
     )
     return "\n".join([
-        f"PERSONAL BASELINES ({BASELINE_SOURCE}; sleep opportunity is adaptive):",
+        f"PERSONAL BASELINES ({pb.get('source') or 'personal references'}; sleep opportunity is adaptive):",
         line("HRV", "hrv"),
         line("Resting HR", "rhr"),
         sleep_line,
         line("Sleep Score", "sleep_score"),
         line("SpO2", "spo2"),
         line("Sleeping HR", "sleeping_hr"),
-        f"- Sleeping respiration: Reference {pb.get('sleeping_respiration', {}).get('garmin', '11 brpm')} | live value not currently imported",
-        f"- Awake respiration: Reference {pb.get('awake_respiration', {}).get('garmin', '13–14 brpm')} | live value not currently imported",
+        f"- Sleeping respiration: Reference {pb.get('sleeping_respiration', {}).get('garmin') or 'not supplied'} | live value not currently imported",
+        f"- Awake respiration: Reference {pb.get('awake_respiration', {}).get('garmin') or 'not supplied'} | live value not currently imported",
     ])
 def _v4898_note_has_athlete_request(note):
     """Detect an actionable athlete question/request even when punctuation is omitted.
@@ -50509,8 +50523,66 @@ def _v196920_ui_native_pending(snapshot):
 
 app.jinja_env.globals['nova_native_r27_pending'] = _v196920_ui_native_pending
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.122 R196.9.21 · CONSENT-GATED R27 CANONICAL EVIDENCE CYCLE · NOVA R196.2 CORE'
+# R196.9.22 · Third Upcoming Sessions card is an ATHLETE decision, not a QA dump.
+# All scientific states remain in the Snapshot / content audit; plain-language
+# decision, safety and any real consent action remain immediately visible.
+_r196922_evidence_title = "<strong>NOVA NEEDS EVIDENCE · {{ 'TEST PROPOSAL' if calibration.test else 'NEXT STEP' }}</strong>"
+assert HOME_PAGE.count(_r196922_evidence_title) == 1, 'R196.9.22 quality evidence heading drift'
+HOME_PAGE=HOME_PAGE.replace(_r196922_evidence_title, """<strong>{{ 'MORE EVIDENCE NEEDED' if calibration.state != 'WAIT_FOR_SAFETY' else 'RECOVERY CHECK REQUIRED' }}</strong>
+<p>{% if calibration.state == 'WAIT_FOR_SAFETY' %}Hard work is not cleared. Recovery and timing checks come first.
+{% elif calibration.gap_kind == 'COUPLED_REPEATABILITY' %}Nova needs verified work-and-recovery evidence before it can prescribe the next quality with confidence. No new test is scheduled.
+{% elif calibration.state == 'ASK_TO_VALIDATE' %}A goal-specific test may help Nova refine your next quality. You can request a safety and feasibility review below; nothing is scheduled yet.
+{% else %}Nova has not established enough evidence to safely prescribe the next quality. No test is scheduled.{% endif %}</p>
+<details class=\"v196922-quality-explain\"><summary>Why Nova needs this</summary>""",1)
+_r196922_evidence_extra = """{% if calibration.gap_kind == 'COUPLED_REPEATABILITY' %}<p>A single maximal power test cannot establish repeatable work-and-recovery power. Verified complete work/recovery data are required.</p>{% endif %}
+{% if calibration.state == 'WAIT_FOR_SAFETY' %}<p>Recovery and timing clearance must come first.</p>{% endif %}"""
+assert HOME_PAGE.count(_r196922_evidence_extra)==1, 'R196.9.22 quality evidence details drift'
+HOME_PAGE=HOME_PAGE.replace(_r196922_evidence_extra,'',1)
+_r196922_consent_anchor = "{% if calibration.state == 'ASK_TO_VALIDATE' and calibration.test and calibration.test.protocol == 'EXISTING_R27_PRIMARY_VALIDATION' and not is_preview and not report_mode and not qa_mode %}"
+assert HOME_PAGE.count(_r196922_consent_anchor)==1, 'R196.9.22 athlete consent anchor drift'
+HOME_PAGE=HOME_PAGE.replace(_r196922_consent_anchor,_r196922_evidence_extra+'\n</details>\n'+_r196922_consent_anchor,1)
+# This existing diagnostic component must not compete with the athlete summary.
+_r196922_gate_open = '<div class="v19685-quality-gates" aria-label="Quality prescription diagnostics">'
+assert HOME_PAGE.count(_r196922_gate_open)==1, 'R196.9.22 quality gate anchor drift'
+_ri=HOME_PAGE.index(_r196922_gate_open)
+_rj=HOME_PAGE.index('</div>\n{% endif %}',_ri) + len('</div>')
+_gate=HOME_PAGE[_ri:_rj]
+HOME_PAGE=HOME_PAGE[:_ri] + '<details class="v196922-quality-technical"><summary>How Nova checked this decision</summary>' + _gate + '</details>' + HOME_PAGE[_rj:]
+_r196922_duplicate_why = "<div class=\"v4-session-why\"><strong>Why:</strong> {{ 'The earliest validated quality is already one of the next two chronological sessions.' if quality_already_shown else 'Nova will reassess the next quality opportunity when the scientific, recovery and scheduling checks support one.' }}</div>"
+assert HOME_PAGE.count(_r196922_duplicate_why)==1,'R196.9.22 third-card explanation anchor drift'
+HOME_PAGE=HOME_PAGE.replace(_r196922_duplicate_why,'''<details class="v196922-quality-explain"><summary>What happens next?</summary><p>{{ 'Your next quality is already shown in an earlier session card; no additional workout has been prescribed.' if quality_already_shown else 'Nova will review the next safe quality opportunity when the training, recovery, evidence and scheduling checks allow it.' }}</p></details>''',1)
+BASE_CSS += r"""
+.v196922-quality-explain,.v196922-quality-technical{margin:10px 0 0;border-top:1px solid rgba(255,255,255,.13);padding:8px 0 0}
+.v196922-quality-explain>summary,.v196922-quality-technical>summary{font-size:12px;font-weight:650;cursor:pointer;color:#b5d4dd}
+.v196922-quality-explain p{margin:8px 0 0;font-size:12px;line-height:1.5}
+.v196922-quality-technical .v19685-quality-gates{margin-top:10px}
+"""
+
+# R196.9.22: Progressive disclosure of panel 3, leaving canonical snapshots and
+# performance/safety/consent/ledger contracts untouched. Both print and desktop
+# retain an explicit path to source-level detail; no info is deleted from data.
+BASE_CSS += r"""
+.v196922-recovery-summary{border:1px solid rgba(74,205,224,.23);border-radius:13px;
+  background:rgba(74,205,224,.055);padding:13px 16px;margin:0 0 16px;
+  color:#e7f1f6;line-height:1.45}
+.v196922-summary-line{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:baseline;justify-content:space-between}
+.v196922-summary-line span{font-size:11px;font-weight:800;letter-spacing:.075em;color:#89dbe9}
+.v196922-summary-line strong{font-size:17px;color:#fff}
+.v196922-recovery-summary p{margin:8px 0 3px;font-size:13px}
+.v196922-recovery-summary small{display:block;font-size:11px;color:#9eb1bf;margin-top:6px}
+.v196922-physiology-detail{border:1px solid rgba(255,255,255,.20);border-radius:12px;
+  margin:16px 0 2px;background:rgba(255,255,255,.025);min-width:0}
+.v196922-physiology-detail>summary{cursor:pointer;list-style:revert;padding:15px 16px;
+  font-size:14px;font-weight:750;color:#e0f4f6;line-height:1.5}
+.v196922-physiology-detail>summary span{display:inline;font-weight:800}
+.v196922-physiology-detail>summary small{display:block;margin:3px 0 0 16px;
+  font-size:11px;font-weight:400;color:#acbdc6}
+.v196922-physiology-detail[open]>summary{border-bottom:1px solid rgba(255,255,255,.13)}
+.v196922-detail-content{padding:14px 10px 7px;min-width:0}
+@media(max-width:760px){.v196922-recovery-summary{padding:12px}.v196922-detail-content{padding:12px 6px 7px}}
+"""
+APP_VERSION = 'THE LAB · PRODUCT V4.9.123 R196.9.22 · ATHLETE-FIRST PHYSIOLOGY UI + PERSONAL REFERENCE SAFETY · NOVA R196.2 CORE' 
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
