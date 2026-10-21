@@ -30766,21 +30766,51 @@ def _v115_replay_mutation_suite(fixture):
                       and not bool((((o.get("question_state") or {}).get("dimensions") or {}).get("SPECIFIC_DOSE") or {}).get("exit_satisfied")),
         )
 
-        # Only breadth + foundational dose closure may unlock TRANSFER.
+        # This MUST mutate the actual missing facets AND the goal-specific
+        # physiological question. Old R115 test changed only Z4+ minutes even
+        # for POWER_20/TT (whose TIME_AT_PRESSURE uses moderate minutes), never
+        # closed EXTENDED_SUSTAINED, and omitted the next-stage evidence gate.
+        # It therefore failed on valid coaching without testing progression.
+        # All additions below are SYNTHETIC REPLAY INPUTS; they are never
+        # written to production evidence or used to authorize a real session.
         ready = _v115_json_clone(success)
-        ledger = ready["core_inputs"].setdefault("microcycle_ledger_base", {})
+        rin = ready["core_inputs"]
+        rev = rin.setdefault("evidence_ledger", {})
+        rrep = rev.setdefault("repeatability", {}).setdefault("events", [])
+        remaining = list((((base_out.get("adaptive_roadmap") or {}).get("facet_profile") or {}).get("missing") or []))
+        for missing in remaining:
+            if missing == target or missing not in bands: continue
+            seconds_remaining = float(bands[missing][0])
+            rrep.insert(0, {"date": str(base.get("generated_at_local") or "")[:10],
+                "interval_secs": seconds_remaining,
+                "interval_label": _v84_duration_label(seconds_remaining),
+                "strong": True, "activity_id": "R115_SIM_BREADTH_"+missing,
+                "source": "R115_REPLAY_MUTATION"})
+        rfeat = rev.setdefault("science_features", {})
+        rfeat["repeatability_sessions"] = max(3,int(rfeat.get("repeatability_sessions") or 0))
+        rfeat["repeatability_strong_sessions"] = max(3,int(rfeat.get("repeatability_strong_sessions") or 0))
+        ledger = rin.setdefault("microcycle_ledger_base", {})
         dose = ledger.setdefault("dose_context", {})
         cur = dose.setdefault("current", {})
         prev = dose.setdefault("previous_comparable", {})
-        prev_hi = float(_rhythm_num(prev.get("high_minutes")) or 0.0)
-        cur["high_minutes"] = prev_hi + max(3.1, 0.11 * max(prev_hi, 1.0))
+        time_goal = goal in {"POWER_20", "TIME_TRIAL"}
+        channel = "moderate_minutes" if time_goal else "high_minutes"
+        before = float(_rhythm_num(prev.get(channel)) or 0.0)
+        cur[channel] = before + max(5.1 if time_goal else 3.1,
+                                    0.11 * max(before, 1.0))
+        dose["moderate_delta_minutes" if time_goal else "high_delta_minutes"] = cur[channel]-before
+        if time_goal:
+            # POWER_20/TT transfer additionally requires observed variable load.
+            rev.setdefault("events", []).insert(0, {"date":str(base.get("generated_at_local") or "")[:10],
+                "tags":["VARIABLE_LOAD"], "source":"R115_REPLAY_MUTATION"})
+        foundation = "TIME_AT_PRESSURE" if time_goal else "SPECIFIC_DOSE"
         ready["expected"] = {}
         record(
             "BREADTH_PLUS_FOUNDATION_CLOSED",
             ready,
             lambda o: int((o.get("adaptive_roadmap") or {}).get("stage_index") or 0) >= 2
-                      and target not in (((o.get("adaptive_roadmap") or {}).get("facet_profile") or {}).get("missing") or [])
-                      and bool((((o.get("question_state") or {}).get("dimensions") or {}).get("SPECIFIC_DOSE") or {}).get("exit_satisfied")),
+                      and not (((o.get("adaptive_roadmap") or {}).get("facet_profile") or {}).get("missing") or [])
+                      and bool((((o.get("question_state") or {}).get("dimensions") or {}).get(foundation) or {}).get("exit_satisfied")),
         )
 
         failed = _v115_json_clone(base)
@@ -31034,6 +31064,16 @@ def _v116_apply_completed_multiminute_mutation(fixture, *, strong, add_high_minu
     return fx
 
 def _v116_realistic_completion_suite(fixture):
+    # The original R116 fixture is explicitly a POWER_5 3×6-min effort.
+    # Its expected facet EXTENDED_PUNCH, dimension SPECIFIC_DOSE and phase
+    # labels are NOT valid for POWER_20, TIME_TRIAL or other goal roadmaps.
+    # A wrong-profile fixture must be visibly SKIPPED, never reported failed
+    # or passed as if its POWER_5 evidence had actually been tested.
+    goal = str((((fixture or {}).get('core_inputs') or {}).get('training_direction') or {}).get('primary_goal') or '').upper()
+    if goal != 'POWER_5':
+        return {'schema':'V4.8.92-R116-REALISTIC-REPLAY-1',
+                'pass':None, 'applicable':False, 'state':'SKIPPED_WRONG_GOAL',
+                'goal_key':goal, 'required_goal':'POWER_5', 'scenarios':[]}
     scenarios = []
 
     def run(name, fx, expect):
@@ -31105,7 +31145,7 @@ def _v115_replay_mutation_suite(fixture):
     realistic = _v116_realistic_completion_suite(fixture)
     return {
         "schema":"V4.8.92-R116-MUTATION-SUITE-1",
-        "pass":bool(base.get("pass")) and bool(realistic.get("pass")),
+        "pass":bool(base.get("pass")) and (not realistic.get("applicable",True) or bool(realistic.get("pass"))),
         "tests":list(base.get("tests") or []),
         "realistic_completion_suite":realistic,
     }
@@ -47355,6 +47395,27 @@ def _v19697_session_envelope(session):
     t = _R19696_LIBRARY_INDEX.get(wid)
     audit = {'schema': R19697_SCHEMA, 'workout_id': wid,
              'state': 'NOT_APPLICABLE', 'issues': [], 'modified': False}
+    if wid == _R196933_VIRTUAL_ID:
+        # R195.9 is a scientifically attested virtual dose, not a catalog entry.
+        # R196.9.6 has already re-attested the original raw activity + roadmap
+        # before retaining the HARD. Reuse only the ORIGINAL issued mechanics
+        # for time accounting; never create watts, work, or a new permission.
+        proof = _v196933_virtual_execution_contract(s)
+        band = s.get('power_prescription') if isinstance(s.get('power_prescription'), dict) else {}
+        if not proof.get('ready'):
+            audit.update(state='VIRTUAL_DOSE_NOT_VERIFIED',
+                         issues=list(proof.get('issues') or []))
+            return s, audit
+        if (type(band.get('reps')) is not int or
+            type(band.get('work_seconds')) is not int or
+            type(band.get('recovery_seconds')) is not int):
+            audit.update(state='VIRTUAL_DOSE_NOT_VERIFIED',
+                         issues=['ISSUED_INTERVAL_TIMING_NOT_INTEGERS'])
+            return s, audit
+        t = {'id': wid, 'pattern': 'MEASURED_COUPLED_DOSE',
+             'reps': band['reps'], 'work_s': band['work_seconds'],
+             'recovery_s': band['recovery_seconds']}
+        audit['time_source'] = 'R1959_ISSUED_DOSE_REATTESTED_R196933'
     if not t or str(t.get('pattern') or '').startswith('ENDURANCE'):
         return s, audit
     is_hard = (bool(s.get('hard_spacing_relevant') or s.get('provisional_quality'))
@@ -47464,7 +47525,11 @@ def _v19697_session_envelope(session):
         return s, audit
     out = dict(s)
     out.pop('r19697_timing_warning',None)  # a corrected envelope clears its old warning
-    out['main_set'] = main
+    # A previously issued R195.9 dose is ledger/fingerprint-sensitive: its
+    # complete original instructions are already present in main_set.  Add
+    # composition metadata for the time authority without altering the issued
+    # text or the canonical plan identity on recompilation.
+    out['main_set'] = text if wid == _R196933_VIRTUAL_ID else main
     out['session_composition'] = comp
     out['aerobic_fill_state'] = 'PLANNED_LOW_Z2' if fill_seconds else 'NOT_REQUIRED'
     out['aerobic_fill_minutes'] = _v19697_time_label(fill_seconds) if fill_seconds else None
@@ -49139,7 +49204,7 @@ _R196915_COPY = {
     'NOT_CANONICAL': ('NOT CLEARED','This workout is not the current authorized prescription.'),
     'TIMING_NOT_FEASIBLE': ('WORKOUT TIME NOT VERIFIED','The session needs a feasible duration and a new clearance.'),
     'NOT_CURRENT': ('NOT CURRENT','This session cannot be cleared from the available Snapshot.'),
-    'PRESCRIBED_SLOT_UNCONFIRMED': ('PRESCRIBED · TIME UNCONFIRMED','The workout is prescribed, but your availability has not been confirmed.'),
+    'PRESCRIBED_SLOT_UNCONFIRMED': ('PRESCRIBED · PLANNED TIME','The workout structure and timing are validated. The training time is inferred from your rhythm, not confirmed availability.'),
     'EXECUTABLE': ('PRESCRIBED','The current workout meets the recorded quality and timing checks.'),
 }
 
@@ -49452,9 +49517,18 @@ def _v196916_local_clearance(session,snapshot):
     label,message=_R196915_COPY[result['state']]
     road=d.get('adaptive_roadmap') if isinstance(d.get('adaptive_roadmap'),dict) else {}
     q=road.get('quality_window') if isinstance(road.get('quality_window'),dict) else {}
+    details = None
+    if result.get('state') == 'PRESCRIBED_SLOT_UNCONFIRMED':
+        # This is not a recovery HOLD, a missing dose or a timing failure.
+        # Do not suggest that an already-issued TODAY workout needs a new
+        # scientific clearance simply because the predicted slot was learned.
+        # Nor may a learned slot be misrepresented as confirmed availability.
+        details = ('Check that you have the stated session duration available '
+                   'and that your recovery and restrictions have not changed '
+                   'before starting. The slot is predicted, not booked.')
     return {'schema':R196916_SCHEMA,'state':label,'message':message,
             'reason_codes':result['reason_codes'],'executable':result['executable'],
-            'quality_gate':q.get('state') or 'Unknown'}
+            'details':details,'quality_gate':q.get('state') or 'Unknown'}
 
 # One snapshot-level diagnostic contract is attached at the FINAL persistence
 # boundary, after science, nutrition and report building are complete. The
@@ -54285,7 +54359,7 @@ def _nova_prescription_outcome(snapshot, previous=None):
         'quality_is_not_a_wellness_color':True,
         'changes_any_prescription':False, 'another_blocking_gate':False}
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.138 R196.9.38 · CLEAN ATHLETE WORKOUT TITLES / QUALITY PRESERVED · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.139 R196.9.39 · VIRTUAL DOSE TIME ACCOUNTING / HONEST SLOT CLEARANCE · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
