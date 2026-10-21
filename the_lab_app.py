@@ -10091,6 +10091,9 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 _db_sql("INSERT INTO latest_report (singleton_id, user_id, generated_at_utc, generated_at_local, app_version, payload_json) VALUES (?, ?, ?, ?, ?, ?)"),
                 (owner_id, owner_id, generated_at_utc, generated_at_local, APP_VERSION, payload_json),
             )
+            # Product DB stores both rows: one physical transaction. Failure
+            # here rolls back the new report and its ledger together.
+            _v196945_same_store_ledger_commit(cur, owner_id)
             conn.commit()
         finally:
             conn.close()
@@ -20241,6 +20244,27 @@ def _v4895_activity_quality_truth(activity=None, family=None):
     intensity_factor = _v40_normalized_intensity_factor(a)
     if intensity_factor is not None and intensity_factor >= 0.90:
         return {"quality_relevant": True, "basis": "INTENSITY_FACTOR"}
+    # R196.9.45: a 30-min aerobic preload can make whole-ride IF look EASY
+    # even when the rider completed two actual 7-min quality repetitions.
+    # Use device WORK intervals and observed watts relative to the athlete's
+    # own FTP. No title inference, retrospective target or workout issuance.
+    ftp = _num(a.get("icu_ftp") or a.get("ftp"))
+    if ftp is not None and ftp > 0:
+        observed = []
+        for it in (a.get("icu_intervals") or []):
+            if not isinstance(it, dict) or str(it.get("type") or "WORK").upper() != "WORK":
+                continue
+            secs = _num(it.get("moving_time") or it.get("elapsed_time"))
+            watts = _num(it.get("average_watts"))
+            if (secs is not None and watts is not None and math.isfinite(secs)
+                    and math.isfinite(watts) and 300 <= secs <= 900
+                    and watts >= 0.92 * ftp):
+                observed.append((secs, watts))
+        if len(observed) >= 2 and any(
+                abs(a0[0]-a1[0]) <= max(12.0, 0.08*a0[0])
+                for i,a0 in enumerate(observed) for a1 in observed[i+1:]):
+            return {"quality_relevant": True,
+                    "basis": "MEASURED_REPEATED_5_TO_15_MIN_WORK_ABOVE_92PCT_FTP"}
     return {"quality_relevant": False, "basis": "NOT_HARD"}
 def _num(value):
     try:
@@ -28862,6 +28886,9 @@ def analyze():
         if _r196920_review.get('issued') and not _r196920_final.get('issued'):
             raise ValueError('R196920_FINAL_R27_CONTRACT_DIVERGED')
         if not qa_requested:
+            # Only the issuance writes of this Snapshot are deferred. Earlier
+            # independent observation reconciliation is left untouched.
+            g.nova_snapshot_ledger_pending = []
             microcycle_ledger = update_microcycle_ledger_from_snapshot(microcycle_ledger, analysis.get("next_sessions"), user_id=user["id"])
             if _r196920_final.get('issued'):
                 _r196920_final = _v196920_attest_persisted_ledger(
@@ -36787,16 +36814,19 @@ def _v153_latest_issued_for_slot(ledger, slot_key, current_workout_id=None):
                     return False
                 if not 0 <= (target_day - completed).days <= 7:
                     return False
-                planned_main = str(row.get("main_set") or "")
-                done_main = str(done.get("main_set") or "")
-                # Canonical ID alone does not equate fresh 2x7 and 2x7 after
-                # thirty minutes of aerobic preload (different training dose).
-                for marker in ("30 min low-Z2 aerobic preload", "20 min progressive aerobic lead-in"):
-                    if (marker in planned_main) != (marker in done_main):
+                # A common library ID is not proof of an equal delivered dose.
+                # Compare the actual instructions; title, date and plan fingerprint
+                # legitimately vary and are not part of dose equivalence.
+                planned_main = " ".join(str(row.get("main_set") or "").split())
+                done_main = " ".join(str(done.get("main_set") or "").split())
+                if not planned_main or planned_main != done_main:
+                    return False
+                for field in ("duration", "interval_minutes", "prescribed_power_low",
+                              "prescribed_power_high", "stimulus_role"):
+                    x, y = row.get(field), done.get(field)
+                    if (x is None) != (y is None):
                         return False
-                for field in ("prescribed_power_low", "prescribed_power_high"):
-                    x,y=row.get(field),done.get(field)
-                    if x is not None and y is not None and str(x)!=str(y):
+                    if x is not None and str(x) != str(y):
                         return False
                 return True
             if any(_same_dose(done) for done in history):
@@ -39027,6 +39057,28 @@ def _v166_carry_missed_hard(out, nova_decision, coach_clock, ledger):
         return out
     if str((nova_decision or {}).get("action") or "").upper() != "TRAIN":
         return out
+    # R154 has already placed the athlete's explicitly postponed workout in
+    # the requested quality slot. A missed-hard carry must not replace it.
+    override = out.get("athlete_schedule_override") or {}
+    if (isinstance(override, dict) and override.get("active")
+            and str(override.get("workout_id") or "") == str(out.get("workout_id") or "")
+            and str(override.get("target_date") or "") == str(
+                next((slot.get("date") for i, slot in enumerate(
+                    list((coach_clock or {}).get("next_slots") or []))
+                    if i == out.get("selected_slot_index") and isinstance(slot, dict)), ""))):
+        return out
+    # The athlete's postponed occurrence is intentional future scheduling,
+    # not an unfulfilled debt to drag into every intermediate quality window.
+    postponed = {(str(b.get("workout_id") or ""), str(b.get("original_date") or ""))
+                 for b in ((coach_clock or {}).get("postponed_workouts") or [])
+                 if isinstance(b, dict) and b.get("original_plan_id") and b.get("target_date")}
+    if postponed:
+        source_ledger = ledger or {}
+        ledger = dict(source_ledger)
+        ledger["prescription_history"] = [r for r in source_ledger.get("prescription_history") or []
+            if not (isinstance(r, dict) and
+                (str(r.get("nova_workout_id") or r.get("nova_contract_id") or ""),
+                 str(r.get("date") or "")[:10]) in postponed)]
     today = _v166_clock_today(coach_clock)
     missed = _v166_latest_missed_hard(ledger or {}, today)
     if not missed:
@@ -45356,8 +45408,9 @@ def _v1962_snapshot_consistency(data):
         fail('BLOCKED_PRESCRIPTION_STILL_EXPOSES_EXECUTABLE_HARD')
     if (str(decision.get('action') or '').upper() == 'TRAIN'
             and decision.get('hard_session_allowed') is True
-            and prescription.get('requested_hard_prescription_available') is True
-            and not hard):
+            and not hard
+            and (prescription.get('requested_hard_prescription_available') is True
+                 or str(prescription.get('status') or '').upper() == 'BLOCKED')):
         fail('REQUESTED_HARD_LOST_BEFORE_FINAL_SESSIONS')
     if str(decision.get('action') or '').upper() in {'HOLD','MAINTAIN','RACE_PRIORITY'} and any(
             not x.get('provisional_quality') for x in hard):
@@ -49055,6 +49108,14 @@ _r196911_execution_match_baseline = _v146_match_plan_block
 
 
 def _v146_match_plan_block(plan, block, allow_fulfilled=True):
+    # R196.9.45: the loaded 2x7 is defined by 300 seconds EASY recovery.
+    # If the device measured a different recovery, equal work-rep lengths
+    # alone do not prove this prescribed dose was executed. Do not require
+    # a missing field or invent power compliance after the fact.
+    if str(_v146_plan_identity(plan or {}) or '') == 'P5X_2X420_R300':
+        observed_recovery = _num(((block or {}).get('repeatability') or {}).get('recovery_secs'))
+        if observed_recovery is not None and abs(observed_recovery - 300.0) > 30.0:
+            return None
     prior = _r196911_execution_match_baseline(plan, block, allow_fulfilled=allow_fulfilled)
     if prior is not None:
         return prior
@@ -54703,7 +54764,157 @@ def _nova_prescription_outcome(snapshot, previous=None):
         'quality_is_not_a_wellness_color':True,
         'changes_any_prescription':False, 'another_blocking_gate':False}
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.143 R196.9.43 · FULFILLED DOSE CONTINUITY RECONCILIATION · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.144 R196.9.44 · SCHEDULE PRESERVATION AND DOSE EQUIVALENCE · NOVA R196.2 CORE'
+
+
+# R196.9.45 — The saved report is the authoritative issued snapshot.
+# Do NOT commit a future prescription to the ledger before its report is accepted.
+# Product storage gets an atomic report+ledger transaction. On the owner's
+# physically separate personal Neon, the report commits first and the ledger
+# is a repairable projection of the saved report (no imaginary distributed ACID).
+# No new routes, tables, training gates, or athlete steps.
+R196945_SCHEMA = 'R196.9.45-ISSUED-SNAPSHOT-LEDGER-1'
+_v196945_db_execute_previous = _db_execute
+
+
+def _v196945_pending():
+    if not has_request_context():
+        return None
+    staged = getattr(g, 'nova_snapshot_ledger_pending', None)
+    return staged if isinstance(staged, list) else None
+
+
+def _db_execute(sql, params=(), fetch=False):
+    pending = _v196945_pending()
+    if (pending is not None and not fetch and
+            re.match(r'^\s*UPDATE\s+microcycle_ledgers\s+SET\s+ledger_json\s*=', str(sql), re.I)):
+        if len(params) != 4 or not str(params[2]) or not str(params[3]):
+            raise ValueError('R196945_LEDGER_WRITE_SHAPE_NOT_SUPPORTED')
+        row = json.loads(str(params[0]))
+        if not isinstance(row, dict) or str(row.get('ledger_id') or '') != str(params[2]):
+            raise ValueError('R196945_LEDGER_ID_MISMATCH')
+        pending.append((str(params[2]), str(params[3]), str(sql), tuple(params)))
+        return []
+    return _v196945_db_execute_previous(sql, params=params, fetch=fetch)
+
+
+def _v196945_finalize_pending(data, owner_id):
+    pending = _v196945_pending()
+    if pending is None or not pending:
+        return None
+    ids = {(x[0], x[1]) for x in pending}
+    if len(ids) != 1 or next(iter(ids))[1] != str(owner_id):
+        raise ValueError('R196945_CROSS_ACCOUNT_OR_MULTIPLE_LEDGER_WRITES')
+    ledger = data.get('microcycle_ledger') if isinstance(data,dict) else None
+    if not isinstance(ledger, dict) or str(ledger.get('ledger_id') or '') != pending[-1][0]:
+        raise ValueError('R196945_FINAL_SNAPSHOT_LEDGER_MISMATCH')
+    # Commit marker is deterministic for this finalized report, not a new
+    # database schema. A later load can distinguish incomplete mirror writes.
+    final = copy.deepcopy(ledger)
+    final.pop('nova_snapshot_ledger_commit', None)
+    canonical = json.dumps(final, ensure_ascii=False, sort_keys=True,
+                           separators=(',', ':'), default=_report_json_default)
+    marker = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+    ledger['nova_snapshot_ledger_commit'] = marker
+    ledger['nova_snapshot_ledger_schema'] = R196945_SCHEMA
+    data['microcycle_ledger'] = ledger
+    # Capture the exact finalized ledger used by the report; each earlier
+    # issuance update concerns the same row, so only its last state matters.
+    sql = pending[-1][2]
+    params = (json.dumps(ledger, ensure_ascii=False, separators=(',', ':'),
+                         default=_report_json_default), _now_utc_text(),
+              pending[-1][0], pending[-1][1])
+    pending[:] = [(pending[-1][0], pending[-1][1], sql, params)]
+    return marker
+
+
+def _v196945_same_store_ledger_commit(cur, owner_id):
+    pending = _v196945_pending()
+    if not pending or _owner_personal_data_enabled(owner_id):
+        return
+    ledger_id, user_id, sql, params = pending[-1]
+    if str(owner_id) != user_id:
+        raise ValueError('R196945_ATOMIC_OWNER_MISMATCH')
+    cur.execute(_db_sql(sql), params)
+    if cur.rowcount != 1:
+        raise RuntimeError('R196945_ATOMIC_LEDGER_ROW_MISSING')
+    pending.clear()
+
+
+def _v196945_repair_ledger_from_saved_report(ledger, plan, user_id=None, read_only=False):
+    if not isinstance(ledger, dict) or not ledger.get('ledger_id'):
+        return ledger
+    owner_id = _data_owner_user_id(user_id)
+    report = load_latest_report(include_payload=True, owner_user_id=owner_id)
+    saved = ((report or {}).get('data') or {}).get('microcycle_ledger')
+    if not isinstance(saved, dict):
+        return ledger
+    token = str(saved.get('nova_snapshot_ledger_commit') or '')
+    if (not re.fullmatch(r'[a-f0-9]{64}',token)
+            or str(saved.get('ledger_id') or '') != str(ledger.get('ledger_id') or '')
+            or str(saved.get('plan_id') or '') != str((plan or {}).get('id') or '')
+            or str(saved.get('cycle_start') or '') != str(ledger.get('cycle_start') or '')):
+        return ledger
+    if token == str(ledger.get('nova_snapshot_ledger_commit') or ''):
+        return ledger
+    # A failed second-store write is repaired from the saved report, NEVER
+    # from an unsaved work-in-progress. Re-run existing R146 evidence matching
+    # against the latest actual device blocks: new rides still count.
+    restored = copy.deepcopy(saved)
+    for field in ('completed_hard_sessions', 'dose_context', 'block_foundation_evidence'):
+        if field in ledger:
+            restored[field] = copy.deepcopy(ledger[field])
+    restored = _v146_reconcile_prescription_execution(
+        restored, list(_V146_BLOCK_CONTEXT.get() or ()), now=get_rome_now())
+    if not read_only:
+        _v196945_db_execute_previous(
+            'UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?',
+            (json.dumps(restored, ensure_ascii=False, separators=(',', ':'),
+                        default=_report_json_default), _now_utc_text(),
+             restored['ledger_id'], owner_id))
+    return restored
+
+
+_v196945_load_ledger_previous = load_microcycle_ledger
+
+def load_microcycle_ledger(plan, training_direction, season_activities, user_id=None, now=None, read_only=False):
+    loaded = _v196945_load_ledger_previous(
+        plan, training_direction, season_activities, user_id=user_id, now=now, read_only=read_only)
+    return _v196945_repair_ledger_from_saved_report(loaded, plan, user_id=user_id,
+                                                      read_only=read_only)
+
+
+_v196945_save_report_previous = save_latest_report
+
+def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None):
+    owner_id = _data_owner_user_id(owner_user_id)
+    pending = _v196945_pending()
+    if pending:
+        _v196945_finalize_pending(data, owner_id)
+    # If this raises before commit, NOTHING from the issuance can have been
+    # written to the ledger. Same-store atomic commit occurs inside core save.
+    result = _v196945_save_report_previous(data, now=now, owner_user_id=owner_id,
+                                            qa_replay_bundle=qa_replay_bundle)
+    if pending:
+        # In Product storage core save already cleared the staged writes in
+        # the same SQL transaction. The split owner bridge cannot share a
+        # transaction with Product Neon: sync the materialized ledger now.
+        if pending:
+            _, uid, sql, params = pending[-1]
+            if uid != str(owner_id):
+                raise ValueError('R196945_POST_COMMIT_OWNER_MISMATCH')
+            try:
+                _v196945_db_execute_previous(sql, params)
+            except Exception as exc:
+                # The report already committed and remains authoritative;
+                # don't falsely tell the athlete their Snapshot was lost.
+                result['ledger_mirror_repair_pending'] = True
+                result['ledger_mirror_error_class'] = type(exc).__name__
+            finally:
+                pending.clear()
+    return result
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.145 R196.9.45 · COHERENT REPORT/LEDGER ISSUANCE + OBSERVED EXECUTION · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
