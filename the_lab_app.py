@@ -52331,7 +52331,7 @@ def compile_nova_prescription(prescription,coach_clock,training_definitions=None
                     sess['nova_workout_dose_identity'] = {k:int(pd[k]) for k in keys}
                     descriptive = label
                 sess['copy_workout_name'] = _v196934_session_copy_name(sess, display_title=descriptive)
-                sess['copy_workout_name_schema'] = R196934_SCHEMA
+                sess['copy_workout_name_schema'] = R196938_TITLE_SCHEMA
     return out
 
 _r196926_before_summary=_v4840_ledger_session_summary
@@ -53735,11 +53735,10 @@ def _v196934_coached_dose_title(dose):
             or not 40 <= ints['recovery_watts_low'] < ints['recovery_watts_high'] <= 600
             or ints['recovery_watts_high'] >= ints['work_watts_low']):
         return None
-    w = f"{ints['interval_secs']/60:g} min"
-    r = f"{ints['recovery_secs']/60:.1f} min" if ints['recovery_secs'] % 60 else f"{ints['recovery_secs']/60:g} min"
-    return (f"Repeatability {ints['reps']}×{w} · "
-            f"{ints['work_watts_low']}–{ints['work_watts_high']} W · "
-            f"recovery {r} {ints['recovery_watts_low']}–{ints['recovery_watts_high']} W")
+    # The structured dose (including recovery and watt bands) remains in
+    # nova_workout_dose_identity / power_prescription / main_set. The athlete's
+    # copied workout title is only the human-readable workout structure.
+    return f"Repeatability {ints['reps']}×{ints['interval_secs']/60:g} min"
 
 
 
@@ -53797,28 +53796,49 @@ def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_de
         return native
 
 
-def _v196934_session_copy_name(session, display_title=None):
-    """Readable, session-specific label; repeatable across equivalent Snapshots.
+R196938_TITLE_SCHEMA = 'V4.9.138-R196.9.38-ATHLETE-PUBLIC-WORKOUT-TITLE-1'
 
-    Copying it is evidence for matching, NOT proof the intervals were completed.
-    Use date + slot + original workout mechanics for deterministic identity; no
-    mutable global plan hash, no athlete ID and no raw activity IDs in the label.
+
+def _v196934_session_copy_name(session, display_title=None):
+    """Only the human title is copied; immutable prescription IDs stay internal.
+
+    Do not add date, power bands or fingerprint to the athlete-facing name.
+    The full dose, date, slot, ledger fingerprint and internal NOVA plan ID
+    remain unchanged and must drive reconciliation, never this display string.
     """
     s = session if isinstance(session, dict) else {}
     title = str(s.get('title') or '').strip()
-    wid = str(s.get('nova_workout_id') or '').strip()
-    if not title or not wid or not s.get('hard_spacing_relevant') or s.get('provisional_quality'):
-        return title or None
-    day = str(s.get('date') or '')[:10]
-    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day):
+    if not title:
+        return None
+    if (display_title and s.get('nova_workout_id') == 'RECOVERY_UNDER_LOAD_EVIDENCE_DOSE_V1'
+            and s.get('hard_spacing_relevant') and not s.get('provisional_quality')):
+        return str(display_title).strip()
+    return title
+
+
+def _nova_public_workout_title(session):
+    """Presentation-only compatibility for historical, immutable Snapshots.
+
+    Older stored Snapshots carry the legacy `NOVA · date · title · N-XXXXXXXX`
+    marker. Do not mutate their ledger or reissue their sessions to render a
+    short name. No bare title is accepted as proof of a completed workout.
+    """
+    s = session if isinstance(session, dict) else {}
+    name = str(s.get('copy_workout_name') or '').strip()
+    title = str(s.get('title') or '').strip()
+    if not name:
         return title
-    signature = {k: s.get(k) for k in ('date', 'start_minute', 'nova_workout_id',
-                  'nova_contract_id', 'prescribed_power_low', 'prescribed_power_high')}
-    if isinstance(s.get('nova_workout_dose_identity'),dict):
-        signature['dose'] = s['nova_workout_dose_identity']
-    token = hashlib.sha256(json.dumps(signature, ensure_ascii=False, sort_keys=True,
-                                       default=str).encode('utf-8')).hexdigest()[:8].upper()
-    return f'NOVA · {day} · {display_title or title} · N-{token}'
+    old = re.fullmatch(r'NOVA · \d{4}-\d{2}-\d{2} · (.+) · N-[A-Fa-f0-9]{8}', name)
+    if old:
+        legacy = old.group(1)
+        if str(s.get('nova_workout_id') or '') == 'RECOVERY_UNDER_LOAD_EVIDENCE_DOSE_V1':
+            match = re.match(r'^(Repeatability \d+×\d+(?:\.\d+)? min)(?: · |$)', legacy)
+            if match:
+                return match.group(1)
+        return title or legacy
+    if name.startswith('THE LAB · '):
+        return title or name
+    return name
 
 
 # R196934 presentation projection lives in the canonical compiler above.
@@ -53832,7 +53852,7 @@ def _v4840_ledger_session_summary(s):
     out = _r196934_summary_before(s)
     if isinstance(out, dict) and isinstance(s, dict):
         out['copy_workout_name'] = s.get('copy_workout_name') or _v196934_session_copy_name(s)
-        out['copy_workout_name_schema'] = R196934_SCHEMA
+        out['copy_workout_name_schema'] = R196938_TITLE_SCHEMA
     return out
 
 
@@ -53856,8 +53876,9 @@ def _v146_match_plan_block(plan, block, allow_fulfilled=True):
 # Apply final UI changes only after all historical UI anchor transformations ran.
 _r196934_h3 = "{{ s.title|replace('Coach-selected session','Nova-selected session') }}"
 _r196934_copy = "{{ s.title|replace('Coach-selected session','Nova-selected session')|e }}"
-_r196934_show = "{{ (s.copy_workout_name or s.canonical_workout_name or s.title)|replace('Coach-selected session','Nova-selected session') }}"
-_r196934_copyvalue = "{{ (s.copy_workout_name or s.canonical_workout_name or s.title)|replace('Coach-selected session','Nova-selected session')|e }}"
+app.jinja_env.globals['nova_public_workout_title'] = _nova_public_workout_title
+_r196934_show = "{{ nova_public_workout_title(s)|replace('Coach-selected session','Nova-selected session') }}"
+_r196934_copyvalue = "{{ nova_public_workout_title(s)|replace('Coach-selected session','Nova-selected session')|e }}"
 assert HOME_PAGE.count(_r196934_h3) == 1, 'R196934 title display drift'
 assert HOME_PAGE.count(_r196934_copy) == 1, 'R196934 copied label drift'
 HOME_PAGE = HOME_PAGE.replace(_r196934_h3, _r196934_show, 1)
@@ -53865,7 +53886,7 @@ HOME_PAGE = HOME_PAGE.replace(_r196934_copy, _r196934_copyvalue, 1)
 _r196934_duplicate = '{{ data.next_sessions[upcoming.quality_index].title }}'
 assert HOME_PAGE.count(_r196934_duplicate) == 1, 'R196934 duplicate quality title drift'
 HOME_PAGE = HOME_PAGE.replace(_r196934_duplicate,
-    '{{ data.next_sessions[upcoming.quality_index].copy_workout_name or data.next_sessions[upcoming.quality_index].canonical_workout_name or data.next_sessions[upcoming.quality_index].title }}', 1)
+    '{{ nova_public_workout_title(data.next_sessions[upcoming.quality_index]) }}', 1)
 
 # R196.9.37: Intervals power is COACHING CONTEXT, not a pass/fail exam.
 # This is one source-selection policy shared across goals, stages and athletes.
@@ -54264,7 +54285,7 @@ def _nova_prescription_outcome(snapshot, previous=None):
         'quality_is_not_a_wellness_color':True,
         'changes_any_prescription':False, 'another_blocking_gate':False}
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.137 R196.9.37 · INTERVALS FIRST / CALIBRATION WITHOUT QUALITY FREEZE · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.138 R196.9.38 · CLEAN ATHLETE WORKOUT TITLES / QUALITY PRESERVED · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
