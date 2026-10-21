@@ -28457,6 +28457,40 @@ def analyze():
         microcycle_ledger = load_microcycle_ledger(strategy_plan, training_direction, cycling_season_activities, user_id=user["id"], read_only=qa_requested)
         microcycle_ledger = _v4932_attach_dose_context(microcycle_ledger, cycling_history_activities, now=get_rome_now())
         microcycle_ledger = _v190_block_dose_evidence(microcycle_ledger, cycling_history_activities, training_direction, now=get_rome_now())
+        # Same executed activity must have the same training classification in
+        # history, current-week memory, rhythm and the next prescription. R146
+        # already matched its plan and persisted FULFILLED. Join by exact
+        # activity ID AND execution date; no title inference or new gate.
+        _fulfilled_quality_by_id = {}
+        for _done in (microcycle_ledger.get('prescription_history') or []):
+            if not isinstance(_done,dict) or str(_done.get('prescription_status') or '').upper()!='FULFILLED':
+                continue
+            _kind=str(_done.get('intensity_class') or '').lower()
+            _aid=str(_done.get('executed_activity_id') or '').strip()
+            _actual=str(_done.get('actual_date') or '')[:10]
+            if (_aid and _actual and _kind in {'tempo','threshold','vo2'}
+                    and _done.get('execution_match_basis')):
+                _fulfilled_quality_by_id[_aid]=(_actual,_kind,_done.get('nova_workout_id'))
+        _quality_joined=set()
+        for _activities in (cycling_recent_activities, cycling_season_activities,
+                            cycling_history_activities, recent_activities,
+                            season_activities, history_activities):
+            for _act in (_activities or []):
+                if not isinstance(_act,dict):continue
+                _id=str(_act.get('id') or '').strip()
+                _match=_fulfilled_quality_by_id.get(_id)
+                if (_match and str(_act.get('start_date_local') or '')[:10]==_match[0]
+                        and not _v1954_confirmed_competition(_act)):
+                    _act['_tl_fulfilled_quality']={'verified':True,'intensity_class':_match[1],
+                        'workout_id':_match[2], 'actual_date':_match[0]}
+                    _quality_joined.add(_id)
+        if _quality_joined:
+            week_memory=build_week_memory(cycling_recent_activities)
+            training_rhythm=build_training_rhythm(cycling_history_activities)
+            systemic_activity_rhythm=build_training_rhythm(season_activities,
+                now=get_rome_now(),scope='SYSTEMIC')
+            coach_clock=build_coach_clock(cycling_season_activities,
+                planning_context=planning_context,training_rhythm=training_rhythm)
         training_direction["nova_execution"] = _v1965_verified_quality_execution(microcycle_ledger, training_direction.get("started_on"), now=get_rome_now())
         progression_training_blocks=_v492_attach_execution_quality(progression_training_blocks,microcycle_ledger);previous_training_blocks=progression_training_blocks[:8];session_progression=_v491_session_progression(progression_training_blocks)
         snapshot_fault_stage = "EVIDENCE_LEDGER"
@@ -42845,7 +42879,7 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
                            'Repeatability at the exact work/recovery dose is not yet verified. '
                            'Power shortfall must not count as failure, reduce adherence or block progression; assess structure and recovery separately. '
                            'These watts are an opening suggestion, not an upper limit; increase if sustainably comfortable. ')
-            sess['main_set']=directive+str(sess.get('main_set') or '')
+            sess['main_set']=directive+_v19696_strip_conflicting_power_headers(sess.get('main_set'))
             # The third Upcoming quality card may lack a previously attached
             # same-duration PB. Enrich from DIRECT curve evidence, never a fit.
             work_seconds=_v1943_finite(band.get('work_seconds'),60,1800)
@@ -44803,29 +44837,59 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
     out=_v1961_science_before(goal_key,roadmap,ledger,session_progression,previous_blocks,
         performance_narrative,performance_evidence,aerobic_metabolic_range,
         evidence_ledger=evidence_ledger,question_state=question_state)
-    if not isinstance(out,dict) or str(out.get('dimension') or '').upper()!='RECOVERY_UNDER_LOAD':
-        return out
+    if not isinstance(out,dict):return out
+    selected_dimension=str(out.get('dimension') or '').upper()
     old=out.get('dose_contract') or {}
-    if old.get('reason')!='NO_MEANINGFUL_LOADED_RECOVERY_STIMULUS':
-        return out
+    exhausted_recovery=(selected_dimension=='RECOVERY_UNDER_LOAD' and
+                        old.get('reason')=='NO_MEANINGFUL_LOADED_RECOVERY_STIMULUS')
+    # R108/R196.1's existing anti-loop question ranking must see actual
+    # fulfilled workout identities, not only delayed repeatability events.
+    # A 2x10 -> 2x15 or 3x12 jump is not a lateral stimulus change.
+    recent_transfer=False
+    if selected_dimension in {'RACE_TRANSFER','RECOVERY_UNDER_LOAD'}:
+        try:
+            next_day=date.fromisoformat(str(((roadmap or {}).get('quality_window') or {}).get('preferred_iso') or '')[:10])
+        except (TypeError,ValueError):
+            next_day=get_rome_now().date()
+        for completed in (ledger or {}).get('prescription_history') or []:
+            if not isinstance(completed,dict) or str(completed.get('prescription_status') or '').upper()!='FULFILLED' or not completed.get('executed_activity_id'):
+                continue
+            workout_id=str(completed.get('nova_workout_id') or completed.get('nova_contract_id') or '')
+            tpl=next((t for t in _NOVA_WORKOUT_LIBRARY if t.get('id')==workout_id and t.get('goal')==str(goal_key or '').upper()),None)
+            if not tpl or str(tpl.get('pattern') or '').upper() not in {'MICRO_30_15','SPRINT_CLUSTER','OVER_UNDER'} or 'RACE_TRANSFER' not in set(tpl.get('dimensions') or ()):
+                continue
+            try:days=(next_day-date.fromisoformat(str(completed.get('actual_date') or '')[:10])).days
+            except (ValueError,TypeError):continue
+            if not 0<days<=4:continue
+            performed=float(_v109_template_total_quality_min(tpl) or 0)
+            lateral=any(other.get('id')!=workout_id and other.get('goal')==str(goal_key or '').upper()
+                and 'RACE_TRANSFER' in set(other.get('dimensions') or ())
+                and str(other.get('pattern') or '').upper() in {'MICRO_30_15','SPRINT_CLUSTER','OVER_UNDER'}
+                and performed>0 and 0.85*performed<=float(_v109_template_total_quality_min(other) or 0)<=1.20*performed
+                for other in _NOVA_WORKOUT_LIBRARY)
+            if not lateral:recent_transfer=True;break
+    if not exhausted_recovery and not recent_transfer:return out
+    deferred='RECOVERY_UNDER_LOAD' if exhausted_recovery else 'RACE_TRANSFER'
+    declined={deferred,'NONE','REVALIDATION','EXTENSION_OR_REVALIDATION'}
+    if recent_transfer:declined.add('RACE_TRANSFER')
     options=[r for r in (out.get('ranked_questions') or []) if isinstance(r,dict)
-        and str(r.get('dimension') or '').upper() not in {'RECOVERY_UNDER_LOAD','NONE',
-        'REVALIDATION','EXTENSION_OR_REVALIDATION'}
-        and float(r.get('score') or 0)>=50
+        and str(r.get('dimension') or '').upper() not in declined
+        and float(r.get('score') or 0)>=(40 if recent_transfer else 50)
         and bool(r.get('architectures'))
         and not _v82_question_exit_satisfied(question_state,r.get('dimension'))]
     out=dict(out)
-    out['deferred_dimension']='RECOVERY_UNDER_LOAD'
+    out['deferred_dimension']=deferred
     out['meaningful_stimulus_gate']={'schema':R1961_SCHEMA,'decision':'NO_NEAR_DUPLICATE',
-        'reason':old.get('reason'),'original_dose_contract':old,'same_structure_power_sacrifice_authorized':False}
+        'reason':old.get('reason') if exhausted_recovery else 'RECENT_FULFILLED_TRANSFER_NO_LATERAL_DOSE',
+        'original_dose_contract':old,'same_structure_power_sacrifice_authorized':False}
     if options:
         alt=options[0]
         dim=str(alt['dimension']).upper()
         out['dimension']=dim
         out['candidate_architectures']=list(alt.get('architectures') or [])
-        out['open_question']=(str(alt.get('reason') or '').strip()+' The previously top-ranked '
-            'recovery-load option was declined: free/easy recovery plus a few extra watts '
-            'does not justify repeating the same hard main set at reduced power.')
+        out['open_question']=(str(alt.get('reason') or '').strip()+
+            (' The last completed race-transfer microstructure is too recent to repeat unchanged; larger alternatives would increase its hard-volume dose without sufficient evidence.'
+             if recent_transfer else ' The previously top-ranked recovery-load option was declined: easy recovery plus a few extra watts does not justify repeating the same hard main set at reduced power.'))
         out['dose_contract']={'available':False,'reason':'NON_RECOVERY_DIMENSION_WORKOUT_LIBRARY',
                               'selected_alternative':dim}
         base_ids=['TID_ELITE','CYCLIST_TRAINING_DISTRIBUTION','LONG_TERM_DEVELOPMENT']
@@ -44944,6 +45008,58 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
         return template, audit
     if not isinstance(template, dict):
         return template, audit
+    as_day = str((slot or {}).get('date') or context.get('as_of') or '')[:10]
+    try:current_day=date.fromisoformat(as_day)
+    except (TypeError,ValueError):current_day=None
+    used={}
+    for row in (context.get('ledger') or {}).get('prescription_history') or []:
+        if not isinstance(row,dict) or str(row.get('prescription_status') or '').upper()!='FULFILLED' or not row.get('executed_activity_id'):
+            continue
+        try:completed=date.fromisoformat(str(row.get('actual_date') or '')[:10])
+        except (TypeError,ValueError):continue
+        if current_day is None or not 0<(current_day-completed).days<=7:continue
+        ident=str(row.get('nova_workout_id') or row.get('nova_contract_id') or '')
+        if ident:used[ident]=row
+    # A completed fresh-legs interval session is not the same dose as its
+    # canonical DURABILITY variant with the library's 30-minute aerobic
+    # pre-load. Preserve the exact completed history but compare the actual
+    # lead-in, not just the shared interval template ID.
+    fresh_to_loaded={ident:record for ident,record in used.items()
+        if str(dimension or '').upper()=='DURABILITY'
+        and '20 min progressive aerobic lead-in' in str(record.get('main_set') or '')
+        and '30 min low-Z2 aerobic preload' not in str(record.get('main_set') or '')}
+    for ident in fresh_to_loaded:used.pop(ident,None)
+    if str(template.get('id') or '') in used:
+        # Work from the already-ranked, existing canonical library. No new
+        # workout is authored and no hard permission is granted here.
+        originals=float(_v109_template_total_quality_min(template) or 0)
+        names=[r.get('id') for r in (audit or {}).get('top_candidates') or [] if isinstance(r,dict)]
+        names += [t.get('id') for t in _NOVA_WORKOUT_LIBRARY]
+        options=[];seen=set()
+        for ident in names:
+            if not ident or ident in seen or ident in used:continue
+            seen.add(ident)
+            t=next((x for x in _NOVA_WORKOUT_LIBRARY if x.get('id')==ident and x.get('goal')==str(goal or '').upper() and str(dimension or '').upper() in set(x.get('dimensions') or ()) and not x.get('adaptive_only')),None)
+            if not t:continue
+            quality=float(_v109_template_total_quality_min(t) or 0)
+            # Recent quality warrants a different architecture, not an
+            # unvalidated 50-80% jump in hard time two days later.
+            if originals>0 and quality>originals*1.20:continue
+            hint=_rhythm_num((slot or {}).get('duration_hint_min'))
+            if hint is not None and _v109_template_estimated_session_min(t,dimension)>hint+5:continue
+            if str(t.get('pattern') or '').upper() in {'STANDARD','SUSTAINED','SHORT_POWER'}:
+                power=_v1943_band(t,evidence_ledger=evidence_ledger,
+                    ftp_anchor=context.get('ftp_anchor'),as_of_date=as_day,dimension=dimension)
+                if power.get('state')!='PRESCRIBED':continue
+            options.append(t)
+        if options:
+            substitute=dict(options[0]);meta=dict(audit or {})
+            meta.update(selected_id=substitute['id'],reason='RECENT_FULFILLED_DOSE_ALTERNATIVE',
+                recent_fulfilled_workout_id=template['id'])
+            template=substitute; audit=meta
+        else:
+            return None,dict(audit or {},reason='RECENT_FULFILLED_NO_LATERAL_DOSE',
+                recent_fulfilled_workout_id=template.get('id'))
     # Sprints, endurance and relative load protocols are *not* numeric interval
     # targets. Never make the lack of an FTP a reason to suppress these families.
     patterns = {'STANDARD', 'SUSTAINED', 'SHORT_POWER'}
@@ -44969,8 +45085,40 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
                           ftp_anchor=context.get('ftp_anchor'), as_of_date=as_of,
                           dimension=dimension)
     metadata = dict(audit or {})
+    # The old ranker may prefer a template whose minimum real timeline
+    # exceeds an observed, reliable slot, although a comparable canonical
+    # structure of the same scientific dimension actually fits. Reuse the
+    # existing selector and power evidence; do not authorize extra work.
+    reliable_minutes=_v19699_slot_limit(clock)
+    prep=30 if str(dimension or '').upper()=='DURABILITY' else (20 if str(dimension or '').upper()=='RACE_TRANSFER' else 12)
+    core=_v19697_workout_core_seconds(template)
+    if (chosen.get('state')=='PRESCRIBED' and reliable_minutes is not None
+            and core and core[0]/60+prep+8>reliable_minutes+0.25):
+        similar=[]
+        original_quality=float(_v109_template_total_quality_min(template) or 0)
+        for alt in _NOVA_WORKOUT_LIBRARY:
+            if (alt.get('goal')!=str(goal or '').upper() or alt.get('id') in used
+                    or str(dimension or '').upper() not in set(alt.get('dimensions') or ())
+                    or alt.get('adaptive_only') or alt.get('id')==template.get('id')):continue
+            acore=_v19697_workout_core_seconds(alt)
+            if not acore or acore[0]/60+prep+8>reliable_minutes+0.25:continue
+            work=float(_v109_template_total_quality_min(alt) or 0)
+            if original_quality and not (0.75*original_quality<=work<=1.10*original_quality):continue
+            power=_v1943_band(alt,evidence_ledger=evidence_ledger,
+                             ftp_anchor=context.get('ftp_anchor'),as_of_date=as_of,dimension=dimension)
+            if power.get('state')=='PRESCRIBED':
+                similar.append((abs(original_quality-work),abs(reliable_minutes-(acore[0]/60+prep+8)),str(alt.get('id')),alt,power))
+        if similar:
+            similar.sort(key=lambda v:v[:3])
+            _,_,_,chosen_alt,chosen_power=similar[0]
+            metadata.update(selected_id=chosen_alt.get('id'),reason=('FRESH_TO_PRELOADED_DURABILITY' if chosen_alt.get('id') in fresh_to_loaded else 'CANONICAL_DOSE_FITS_ACTUAL_SLOT'),
+                original_id=template.get('id'), prior_contextual_variant=bool(chosen_alt.get('id') in fresh_to_loaded))
+            template=dict(chosen_alt);chosen=chosen_power
     repeat=_v1962_repeat_guard(template,chosen,evidence_ledger,slot) if chosen.get('state')=='PRESCRIBED' else None
-    if chosen.get('state') == 'PRESCRIBED' and not repeat:
+    if (chosen.get('state') == 'PRESCRIBED' and not repeat and template.get('id') not in used
+            and (reliable_minutes is None or (
+                 _v19697_workout_core_seconds(template) is not None and
+                 _v19697_workout_core_seconds(template)[0]/60+prep+8 <= reliable_minutes+0.25))):
         metadata['feasibility_gate'] = {'schema':R1962_SCHEMA, 'selected':'ORIGINAL',
                                        'power_source':chosen.get('source')}
         return template, metadata
@@ -44982,13 +45130,15 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     tried = {str(template.get('id') or '')}
     for record in ranked:
         ident = str(record.get('id') or '')
-        if not ident or ident in tried: continue
+        if not ident or ident in tried or ident in used: continue
         tried.add(ident)
         option = next((t for t in _NOVA_WORKOUT_LIBRARY if t.get('id') == ident
                        and str(t.get('goal') or '').upper() == str(goal).upper()
                        and str(dimension or '').upper() in set(t.get('dimensions') or ())), None)
         if not option or str(option.get('pattern') or '').upper() not in patterns:
             continue
+        oc=_v19697_workout_core_seconds(option)
+        if reliable_minutes is not None and (not oc or oc[0]/60+prep+8>reliable_minutes+0.25):continue
         band = _v1943_band(option, evidence_ledger=evidence_ledger,
                             ftp_anchor=context.get('ftp_anchor'), as_of_date=as_of,
                             dimension=dimension)
@@ -45017,6 +45167,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     relative.sort(key=lambda t:(-scores.get(str(t.get('id') or ''), -10000.0),
                                 -float(t.get('priority') or 0),str(t.get('id') or '')))
     for option in relative:
+        if option.get('id') in used:continue
         if _v1962_repeat_guard(option,{},evidence_ledger,slot):
             continue
         metadata.update({'selected_id':option.get('id'),
@@ -47424,7 +47575,7 @@ def _v19696_strip_conflicting_power_headers(main_set):
     # R196.9.7: compiler re-entry must not stack its own canonical range.
     # Only erase a byte-identifiable prefix authored by the R196.9.6 compiler;
     # do not touch observational watts, pacing cues or arbitrary free text.
-    prefix=r'^(?:EXPLORATORY )?WORK RANGE:\s*\d+(?:\s*[–-]\s*\d+)?\s*W\s+(?:exploratory work range; not a pass/fail target|validated prescription range)\.\s*'
+    prefix=r'^(?:EXPLORATORY )?WORK RANGE:\s*\d+(?:\s*[–-]\s*\d+)?\s*W\s+(?:exploratory work range; not a pass/fail target|validated prescription range)\.\s*(?:These watts are an opening suggestion, not an upper limit; increase if sustainably comfortable\.\s*)?'
     while re.match(prefix,raw,flags=re.I):
         raw=re.sub(prefix,'',raw,count=1,flags=re.I).strip()
     raw=re.sub(r'EXPLORATORY POWER TARGET:.*?assess structure and recovery separately\.\s*',
@@ -48700,6 +48851,9 @@ _r196910_quality_baseline = _v4895_activity_quality_truth
 
 def _v4895_activity_quality_truth(activity=None, family=None):
     result = _r196910_quality_baseline(activity, family)
+    if ((activity or {}).get('_tl_fulfilled_quality') or {}).get('verified') is True \
+            and not _v1954_confirmed_competition(activity):
+        return {'quality_relevant':True, 'basis':'RECONCILED_FULFILLED_HARD_ACTIVITY'}
     # Classification from raw samples only, not from workout title or HR alone.
     if ((activity or {}).get('_v196910_micro_truth') or {}).get('complete_pattern_verified') is True \
             and not _v1954_confirmed_competition(activity):
@@ -48761,6 +48915,11 @@ def _v196911_verified_micro(row):
 
 
 def classify_training_family(activity):
+    linked = (activity or {}).get('_tl_fulfilled_quality') or {}
+    if linked.get('verified') is True and not _v1954_confirmed_competition(activity):
+        return {'vo2':'VO2max', 'threshold':'Threshold',
+                'tempo':'Tempo / Threshold Mixed'}.get(str(linked.get('intensity_class') or '').lower(),
+                                                       'High Intensity / Mixed')
     if _v196911_verified_micro(activity):
         return 'High Intensity / Mixed'
     return _r196911_family_baseline(activity)
@@ -54476,7 +54635,7 @@ def _nova_prescription_outcome(snapshot, previous=None):
         'quality_is_not_a_wellness_color':True,
         'changes_any_prescription':False, 'another_blocking_gate':False}
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.141 R196.9.41 · SCIENTIFIC SELECTION AND POSTPONEMENT · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.142 R196.9.42 · EXECUTION TRUTH AND DOSE MEMORY · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
