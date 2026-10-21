@@ -46807,6 +46807,137 @@ def _v196913_attested_exploration(s, t, band):
             and str(s.get('nova_workout_id') or '')==str(t.get('id') or ''))
 
 
+# R196.9.33 — SCIENTIFICALLY ATTESTED VIRTUAL WORKOUT BRIDGE.
+# R195.9 deliberately constructs the athlete-specific RECOVERY_UNDER_LOAD dose
+# outside the static catalog. R196.9.6 must not erase it as TEMPLATE_MISSING.
+# This adapter checks exactly the original issued dose; the compiler ALSO
+# re-runs the R196.0 raw + roadmap attestation before any HARD is retained.
+R196933_SCHEMA = 'V4.9.134-R196.9.33-COUPLED-DOSE-COMPILER-BRIDGE-1'
+_R196933_VIRTUAL_ID = 'RECOVERY_UNDER_LOAD_EVIDENCE_DOSE_V1'
+_R196933_DOSE_TEXT = re.compile(
+    r'(\d+)\s*[×xX]\s*(\d+(?:\.\d+)?)\s*(min|s)\s+free\s+at\s+'
+    r'(\d+)\s*[–—-]\s*(\d+)\s*W\.\s*Recovery\s+between\s+reps:\s*'
+    r'(\d+(?:\.\d+)?)\s*(min|s)\s+continuously\s+at\s+'
+    r'(\d+)\s*[–—-]\s*(\d+)\s*W\b', re.I)
+
+
+def _v196933_virtual_execution_contract(session):
+    """Pure structural screen for the ONE measured-dose virtual protocol.
+
+    This screen is *necessary, not sufficient*. The R196.9.6 compiler MUST
+    independently reattest raw activity and roadmap with R196.0 below.
+    Never derive numeric watts from best-power, FTP or the printed workout.
+    """
+    s = session if isinstance(session, dict) else {}
+    issues = []
+    band = s.get('power_prescription') if isinstance(s.get('power_prescription'),dict) else {}
+    m = _R196933_DOSE_TEXT.search(str(s.get('main_set') or ''))
+    def finite_int(value, low, high):
+        if isinstance(value, bool): return None
+        try:
+            v=float(value)
+            if not math.isfinite(v) or not low <= v <= high or int(v)!=v:return None
+            return int(v)
+        except (TypeError, ValueError, OverflowError): return None
+    if (str(s.get('nova_workout_id') or '')!=_R196933_VIRTUAL_ID
+        or str(s.get('nova_prescription_dimension') or '')!='RECOVERY_UNDER_LOAD'
+        or str(s.get('nova_contract_id') or '')!=_R196933_VIRTUAL_ID
+        or band.get('schema')!=R1943_SCHEMA
+        or band.get('handoff_schema')!=R1960_SCHEMA
+        or band.get('provenance_schema')!=R1959_SCHEMA
+        or band.get('state')!='PRESCRIBED' or band.get('confidence')!='HIGH'
+        or band.get('source')!='OBSERVED_COUPLED_RECOVERY_DOSE'):
+        issues.append('VIRTUAL_COUPLED_PROVENANCE_MISSING')
+    if not m:
+        issues.append('COUPLED_WORK_RECOVERY_MECHANICS_MISSING')
+    if issues:
+        return {'schema':R196933_SCHEMA,'available':True,'ready':False,'pattern':'MEASURED_COUPLED_DOSE',
+                'goal':None,'work':None,'recovery':None,'power':None,
+                'total':s.get('duration'),'issues':issues}
+    reps, wd, wu, wl, wh, rd, ru, rl, rh = m.groups()
+    try:
+        reps=int(reps)
+        work_seconds=float(wd)*(60 if wu.lower()=='min' else 1)
+        recovery_seconds=float(rd)*(60 if ru.lower()=='min' else 1)
+        work_low=int(wl);work_high=int(wh);recovery_low=int(rl);recovery_high=int(rh)
+    except (TypeError,ValueError,OverflowError):
+        issues.append('COUPLED_DOSE_PARSE_FAILED')
+        reps=0;work_seconds=recovery_seconds=0;work_low=work_high=recovery_low=recovery_high=0
+    if (not 2<=reps<=20 or not 60<=work_seconds<=1800
+        or not 20<=recovery_seconds<=1800 or not 80<=work_low<work_high<=1200
+        or not 40<=recovery_low<recovery_high<=600 or recovery_high>=work_low):
+        issues.append('COUPLED_DOSE_OUT_OF_BOUNDS')
+    expected = {'reps':reps,'low_watts':work_low,
+                'high_watts':work_high,'recovery_watts_low':recovery_low,
+                'recovery_watts_high':recovery_high}
+    if any(finite_int(band.get(k),0,1800)!=v for k,v in expected.items()):
+        issues.append('ISSUED_DOSE_AND_MECHANICS_DIVERGE')
+    # R195.9 renders 299 s as '5.0 min': preserve the exact original
+    # R196.0 rounding tolerance, without widening the scientific dose.
+    attested_work_s=finite_int(band.get('work_seconds'),60,1800)
+    attested_recovery_s=finite_int(band.get('recovery_seconds'),20,1800)
+    if (attested_work_s is None or attested_recovery_s is None
+        or abs(attested_work_s-work_seconds)>3.1
+        or abs(attested_recovery_s-recovery_seconds)>6.1):
+        issues.append('COUPLED_TIMING_AND_ATTESTED_DOSE_DIVERGE')
+    if (finite_int(s.get('prescribed_power_low'),1,1500)!=work_low
+        or finite_int(s.get('prescribed_power_high'),1,1500)!=work_high):
+        issues.append('ISSUED_WORK_POWER_BAND_MISMATCH')
+    try:
+        declared=_parse_duration_minutes(s.get('duration'))
+        core=(reps*(attested_work_s if attested_work_s is not None else work_seconds)
+             +(reps-1)*(attested_recovery_s if attested_recovery_s is not None else recovery_seconds))
+        if (declared is None or not math.isfinite(float(declared))
+            or float(declared)*60+1<core):
+            issues.append('WORKOUT_DOES_NOT_FIT_DECLARED_DURATION')
+    except (TypeError,ValueError,OverflowError):
+        issues.append('COUPLED_TIMING_UNVERIFIED')
+    if str(s.get('restriction') or 'NONE').upper()!='NONE':
+        issues.append('EXPLICIT_RESTRICTION_PRESERVED')
+    # Work and recovery are the original native measured-dose pair, not
+    # independently invented numbers. R196.0 independently proves their source.
+    return {'schema':R196933_SCHEMA,'available':True,'ready':not issues,
+            'workout_id':_R196933_VIRTUAL_ID,'goal':None,'pattern':'MEASURED_COUPLED_DOSE',
+            'work':f"{reps} × {(attested_work_s if attested_work_s is not None else work_seconds)/60:g} min",
+            'recovery':f"{int(attested_recovery_s if attested_recovery_s is not None else recovery_seconds)//60} min {int(attested_recovery_s if attested_recovery_s is not None else recovery_seconds)%60:02d} s at {recovery_low}–{recovery_high} W between reps",
+            'power':f'{work_low}–{work_high} W measured-dose work range',
+            'total':s.get('duration'),'issues':issues}
+
+
+def _v196933_raw_attested(prescription, index, compiled_session, roadmap):
+    """Recheck the original scientific source, not just a plausible label."""
+    p = prescription if isinstance(prescription,dict) else {}
+    rows = p.get('raw_sessions')
+    if (type(index) is not int or not isinstance(rows,list) or not 0<=index<len(rows)
+        or not isinstance(rows[index],dict)
+        or not isinstance(roadmap,dict)):
+        return False
+    # R196.0 checks the watts/intervals but does not itself require the native
+    # activity identifier. Require an identifiable completed-source anchor.
+    science=roadmap.get('scientific_progression')
+    if not isinstance(science,dict):return False
+    dose=science.get('dose_contract')
+    if not isinstance(dose,dict):return False
+    reference=dose.get('reference')
+    selection=dose.get('reference_selection') or {}
+    prescription_dose=dose.get('prescription')
+    if (not isinstance(reference,dict) or not isinstance(selection,dict)
+        or not isinstance(prescription_dose,dict)):
+        return False
+    source_id=str(reference.get('activity_id') or '').strip()
+    if (not source_id or (selection.get('activity_id') and
+        str(selection.get('activity_id'))!=source_id)):
+        return False
+    proven=_v1960_coupled_power_band(rows[index],compiled_session,roadmap)
+    band=(compiled_session or {}).get('power_prescription') or {}
+    return bool(isinstance(proven,dict) and proven.get('state')=='PRESCRIBED'
+        and proven.get('source')=='OBSERVED_COUPLED_RECOVERY_DOSE'
+        and proven.get('low_watts')==band.get('low_watts')==compiled_session.get('prescribed_power_low')
+        and proven.get('high_watts')==band.get('high_watts')==compiled_session.get('prescribed_power_high')
+        and all(proven.get(k)==band.get(k) for k in
+              ('reps','work_seconds','recovery_seconds','recovery_watts_low','recovery_watts_high')))
+
+
 def _v19696_execution_contract(session):
     """One pure contract for EVERY Nova library family and goal.
 
@@ -46815,6 +46946,8 @@ def _v19696_execution_contract(session):
     """
     s = session if isinstance(session, dict) else {}
     wid = str(s.get('nova_workout_id') or '')
+    if wid == _R196933_VIRTUAL_ID:
+        return _v196933_virtual_execution_contract(s)
     t = _R19696_LIBRARY_INDEX.get(wid)
     if not isinstance(t, dict):
         return {'schema':R19696_SCHEMA,'available':False,'ready':False,
@@ -47232,6 +47365,10 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
         if not hard:continue
         sid=str(original.get('nova_workout_id') or '')
         spec=_v19696_execution_contract(original)
+        if sid == _R196933_VIRTUAL_ID and spec.get('ready'):
+            if not _v196933_raw_attested(prescription,i,original,adaptive_roadmap):
+                spec=dict(spec,ready=False,
+                    issues=list(spec.get('issues') or [])+['ORIGINAL_COUPLED_DOSE_ATTESTATION_FAILED'])
         checked.append({'index':i,'workout_id':sid,'goal':spec.get('goal'),
                         'pattern':spec.get('pattern'),'result':'PASS' if spec['ready'] else 'BLOCKED',
                         'issues':list(spec['issues'])})
@@ -53345,6 +53482,11 @@ def _v196918_calibration_request(snapshot):
     return result
 
 APP_VERSION='THE LAB · PRODUCT V4.9.133 R196.9.32 · COACH-ASSIGNED TEST NOTIFICATION · NOVA R196.2 CORE'
+
+
+
+# R196.9.33 — virtual measured-dose interoperability (no additional safety bypass).
+APP_VERSION='THE LAB · PRODUCT V4.9.134 R196.9.33 · COUPLED-DOSE CONTRACT INTEROPERABILITY · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
