@@ -45316,7 +45316,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     prep=30 if str(dimension or '').upper()=='DURABILITY' else (20 if str(dimension or '').upper()=='RACE_TRANSFER' else 12)
     core=_v19697_workout_core_seconds(template)
     if (chosen.get('state')=='PRESCRIBED' and reliable_minutes is not None
-            and core and core[0]/60+prep+8>reliable_minutes+0.25):
+            and core and core[0]/60+prep+5>reliable_minutes+0.25):
         similar=[]
         original_quality=float(_v109_template_total_quality_min(template) or 0)
         for alt in _NOVA_WORKOUT_LIBRARY:
@@ -45324,13 +45324,13 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
                     or str(dimension or '').upper() not in set(alt.get('dimensions') or ())
                     or alt.get('adaptive_only') or alt.get('id')==template.get('id')):continue
             acore=_v19697_workout_core_seconds(alt)
-            if not acore or acore[0]/60+prep+8>reliable_minutes+0.25:continue
+            if not acore or acore[0]/60+prep+5>reliable_minutes+0.25:continue
             work=float(_v109_template_total_quality_min(alt) or 0)
             if original_quality and not (0.75*original_quality<=work<=1.10*original_quality):continue
             power=_v1943_band(alt,evidence_ledger=evidence_ledger,
                              ftp_anchor=context.get('ftp_anchor'),as_of_date=as_of,dimension=dimension)
             if power.get('state')=='PRESCRIBED':
-                similar.append((abs(original_quality-work),abs(reliable_minutes-(acore[0]/60+prep+8)),str(alt.get('id')),alt,power))
+                similar.append((abs(original_quality-work),abs(reliable_minutes-(acore[0]/60+prep+5)),str(alt.get('id')),alt,power))
         if similar:
             similar.sort(key=lambda v:v[:3])
             _,_,_,chosen_alt,chosen_power=similar[0]
@@ -45361,7 +45361,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
         if not option or str(option.get('pattern') or '').upper() not in patterns:
             continue
         oc=_v19697_workout_core_seconds(option)
-        if reliable_minutes is not None and (not oc or oc[0]/60+prep+8>reliable_minutes+0.25):continue
+        if reliable_minutes is not None and (not oc or oc[0]/60+prep+5>reliable_minutes+0.25):continue
         band = _v1943_band(option, evidence_ledger=evidence_ledger,
                             ftp_anchor=context.get('ftp_anchor'), as_of_date=as_of,
                             dimension=dimension)
@@ -45373,6 +45373,65 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
                     'power_source':band.get('source'), 'candidate_id':ident}})
             return dict(option), metadata
         rejected.append({'id':ident, 'state':'NO_MEANINGFUL_NEW_STIMULUS' if repeat_option else band.get('state'), 'repeat_guard':repeat_option})
+    # R196.9.47: the decision engine owns whether hard work is scheduled.
+    # Prior compilation used an 8-min additive margin even though the actual
+    # contract requires a 5-min cooldown. That rejects fully feasible 60-min
+    # workouts and silently turns an eligible hard opportunity into EASY_ONLY.
+    # Search the SAME canonical library, same goal/dimension, genuine observed
+    # power support and novelty; count the complete actual timeline including
+    # the 5-min mandatory cooldown, not an extra imaginary 3-min veto.
+    # Never borrow a different user's evidence or repeat a recently performed
+    # identical main set. No scheduling/recovery permission is manufactured.
+    if reliable_minutes is not None and str(template.get('pattern') or '').upper() in patterns:
+        original_quality = float(_v109_template_total_quality_min(template) or 0)
+        fallback = []
+        for alt in _NOVA_WORKOUT_LIBRARY:
+            ident = str(alt.get('id') or '')
+            if (not ident or ident in used or alt.get('adaptive_only')
+                    or str(alt.get('goal') or '').upper() != str(goal or '').upper()
+                    or str(dimension or '').upper() not in set(alt.get('dimensions') or ())
+                    or str(alt.get('pattern') or '').upper() not in patterns):
+                continue
+            core = _v19697_workout_core_seconds(alt)
+            qmin = float(_v109_template_total_quality_min(alt) or 0)
+            if (not core or core[0]/60.0 + prep + 5.0 > reliable_minutes + .25
+                    or not qmin or (original_quality and
+                    not (.75*original_quality <= qmin <= 1.20*original_quality))):
+                continue
+            band = _v1943_band(alt, evidence_ledger=evidence_ledger,
+                ftp_anchor=context.get('ftp_anchor'), as_of_date=as_of,
+                dimension=dimension)
+            if band.get('state') != 'PRESCRIBED' or _v1962_repeat_guard(alt,band,evidence_ledger,slot):
+                continue
+            score = next((float(r.get('score') or 0)
+                for r in ranked if str(r.get('id') or '') == ident), None)
+            # After a recent measured hard dose, prefer a non-escalating dose;
+            # power and repetition mechanics still come from the canonical
+            # workout and cannot be invented by the renderer.
+            fallback.append((qmin > original_quality + 1e-6,
+                abs(qmin-original_quality), -(score if score is not None else
+                    float(alt.get('priority') or 0)/2.0), ident, alt, band))
+        if fallback:
+            fallback.sort(key=lambda v:v[:4])
+            _,_,_,ident,selected,band=fallback[0]
+            rank_row=next((row for row in ranked if row.get('id')==ident),{})
+            original_choice=metadata.get('original_id') or template.get('id')
+            metadata.update({'selected_id':ident,
+                'selected_score':rank_row.get('score'),
+                'selected_signature':rank_row.get('signature') or
+                    _v109_template_signature(selected),
+                'selected_facet':rank_row.get('facet'),
+                'original_id':original_choice,
+                'reason':'R196947_CANONICAL_FEASIBLE_QUALITY_WITH_EXACT_COOLDOWN',
+                'feasibility_gate':{'schema':'R196.9.47-SINGLE-DECISION-COMPILER-1',
+                    'selected':'SAME_DIMENSION_CANONICAL_WORKOUT',
+                    'original_id':original_choice, 'candidate_id':ident,
+                    'minimum_duration_min':round(_v19697_workout_core_seconds(selected)[0]/60.0+prep+5.0,1),
+                    'slot_minutes':reliable_minutes, 'mandatory_cooldown_min':5,
+                    'no_extra_compiler_veto':True,
+                    'power_source':band.get('source'),
+                    'rejected':[item for item in rejected if str(item.get('id') or '')!=ident]}})
+            return dict(selected),metadata
     # A measured absolute-watt band is NOT needed for a canonical free/relative
     # mode. Choose only an existing same-goal, same-question protocol; the normal
     # compiler still owns real safety and scheduling checks.
@@ -48164,16 +48223,20 @@ def compile_nova_prescription(prescription, coach_clock, training_definitions=No
                         'issues':list(spec['issues'])})
         if not spec['ready']:
             s=dict(original)
-            s.update({'title':'Easy aerobic · incomplete quality deferred',
-                      'intensity':'EASY','intensity_class':'recovery',
+            # Never disguise a failed *technical* compilation as the coach's
+            # decision to prescribe an ordinary easy ride. The unissued hard
+            # contract must be visible and explicitly NOT executable.
+            s.update({'title':'Quality not executable · incomplete contract',
+                      'intensity':'BLOCKED','intensity_class':'recovery',
                       'hard_spacing_relevant':False,'provisional_quality':False,
                       'stimulus_architecture_state':'NOT_HARD','stimulus_role':None,
                       'stimulus_domain':None,'nova_workout_id':None,
                       'nova_contract_id':None,'quality_relevance':'NOT_HARD',
                       'prescribed_power_low':None,'prescribed_power_high':None,
                       'power_band':None,'quality_target_ratio':None,
-                      'main_set':'Easy Z1–Z2; the incomplete HARD prescription was not issued.',
-                      'why':'The canonical workout cannot be executed without a defensible full work/recovery/power contract. See the completeness audit.',
+                      'main_set':'No hard workout has been issued for this slot: the selected canonical mechanics are incomplete. Follow only the separately issued easy-day guidance.',
+                      'why':'The selected hard dose needs a complete work/recovery/power contract before it can be executed. This is a technical compilation failure, not a coaching instruction to replace quality with easy work.',
+                      'unissued_candidate_workout_id':sid,
                       'unissued_quality_reason':'R19696_INCOMPLETE_WORKOUT_CONTRACT'})
             rows[i]=s;blocked.append(i)
         elif (spec.get('pattern') in _R19696_NUMERIC_PATTERNS and
@@ -53011,6 +53074,72 @@ def compile_nova_prescription(prescription,coach_clock,training_definitions=None
                         'retroactive_prescription_fulfillment':False,
                     }
                     break
+    # When a DIFFERENT canonical hard set is selected after a measured recent
+    # workout, preserve the observation and explain the new plan to the athlete.
+    # A completed ride is not a retroactively fulfilled future prescription.
+    if (isinstance(out,dict) and isinstance(prescription,dict) and
+            prescription.get('status')=='PRESCRIBED' and
+            prescription.get('hard_prescription_available') is True and
+            str((prescription.get('workout_library') or {}).get('reason') or '') ==
+                'R196947_CANONICAL_FEASIBLE_QUALITY_WITH_EXACT_COOLDOWN'):
+        index=prescription.get('selected_slot_index')
+        slots=(coach_clock or {}).get('next_slots') or []
+        if type(index) is int and 0<=index<len(slots):
+            observed=_v196946_recent_observed_workout_ids(slots[index],
+                prescription.get('goal_key'),prescription.get('dimension'))
+            current_id=str(prescription.get('workout_id') or '')
+            previous=next(((wid,credit) for wid,credit in observed.items()
+                if wid!=current_id and isinstance(credit,dict) and credit.get('activity_id')),None)
+            if previous:
+                prior_id,credit=previous
+                for sess in out.get('sessions') or []:
+                    if (isinstance(sess,dict) and sess.get('nova_workout_id')==current_id and
+                            sess.get('hard_spacing_relevant') is True):
+                        sess['why']=('Measured hard work on '+str(credit['actual_date'])+
+                            ' already covered '+prior_id+'. This is a DIFFERENT '+
+                            'canonical quality session, not a repeat or a postponed debt. '+
+                            str(sess.get('why') or ''))
+                        sess['recent_quality_context']={
+                            'schema':R196946_SCHEMA,'executed_date':credit['actual_date'],
+                            'activity_id':credit['activity_id'],'previous_workout_id':prior_id,
+                            'different_new_workout_id':current_id,
+                            'retroactive_prescription_fulfillment':False}
+                        break
+    # The compiler is an execution FORMATTER, not a second coach. Record the
+    # original prescription intent and check the actual compiled identity.
+    # A broken compilation is never silently published as a successful EASY
+    # recommendation; real safety, illness, racing and unavailable slots still
+    # prevent issuing the incomplete workout. No new route, DB field or gate.
+    if isinstance(out,dict) and isinstance(prescription,dict):
+        wanted=(prescription.get('status')=='PRESCRIBED' and
+                prescription.get('hard_prescription_available') is True)
+        out['requested_hard_prescription_available']=bool(wanted)
+        if wanted:
+            ident=str(prescription.get('workout_id') or prescription.get('contract_id') or '')
+            rows=[x for x in (out.get('sessions') or []) if isinstance(x,dict)]
+            matched=[x for x in rows if str(x.get('nova_workout_id') or '')==ident
+                     and x.get('hard_spacing_relevant') is True]
+            ready=[x for x in matched if x.get('provisional_quality') is not True]
+            state=('READY' if ready and out.get('status')=='PRESCRIBED' else
+                   'FUTURE_RECHECK' if matched else 'COMPILATION_DIVERGENCE')
+            out['coach_compiler_contract']={
+                'schema':'R196.9.47-COACH-AUTHORITY-PROJECTION-1',
+                'state':state, 'requested_workout_id':ident,
+                'compiled_workout_ids':[str(x.get('nova_workout_id') or '') for x in matched],
+                'decision_made_by':'NOVA_PRESCRIPTION_ENGINE',
+                'compiler_can_select_a_different_workout':False,
+                'no_implicit_easy_fallback':True}
+            if state=='COMPILATION_DIVERGENCE' and out.get('status') not in {'BLOCKED','HOLD','DEFERRED'}:
+                out['status']='BLOCKED'
+                out['execution_status']='BLOCKED_COMPILER_CONTRACT_DIVERGENCE'
+                out['fail_closed_reason']='SELECTED_HARD_NOT_PROJECTED_NO_SAFETY_REASON'
+                out['hard_prescription_available']=False
+                out['coach_compiler_contract']['state']='BLOCKED_EXPLICIT_COMPILER_ERROR'
+        else:
+            out['coach_compiler_contract']={
+                'schema':'R196.9.47-COACH-AUTHORITY-PROJECTION-1',
+                'state':'NO_HARD_REQUESTED', 'decision_made_by':'NOVA_PRESCRIPTION_ENGINE',
+                'compiler_can_select_a_different_workout':False}
     return out
 
 _r196926_before_summary=_v4840_ledger_session_summary
@@ -55120,7 +55249,7 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.146 R196.9.46 · RECENT OBSERVED DOSE CONTINUITY · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.147 R196.9.47 · SINGLE COACH AUTHORITY + EXACT SESSION ENVELOPE · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
