@@ -51729,7 +51729,7 @@ def _v196926_compile_first_observation(out,prescription,clock):
     downstream semantic projections must retain the exact signed identity.
     """
     p=prescription or {}; b=p.get('initial_evidence_bridge') or {}
-    if b.get('state')!='CONSENTED_FOR_CANONICAL_COMPILATION':return out
+    if b.get('state') not in {'CONSENTED_FOR_CANONICAL_COMPILATION','COACH_SELECTED_FOR_CANONICAL_COMPILATION'}:return out
     req=b.get('request') or {}; t=req.get('template') or {}
     source=next((x for x in _NOVA_WORKOUT_LIBRARY
                  if x.get('id')==t.get('template_id') and x.get('goal')==req.get('goal_key')),None)
@@ -52984,6 +52984,367 @@ BASE_CSS+="""\n.v196931-planned{font-size:12px;line-height:1.5;padding:9px 12px;
 
 APP_VERSION='THE LAB · PRODUCT V4.9.132 R196.9.31 · COACH-LED FORWARD QUALITY · TEST-ONLY CONSENT · NOVA R196.2 CORE'
 
+
+
+# R196.9.32 — COACH ASSIGNS · TEST NOTICE, NOT CONSENT
+# Correct the three older consent paths without bypassing recovery, canonical
+# protocol, race, activity provenance, locked slots or final ledger attestation.
+# A notification is not permission, proof of execution or a watt measurement.
+R196932_SCHEMA='V4.9.133-R196.9.32-COACH_ASSIGNED_TEST_NOTICE-1'
+
+def _v196932_athlete_explicitly_unavailable(slot,window=None):
+    """The coach may choose a slot, but may not override an actual 'no'."""
+    for s in (slot,window):
+        if not isinstance(s,dict):continue
+        source=str(s.get('availability_source') or '').upper()
+        if s.get('availability_confirmed') is False and (
+                source.startswith('ATHLETE') or source.startswith('USER') or
+                source.startswith('CALENDAR_EXPLICIT') or source.startswith('MANUAL_UNAVAILABLE')):
+            return True
+    return False
+
+# R27 native branch: remove the agreement lookup, retain the canonical native
+# validation key (due checkpoint, exact slot, catalog contract) and safety.
+def _v196920_guard_native_r27(prescription,decision,road,clock,context,ledger,user_id):
+    p=prescription if isinstance(prescription,dict) else {}
+    if (str(p.get('workout_id') or p.get('contract_id') or '')!=_R196920_VALIDATION_ID
+            or str(p.get('status') or '').upper()!='PRESCRIBED'):
+        return p,{}
+    snap={'nova_prescription':p,'nova_decision':decision,
+          'adaptive_roadmap':road,'coach_clock':clock,'microcycle_ledger':ledger}
+    cfg=_v4893_validation_contract(road)
+    slots=(clock or {}).get('next_slots') or []
+    idx=p.get('selected_slot_index')
+    slot=slots[idx] if type(idx) is int and 0<=idx<len(slots) else {}
+    window=(road or {}).get('quality_window') or {}
+    ctx=context if isinstance(context,dict) else {}
+    # A coach-selected slot is calendar assignment, not an athlete's acceptance.
+    # Never bypass a genuine explicit unavailability, race or contextual blackout.
+    slot_valid=bool(type(idx) is int and isinstance(slot,dict) and slot and
+        not slot.get('is_race') and str(slot.get('restriction') or 'NONE').upper()=='NONE' and
+        str(slot.get('date') or '')[:10] not in set(ctx.get('blackout_dates') or []) and
+        str(slot.get('date') or '')[:10] not in set(ctx.get('no_intensity_dates') or []) and
+        not _v196932_athlete_explicitly_unavailable(slot,window))
+    upstream_safe=bool(slot_valid and not ctx.get('health_override') and
+        str((decision or {}).get('action') or '').upper()=='VALIDATE' and
+        str(window.get('state') or '').upper() not in _R196918_NO_HARD and
+        (cfg.get('mode')=='SUBMAX_DURABILITY' or (decision or {}).get('hard_session_allowed') is True))
+    if upstream_safe and slot.get('availability_confirmed') is not True:
+        slot['availability_confirmed']=True
+        slot['availability_source']='NOVA_COACH_ASSIGNED_R27_TEST'
+    token=_v196920_native_key(snap) if upstream_safe else None
+    safe=bool(token and upstream_safe)
+    review={'schema':R196932_SCHEMA,'state':'R27_COACH_TEST_SAFETY_BLOCKED',
+        'native_requires_consent':False,'native_can_issue':False,
+        'request_id':token,'selected_slot_index':idx,'goal_key':cfg.get('goal_key'),
+        'mode':cfg.get('mode'),'seconds':cfg.get('seconds'),'issued':False,
+        'persisted':False,'can_execute':False,'notification_only':True}
+    if safe:
+        return p,dict(review,state='R27_COACH_TEST_PENDING_CANONICAL_COMPILER',native_can_issue=True)
+    held=_v196920_hold_native_r27(p,decision,clock)
+    held['source']='R27_SAFETY_OR_CANONICAL_SLOT_HOLD'
+    held['fail_closed_reason']='R27_CANONICAL_TEST_SAFETY_OR_SLOT_NOT_CLEARED'
+    return held,review
+
+# R27 acquisition branch: original official R27 alignment and compiler remain
+# sole owners. No synthetic ACCEPT or consent decision is ever generated.
+def _v196920_prepare_consented_r27(snapshot,user_id=None,read_only=False,agreement=None):
+    snap=snapshot if isinstance(snapshot,dict) else {}
+    pres=snap.get('nova_prescription') or {}
+    base={'schema':R196932_SCHEMA,'state':'NO_SAFE_CANONICAL_TEST',
+          'issued':False,'persisted':False,'can_execute':False,
+          'request_id':None,'notification_only':True,'requires_consent':False}
+    if pres.get('status')=='PRESCRIBED' and pres.get('hard_prescription_available') is True:
+        return None,dict(base,state='EXISTING_QUALITY_PRESERVED')
+    gate=_v196919_authorize_request(snap)
+    if gate.get('can_ask_consent') is not True:
+        return None,dict(base,state=gate.get('state') or 'CANONICAL_TEST_UNAVAILABLE')
+    token=gate.get('request_id')
+    road=snap.get('adaptive_roadmap') or {}
+    dec=snap.get('nova_decision') or {}
+    clock=snap.get('coach_clock') or {}
+    context=snap.get('planning_context') or {}
+    window=road.get('quality_window') or {}
+    test=road.get('test') or {}
+    if (dec.get('hard_session_allowed') is not True or
+        str(dec.get('action') or '').upper() not in {'TRAIN','VALIDATE'} or
+        str(window.get('state') or '').upper() in _R196918_NO_HARD or
+        context.get('health_override') or
+        str(test.get('state') or '').upper() not in _R196919_ACTIVE_TEST_STATES or
+        not _v4893_validation_due(road,snap.get('microcycle_ledger'))):
+        return None,dict(base,state='R27_SAFETY_OR_CANONICAL_STAGE_HOLD',request_id=token)
+    slots=clock.get('next_slots') or []
+    raw=pres.get('raw_sessions') or []
+    if not isinstance(raw,list) or not isinstance(slots,list) or not slots:
+        return None,dict(base,state='R27_NO_COACH_SLOTS',request_id=token)
+    selected=_v4893_align_due_validation_to_window(raw,clock,
+        adaptive_roadmap=road,microcycle_ledger=snap.get('microcycle_ledger'))
+    found=[i for i,row in enumerate(selected or []) if isinstance(row,dict)
+           and row.get('_tl_deterministic_validation') is True]
+    if len(found)!=1:
+        return None,dict(base,state='R27_CANONICAL_TEST_SLOT_NOT_FOUND',request_id=token)
+    idx=found[0]
+    slot=slots[idx] if idx<len(slots) else None
+    if not isinstance(slot,dict):
+        return None,dict(base,state='R27_INVALID_CLOCK_SLOT',request_id=token)
+    day=str(slot.get('date') or '')[:10]
+    if (not day or day in set(context.get('blackout_dates') or []) or
+        day in set(context.get('no_intensity_dates') or []) or slot.get('is_race') or
+        str(slot.get('restriction') or 'NONE').upper()!='NONE' or
+        _v196932_athlete_explicitly_unavailable(slot,window)):
+        return None,dict(base,state='R27_CALENDAR_OR_AVAILABILITY_HOLD',request_id=token)
+    for row in (snap.get('microcycle_ledger') or {}).get('prescription_history') or []:
+        if not isinstance(row,dict):continue
+        if (str(row.get('prescription_status') or '').upper() in
+            {'ACTIVE','PLANNED','ISSUED','MISSED_UNEXECUTED'} and
+            str(row.get('planned_date') or row.get('date') or '')[:10]==day):
+            return None,dict(base,state='R27_EXISTING_LIVE_PLAN_OWNS_SLOT',request_id=token)
+    real=_v4893_validation_contract(road)
+    generated=(selected[idx] or {}).get('_tl_validation_contract') or {}
+    if (not real.get('available') or generated.get('available') is not True or
+        generated.get('seconds')!=real.get('seconds') or
+        generated.get('goal_key')!=real.get('goal_key')):
+        return None,dict(base,state='R27_CANONICAL_CONTRACT_MISMATCH',request_id=token)
+    # Availability here means a selected free coach-calendar slot, not signed
+    # athlete permission. Explicit unavailability was checked above.
+    if slot.get('availability_confirmed') is not True:
+        slot['availability_confirmed']=True
+        slot['availability_source']='NOVA_COACH_ASSIGNED_R27_TEST'
+    candidate=copy.deepcopy(pres)
+    candidate.update({'status':'PRESCRIBED','source':'VALIDATION_CONTRACT',
+        'workout_id':_R196920_VALIDATION_ID,
+        'contract_id':_R196920_VALIDATION_ID,'selected_slot_index':idx,
+        'raw_sessions':copy.deepcopy(selected),
+        'hard_prescription_available':real.get('mode')=='MAXIMAL',
+        'fail_closed_reason':None,
+        'evidence_cycle_source':'R27_COACH_ASSIGNED_MISSING_POWER_TEST',
+        'evidence_cycle_request_id':token})
+    return candidate,dict(base,state='R27_COACH_TEST_PENDING_CANONICAL_COMPILER',
+        request_id=token,selected_slot_index=idx,
+        goal_key=real.get('goal_key'),seconds=real.get('seconds'),mode=real.get('mode'))
+
+# Initial measured-work observation. No athlete approval is asked or persisted;
+# the measurement protocol is selected only after the existing science checks.
+# Preserve the old bridge token field for downstream immutable comparisons:
+# it now means canonical COACH REQUEST ID, NOT a signed athlete agreement.
+def _v196926_prepare_first_observation(decision,road,clock,p):
+    out=copy.deepcopy(p if isinstance(p,dict) else {})
+    science=(road or {}).get('scientific_progression') or {}
+    dim=str((decision or {}).get('dimension') or science.get('dimension') or '').upper()
+    # A repeated-work observation cannot be promoted to a general-purpose test
+    # for an unrelated science question merely because some dose is unavailable.
+    if dim!='RECOVERY_UNDER_LOAD':return out
+    req=_v196926_initial_request(decision,road,clock,p)
+    if req.get('state') in {'OTHER_SCIENCE_OWNER','EXISTING_CONTRACT_AVAILABLE',
+                            'COMPARABLE_EVIDENCE_PATH_AVAILABLE'}:
+        return out
+    bridge={'schema':R196926_SCHEMA,'state':req.get('state'),
+            'request':req,'issued':False,'requires_consent':False,
+            'notification_only':True,'policy':R196932_SCHEMA}
+    out['initial_evidence_bridge']=bridge
+    if req.get('state')!='CONSENT_REQUIRED':return out
+    slots=(clock or {}).get('next_slots') or []
+    idx=req.get('index')
+    if type(idx) is not int or idx<0 or idx>=len(slots):return out
+    slot=slots[idx];window=(road or {}).get('quality_window') or {}
+    if (not isinstance(slot,dict) or slot.get('is_race') or
+        str(slot.get('restriction') or 'NONE').upper()!='NONE' or
+        window.get('preferred_iso')!=req.get('window_iso') or
+        _v196932_athlete_explicitly_unavailable(slot,window)):
+        out['initial_evidence_bridge']=dict(bridge,state='TEST_SLOT_UNAVAILABLE_OR_RESTRICTED')
+        return out
+    ctx=(road or {}).get('planning_context') or {}
+    if (req.get('date') in set(ctx.get('blackout_dates') or []) or
+            req.get('date') in set(ctx.get('no_intensity_dates') or [])):
+        out['initial_evidence_bridge']=dict(bridge,state='TEST_SLOT_BLOCKED_BY_CALENDAR')
+        return out
+    # Internal compiler still expects an exact-slot mechanical confirmation.
+    # This is a coach-owned calendar assignment, not an athlete's approval.
+    slot['availability_confirmed']=True
+    slot['availability_source']='NOVA_COACH_ASSIGNED_EVIDENCE_TEST'
+    window['availability_confirmed']=True
+    window['availability_source']='NOVA_COACH_ASSIGNED_EVIDENCE_TEST'
+    out['initial_evidence_bridge']=dict(bridge,
+        state='COACH_SELECTED_FOR_CANONICAL_COMPILATION',
+        coach_request_id=req['request_id'],
+        agreed_request_id=req['request_id'],  # backward-compatible ledger field, not athlete consent
+        authority='NOVA_DETERMINISTIC_TEST_PLANNING',
+        legacy_state_name_only=True)
+    return out
+
+# A 'notice' is displayed only for a real science gap with a canonical test;
+# normal coached quality is never sent through this presentation path.
+def _v196932_test_notice(snapshot):
+    s=snapshot if isinstance(snapshot,dict) else {}
+    p=s.get('nova_prescription') or {}
+    dec=s.get('nova_decision') or {}
+    road=s.get('adaptive_roadmap') or {}
+    b=p.get('initial_evidence_bridge') or {}
+    if isinstance(b,dict) and b.get('policy')==R196932_SCHEMA:
+        req=b.get('request') or {};t=req.get('template') or {}
+        if b.get('state') in {'CANONICAL_OBSERVATION_COMPILED',
+            'CONSENTED_PENDING_SAME_DAY_RECHECK','COACH_SELECTED_FOR_CANONICAL_COMPILATION'}:
+            return {'kind':'INITIAL_WORK_RECOVERY','date':req.get('date'),
+                'start_minute':req.get('start_minute'),
+                'protocol':t.get('template_id'),
+                'reason':((road.get('scientific_progression') or {}).get('dose_contract') or {}).get('reason') or 'MISSING_VERIFIED_REPEATED_WORK_RECOVERY',
+                'state':('SCHEDULED' if b.get('issued') else 'PLANNED_PENDING_SAFETY'),
+                'request_id':req.get('request_id'),
+                'work_seconds':t.get('work_seconds'),'reps':t.get('reps'),
+                'recovery_seconds':t.get('recovery_seconds'),
+                'instruction':'No invented watt target. Record real work and recovery measurements.'}
+    rv=s.get('evidence_cycle_review') or p.get('evidence_cycle_review') or {}
+    if (rv.get('issued') is True and rv.get('mode') in {'MAXIMAL','SUBMAX_DURABILITY'}
+            and rv.get('goal_key') and rv.get('planned_date')):
+        return {'kind':'PRIMARY_R27','date':rv.get('planned_date'),
+            'protocol':'VALIDATION_CONTRACT_V1','reason':'MISSING_CANONICAL_GOAL_REFERENCE',
+            'state':'SCHEDULED','start_minute':None,'reps':None,
+            'instruction':'Follow the exact official R27 protocol in your current plan.'}
+    return None
+
+app.jinja_env.globals['nova_missing_power_test_notice']=_v196932_test_notice
+
+# Remove the legacy forms at their template owners. The pages may still
+# contain the old branches, but all consent-only Jinja gates return None.
+# The missing-evidence notice is presented separately (including Home).
+def _v196925_ui(snapshot):
+    return None
+app.jinja_env.globals['nova_initial_evidence_ui']=_v196925_ui
+
+def _v196920_ui_native_pending(snapshot):
+    return None
+app.jinja_env.globals['nova_native_r27_pending']=_v196920_ui_native_pending
+
+def _v196920_ui_issued_test(snapshot):
+    return None
+app.jinja_env.globals['nova_evidence_issued_test']=_v196920_ui_issued_test
+
+def _v196919_ui_agreement(snapshot):
+    return None
+app.jinja_env.globals['nova_evidence_agreement']=_v196919_ui_agreement
+
+# Endpoint authentication and CSRF still run through Flask for legacy traffic,
+# but old ACCEPT / DECLINE / WITHDRAW can no longer mutate test authority.
+# Existing independent LINK_ACTIVITY remains available at the same endpoint.
+_r196932_initial_route_before=nova_initial_evidence
+def nova_initial_evidence():
+    if str(request.form.get('decision') or '').upper()!='LINK_ACTIVITY':
+        abort(410)
+    return _r196932_initial_route_before()
+app.view_functions['nova_initial_evidence']=nova_initial_evidence
+
+def nova_evidence_consent():
+    abort(410)
+app.view_functions['nova_evidence_consent']=nova_evidence_consent
+
+def nova_coupled_assessment_consent():
+    abort(410)
+app.view_functions['nova_coupled_assessment_consent']=nova_coupled_assessment_consent
+
+# Replace the solitary stale R27 opt-in form with a neutral status instruction;
+# this branch is not used for ordinary quality either.
+_R196932_OLD_R27_UI="{% if calibration.state == 'ASK_TO_VALIDATE' and calibration.test and calibration.test.protocol == 'EXISTING_R27_PRIMARY_VALIDATION' and not is_preview and not report_mode and not qa_mode %}"
+# Hide its consent surface without changing science decision/identity.
+HOME_PAGE=HOME_PAGE.replace(_R196932_OLD_R27_UI,
+    "{% if false and calibration.state == 'ASK_TO_VALIDATE' and calibration.test and calibration.test.protocol == 'EXISTING_R27_PRIMARY_VALIDATION' and not is_preview and not report_mode and not qa_mode %}",1)
+
+_R196932_HOME_ANCHOR='<section class="v4-card v4-hero">'
+assert HOME_PAGE.count(_R196932_HOME_ANCHOR)==1,'R196932 missing Home test-notice insertion anchor'
+HOME_PAGE=HOME_PAGE.replace(_R196932_HOME_ANCHOR,r"""{% if not is_preview and not qa_mode and not report_mode %}
+{% set notice_snapshot = data if data else (consent_snapshot_data if consent_snapshot_data is defined else none) %}
+{% if notice_snapshot %}
+{% set missing_power_test = nova_missing_power_test_notice(notice_snapshot) %}
+{% if missing_power_test %}
+<section class="v196932-test-notice" role="status" aria-label="NOVA scheduled measurement test">
+<strong>NOVA COACH · MEASUREMENT TEST {{ missing_power_test.state }}</strong>
+<p>NOVA has selected a {{ missing_power_test.kind }} measurement because {{ missing_power_test.reason }}.</p>
+<p><b>Date:</b> {{ missing_power_test.date or 'Awaiting verified slot' }}{% if missing_power_test.start_minute is not none %} · {{ '%02d:%02d'|format(missing_power_test.start_minute // 60, missing_power_test.start_minute % 60) }}{% endif %}. <b>Protocol:</b> {{ missing_power_test.protocol }}.</p>
+{% if missing_power_test.reps %}<p>{{ missing_power_test.reps }} × {{ missing_power_test.work_seconds }} seconds of controlled work, {{ missing_power_test.recovery_seconds }} seconds recovery.</p>{% endif %}
+<p>{{ missing_power_test.instruction }}{% if missing_power_test.state == 'PLANNED_PENDING_SAFETY' %} This is a planned test, not yet executable: current recovery and the canonical compiler must clear it before you ride.{% else %} If illness, safety or availability changes, update NOVA before riding.{% endif %}</p>
+<p>No acceptance checkbox or permission request. NOVA assigns the test; completion must be verified from your actual activity.</p>
+{% if missing_power_test.kind == 'INITIAL_WORK_RECOVERY' and missing_power_test.request_id %}
+<form method="post" action="{{ url_for('nova_initial_evidence') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="request_id" value="{{ missing_power_test.request_id }}">
+<label>Already completed this measurement? Link its own-account Intervals.icu activity ID:
+<input type="text" name="activity_id" maxlength="80" placeholder="i123456789" required></label>
+<button type="submit" name="decision" value="LINK_ACTIVITY">Link measured activity</button>
+</form>{% endif %}
+</section>
+{% endif %}{% endif %}{% endif %}
+""" + _R196932_HOME_ANCHOR,1)
+BASE_CSS+="""\n.v196932-test-notice{padding:15px;margin:12px 0;border:1px solid rgba(119,197,215,.55);border-radius:12px}.v196932-test-notice strong{display:block;color:#a7e2f0}.v196932-test-notice p{font-size:13px;line-height:1.5}"""
+
+# Make the question backlog describe the coach action, never old permission.
+_r196932_backlog_before=_v196926_build_evidence_backlog
+def _v196926_build_evidence_backlog(snapshot):
+    result=_r196932_backlog_before(snapshot)
+    if not isinstance(result,dict):return result
+    out=copy.deepcopy(result)
+    for issue in out.get('issues') or []:
+        if not isinstance(issue,dict):continue
+        if issue.get('protocol_state')=='EXISTING_PROTOCOL_REQUIRES_CURRENT_SAFETY_AND_CONSENT':
+            issue['protocol_state']='EXISTING_PROTOCOL_REQUIRES_CURRENT_SAFETY'
+        if issue.get('protocol') in ('R27_GOAL_PRIMARY_TEST',_R196926_PROTOCOL):
+            issue['athlete_consent_required']=False
+    out['execution_requires_current_safety_and_consent']=False
+    out['execution_requires_current_safety_and_canonical_protocol']=True
+    b=(((snapshot or {}).get('nova_prescription') or {}).get('initial_evidence_bridge') or {})
+    if b.get('policy')==R196932_SCHEMA:
+        out.pop('consent_recognized',None)
+        out.pop('consent_request_id',None)
+        out['coach_test_request_id']=b.get('agreed_request_id')
+        out['coach_test_scheduled']=bool(b.get('issued'))
+        out['next_action']=('COMPLETE_COACH_ASSIGNED_TEST_AND_IMPORT_ACTIVITY' if b.get('issued')
+            else 'RECHECK_CALENDAR_SAFETY_AND_CANONICAL_COMPILATION')
+        for issue in out.get('issues') or []:
+            if isinstance(issue,dict) and issue.get('dimension')==out.get('current_dimension'):
+                issue['next_action']=out['next_action']
+                if 'CONSENT' in str(issue.get('protocol_state') or ''):
+                    issue['protocol_state']='COACH_TEST_PENDING_SAFETY_AND_COMPILER'
+    out['no_automatic_success_from_consent']=True
+    action=str(out.get('next_action') or '')
+    if 'CONSENT' in action:out['next_action']='COACH_SELECT_CANONICAL_TEST_OR_IMPORT_MISSING_EVIDENCE'
+    return out
+
+_r196932_acquisition_before=_v196928_acquisition_instruction
+def _v196928_acquisition_instruction(truth):
+    snap=(truth or {}).get('_v196928_snapshot') or {}
+    b=((snap.get('nova_prescription') or {}).get('initial_evidence_bridge') or {})
+    if b.get('policy')==R196932_SCHEMA and b.get('request'):
+        return ('NOVA identified missing measured work/recovery evidence and selected an '
+            'existing catalog test. See the coach test notice for the planned date and '
+            'protocol. No athlete consent is required. The prescribed test remains '
+            'subject to real safety and canonical compilation checks; no power '
+            'performance is credited until actual activity data is verified.')
+    review=snap.get('evidence_cycle_review') or {}
+    if review.get('schema')==R196932_SCHEMA and review.get('native_can_issue'):
+        return ('NOVA selected a canonical R27 test to acquire the missing goal '
+            'reference. No athlete consent is required. Follow the current prescribed '
+            'protocol; outcomes are verified from the completed activity.')
+    text=_r196932_acquisition_before(truth)
+    if isinstance(text,str) and ('consent' in text.lower() or 'agree' in text.lower()):
+        return ('NOVA is tracking an unresolved evidence question. A missing-data '
+            'test is prescribed only after its protocol, calendar and safety are '
+            'verified; ordinary training does not require a consent response.')
+    return text
+
+# Calibration UI is an explanation, not an authorization gate.
+_r196932_calibration_before=_v196918_calibration_request
+def _v196918_calibration_request(snapshot):
+    result=_r196932_calibration_before(snapshot)
+    if not isinstance(result,dict):return result
+    protocol=(result.get('test') or {}).get('protocol')
+    if protocol=='EXISTING_R27_PRIMARY_VALIDATION':
+        rv=(snapshot or {}).get('evidence_cycle_review') or {}
+        state='COACH_R27_TEST_SCHEDULED' if rv.get('issued') else 'COACH_R27_TEST_SAFETY_REVIEW'
+        return dict(result,state=state,
+            requires_explicit_athlete_agreement=False,notification_only=True,
+            next_step='FOLLOW_COACH_TEST_IF_ISSUED_ELSE_REVIEW_CANONICAL_SAFETY',
+            question='NOVA selects a canonical R27 measurement when a real goal reference is missing. The athlete is informed; no training authorization response is requested.')
+    return result
+
+APP_VERSION='THE LAB · PRODUCT V4.9.133 R196.9.32 · COACH-ASSIGNED TEST NOTIFICATION · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
