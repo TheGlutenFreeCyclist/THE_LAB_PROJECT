@@ -51110,61 +51110,10 @@ def _v1959_recovery_dose_contract(goal, dimension, features):
         return dict(coupled,reference_selection={'schema':R196924_SCHEMA,
             'activity_id':h['activity_id'],'date':h['date'],
             'reason':'LATEST_COMPARABLE_FULL_WORK_RECOVERY_NOT_LATEST_UNRELATED_INTERVAL'})
-    # Do not bypass any safety/quality hold, stale history, strength failure,
-    # unverified recovery, work-capacity floor, or meaningful-load gate.
-    if coupled.get('reason')!='NO_MEANINGFUL_LOADED_RECOVERY_STIMULUS':
-        return dict(coupled,reference_selection={'schema':R196924_SCHEMA,
-            'activity_id':h['activity_id'],'reason':'RETAIN_PRIOR_FAIL_CLOSED_GATE'})
-    ftp=float(h['ftp']); work=float(h['work_watts']); rec=float(h['recovery_watts'])
-    ratio=rec/ftp
-    if not .15<=ratio<.55:return base
-    # Same observed mechanics, one bounded measurement increment, deliberately
-    # de-rated work. No automatic award; not a disguised new hard progression.
-    floor5=lambda x:int(math.floor(float(x)/5)*5)
-    rec_high=floor5(min(rec+ftp*.06,ftp*.55))
-    rec_low=floor5(max(rec+2,rec_high-10))
-    work_high=floor5(work*.98);work_low=floor5(work*.94)
-    if (rec_high<=rec+2 or rec_low>=rec_high or work_low<=0 or
-            work_high<=work_low or work_high>=work or rec_high>rec+ftp*.0601):
-        return dict(base,reason='COUPLED_EVIDENCE_STEP_NOT_QUANTIFIABLE')
-    return {
-        'schema':R1959_SCHEMA,'available':True,
-        'stage':_R196924_ASSESSMENT,
-        'protocol_schema':R196924_SCHEMA,
-        'requires_explicit_athlete_agreement':True,
-        'normal_training_progression_authorized':False,
-        'assessment_only':True,'no_performance_pass_mark':True,
-        'reference':{
-            'date':h['date'],'activity_id':h['activity_id'],
-            'reps':int(h['reps']),'interval_secs':int(h['interval_secs']),
-            'recovery_secs':int(h['recovery_secs']),
-            'work_avg_watts':round(work,1),'recovery_avg_watts':round(rec,1),
-            'ftp':round(ftp,1),'recovery_ratio':round(ratio,3),
-            'recent_best_repeated_work_watts':round(work,1),
-            'minimum_meaningful_work_watts':round(work*.88,1),
-            'last_verified_recovery_watts':round(rec,1),
-            'last_verified_recovery_ratio':round(ratio,3),
-            'matched_completed_sessions':1,
-        },
-        'prescription':{
-            'reps':int(h['reps']),'interval_secs':int(h['interval_secs']),
-            'recovery_secs':int(h['recovery_secs']),
-            'work_watts_low':work_low,'work_watts_high':work_high,
-            'recovery_watts_low':rec_low,'recovery_watts_high':rec_high,
-            'recovery_ratio_low':round(rec_low/ftp,3),
-            'recovery_ratio_high':round(rec_high/ftp,3),
-        },
-        'reference_selection':{'schema':R196924_SCHEMA,
-            'activity_id':h['activity_id'],'date':h['date'],
-            'reason':'LATEST_STRONG_CANONICAL_MATCHED_PAIR; SHORT_RECOVERY_FLOAT_EXCLUDED'},
-        'rule':('An athlete-consented, single-slot, objectively measured assessment of coupled work and recovery. '
-                'Recovery power is limited to one small increase from a canonical measured baseline. '
-                'The WORK watt range is an optional exploratory starting point, not a ceiling or pass mark; '
-                'stronger sustainable work may be observed voluntarily. The athlete can reduce or stop. '
-                'Do not award loaded-recovery mastery without two independently proven meaningful successes.'),
-        'evidence_basis':'Exact completed canonical repeated work and recovery, not a single PB or estimated FTP power curve.',
-    }
-
+    # Do not promote an already-rejected easy-recovery repeat into an
+    # ordinary hard quality. The existing R196.1 scientific selector can
+    # choose a different *already evaluated* stimulus. No added gates/paths.
+    return coupled
 
 _r196924_before_repair=_v503_scientific_hard_repair
 
@@ -54359,7 +54308,7 @@ def _nova_prescription_outcome(snapshot, previous=None):
         'quality_is_not_a_wellness_color':True,
         'changes_any_prescription':False, 'another_blocking_gate':False}
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.139 R196.9.39 · VIRTUAL DOSE TIME ACCOUNTING / HONEST SLOT CLEARANCE · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.140 R196.9.40 · SCIENTIFIC SELECTION RESTORED · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
