@@ -53488,5 +53488,199 @@ APP_VERSION='THE LAB · PRODUCT V4.9.133 R196.9.32 · COACH-ASSIGNED TEST NOTIFI
 # R196.9.33 — virtual measured-dose interoperability (no additional safety bypass).
 APP_VERSION='THE LAB · PRODUCT V4.9.134 R196.9.33 · COUPLED-DOSE CONTRACT INTEROPERABILITY · NOVA R196.2 CORE'
 
+
+# R196.9.34 — identity-preserving workout titles and weak-prior quality scheduling.
+# No new permission, medical clearance, DB schema, or independent training gate.
+R196934_SCHEMA = 'V4.9.135-R196.9.34-WORKOUT-IDENTITY-WEAK-PRIOR-1'
+_r196934_repair_before = _v503_scientific_hard_repair
+
+
+def _v196934_coached_dose_title(dose):
+    """Use only attested existing work/recovery prescription, never infer watts."""
+    if not isinstance(dose, dict) or dose.get('available') is not True:
+        return None
+    p = dose.get('prescription') or {}
+    if not isinstance(p, dict):
+        return None
+    keys = ('reps', 'interval_secs', 'recovery_secs', 'work_watts_low',
+            'work_watts_high', 'recovery_watts_low', 'recovery_watts_high')
+    ints = {}
+    for k in keys:
+        try:
+            v = p.get(k)
+            if v is None or isinstance(v, bool):
+                return None
+            n = float(v)
+            if not math.isfinite(n) or n != int(n):
+                return None
+            ints[k] = int(n)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if (not 2 <= ints['reps'] <= 20 or not 60 <= ints['interval_secs'] <= 1800
+            or not 20 <= ints['recovery_secs'] <= 1800
+            or not 80 <= ints['work_watts_low'] < ints['work_watts_high'] <= 1200
+            or not 40 <= ints['recovery_watts_low'] < ints['recovery_watts_high'] <= 600
+            or ints['recovery_watts_high'] >= ints['work_watts_low']):
+        return None
+    w = f"{ints['interval_secs']/60:g} min"
+    r = f"{ints['recovery_secs']/60:.1f} min" if ints['recovery_secs'] % 60 else f"{ints['recovery_secs']/60:g} min"
+    return (f"Repeatability {ints['reps']}×{w} · "
+            f"{ints['work_watts_low']}–{ints['work_watts_high']} W · "
+            f"recovery {r} {ints['recovery_watts_low']}–{ints['recovery_watts_high']} W")
+
+
+def _v503_scientific_hard_repair(ledger, road, power_model, ftp_anchor=None):
+    result = _r196934_repair_before(ledger, road, power_model, ftp_anchor=ftp_anchor)
+    if not (isinstance(result, tuple) and len(result) == 5
+            and result[0] == 'Coupled work/recovery · coached quality'):
+        return result
+    dose = (((road or {}).get('scientific_progression') or {}).get('dose_contract') or {})
+    title = _v196934_coached_dose_title(dose)
+    return (title, *result[1:]) if title else result
+
+
+_r196934_window_before = _v117_select_quality_window
+
+
+def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_delay, second_hard=False):
+    """An under-evidenced weekday PRIOR cannot defer a safe candidate a week.
+
+    Keep all upstream recovery/availability/Calendar restrictions and lower
+    bounds. Preserve the native preferred physiological spacing, including any
+    readiness penalty. Explicit athlete intent always outranks this heuristic.
+    """
+    native = _r196934_window_before(candidates, last_end, spacing, cadence,
+                                    extra_delay, second_hard=second_hard)
+    if not isinstance(native, tuple) or len(native) != 4:
+        return native
+    earliest, chosen, reason, selected_row = native
+    if not (isinstance(earliest, datetime) and isinstance(chosen, datetime)
+            and chosen - earliest >= timedelta(hours=72)
+            and str(reason or '').startswith(('OBSERVED_HARD_', 'SPARSE_HARD_'))):
+        return native
+    cad = cadence or {}
+    if (str(cad.get('gap_confidence') or 'LOW').upper() not in ('LOW', 'NONE', 'UNLEARNED')
+            or str(cad.get('time_confidence') or 'LOW').upper() not in ('LOW', 'NONE', 'UNLEARNED')
+            or str(cad.get('hard_week_confidence') or 'LOW').upper() not in ('LOW', 'NONE', 'UNLEARNED')):
+        return native
+    try:
+        earliest_hours = float((spacing or {}).get('earliest_hours') or 36)
+        preferred_hours = float((spacing or {}).get('preferred_hours') or 48)
+        penalty = float(extra_delay)
+        if not all(math.isfinite(n) and n >= 0 for n in (earliest_hours, preferred_hours, penalty)):
+            return native
+        lower = last_end + timedelta(hours=earliest_hours + penalty) if last_end else None
+        preferred_lower = last_end + timedelta(hours=max(earliest_hours, preferred_hours) + penalty) if last_end else None
+        rows = sorted((r for r in (candidates or []) if isinstance(r, dict)
+                       and isinstance(r.get('dt'), datetime)
+                       and (lower is None or r['dt'] >= lower)), key=lambda r: r['dt'])
+        if not rows or any(r.get('explicit') for r in rows):
+            return native
+        # A statistically meaningful preferred weekday can still justify delay.
+        if selected_row and isinstance(selected_row, dict):
+            dt = selected_row.get('dt')
+            if isinstance(dt, datetime) and _v19693_established_weekday_evidence(cad, dt.weekday()):
+                return native
+        target = next((r for r in rows if (preferred_lower is None or r['dt'] >= preferred_lower)
+                       and r['dt'] < chosen), None)
+        if target is None:
+            return native
+        # A scheduling prior never overrides a real unavailability, race or
+        # recovery hold: candidates were filtered by the original selector.
+        return earliest, target['dt'], 'R196934_WEAK_WEEKDAY_PRIOR_NO_LONG_DEFERRAL', target
+    except (TypeError, ValueError, OverflowError, KeyError):
+        return native
+
+
+def _v196934_session_copy_name(session):
+    """Readable, session-specific label; repeatable across equivalent Snapshots.
+
+    Copying it is evidence for matching, NOT proof the intervals were completed.
+    Use date + slot + original workout mechanics for deterministic identity; no
+    mutable global plan hash, no athlete ID and no raw activity IDs in the label.
+    """
+    s = session if isinstance(session, dict) else {}
+    title = str(s.get('title') or '').strip()
+    wid = str(s.get('nova_workout_id') or '').strip()
+    if not title or not wid or not s.get('hard_spacing_relevant') or s.get('provisional_quality'):
+        return title or None
+    day = str(s.get('date') or '')[:10]
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day):
+        return title
+    signature = {k: s.get(k) for k in ('date', 'start_minute', 'nova_workout_id',
+                  'nova_contract_id', 'title', 'main_set',
+                  'prescribed_power_low', 'prescribed_power_high')}
+    token = hashlib.sha256(json.dumps(signature, ensure_ascii=False, sort_keys=True,
+                                       default=str).encode('utf-8')).hexdigest()[:8].upper()
+    return f'NOVA · {day} · {title} · N-{token}'
+
+
+_r196934_compiler_before = compile_nova_prescription
+
+
+def compile_nova_prescription(prescription, coach_clock, training_definitions=None,
+                              ftp_anchor=None, recent_activities=None,
+                              undefined_training_intent=None, power_model=None,
+                              microcycle_ledger=None, coaching_contract=None,
+                              adaptive_roadmap=None, strength_pattern=None,
+                              training_rhythm=None, execution_model=None):
+    out = _r196934_compiler_before(
+        prescription, coach_clock, training_definitions=training_definitions,
+        ftp_anchor=ftp_anchor, recent_activities=recent_activities,
+        undefined_training_intent=undefined_training_intent, power_model=power_model,
+        microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract,
+        adaptive_roadmap=adaptive_roadmap, strength_pattern=strength_pattern,
+        training_rhythm=training_rhythm, execution_model=execution_model)
+    if isinstance(out, dict):
+        for sess in out.get('sessions') or []:
+            if isinstance(sess, dict):
+                sess['copy_workout_name'] = _v196934_session_copy_name(sess)
+                sess['copy_workout_name_schema'] = R196934_SCHEMA
+    return out
+
+
+_r196934_summary_before = _v4840_ledger_session_summary
+
+def _v4840_ledger_session_summary(s):
+    out = _r196934_summary_before(s)
+    if isinstance(out, dict) and isinstance(s, dict):
+        out['copy_workout_name'] = s.get('copy_workout_name') or _v196934_session_copy_name(s)
+        out['copy_workout_name_schema'] = R196934_SCHEMA
+    return out
+
+
+_r196934_match_before = _v146_match_plan_block
+
+def _v146_match_plan_block(plan, block, allow_fulfilled=True):
+    matched = _r196934_match_before(plan, block, allow_fulfilled=allow_fulfilled)
+    if not isinstance(matched, dict):
+        return matched  # A copied title alone never fabricates a completed workout.
+    expected = str((plan or {}).get('copy_workout_name') or '').strip()
+    actual = str((block or {}).get('name') or '').strip()
+    if expected and expected.startswith('NOVA · ') and actual == expected:
+        enriched = dict(matched)
+        prior_score = int(enriched.get('score') or 0)
+        enriched['score'] = max(prior_score, min(99, prior_score + 2))
+        enriched['copied_name_match'] = True
+        return enriched
+    return matched
+
+
+# Apply final UI changes only after all historical UI anchor transformations ran.
+_r196934_h3 = "{{ s.title|replace('Coach-selected session','Nova-selected session') }}"
+_r196934_copy = "{{ s.title|replace('Coach-selected session','Nova-selected session')|e }}"
+_r196934_show = "{{ (s.copy_workout_name or s.canonical_workout_name or s.title)|replace('Coach-selected session','Nova-selected session') }}"
+_r196934_copyvalue = "{{ (s.copy_workout_name or s.canonical_workout_name or s.title)|replace('Coach-selected session','Nova-selected session')|e }}"
+assert HOME_PAGE.count(_r196934_h3) == 1, 'R196934 title display drift'
+assert HOME_PAGE.count(_r196934_copy) == 1, 'R196934 copied label drift'
+HOME_PAGE = HOME_PAGE.replace(_r196934_h3, _r196934_show, 1)
+HOME_PAGE = HOME_PAGE.replace(_r196934_copy, _r196934_copyvalue, 1)
+_r196934_duplicate = '{{ data.next_sessions[upcoming.quality_index].title }}'
+assert HOME_PAGE.count(_r196934_duplicate) == 1, 'R196934 duplicate quality title drift'
+HOME_PAGE = HOME_PAGE.replace(_r196934_duplicate,
+    '{{ data.next_sessions[upcoming.quality_index].copy_workout_name or data.next_sessions[upcoming.quality_index].canonical_workout_name or data.next_sessions[upcoming.quality_index].title }}', 1)
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.135 R196.9.34 · SESSION IDENTITY + WEAK PRIOR QUALITY CLOCK · NOVA R196.2 CORE'
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
