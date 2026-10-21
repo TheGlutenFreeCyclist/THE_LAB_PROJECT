@@ -14961,7 +14961,25 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
                     status="PRESCRIBED";source="CANONICAL_WORKOUT_LIBRARY"
                 else:fail_reason="WORKOUT_LIBRARY_RENDER_FAILED"
             else:
-                fail_reason="WORKOUT_LIBRARY_NO_CANDIDATE"
+                observed = (library_audit or {}).get('recent_observed_dose') or []
+                if observed and idx is not None and idx < len(raw):
+                    # This athlete executed a matching HARD interval core
+                    # before the candidate Friday prescription was issued.
+                    # Never backdate FULFILLED. Instead label the ordinary
+                    # aerobic recommendation as absorption of actual work.
+                    first = observed[0]
+                    raw[idx].update({
+                        'title': 'Aerobic endurance · quality already performed',
+                        'intensity': 'EASY',
+                        'main_set': ('The matching hard interval dose was already performed on '
+                            +str(first.get('actual_date') or 'a recent day')
+                            +'. Keep this opportunity Z1–Z2 and conversational; do not repeat those hard repetitions.'),
+                        'why': ('Measured repeated work and recovery already supply this dose. '
+                            'No distinct, justified hard alternative fits the selected opportunity; recover and reassess.'),
+                    })
+                    fail_reason='RECENT_OBSERVED_QUALITY_ALREADY_PERFORMED'
+                else:
+                    fail_reason="WORKOUT_LIBRARY_NO_CANDIDATE"
     elif (action=="TRAIN" and dec.get("hard_session_allowed") and idx is None
           and (road.get("quality_window") or {}).get("spacing_policy")=="R117_HARD_CADENCE_PLUS_RECOVERY_HEURISTIC"):
         # Explain the intentional EASY_ONLY window instead of silently swapping
@@ -36774,7 +36792,7 @@ def _v153_is_training_plan(row):
     if status in {"FULFILLED", "CANCELLED"}:
         return False
     supersession_reason = str(row.get("supersession_reason") or "").upper()
-    if supersession_reason in {"COMPLETED_CHECKPOINT_ALREADY_FULFILLED", "WORKOUT_EXECUTED", "SAFETY_INVALIDATED"}:
+    if supersession_reason in {"COMPLETED_CHECKPOINT_ALREADY_FULFILLED", "WORKOUT_EXECUTED", "SAFETY_INVALIDATED", "RECENT_OBSERVED_HARD_DOSE_ALREADY_PERFORMED"}:
         return False
     wid = str(row.get("nova_workout_id") or row.get("nova_contract_id") or "").upper()
     if wid == "VALIDATION_CONTRACT_V1" or str(row.get("stimulus_role") or "").upper() == "VALIDATE":
@@ -45115,6 +45133,83 @@ def _v1962_repeat_guard(template, band, evidence_ledger, slot):
 
 
 
+# R196.9.46: actual dose, not just issued/fulfilled prescription history,
+# is authoritative for avoiding an immediate identical future hard main set.
+# Recognition is measurement-only: no workout is retrospectively FULFILLED,
+# no unverified pre-load is credited, and no new permission to train is added.
+R196946_SCHEMA = 'R196.9.46-RECENT-OBSERVED-DOSE-CONTINUITY-1'
+
+
+def _v196946_recent_observed_workout_ids(slot, goal, dimension):
+    try:
+        target = date.fromisoformat(str((slot or {}).get('date') or '')[:10])
+    except (TypeError, ValueError):
+        return {}
+    observed = {}
+    for b in (_V146_BLOCK_CONTEXT.get() or ()):
+        if not isinstance(b, dict) or b.get('quality_relevant') is not True:
+            continue
+        aid = str(b.get('activity_id') or '')
+        try:
+            performed = date.fromisoformat(str(b.get('date') or '')[:10])
+        except (TypeError, ValueError):
+            continue
+        if not aid or not 0 < (target - performed).days <= 7:
+            continue
+        wbal = b.get('wbal') or {}
+        if (not isinstance(wbal, dict) or wbal.get('available') is not True
+                or str(wbal.get('source') or '') != 'INTERVALS_NATIVE_INTERVALS'):
+            continue
+        rows = wbal.get('rows') or []
+        if not isinstance(rows, list):
+            continue
+        for t in _NOVA_WORKOUT_LIBRARY:
+            if (t.get('goal') != str(goal or '').upper()
+                    or str(dimension or '').upper() not in set(t.get('dimensions') or ())
+                    or str(t.get('pattern') or '').upper() not in {'STANDARD','SUSTAINED','SHORT_POWER'}):
+                continue
+            reps = t.get('reps')
+            work = _rhythm_num(t.get('work_s'))
+            rest = _rhythm_num(t.get('recovery_s'))
+            if not isinstance(reps, int) or reps < 2 or not work or rest is None:
+                continue
+            matches = []
+            for ix, row in enumerate(rows):
+                if not isinstance(row, dict) or str(row.get('type') or '').upper() != 'WORK':
+                    continue
+                secs, watts = _rhythm_num(row.get('duration_sec')), _rhythm_num(row.get('average_watts'))
+                ftp = _rhythm_num(b.get('ftp'))
+                if (secs is not None and watts is not None and watts > 0
+                        and (ftp is None or watts >= ftp * .90)
+                        and abs(secs-work) <= max(4.0,work*.03)):
+                    matches.append(ix)
+            if len(matches) < reps:
+                continue
+            # Work and prescribed EASY gaps must alternate. A separate short
+            # warm-up surge does not create an extra interval or invalidate the
+            # actual 2x7. Missing/mismatched gap is NOT a confirmed match.
+            for start in range(len(matches)-reps+1):
+                positions = matches[start:start+reps]
+                valid = True
+                for x,y in zip(positions,positions[1:]):
+                    between = rows[x+1:y]
+                    if (not between or any(not isinstance(z,dict) or
+                            str(z.get('type') or '').upper() not in {'RECOVERY','REST'}
+                            for z in between)):
+                        valid=False; break
+                    seconds = sum(_rhythm_num(z.get('duration_sec')) or 0 for z in between)
+                    if abs(seconds-rest)>max(10.0,rest*.06):
+                        valid=False; break
+                if valid:
+                    observed[str(t.get('id'))] = {'source':'MEASURED_NATIVE_WORK_RECOVERY',
+                        'activity_id':aid,'actual_date':performed.isoformat(),
+                        'measured_work_seconds':[rows[k].get('duration_sec') for k in positions],
+                        'prescribed_recovery_seconds':rest,
+                        'observation_only':True,'schema':R196946_SCHEMA}
+                    break
+    return observed
+
+
 def _v109_select_workout_template(goal, dimension, evidence_ledger=None, training_definitions=None, slot=None):
     template, audit = _r1962_library_before(goal, dimension, evidence_ledger=evidence_ledger,
         training_definitions=training_definitions, slot=slot)
@@ -45135,12 +45230,19 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
         if current_day is None or not 0<(current_day-completed).days<=7:continue
         ident=str(row.get('nova_workout_id') or row.get('nova_contract_id') or '')
         if ident:used[ident]=row
+    # Reuse the existing recent-dose selector to account for observed work
+    # even when the formal prescription was only created AFTER the ride.
+    # This never alters FULFILLED, the ledger, or the athlete's roadmap stage.
+    observed_protocols = _v196946_recent_observed_workout_ids(slot, goal, dimension)
+    for protocol_id, observation in observed_protocols.items():
+        used.setdefault(protocol_id, observation)
     # A completed fresh-legs interval session is not the same dose as its
     # canonical DURABILITY variant with the library's 30-minute aerobic
     # pre-load. Preserve the exact completed history but compare the actual
     # lead-in, not just the shared interval template ID.
     fresh_to_loaded={ident:record for ident,record in used.items()
-        if str(dimension or '').upper()=='DURABILITY'
+        if ident not in observed_protocols
+        and str(dimension or '').upper()=='DURABILITY'
         and '20 min progressive aerobic lead-in' in str(record.get('main_set') or '')
         and '30 min low-Z2 aerobic preload' not in str(record.get('main_set') or '')}
     for ident in fresh_to_loaded:used.pop(ident,None)
@@ -45169,12 +45271,18 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
             options.append(t)
         if options:
             substitute=dict(options[0]);meta=dict(audit or {})
-            meta.update(selected_id=substitute['id'],reason='RECENT_FULFILLED_DOSE_ALTERNATIVE',
-                recent_fulfilled_workout_id=template['id'])
+            recent_observed = template['id'] in observed_protocols
+            meta.update(selected_id=substitute['id'],
+                reason=('RECENT_OBSERVED_DOSE_ALTERNATIVE' if recent_observed else 'RECENT_FULFILLED_DOSE_ALTERNATIVE'),
+                recent_observed_dose=observed_protocols.get(template['id']) if recent_observed else None,
+                recent_fulfilled_workout_id=None if recent_observed else template['id'])
             template=substitute; audit=meta
         else:
-            return None,dict(audit or {},reason='RECENT_FULFILLED_NO_LATERAL_DOSE',
-                recent_fulfilled_workout_id=template.get('id'))
+            recent_observed = template.get('id') in observed_protocols
+            return None,dict(audit or {},
+                reason='RECENT_OBSERVED_NO_LATERAL_DOSE' if recent_observed else 'RECENT_FULFILLED_NO_LATERAL_DOSE',
+                recent_observed_dose=observed_protocols.get(template.get('id')),
+                recent_fulfilled_workout_id=None if recent_observed else template.get('id'))
     # Sprints, endurance and relative load protocols are *not* numeric interval
     # targets. Never make the lack of an FTP a reason to suppress these families.
     patterns = {'STANDARD', 'SUSTAINED', 'SHORT_POWER'}
@@ -48534,6 +48642,14 @@ def _v19699_select_workout_template(goal, dimension, evidence_ledger=None,
     if not R19699_DOSE_ENABLED:
         return original, audit  # byte-for-byte compatible policy-off path
     if not isinstance(original, dict):
+        # The existing selector has no distinct feasible QUALITY after
+        # excluding a measured recent repetition. Give the caller the actual
+        # reason so its ordinary easy session is not an unexplained fallback.
+        observed = _v196946_recent_observed_workout_ids(slot, goal, dimension)
+        if observed:
+            audit = dict(audit or {}, reason='RECENT_OBSERVED_NO_DISTINCT_FEASIBLE_DOSE',
+                         recent_observed_dose=list(observed.values()),
+                         recent_observed_workout_ids=sorted(observed))
         return original, audit  # old safety authority remains sovereign
     s = slot if isinstance(slot, dict) else {}
     if s.get('is_planned_training') is True:
@@ -51076,10 +51192,80 @@ def _v196920_evidence_cycle_status(performance_evidence, ledger, direction):
 # a new activity or claim the session was executed.
 _r196920_update_ledger_before = update_microcycle_ledger_from_snapshot
 
+
+def _v196946_supersede_redundant_issued_future(ledger, sessions, user_id=None, now=None):
+    # This is ledger reconciliation, not a future-training veto. A plan issued
+    # AFTER the athlete finished an independently measured matching dose is
+    # superseded (NEVER marked FULFILLED). Respect the original real activity.
+    out = ledger if isinstance(ledger,dict) else {}
+    pairs=[]
+    for session in sessions or []:
+        if not isinstance(session,dict) or session.get('hard_spacing_relevant'):
+            continue
+        credit=session.get('observed_quality_credit') or {}
+        if credit.get('schema')!=R196946_SCHEMA:
+            continue
+        identifiers=_v196946_recent_observed_workout_ids(session,
+            out.get('primary_goal'),session.get('nova_prescription_dimension'))
+        matched={wid:ref for wid,ref in identifiers.items()
+            if ref.get('activity_id')==credit.get('activity_id')
+            and ref.get('actual_date')==credit.get('actual_date')}
+        if not matched:continue
+        pairs.append((str(session.get('date') or '')[:10],matched))
+    if not pairs:return out
+    rows=[dict(x) if isinstance(x,dict) else x for x in out.get('prescription_history') or []]
+    superseded=[]
+    for row in rows:
+        if not isinstance(row,dict) or str(row.get('prescription_status') or '').upper()!='ACTIVE':
+            continue
+        ident=str(row.get('nova_workout_id') or row.get('nova_contract_id') or '')
+        for planned,observed in pairs:
+            if str(row.get('date') or '')[:10]!=planned or ident not in observed:continue
+            ref=observed[ident]
+            block=next((b for b in (_V146_BLOCK_CONTEXT.get() or ())
+                if isinstance(b,dict) and str(b.get('activity_id') or '')==ref['activity_id']),None)
+            if not isinstance(block,dict):continue
+            issued=_v153_parse_local(row.get('recorded_at_local'))
+            try:
+                start=datetime.strptime(str(block.get('date') or '')[:10]+' '+str(block.get('time') or ''),
+                                        '%Y-%m-%d %I:%M %p')
+                finished=start+timedelta(minutes=float(block['duration_min']))
+                if issued is None or finished>issued.replace(tzinfo=None):continue
+            except (TypeError,ValueError,KeyError,AttributeError,OverflowError):
+                continue
+            row.update(prescription_status='SUPERSEDED',
+                supersession_reason='RECENT_OBSERVED_HARD_DOSE_ALREADY_PERFORMED',
+                superseded_at_local=(now or get_rome_now()).isoformat(timespec='seconds'),
+                observed_activity_reference={'date':ref['actual_date'],
+                    'activity_id':ref['activity_id'], 'source':ref['source'],
+                    'retroactive_fulfillment':False})
+            superseded.append(row)
+            break
+    if not superseded:return out
+    out['prescription_history']=rows
+    anchor=out.get('primary_anchor')
+    if isinstance(anchor,dict) and str(anchor.get('status') or '').upper()=='PLANNED':
+        for row in superseded:
+            if (str(anchor.get('date') or '')[:10]==str(row.get('date') or '')[:10]
+                    and str(anchor.get('main_set') or '')==str(row.get('main_set') or '')):
+                anchor['status']='SUPERSEDED'
+                anchor['supersession_reason']='RECENT_OBSERVED_HARD_DOSE_ALREADY_PERFORMED'
+                anchor['prescription_note']='Matching quality was already performed. Do not repeat this hard main set.'
+                out['primary_anchor']=anchor
+                out['continuity_state']='OBSERVED QUALITY ABSORBED'
+                break
+    if out.get('ledger_id'):
+        _db_execute('UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?',
+            (json.dumps(out,ensure_ascii=False,separators=(',',':'),default=_report_json_default),
+             _now_utc_text(),out['ledger_id'],_data_owner_user_id(user_id)))
+    return out
+
+
 def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=None):
     out = _r196920_update_ledger_before(ledger, sessions, user_id=user_id, now=now)
     if not isinstance(out,dict) or not out.get('ledger_id') or out.get('available') is not True:
         return out
+    out = _v196946_supersede_redundant_issued_future(out, sessions, user_id=user_id, now=now)
     candidates=[s for s in (sessions or []) if isinstance(s,dict) and
                 s.get('nova_evidence_protocol')=='R27_CANONICAL_CONSENTED' and
                 s.get('nova_evidence_mode')=='SUBMAX_DURABILITY' and
@@ -52805,6 +52991,26 @@ def compile_nova_prescription(prescription,coach_clock,training_definitions=None
                     descriptive = label
                 sess['copy_workout_name'] = _v196934_session_copy_name(sess, display_title=descriptive)
                 sess['copy_workout_name_schema'] = R196938_TITLE_SCHEMA
+        if str((prescription or {}).get('fail_closed_reason') or '') == 'RECENT_OBSERVED_QUALITY_ALREADY_PERFORMED':
+            observation = ((prescription.get('workout_library') or {}).get('recent_observed_dose') or [{}])[0]
+            target = (prescription.get('quality_slot_match') or {}).get('target_date')
+            for sess in out.get('sessions') or []:
+                if (isinstance(sess,dict) and str(sess.get('date') or '') == str(target or '')
+                        and not sess.get('hard_spacing_relevant')):
+                    # Explanation only: the canonical EASY session and its
+                    # plan identity stay unchanged. No retrospective FULFILLED.
+                    sess['why'] = ('You already performed a matching measured hard interval dose on '
+                        +str(observation.get('actual_date') or 'a recent day')
+                        +'. Friday is aerobic absorption, not another 2×7-minute quality session. '
+                        'No distinct hard dose was justified in the available slot.')
+                    sess['observed_quality_credit'] = {
+                        'schema':R196946_SCHEMA,
+                        'actual_date':observation.get('actual_date'),
+                        'activity_id':observation.get('activity_id'),
+                        'measurement_source':observation.get('source'),
+                        'retroactive_prescription_fulfillment':False,
+                    }
+                    break
     return out
 
 _r196926_before_summary=_v4840_ledger_session_summary
@@ -54914,7 +55120,7 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.145 R196.9.45 · COHERENT REPORT/LEDGER ISSUANCE + OBSERVED EXECUTION · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.146 R196.9.46 · RECENT OBSERVED DOSE CONTINUITY · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
