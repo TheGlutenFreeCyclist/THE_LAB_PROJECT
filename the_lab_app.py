@@ -52769,7 +52769,220 @@ _R196930_EMBED_NEW=('''{% if coupled_req.pending_day_of_review %}<p><strong>CONS
 assert HOME_PAGE.count(_R196930_EMBED_OLD)==1,'R196930 embedded consent branch moved'
 HOME_PAGE=HOME_PAGE.replace(_R196930_EMBED_OLD,_R196930_EMBED_NEW,1)
 
-APP_VERSION='THE LAB · PRODUCT V4.9.131 R196.9.30 · CONSENTED EVIDENCE PENDING DAY-OF SAFETY · NOVA R196.2 CORE'
+# R196.9.31 — COACH-LED PLANNING / NARROW TEST CONSENT
+# A measured, bounded training dose is a coaching prescription, not an
+# appointment the athlete has to approve. Explicit opt-in remains reserved for
+# a separate uncalibrated primary/initial assessment, never ordinary quality.
+R196931_SCHEMA = 'V4.9.132-R196.9.31-COACH_LED_FORWARD_PLANNING-1'
+
+def _v196931_measured_dose_ready(road,dec):
+    sci=(road or {}).get('scientific_progression') or {}
+    dose=sci.get('dose_contract') or {}
+    if (dose.get('stage')!=_R196924_ASSESSMENT or dose.get('available') is not True
+            or str((dec or {}).get('action') or '').upper()!='TRAIN'
+            or (dec or {}).get('hard_session_allowed') is not True):
+        return False
+    ref=dose.get('reference') or {};band=dose.get('prescription') or {}
+    if not isinstance(ref,dict) or not isinstance(band,dict) or not ref.get('activity_id'):
+        return False
+    try:
+        work=float(ref.get('work_avg_watts'));recover=float(ref.get('recovery_avg_watts'))
+        values=[float(band[k]) for k in ('work_watts_low','work_watts_high','recovery_watts_low','recovery_watts_high')]
+        reps=int(band.get('reps'));dur=int(band.get('interval_secs'));rest=int(band.get('recovery_secs'))
+        if (not all(math.isfinite(z) for z in [work,recover]+values)
+             or not (work>recover>=0 and 0<values[0]<values[1]<work
+                 and 0<=values[2]<values[3]<values[0]
+                 and 2<=reps<=20 and 30<=dur<=1800 and 20<=rest<=1800)):
+            return False
+    except (TypeError,ValueError,KeyError,OverflowError):
+        return False
+    return True
+
+# Preserve the already-verified dose mechanics, but stop publishing a false
+# need for consent on an ordinary workout. R27 and truly uncalibrated initial
+# observation remain separate assessment owners.
+_r196931_dose_before=_v1959_recovery_dose_contract
+
+def _v1959_recovery_dose_contract(goal,dimension,features):
+    dose=_r196931_dose_before(goal,dimension,features)
+    if not isinstance(dose,dict) or not _v196931_measured_dose_ready(
+        {'scientific_progression':{'dose_contract':dose}},
+        {'action':'TRAIN','hard_session_allowed':True}):
+        return dose
+    out=copy.deepcopy(dose)
+    out.update({'requires_explicit_athlete_agreement':False,
+        'normal_training_progression_authorized':True,'assessment_only':False,
+        'coaching_class':'ORDINARY_EVIDENCE_BACKED_QUALITY',
+        'safety_is_independent':True,'new_data_test_consent_only':True,
+        'rule':('A bounded coached work/recovery progression selected from an original '
+          'measured comparable activity. Work watts are an exploratory pacing range, '
+          'not a pass mark or ceiling; recovery increases only conservatively from '
+          'observed prior recovery. Safety/recovery/race decisions remain authoritative. '
+          'No optional assessment consent is necessary for ordinary coached training; '
+          'a separate uncalibrated test, if needed, keeps its own athlete opt-in. '
+          'Do not award scientific mastery without independent completed evidence.')})
+    return out
+
+# R196.9.24's consent gate replaced an already selected, evidence-backed
+# canonical dose with EASY_ONLY. Use the prior deterministic prescriber for
+# those doses; no custom workout, target, clock slot, or new safety permission.
+_r196931_prescription_before=build_nova_prescription
+
+def build_nova_prescription(nova_decision,coach_clock,adaptive_roadmap=None,
+        microcycle_ledger=None,evidence_ledger=None,power_model=None,
+        ftp_anchor=None,aerobic_metabolic_range=None,training_definitions=None):
+    kws=dict(adaptive_roadmap=adaptive_roadmap,microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger,power_model=power_model,ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range,training_definitions=training_definitions)
+    if _v196931_measured_dose_ready(adaptive_roadmap,nova_decision):
+        original=_r196924_before_prescription(nova_decision,coach_clock,**kws)
+        if (isinstance(original,dict) and original.get('status')=='PRESCRIBED'
+            and original.get('hard_prescription_available') is True
+            and original.get('workout_id')==_R196924_WORKOUT):
+            out=copy.deepcopy(original)
+            out['nova_forward_plan_policy']={
+                'schema':R196931_SCHEMA,'state':'COACH_PRESCRIBED',
+                'source':'VERIFIED_MEASURED_WORK_RECOVERY',
+                'requires_training_consent':False,
+                'new_data_test_consent_only':True,
+                'safety_and_health_restrictions_preserved':True}
+            return out
+        # An upstream veto must remain a veto, not get reactivated by this patch.
+        if isinstance(original,dict):
+            original=copy.deepcopy(original)
+            original['nova_forward_plan_policy']={'schema':R196931_SCHEMA,
+               'state':'UPSTREAM_SAFETY_OR_EVIDENCE_VETO','requires_training_consent':False,
+               'reason':original.get('fail_closed_reason')}
+            return original
+    return _r196931_prescription_before(nova_decision,coach_clock,**kws)
+
+# Coached quality is put on tomorrow's calendar *today*. A future exercise is
+# a plan based on current evidence, not an instruction to await another approval.
+# New symptoms, explicit restrictions, race conflict and recovery changes must
+# still trigger modification of that plan when they become known.
+_r196931_quality_before=_v19695_current_quality_cleared
+
+def _v19695_current_quality_cleared(session,roadmap):
+    if _r196931_quality_before(session,roadmap):return True
+    s=session if isinstance(session,dict) else {}
+    road=roadmap if isinstance(roadmap,dict) else {}
+    q=road.get('quality_window') or {};d=road.get('nova_decision') or {}
+    if (d.get('available') is not True or str(d.get('action') or '').upper()!='TRAIN'
+        or d.get('hard_session_allowed') is not True
+        or d.get('quality_window_eligible') is not True
+        or str(q.get('decision_action') or '').upper()!='TRAIN'
+        or q.get('hard_session_allowed') is not True
+        or str(q.get('state') or '').upper() not in {'WATCH','OPEN'}
+        or str(s.get('restriction') or 'NONE').upper()!='NONE'
+        or s.get('is_race') is True or s.get('nova_prescription_authority') is not True
+        or (str(s.get('availability_source') or '').upper().startswith('ATHLETE')
+            and s.get('availability_confirmed') is False)
+        or (str(q.get('availability_source') or '').upper().startswith('ATHLETE')
+            and q.get('availability_confirmed') is False)
+        or not s.get('nova_workout_id') or not s.get('hard_spacing_relevant')
+        or str(s.get('intensity') or '').upper() in {'EASY','RECOVERY','DEFERRED'}
+        or str(s.get('nova_prescription_dimension') or '').upper()!=str(d.get('dimension') or '').upper()):
+        return False
+    try:
+        planned=datetime.combine(date.fromisoformat(str(s.get('date') or '')[:10]),
+            datetime.min.time())+timedelta(minutes=int(s.get('start_minute')))
+        window=datetime.fromisoformat(str(q.get('preferred_iso') or ''))
+        earliest,_=_v4881_parse_quality_window_local_dt(road)
+        now=get_rome_now().replace(tzinfo=None)
+        if (planned!=window or earliest is None or planned<earliest or
+            planned<=now or (planned-now).days>6):return False
+    except (ValueError,TypeError,OverflowError):return False
+    # Never promote a formally uncalibrated validation test by relaxing the
+    # forward-planning rule. Such tests retain the existing explicit opt-in.
+    if str(s.get('stimulus_role') or '').upper()=='VALIDATE' and not (
+        str(s.get('nova_workout_id') or '')==_R196924_WORKOUT and
+        _v196931_measured_dose_ready(road,d)):
+        return False
+    s['nova_coach_planned_ahead']=True
+    s['nova_coach_plan_policy']=R196931_SCHEMA
+    s['future_recovery_recheck_required']=False
+    return True
+
+# The recovery-under-load structure is backed by real measured pairs. It is
+# coached training, not a consented performance examination. Keep mechanics
+# and recovery boundaries generated upstream; change only the misleading copy.
+_r196931_repair_before=_v503_scientific_hard_repair
+
+def _v503_scientific_hard_repair(ledger,road,power_model,ftp_anchor=None):
+    result=_r196931_repair_before(ledger,road,power_model,ftp_anchor=ftp_anchor)
+    if not result:return result
+    dose=((road or {}).get('scientific_progression') or {}).get('dose_contract') or {}
+    if (dose.get('stage')!=_R196924_ASSESSMENT or dose.get('available') is not True
+        or not (dose.get('reference') or {}).get('activity_id')):return result
+    title,intensity,main,why,arch=result
+    main=str(main).replace('This is one consented measurement, NOT a mandatory watt test.',
+         'This is a coached repeatability workout using your verified measured reference, not a mandatory watt test.')
+    why=('NOVA selected the next bounded work/recovery training dose from actual completed intervals. '
+         'The watt range is an exploratory starting point, not a pass mark. '
+         'Adjust or stop if your condition or technique deteriorates.')
+    return ('Coupled work/recovery · coached quality',intensity,main,why,
+        dict(arch or {},assessment_only=False,requires_consent=False,role='TRAIN'))
+
+# Keep the earlier semantic compiler honest: an open scientific question does
+# not mean the coach failed to issue a legitimate, evidence-backed TRAIN workout.
+_r196931_acquisition_copy_before=_v196928_acquisition_instruction
+
+def _v196928_acquisition_instruction(truth):
+    snap=(truth or {}).get('_v196928_snapshot') or {}
+    p=snap.get('nova_prescription') or {}
+    rows=(truth or {}).get('sessions') or snap.get('next_sessions') or []
+    active=any(isinstance(s,dict) and s.get('hard_spacing_relevant') is True
+        and not s.get('provisional_quality')
+        and str(s.get('stimulus_role') or 'TRAIN').upper()=='TRAIN' for s in rows)
+    if active or (p.get('nova_forward_plan_policy') or {}).get('state')=='COACH_PRESCRIBED':
+        return ('NOVA has scheduled the next coached quality workout from the current '
+            'evidence and recovery pattern. No training consent or mandatory '
+            'day-of Snapshot is required. If your health or availability changes, '
+            'update NOVA and modify the plan. Completed activity data will inform '
+            'the still-open scientific question.')
+    return _r196931_acquisition_copy_before(truth)
+
+# Once a measured plan is coached, never advertise the obsolete consent form
+# from a previously saved Snapshot. Initial evidence and formal R27 tests keep
+# their existing per-user authenticated consent paths.
+_r196931_coupled_ui_before=_v196924_ui_bridge
+
+def _v196924_ui_bridge(snapshot):
+    return None  # R196.9.24 was an ordinary coached dose, NOT a missing-data test.
+app.jinja_env.globals['nova_coupled_assessment_ui']=_v196924_ui_bridge
+
+_r196931_acquisition_before=_v196918_calibration_request
+
+def _v196918_calibration_request(snapshot):
+    p=(snapshot or {}).get('nova_prescription') or {}
+    policy=p.get('nova_forward_plan_policy') or {}
+    if policy.get('state')=='COACH_PRESCRIBED':
+        return {'schema':R196931_SCHEMA,'state':'NORMAL_COACHED_TRAINING',
+             'next_step':'FOLLOW_THE_COACH_PLAN_AND_REVIEW_NEW_MEASURED_SESSIONS',
+             'test':None,'auto_scheduled':True,'requires_explicit_athlete_agreement':False,
+             'question':'NOVA has a verified measured reference and has planned the next quality workout.'}
+    return _r196931_acquisition_before(snapshot)
+
+# Do not ask for the same declined missing-data test again in the same request.
+# A decline is a decision about a test, not a veto over independent training.
+_r196931_initial_ui_before=_v196925_ui
+
+def _v196925_ui(snapshot):
+    out=_r196931_initial_ui_before(snapshot)
+    if isinstance(out,dict) and (out.get('agreement') or {}).get('decision')=='DECLINE':
+        out=dict(out,state='DECLINED_OPTIONAL_TEST',test_declined=True)
+    return out
+app.jinja_env.globals['nova_initial_evidence_ui']=_v196925_ui
+
+# Future plans must read as plans, not as unapproved workouts. This note does
+# not change the byte-exact signed recommendation, plan mechanics, or ledger.
+_R196931_FUTURE_NOTE="""{% if s.nova_coach_planned_ahead %}<div class="v196931-planned" role="note"><strong>COACH PLAN · SCHEDULED</strong> This workout is on your plan now, based on current training and recovery patterns. If you feel unwell or a restriction changes, tell NOVA or adjust the session. No permission checkbox or mandatory day-of Snapshot.</div>{% endif %}"""
+_R196931_CARD_MARK='<div class="v4-session-main">{{ athlete_view.instructions|replace(\'See coach recommendation.\',\'See the recommendation above.\') }}</div>'
+assert HOME_PAGE.count(_R196931_CARD_MARK)==1, 'R196931 quality card insertion anchor drift'
+HOME_PAGE=HOME_PAGE.replace(_R196931_CARD_MARK,_R196931_FUTURE_NOTE+'\n'+_R196931_CARD_MARK,1)
+BASE_CSS+="""\n.v196931-planned{font-size:12px;line-height:1.5;padding:9px 12px;margin:10px 0;border:1px solid rgba(115,175,204,.4);border-radius:9px}.v196931-planned strong{display:block;margin-bottom:4px;color:#9bdbe6}"""
+
+APP_VERSION='THE LAB · PRODUCT V4.9.132 R196.9.31 · COACH-LED FORWARD QUALITY · TEST-ONLY CONSENT · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
