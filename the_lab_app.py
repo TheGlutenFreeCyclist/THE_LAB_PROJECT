@@ -28491,6 +28491,30 @@ def analyze():
                 now=get_rome_now(),scope='SYSTEMIC')
             coach_clock=build_coach_clock(cycling_season_activities,
                 planning_context=planning_context,training_rhythm=training_rhythm)
+            # The detail blocks were assembled before the R146 fulfillment
+            # ledger was loaded. Apply the SAME exact ID + actual-date match
+            # to those already-built blocks, instead of letting their stale
+            # NOT_HARD label contradict week memory and science.
+            for _blocks in (progression_training_blocks, repeatability_history_blocks):
+                for _block in (_blocks or []):
+                    if not isinstance(_block,dict):continue
+                    _id=str(_block.get('activity_id') or '').strip()
+                    _match=_fulfilled_quality_by_id.get(_id)
+                    if (_id not in _quality_joined or not _match
+                            or str(_block.get('date') or '')[:10]!=_match[0]
+                            or str(_block.get('event_kind') or '').upper()=='RACE'):
+                        continue
+                    _block['quality_relevant']=True
+                    _block['quality_basis']='RECONCILED_FULFILLED_HARD_ACTIVITY'
+                    _block['family']={'vo2':'VO2max','threshold':'Threshold',
+                        'tempo':'Tempo / Threshold Mixed'}.get(_match[1],'High Intensity / Mixed')
+                    _block['consideration']='⚡ Fulfilled verified quality · include actual high-intensity load in subsequent coaching.'
+            # Recompute the existing execution model from the corrected block
+            # truth; otherwise its native W′bal quality_session_count stays 0.
+            execution_model=build_athlete_execution_model(daily_logs_full,
+                subjective_activity_context,training_rhythm,progression_training_blocks[:8])
+            completed_quality_review=_v4879_completed_quality_review(
+                progression_training_blocks[:8],subjective_activity_context)
         training_direction["nova_execution"] = _v1965_verified_quality_execution(microcycle_ledger, training_direction.get("started_on"), now=get_rome_now())
         progression_training_blocks=_v492_attach_execution_quality(progression_training_blocks,microcycle_ledger);previous_training_blocks=progression_training_blocks[:8];session_progression=_v491_session_progression(progression_training_blocks)
         snapshot_fault_stage = "EVIDENCE_LEDGER"
@@ -36731,14 +36755,52 @@ def _v153_is_training_plan(row):
     return _v136_is_hard_summary(row)
 
 
-def _v153_latest_issued_for_slot(ledger, slot_key):
+def _v153_latest_issued_for_slot(ledger, slot_key, current_workout_id=None):
+    # Continuity means keeping an unresolved future commitment; it must not
+    # resurrect the exact hard dose already marked FULFILLED in this athlete's
+    # ledger when the current scientific selector proposes a different dose.
+    history = (ledger or {}).get("prescription_history") or []
     rows = []
-    for row in (ledger or {}).get("prescription_history") or []:
+    try:
+        target_day = date.fromisoformat(slot_key[0])
+    except (TypeError, ValueError, IndexError):
+        target_day = None
+    for row in history:
         if not _v153_is_training_plan(row) or _v153_plan_slot(row) != slot_key:
             continue
         issued = _v153_parse_local(row.get("recorded_at_local"))
         if issued is None:
             continue
+        wid = str(row.get("nova_workout_id") or row.get("nova_contract_id") or "")
+        # This is reconciliation of a stale commitment, not an additional
+        # training veto. An unchanged current candidate retains its normal
+        # continuity, and a legitimately different mechanical dose is distinct.
+        if wid and current_workout_id and wid != current_workout_id and target_day:
+            def _same_dose(done):
+                if not isinstance(done, dict) or str(done.get("prescription_status") or "").upper() != "FULFILLED":
+                    return False
+                if not done.get("executed_activity_id") or str(done.get("nova_workout_id") or done.get("nova_contract_id") or "") != wid:
+                    return False
+                try:
+                    completed = date.fromisoformat(str(done.get("actual_date") or "")[:10])
+                except (TypeError, ValueError):
+                    return False
+                if not 0 <= (target_day - completed).days <= 7:
+                    return False
+                planned_main = str(row.get("main_set") or "")
+                done_main = str(done.get("main_set") or "")
+                # Canonical ID alone does not equate fresh 2x7 and 2x7 after
+                # thirty minutes of aerobic preload (different training dose).
+                for marker in ("30 min low-Z2 aerobic preload", "20 min progressive aerobic lead-in"):
+                    if (marker in planned_main) != (marker in done_main):
+                        return False
+                for field in ("prescribed_power_low", "prescribed_power_high"):
+                    x,y=row.get(field),done.get(field)
+                    if x is not None and y is not None and str(x)!=str(y):
+                        return False
+                return True
+            if any(_same_dose(done) for done in history):
+                continue
         rows.append((issued, dict(row)))
     if not rows:
         return None
@@ -36834,7 +36896,8 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
     except Exception:
         return out
 
-    prior = _v153_latest_issued_for_slot(microcycle_ledger or {}, (target_date, target_period))
+    prior = _v153_latest_issued_for_slot(microcycle_ledger or {}, (target_date, target_period),
+                                         str(out.get("workout_id") or out.get("contract_id") or ""))
     if not prior or _v153_material_hard_after(prior, microcycle_ledger or {}):
         return out
 
@@ -45291,6 +45354,11 @@ def _v1962_snapshot_consistency(data):
     if len(rows)>3:pass # later canonical horizons are allowed
     if str(prescription.get('status') or '') == 'BLOCKED' and hard:
         fail('BLOCKED_PRESCRIPTION_STILL_EXPOSES_EXECUTABLE_HARD')
+    if (str(decision.get('action') or '').upper() == 'TRAIN'
+            and decision.get('hard_session_allowed') is True
+            and prescription.get('requested_hard_prescription_available') is True
+            and not hard):
+        fail('REQUESTED_HARD_LOST_BEFORE_FINAL_SESSIONS')
     if str(decision.get('action') or '').upper() in {'HOLD','MAINTAIN','RACE_PRIORITY'} and any(
             not x.get('provisional_quality') for x in hard):
         fail('NON_TRAIN_DECISION_EXPOSES_EXECUTABLE_HARD')
@@ -54635,7 +54703,7 @@ def _nova_prescription_outcome(snapshot, previous=None):
         'quality_is_not_a_wellness_color':True,
         'changes_any_prescription':False, 'another_blocking_gate':False}
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.142 R196.9.42 · EXECUTION TRUTH AND DOSE MEMORY · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.143 R196.9.43 · FULFILLED DOSE CONTINUITY RECONCILIATION · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
