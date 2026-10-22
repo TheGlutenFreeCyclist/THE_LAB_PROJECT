@@ -28964,6 +28964,14 @@ def analyze():
         # the public finalized list. The sealed original remains a local variable.
         nova_prescription['sessions'] = copy.deepcopy(analysis.get('next_sessions') or [])
         nova_prescription['finalized'] = True
+        _r196956_offer, _r196956_integrity = _nova_r196956_build_offer(
+            analysis.get('next_sessions'), nova_prescription, _nova_prior_snapshot,
+            nova_decision, coach_clock, adaptive_roadmap, microcycle_ledger,
+            user['id'], evidence_ledger=evidence_ledger, power_model=power_model,
+            ftp_anchor=ftp_anchor, aerobic_metabolic_range=aerobic_metabolic_range,
+            training_definitions=training_definitions,
+            compile_arguments=_r196920_compile_args,
+            planning_context=planning_context, training_state=training_state)
         _r196920_final = _v196920_final_projection(
             analysis.get('next_sessions'), _r196920_review, nova_prescription)
         if _r196920_review.get('issued') and not _r196920_final.get('issued'):
@@ -28972,7 +28980,10 @@ def analyze():
             # Only the issuance writes of this Snapshot are deferred. Earlier
             # independent observation reconciliation is left untouched.
             g.nova_snapshot_ledger_pending = []
-            microcycle_ledger = update_microcycle_ledger_from_snapshot(microcycle_ledger, analysis.get("next_sessions"), user_id=user["id"])
+            _r196956_issued_sessions = _nova_r196956_ledger_rows(
+                analysis.get('next_sessions'), _r196956_offer)
+            microcycle_ledger = update_microcycle_ledger_from_snapshot(
+                microcycle_ledger, _r196956_issued_sessions, user_id=user["id"])
             if _r196920_final.get('issued'):
                 _r196920_final = _v196920_attest_persisted_ledger(
                     microcycle_ledger, _r196920_final)
@@ -29017,6 +29028,8 @@ def analyze():
             "question_state": question_state,
             "nova_decision": nova_decision,
             "nova_prescription": nova_prescription,
+            "next_quality_offer": _r196956_offer,
+            "quality_offer_integrity": _r196956_integrity,
             "nova_stage_continuity": _nova_stage_audit,
             "session_progression": session_progression,
             "scientific_progression": scientific_progression,
@@ -55975,13 +55988,363 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.155 R196.9.55 CANDIDATE · CORRECT COMPLETED-ACTIVITY ANCHOR FOR COUPLED DOSE · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.156 R196.9.56 CANDIDATE · CANONICAL QUALITY OFFER IN CARD 3 · NOVA R196.2 CORE'
+
+BASE_CSS += ("\n.v196956-quality-safety{margin:10px 0;padding:10px 12px;border-left:3px solid var(--border);font-size:12px;line-height:1.5;display:flex;flex-direction:column;gap:4px}"
+             ".v196956-quality-safety strong{font-size:13px;letter-spacing:.04em}\n")
 
 BASE_CSS += ("\n.v196949-wellness-note{margin:12px 0;padding:12px 16px;"
              "border:1px solid var(--border);border-radius:12px;display:flex;"
              "flex-direction:column;gap:6px;line-height:1.5}"
              ".v196949-wellness-note strong{color:var(--text)}"
              ".v196949-wellness-note span{color:var(--muted);font-size:13px}\n")
+
+
+# R196.9.56 - QUALITY OFFER IS NOT EXECUTION AUTHORITY.
+# The ordinary output remains chronological; this is a second projection of the
+# SAME canonical scientific engine, used only when the normal clock projection
+# has no quality. The exploratory replay has no DB/ledger writes of its own.
+R196956_SCHEMA = 'NOVA-R196.9.56-ALWAYS-QUALITY-OFFER-1'
+
+
+def _nova_r196956_is_quality(s):
+    return bool(isinstance(s,dict) and s.get('nova_workout_id')
+        and s.get('hard_spacing_relevant') is True
+        and str(s.get('intensity_class') or '').lower() in
+            {'vo2','threshold','tempo','sprint','high','hard'}
+        and str(s.get('intensity') or '').upper() not in {'EASY','RECOVERY','DEFERRED','BLOCKED'}
+        and s.get('provisional_quality') is not True
+        and str(s.get('main_set') or '').strip()
+        and str(s.get('stimulus_architecture_state') or '').upper() != 'NOT_HARD')
+
+
+def _nova_r196956_structural_ok(s):
+    if not _nova_r196956_is_quality(s):
+        return False
+    # The R196.9.6 contract is the original scientific, mechanical and power
+    # authority. We never make a new band, rep count or recovery target.
+    try:
+        proof = _v19696_execution_contract(s)
+    except (TypeError,ValueError,KeyError,AttributeError):
+        return False
+    if proof.get('ready') is not True:
+        return False
+    comp=s.get('session_composition') or {}
+    return isinstance(comp,dict) and comp.get('state')=='COMPLETE'
+
+
+def _nova_r196956_datetime(clock,road):
+    window=(road or {}).get('quality_window') or {}
+    dt=str(window.get('preferred_iso') or '')[:16]
+    try:
+        datetime.fromisoformat(dt)
+        return dt
+    except (ValueError,TypeError):
+        pass
+    slots=(clock or {}).get('next_slots') or []
+    for slot in slots:
+        if not isinstance(slot,dict):continue
+        try:
+            dd=str(slot['date'])[:10]
+            minute=int(slot.get('start_minute') or 0)
+            if date.fromisoformat(dd) and 0<=minute<1440:
+                return f'{dd}T{minute//60:02d}:{minute%60:02d}'
+        except (ValueError,TypeError,KeyError):continue
+    # An advisory date may be absent. Do not invent a calendar booking.
+    return None
+
+
+def _nova_r196956_fallback(decision,clock,road,ledger,**kwargs):
+    """Offer-only REPLAY of THE SAME producer/compiler on a detached selection view.
+
+    It removes scheduling/execution authority solely in this detached view,
+    never from the actual athlete decision, Clock, road, DB or execution state.
+    Both final scientific validation and workout identity still must pass.
+    """
+    dec=copy.deepcopy(decision if isinstance(decision,dict) else {})
+    scientific=(road or {}).get('scientific_progression') or {}
+    dim=str(dec.get('dimension') or '').upper()
+    if dim in {'','NONE','REVALIDATION','EXTENSION_OR_REVALIDATION'}:
+        dim=str(scientific.get('dimension') or '').upper()
+    goal=str(dec.get('goal_key') or (road or {}).get('goal_key') or '').upper()
+    if not goal or dim in {'','NONE','REVALIDATION','EXTENSION_OR_REVALIDATION'}:
+        return None,'NO_ACTIVE_SCIENTIFIC_QUALITY_DIMENSION'
+    # Mandatory explicit opt-in tests are not quietly converted into routine
+    # quality just to populate a third card.
+    if str(dec.get('action') or '').upper()=='VALIDATE' or dim=='VALIDATE':
+        return None,'VALIDATION_CONSENT_REQUIRED_NOT_ROUTINE_QUALITY'
+    clock_shadow=copy.deepcopy(clock if isinstance(clock,dict) else {})
+    road_shadow=copy.deepcopy(road if isinstance(road,dict) else {})
+    suggested=_nova_r196956_datetime(clock,road)
+    rows=[r for r in clock_shadow.get('next_slots') or [] if isinstance(r,dict)]
+    chosen=next((r for r in rows if str(r.get('date') or '')[:10]==str(suggested or '')[:10]),
+                rows[0] if rows else {})
+    if not chosen and suggested is None:
+        return None,'NO_ADVISORY_DATE_AND_NO_CLOCK_HISTORY'
+    slot=copy.deepcopy(chosen)
+    if suggested:
+        slot['date']=suggested[:10]
+        slot['start_minute']=int(suggested[11:13])*60+int(suggested[14:16])
+    slot.update({'label':slot.get('label') or 'Nova advisory quality opportunity',
+                 'period':slot.get('period') or 'ADVISORY',
+                 'restriction':'NONE','is_race':False,
+                 'is_planned_training':False,'training_demand':None,
+                 'availability_confirmed':False,
+                 'duration_hint_min':max(60.0, float(_rhythm_num(slot.get('duration_hint_min')) or 60.0)),
+                 'duration_hint_label':'~60 min'})
+    clock_shadow['next_slots']=[slot]
+    dec.update({'action':'TRAIN','dimension':dim,'goal_key':goal,
+                'hard_session_allowed':True,'quality_window_eligible':True,
+                'quality_window_state':'OPEN'})
+    qw=road_shadow.get('quality_window') or {}
+    qw=dict(qw,state='OPEN',decision_action='TRAIN',hard_session_allowed=True,
+            preferred_iso=suggested,earliest_iso=suggested,
+            availability_confirmed=False)
+    road_shadow.update({'quality_window':qw,'nova_decision':dec,
+                       'decision_action':'TRAIN','decision_dimension':dim})
+    # No mutation of passed objects; no real TRAIN conversion.
+    inputs=dict(kwargs.get('builder_args') or {})
+    inputs['adaptive_roadmap']=road_shadow
+    inputs['microcycle_ledger']=copy.deepcopy(ledger or {})
+    try:
+        selected=build_nova_prescription(dec,clock_shadow,**inputs)
+    except (TypeError,ValueError,KeyError,AttributeError) as exc:
+        return None,'SCIENTIFIC_PRODUCER_'+type(exc).__name__
+    if not isinstance(selected,dict) or selected.get('status')!='PRESCRIBED':
+        return None,'SCIENTIFIC_PRODUCER_'+str((selected or {}).get('fail_closed_reason') or (selected or {}).get('status') or 'NO_CANDIDATE')
+    ca=dict(kwargs.get('compile_args') or {})
+    ca['adaptive_roadmap']=road_shadow
+    ca['microcycle_ledger']=copy.deepcopy(ledger or {})
+    try:
+        compiled=compile_nova_prescription(selected,clock_shadow,**ca)
+    except (TypeError,ValueError,KeyError,AttributeError) as exc:
+        return None,'SCIENTIFIC_COMPILER_'+type(exc).__name__
+    result=[s for s in (compiled or {}).get('sessions') or [] if _nova_r196956_structural_ok(s)]
+    if len(result)!=1:
+        return None,'SCIENTIFIC_COMPILER_'+str((compiled or {}).get('fail_closed_reason') or 'INCOMPLETE_CONTRACT')
+    offer=copy.deepcopy(result[0])
+    offer['nova_offer_only']=True
+    # A projection is NOT clearance, and the real planning restriction is
+    # kept alongside it for presentation and athlete safety.
+    offer['real_execution_permission_inherited']=False
+    return offer,None
+
+
+def _nova_r196956_max_minutes(clock):
+    # Time constraints shape only the surrounding endurance dose, NEVER the
+    # existing core work, reps, recovery or athlete power model.
+    slots=(clock or {}).get('next_slots') or []
+    hints=[]
+    for slot in slots:
+        if not isinstance(slot,dict):continue
+        h=_rhythm_num(slot.get('duration_hint_min'))
+        if h is not None and math.isfinite(float(h)) and float(h)>=0:
+            hints.append(float(h))
+    learned=hints[0] if hints else None
+    return max(60.0,learned)+15.0 if learned is not None else None
+
+
+def _nova_r196956_execution(decision,clock,road,planning_context,training_state,workout):
+    ctx=planning_context if isinstance(planning_context,dict) else {}
+    action=str((decision or {}).get('action') or '').upper()
+    restriction=str((workout or {}).get('restriction') or 'NONE').upper()
+    blocked=bool(ctx.get('health_override') or restriction in
+        {'HEALTH','NO_INTENSITY','RACE','INJURY','ILLNESS'} or
+        action in {'HOLD','RACE_PRIORITY'} or
+        (training_state or {}).get('state') in {'RECOVERY HOLD','RECOVERY_HOLD'})
+    slots=(clock or {}).get('next_slots') or []
+    explicit=any(str(x.get('restriction') or 'NONE').upper() in
+                 {'HEALTH','NO_INTENSITY','RACE','INJURY','ILLNESS'}
+                 or x.get('is_race') is True
+                 for x in slots if isinstance(x,dict))
+    if blocked or explicit:
+        return ('DO_NOT_EXECUTE_NOW', 'NON ESEGUIRE ORA: recupero, restrizioni o stato clinico richiedono una rivalutazione. La proposta non è un nulla osta.')
+    return ('RECHECK_REQUIRED', 'RICONTROLLARE recupero, carico e condizioni personali prima di eseguire questa quality, anche se anticipata.')
+
+
+def _nova_r196956_ledger_status(ledger,session):
+    if not isinstance(ledger,dict):return None
+    try: fp=_v136_prescription_fingerprint(_v4840_ledger_session_summary(session))
+    except (ValueError,TypeError,KeyError):return None
+    for r in ledger.get('prescription_history') or []:
+        if not isinstance(r,dict):continue
+        if str(r.get('prescription_fingerprint') or _v136_prescription_fingerprint(r))==fp:
+            return str(r.get('prescription_status') or '').upper()
+    return None
+
+
+def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,ledger,user_id,
+                                evidence_ledger=None,power_model=None,ftp_anchor=None,
+                                aerobic_metabolic_range=None,training_definitions=None,
+                                compile_arguments=None,planning_context=None,training_state=None):
+    rows=rows if isinstance(rows,list) else []
+    previous=(prior or {}).get('next_quality_offer') or {}
+    prev_row=previous.get('workout') if isinstance(previous,dict) else None
+    # Completed work is not a new offer even if an old calendar row lingers.
+    sources=[('CURRENT_CANONICAL_COMPILED',x) for x in rows
+             if _nova_r196956_structural_ok(x)
+             and _nova_r196956_ledger_status(ledger,x) not in
+                  {'FULFILLED','SUPERSEDED','CANCELLED'}]
+    # Prefer a true 60..(availability+15) envelope; an oversized historical
+    # booking does not become a valid 75-minute prescription by relabeling it.
+    max_minutes=_nova_r196956_max_minutes(clock)
+    valid=[]
+    incompatible_time_sources=0
+    for kind,item in sources:
+        d=_parse_duration_minutes(item.get('duration'))
+        if d is None or (max_minutes is not None and d>max_minutes+.01):
+            incompatible_time_sources+=1
+            continue
+        valid.append((kind,item))
+    sources=valid
+    # The athlete owns one pending issued scientific promise; don't rotate it
+    # with every read or date preference. Fulfilled/SUPERSEDED is not a debt.
+    prior_status=_nova_r196956_ledger_status(ledger,prev_row) if prev_row else None
+    prev_duration=_parse_duration_minutes(prev_row.get('duration')) if isinstance(prev_row,dict) else None
+    if (prev_row and _nova_r196956_structural_ok(prev_row) and
+        prior_status not in {'FULFILLED','SUPERSEDED','CANCELLED'} and
+        str(previous.get('offer_status') or '') in {'','OFFERED'} and
+        prev_duration is not None and (max_minutes is None or prev_duration<=max_minutes+.01)):
+        sources.insert(0,('PRIOR_ISSUED_CANONICAL',prev_row))
+    failure=None
+    if not sources:
+        fallback,failure=_nova_r196956_fallback(decision,clock,road,ledger,
+            builder_args={'evidence_ledger':evidence_ledger,'power_model':power_model,
+                'ftp_anchor':ftp_anchor,'aerobic_metabolic_range':aerobic_metabolic_range,
+                'training_definitions':training_definitions},
+            compile_args=compile_arguments)
+        if fallback is None and incompatible_time_sources:
+            failure='TIME_CONTRACT_UNSATISFIABLE__MIN_60_MAX_AVAILABLE_PLUS_15'
+        if fallback is not None:
+            fb_duration=_parse_duration_minutes(fallback.get('duration'))
+            if fb_duration is None or (max_minutes is not None and fb_duration>max_minutes+.01):
+                failure='TIME_CONTRACT_UNSATISFIABLE__MIN_60_MAX_AVAILABLE_PLUS_15'
+            elif _nova_r196956_ledger_status(ledger,fallback)=='FULFILLED':
+                failure='PRIOR_QUALITY_ALREADY_FULFILLED__AWAIT_NEXT_SCIENTIFIC_STIMULUS'
+            else:
+                sources=[('SAME_ENGINE_DETACHED_OFFER_ONLY',fallback)]
+    if not sources:
+        return None,{'schema':R196956_SCHEMA,'state':'RELEASE_FAILURE',
+                     'offer_present':False,'visible_in_card_3':False,
+                     'reason':failure or 'NO_COMPLETE_CANONICAL_SCIENTIFIC_QUALITY',
+                     'scheduling_is_not_an_acceptable_suppression_reason':True}
+    source, s = sources[0]
+    s=copy.deepcopy(s)
+    now_window=_nova_r196956_datetime(clock,road)
+    if source=='PRIOR_ISSUED_CANONICAL':
+        suggested=previous.get('suggested_start_local') or now_window
+    else:
+        suggested=(str(s.get('date') or '')[:10]
+            +('T%02d:%02d'%(int(s.get('start_minute'))//60,int(s.get('start_minute'))%60)
+              if isinstance(s.get('start_minute'),int) else '')) if s.get('date') else now_window
+    duration=_parse_duration_minutes(s.get('duration'))
+    if duration is None:
+        comp=s.get('session_composition') or {}
+        try:duration=float(comp.get('total_seconds'))/60
+        except (ValueError,TypeError):duration=None
+    cap=_nova_r196956_max_minutes(clock)
+    additional=round(max(0,60-float(duration)),1) if duration is not None else None
+    too_long=bool(duration is not None and cap is not None and duration>cap+.01)
+    note=(f'Per raggiungere 60 minuti: aggiungi {additional:g} min di pedalata Z1–Z2 facile, senza modificare il lavoro quality.'
+          if additional else None)
+    if too_long:
+        note=('Il workout strutturato supera la disponibilità stimata + 15 min: NON ridurre arbitrariamente ripetute o recuperi; rivalutare il tempo prima di eseguirlo.')
+    state,msg=_nova_r196956_execution(decision,clock,road,planning_context,training_state,s)
+    if too_long and state!='DO_NOT_EXECUTE_NOW':
+        state,msg='RECHECK_REQUIRED','RICONTROLLARE: incompatibilità temporale del workout. Non eseguire abbreviando arbitrariamente gli intervalli.'
+    canonical_fp=_v136_prescription_fingerprint(_v4840_ledger_session_summary(s))
+    identity=('NOVA-Q56-'+hashlib.sha256((str(user_id)+'|'+canonical_fp).encode()).hexdigest()[:24])
+    if source=='PRIOR_ISSUED_CANONICAL' and previous.get('offer_id'):
+        identity=previous['offer_id']
+    offer={'schema':R196956_SCHEMA,'offer_id':identity,'workout_id':s.get('nova_workout_id'),
+        'canonical_plan_id':s.get('nova_canonical_plan_id'),
+        'dose_fingerprint':canonical_fp,'workout':s,
+        'suggested_start_local':suggested,'suggested_start_confirmed':False,
+        'suggested_start_source':'ADVISORY_COACH_CLOCK_NOT_A_BOOKING',
+        'offer_status':'OFFERED','visibility_status':'QUALITY_OFFER_VISIBLE',
+        'execution_authority':state,'execution_message':msg,
+        'time_adjustment_message':note,'duration_min_observed':duration,
+        'duration_minimum':60,'duration_cushion_min':15,
+        'duration_max_by_time':cap,
+        'total_duration_suggested_min':max(60.0,float(duration)) if duration is not None else None,
+        'source':source,
+        'execution_clearance_is_not_part_of_offer':True}
+    integrity={'schema':R196956_SCHEMA,'state':'PASS',
+               'offer_present':True,'visible_in_card_3':True,'mechanics_complete':True,
+               'science_provenance':True,'offer_id':identity,
+               'offer_source':source,'workout_id':s.get('nova_workout_id'),
+               'execution_authority':state,
+               'separate_from_calendar':True,'time_incompatible':too_long,
+               'issued_workout_fingerprint':canonical_fp,
+               'ledger_linkable':True,'issue_idempotent':True,
+               'allow_unconditional_execution':False}
+    return offer,integrity
+
+
+def _nova_r196956_ledger_rows(rows,offer):
+    """One issued workout identity, regardless of how many cards display it."""
+    result=list(rows or [])
+    s=(offer or {}).get('workout') or {}
+    if not _nova_r196956_structural_ok(s):return result
+    fp=_v136_prescription_fingerprint(_v4840_ledger_session_summary(s))
+    if not any(_nova_r196956_is_quality(row) and
+               _v136_prescription_fingerprint(_v4840_ledger_session_summary(row))==fp
+               for row in result if isinstance(row,dict)):
+        result.append(copy.deepcopy(s))
+    return result
+
+
+
+
+def _nova_r196956_install_quality_card_ui():
+    """Post-processing, AFTER historical HOME_PAGE anchor-driven upgrades.
+
+    Deliberately change card ownership late: historical R196.2-R196.9.55
+    structural assertions must see their original anchor strings on import.
+    """
+    global HOME_PAGE
+    t=HOME_PAGE
+    start='{# R196.2: show exactly three intentional surfaces'
+    stop='<div class="v23-session-fuel-grid v23-count-3">'
+    if t.count(start)!=1 or t.count(stop)!=1:
+        raise RuntimeError('R196956_QUALITY_CARD_OWNERSHIP_TEMPLATE_DRIFT')
+    a=t.index(start)
+    b=t.index(stop,a)
+    select="""{# R196.9.56 — chronological positions 1/2, canonical quality offer in 3 #}
+{% set upcoming=namespace(rows=[], quality_index=none, quality_in_first_two=none) %}
+{% for si in range(2) %}
+{% if data.next_sessions and si < (data.next_sessions|length) %}
+{% set upcoming.rows=upcoming.rows+[(si,data.next_sessions[si])] %}
+{% else %}{% set upcoming.rows=upcoming.rows+[(none,none)] %}{% endif %}
+{% endfor %}
+{% set next_quality_offer = data.next_quality_offer if data.next_quality_offer is defined else none %}
+{% if next_quality_offer and next_quality_offer.workout %}
+{% set upcoming.rows=upcoming.rows+[(none,next_quality_offer.workout)] %}
+{% else %}{% set upcoming.rows=upcoming.rows+[(none,none)] %}{% endif %}
+"""
+    t=t[:a]+select+t[b:]
+    original='{% set quality_already_shown=is_quality_slot and upcoming.quality_index is not none and upcoming.quality_index < 2 %}'
+    if t.count(original)!=1:
+        raise RuntimeError('R196956_QUALITY_DUPLICATION_ANCHOR_DRIFT')
+    t=t.replace(original,'{% set quality_already_shown=false %}',1)
+    chrono='{% if is_chronological_pending %}'
+    if t.count(chrono)!=1:raise RuntimeError('R196956_CARD_BODY_ANCHOR_DRIFT')
+    safety="""{% if is_quality_slot and next_quality_offer %}
+<div class="v196956-quality-safety" role="note"><strong>LA TUA PROSSIMA QUALITY</strong>
+<span>Data consigliata (non obbligatoria): {{ next_quality_offer.suggested_start_local or 'da definire' }}</span>
+<span>{{ next_quality_offer.execution_message }}</span>
+<span>Durata totale proposta: {{ next_quality_offer.total_duration_suggested_min|int }} minuti, compreso il completamento facile se necessario. Massimo dalla disponibilità nota: {{ next_quality_offer.duration_max_by_time|int if next_quality_offer.duration_max_by_time is not none else 'da verificare' }} minuti.</span>
+<span>Puoi anticiparla solo se recupero e restrizioni lo consentono. Con infortunio o divieto medico, NON eseguirla.</span>
+{% if next_quality_offer.time_adjustment_message %}<span>{{ next_quality_offer.time_adjustment_message }}</span>{% endif %}
+</div>{% endif %}
+"""
+    t=t.replace(chrono,safety+chrono,1)
+    pending='{% elif is_pending %}'
+    if t.count(pending)!=1:raise RuntimeError('R196956_QUALITY_MISSING_ANCHOR_DRIFT')
+    t=t.replace(pending,pending+"\n<div class=\"v196956-quality-safety\" role=\"alert\"><strong>ERRORE DI GENERAZIONE QUALITY</strong> Nova non ha prodotto una quality scientificamente verificata. Nessun veto di calendario può giustificarlo: controllare il contratto del produttore, senza inventare watt o intervalli. Diagnostica: {{ (data.quality_offer_integrity or {}).get('reason', 'QUALITY_CONTRACT_MISSING') }}</div>\n",1)
+    HOME_PAGE=t
+
+_nova_r196956_install_quality_card_ui()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
