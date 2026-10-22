@@ -28718,8 +28718,14 @@ def analyze():
             microcycle_ledger=microcycle_ledger, coaching_contract=coaching_contract,
             adaptive_roadmap=adaptive_roadmap, strength_pattern=strength_pattern,
             training_rhythm=training_rhythm, execution_model=execution_model)
+        # The recovery adjustment, when objectively indicated and feasible,
+        # belongs to NOVA's selected canonical contract BEFORE compilation.
+        # The compiler may never select a different workout as an alternative.
+        _r196920_selected_coach = _v1953_coach_prepare_variant(
+            _r196920_candidate or _r196920_base_prescription,
+            recovery_signal, coach_clock)
         nova_prescription = compile_nova_prescription(
-            _r196920_candidate or _r196920_base_prescription, coach_clock,
+            _r196920_selected_coach, coach_clock,
             **_r196920_compile_args)
         if _r196920_candidate is not None:
             _r196920_checked = _v196920_attest_compiled_r27(
@@ -28732,7 +28738,8 @@ def analyze():
                 # An R27 candidate blocked by any normal final validator is NOT
                 # published/persisted as a test. Compile the original safe plan.
                 nova_prescription = compile_nova_prescription(
-                    _r196920_base_prescription, coach_clock, **_r196920_compile_args)
+                    _v1953_coach_prepare_variant(_r196920_base_prescription,
+                        recovery_signal, coach_clock), coach_clock, **_r196920_compile_args)
                 _r196920_review = _r196920_checked
         # Attest already-canonical R27 by the SAME compiled-session requirements;
         # on a blocked stage immediately recompile the safe non-test fallback.
@@ -28757,7 +28764,8 @@ def analyze():
                         ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
                         training_definitions=training_definitions)
                     nova_prescription=compile_nova_prescription(
-                        _nova_back,coach_clock,**_r196920_compile_args)
+                        _v1953_coach_prepare_variant(_nova_back,recovery_signal,coach_clock),
+                        coach_clock,**_r196920_compile_args)
                 else:
                     nova_prescription = compile_nova_prescription(
                         _v196920_hold_native_r27(_r196920_base_prescription,
@@ -28922,6 +28930,8 @@ def analyze():
             'nova_prescription':nova_prescription,'question_state':question_state,
             'evidence_cycle_review':_r196920_review})
         nova_prescription['evidence_cycle_review'] = _r196920_review
+        nova_workout_execution_memory = _nova_workout_execution_memory(
+            microcycle_ledger, training_direction, previous_training_blocks)
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
         snapshot_fault_stage = "NUTRITION_PLAN"
         nutrition_plan = build_nutrition_plan(analysis.get("next_sessions"), metabolic_context)
@@ -28929,6 +28939,7 @@ def analyze():
         data = {
             **metrics, **season_stats, **analysis, **energy_bank,
             "coach_clock": coach_clock,
+            "nova_workout_execution_memory": nova_workout_execution_memory,
             "physical_session_reconciliation": physical_session_reconciliation,
             "training_rhythm": training_rhythm,
             "athlete_execution_model": execution_model,
@@ -36862,6 +36873,37 @@ def _v153_material_hard_after(plan, ledger):
     if issued is None:
         return False
     issue_day = issued.date()
+    # An athlete can complete a hard ride BEFORE the planned date, including
+    # one not linked to a Nova prescription. Native activity truth unlocks the
+    # stale calendar commitment but NEVER marks that commitment FULFILLED.
+    # Only a completed ride after the actual issue instant counts. A same-day
+    # activity with no clock time is not enough to establish ordering.
+    for block in (_V146_BLOCK_CONTEXT.get() or ()):
+        if not isinstance(block, dict) or block.get('quality_relevant') is not True:
+            continue
+        if not str(block.get('activity_id') or '').strip():
+            continue
+        if not ((block.get('wbal') or {}).get('available') is True
+                or block.get('work_interval_evidence')
+                or block.get('hard_spacing_relevant') is True):
+            continue
+        try:
+            day = date.fromisoformat(str(block.get('date') or '')[:10])
+            if day < issue_day or day > get_rome_now().date():
+                continue
+            start_time = str(block.get('time') or '').strip()
+            if start_time:
+                try:
+                    start = datetime.combine(day, datetime.strptime(start_time,'%I:%M %p').time())
+                except ValueError:
+                    start = datetime.fromisoformat(f'{day.isoformat()}T{start_time}')
+                completed = start + timedelta(minutes=float(block.get('duration_min') or 0))
+                if completed > issued.replace(tzinfo=None):
+                    return True
+            elif day > issue_day:
+                return True
+        except (TypeError, ValueError, OverflowError, AttributeError):
+            continue
     for row in (ledger or {}).get("completed_hard_sessions") or []:
         if not isinstance(row, dict):
             continue
@@ -36869,8 +36911,24 @@ def _v153_material_hard_after(plan, ledger):
             d = date.fromisoformat(str(row.get("date") or "")[:10])
         except Exception:
             continue
-        if d >= issue_day:
+        # Date-only evidence cannot prove that a same-day workout was
+        # completed after the prescription was actually issued. Treat an
+        # earlier ride as context, not as a retroactive reason to erase Nova's
+        # existing commitment. A later day is unambiguous.
+        if d > issue_day:
             return True
+        if d == issue_day:
+            raw_clock = str(row.get('time') or '').strip()
+            if not raw_clock:
+                continue
+            try:
+                clock = (datetime.strptime(raw_clock, '%H:%M').time()
+                         if re.fullmatch(r'\d{1,2}:\d{2}',raw_clock)
+                         else datetime.strptime(raw_clock, '%I:%M %p').time())
+                if datetime.combine(d, clock) > issued.replace(tzinfo=None):
+                    return True
+            except (TypeError, ValueError):
+                continue
     return False
 
 
@@ -43574,98 +43632,98 @@ def _v1953_signal(watch, blocks, progression, now=None):
     return out
 
 
-def _v1953_adapt_prescription(prescription, signal):
-    """Edit only a versioned canonical library variant when full session fits.
+def _v1953_coach_prepare_variant(prescription, signal, coach_clock):
+    """Nova selects a canonical rest variant BEFORE compilation, never after.
 
-    No change to ordinary sessions, power bands, work intervals, training
-    selection, roadmap, calendar or safety gates. Idempotent by identity.
+    The old post-compiler adapter changed the published workout identity and
+    left the coach/compiler contract describing a different session. Variant
+    choice now occurs once, on an already-authorized raw coach prescription.
+    If its timing cannot be proven, keep the original dose and surface a WATCH.
     """
-    if not isinstance(prescription,dict) or not (signal or {}).get("active"):
+    if not isinstance(prescription, dict) or not (signal or {}).get('active'):
         return prescription
-    import copy as _copy
-    out=_copy.deepcopy(prescription)
-    sessions=list(out.get("sessions") or [])
-    changed=[]
-    for index,sess in enumerate(sessions):
-        if not isinstance(sess,dict):continue
-        base=str(sess.get("nova_workout_id") or "")
-        variant=_R1953_VARIANTS.get(base)
-        if not variant:continue
-        if (str(sess.get("stimulus_architecture_state") or "")!="NOVA_CANONICAL_LIBRARY"
-            or str(sess.get("intensity_class") or "").lower() not in ("vo2","threshold","tempo")
-            or (sess.get("power_prescription") or {}).get("state")!="PRESCRIBED"
-            or sess.get("restriction")=="RACE"):
-            continue
-        feasibility=sess.get("session_duration_feasibility") or {}
-        try:
-            reps=int(feasibility.get("reps")); intervals=int(feasibility.get("recovery_count"))
-            rest=float(feasibility.get("recovery_min")); required=float(feasibility.get("min_required"))
-            declared=float(feasibility.get("declared_min"))
-        except (ValueError,TypeError):continue
-        if (not feasibility.get("available") or feasibility.get("state")!="PASS"
-            or intervals!=max(0,reps-1) or intervals<1 or abs(rest-variant[1])>0.01):
-            continue
-        delta=intervals*(variant[2]-variant[1])
-        if required+delta > declared+0.01:continue
-        # Exact controlled replacement; no freeform workout synthesis.
-        old=f"with {variant[1]} min "
-        before=str(sess.get("main_set") or "")
-        after=before.replace(old, f"with {variant[2]} min ",1)
-        if after==before:continue
-        update=dict(sess)
-        update["main_set"]=after
-        update["nova_workout_id"]=variant[0]
-        update["nova_contract_id"]=variant[0]
-        update["nova_template_signature"]=f"{reps}x{int((sess.get('power_prescription') or {}).get('work_seconds') or 0)}r{variant[2]*60}"
-        update["canonical_workout_name"]=f"THE LAB · {variant[0]} · {sess.get('title') or ''}"
-        next_feas=dict(feasibility)
-        next_feas["recovery_min"]=float(variant[2])
-        next_feas["min_required"]=round(required+delta,2)
-        next_feas["adjusted"]=True
-        update["session_duration_feasibility"]=next_feas
-        update["rest_adaptation"]={"schema":R1953_SCHEMA,"from_workout_id":base,
-                                  "original_recovery_min":variant[1],"recovery_min":variant[2],
-                                  "extra_minutes":delta,"source":"CONCORDANT_RECOVERY_SIGNAL"}
-        update["coherence_reasons"]=list(sess.get("coherence_reasons") or [])+["R1953_VERIFIED_REST_VARIANT"]
-        sessions[index]=update
-        changed.append((index,base,variant[0],before,after))
-    if not changed:
+    if (str(prescription.get('status') or '').upper() != 'PRESCRIBED'
+            or prescription.get('hard_prescription_available') is not True):
         return prescription
-    out["sessions"]=sessions
-    # Keep uncompiled raw contract aligned so no downstream surface sees an
-    # obsolete workout id/mechanics when referencing canonical sessions.
-    raw=list(out.get("raw_sessions") or [])
-    for index,base,target,before,after in changed:
-        if index<len(raw) and isinstance(raw[index],dict) and raw[index].get("_tl_nova_workout_id")==base:
-            row=dict(raw[index]);row["_tl_nova_workout_id"]=target
-            row["_tl_nova_template_signature"]=sessions[index]["nova_template_signature"]
-            row["main_set"]=str(row.get("main_set") or "").replace("with 5 min ","with 6 min ",1)
-            raw[index]=row
-        future=out.get("future_quality_candidate") or {}
-        if isinstance(future,dict) and future.get("index")==index:
-            fr=future.get("raw_quality") or {}
-            if isinstance(fr,dict) and fr.get("_tl_nova_workout_id")==base:
-                fr=dict(fr);fr["_tl_nova_workout_id"]=target
-                fr["_tl_nova_template_signature"]=sessions[index]["nova_template_signature"]
-                fr["main_set"]=str(fr.get("main_set") or "").replace("with 5 min ","with 6 min ",1)
-                future=dict(future);future["raw_quality"]=fr;out["future_quality_candidate"]=future
-    out["raw_sessions"]=raw
-    if str(out.get("workout_id") or "")==changed[0][1]:out["workout_id"]=changed[0][2]
-    if str(out.get("contract_id") or "")==changed[0][1]:out["contract_id"]=changed[0][2]
-    library=dict(out.get("workout_library") or {})
-    if library.get("selected_id")==changed[0][1]:
-        library["selected_id"]=changed[0][2]
-        library["selected_signature"]=sessions[changed[0][0]]["nova_template_signature"]
-        library["recovery_variant_rule"]=R1953_SCHEMA
-        out["workout_library"]=library
-    _v145_rehash_plan(out)
-    authority=dict(out.get("single_plan_authority") or {})
-    authority["plan_id"]=out["canonical_plan_id"]
-    if str(authority.get("workout_id") or "")==changed[0][1]:
-        authority["workout_id"]=changed[0][2]
-    out["single_plan_authority"]=authority
-    out["recovery_variant_audit"]={"schema":R1953_SCHEMA,"count":len(changed),
-                                  "workout_ids":[x[2] for x in changed]}
+    try:
+        index = int(prescription.get('selected_slot_index'))
+        raw = (prescription.get('raw_sessions') or [])[index]
+        slot = (coach_clock or {}).get('next_slots', [])[index]
+        base = str(prescription.get('workout_id') or '')
+        variant = _R1953_VARIANTS.get(base)
+        template = next((t for t in _NOVA_WORKOUT_LIBRARY if t.get('id') == base), None)
+        alternative = next((t for t in _NOVA_WORKOUT_LIBRARY if variant and t.get('id') == variant[0]), None)
+        if not (variant and template and alternative and isinstance(raw,dict)
+                and isinstance(slot,dict) and raw.get('_tl_nova_workout_id') == base):
+            return prescription
+        # Reject inconsistent library variants as a coach-side WATCH, not
+        # a production AssertionError that would abort snapshot generation.
+        if (template.get('work_s') != alternative.get('work_s')
+                or template.get('reps') != alternative.get('reps')):
+            return prescription
+        core = _v19697_workout_core_seconds(alternative)
+        if not core: return prescription
+        original = str(raw.get('main_set') or '')
+        old = f'with {variant[1]} min '
+        if old not in original: return prescription
+        declared = (_parse_duration_minutes(raw.get('duration')) or
+            _rhythm_num(slot.get('duration_hint_min')) or
+            _parse_duration_minutes(slot.get('duration_hint_label')))
+        if declared is None or not math.isfinite(float(declared)) or declared <= 0:
+            return prescription
+        # Original expressed prior-load work must stay exactly as chosen by
+        # Nova. Otherwise use a conservative 15 minute preparation minimum.
+        preparation = (30 if re.search(r'30\s*min\s+low[- ]?Z2\s+aerobic\s+preload',original,re.I)
+                       else 20 if re.search(r'20\s*min\s+progressive\s+aerobic\s+lead-in',original,re.I)
+                       else 15)
+        if float(declared)*60 + 0.01 < core[0] + preparation*60 + 5*60:
+            return prescription
+        out = copy.deepcopy(prescription)
+        updated = dict(raw)
+        updated['main_set'] = original.replace(old,f'with {variant[2]} min ',1)
+        updated['_tl_nova_workout_id'] = variant[0]
+        updated['_tl_nova_contract_id'] = variant[0]
+        updated['_tl_nova_template_signature'] = _v109_template_signature(alternative)
+        updated['_tl_nova_recovery_variant'] = R1953_SCHEMA
+        out['raw_sessions'][index] = updated
+        out['workout_id'] = variant[0]
+        out['contract_id'] = variant[0]
+        library = dict(out.get('workout_library') or {})
+        library.update({'selected_id':variant[0],
+            'selected_signature':updated['_tl_nova_template_signature'],
+            'derived_from':base,'recovery_variant_rule':R1953_SCHEMA})
+        out['workout_library'] = library
+        out['recovery_variant_audit'] = {'schema':R1953_SCHEMA,'state':'COACH_SELECTED_BEFORE_COMPILER',
+            'count':1,'workout_ids':[variant[0]],'original_workout_id':base,
+            'source':'CONCORDANT_RECOVERY_SIGNAL'}
+        return out
+    except (TypeError, ValueError, KeyError, IndexError, OverflowError):
+        return prescription
+
+
+def _v1953_adapt_prescription(prescription, signal):
+    """Diagnostic only. No post-compiler authority over identity/mechanics."""
+    if not isinstance(prescription, dict):
+        return prescription
+    # A chosen rest variant must have been selected by the coach before the
+    # compiler. This function may annotate that decision, never manufacture it.
+    if not (signal or {}).get('active'):
+        return prescription
+    out = dict(prescription)
+    audit = dict(out.get('recovery_variant_audit') or {})
+    installed = [str(x.get('nova_workout_id')) for x in out.get('sessions') or []
+        if isinstance(x,dict) and x.get('hard_spacing_relevant') is True
+        and not x.get('provisional_quality') and
+        str(x.get('nova_workout_id') or '') in {v[0] for v in _R1953_VARIANTS.values()}]
+    if installed:
+        audit = {'schema':R1953_SCHEMA,'state':'COACH_VARIANT_COMPILED',
+            'count':len(installed),'workout_ids':installed,
+            'source':'CANONICAL_COACH_SELECTED_VARIANT'}
+    elif not audit:
+        audit = {'schema':R1953_SCHEMA,'state':'RECOVERY_WATCH_ONLY',
+            'count':0,'workout_ids':[],
+            'reason':'NO_VALIDATED_CANONICAL_VARIANT_WITHIN_SESSION_ENVELOPE'}
+    out['recovery_variant_audit'] = audit
     return out
 
 _R1953_HOME_TARGET = '<div class="v4-week-memory"><div class="v4-week-label">This week</div>'
@@ -51324,11 +51382,65 @@ def _v196946_supersede_redundant_issued_future(ledger, sessions, user_id=None, n
     return out
 
 
+def _nova_reconcile_duplicate_active_commitments(ledger, sessions, now=None):
+    """One active identity per date + actual canonical main-set workout ID.
+
+    Preserve all historical records and any different workouts. A committed
+    session in the current final plan wins; otherwise newest issuance wins.
+    Multiple period labels cannot make one identical workout two commitments.
+    """
+    out = ledger if isinstance(ledger,dict) else {}
+    history = [dict(r) if isinstance(r,dict) else r
+        for r in out.get('prescription_history') or []]
+    groups = {}
+    for i,entry in enumerate(history):
+        if not isinstance(entry,dict) or str(entry.get('prescription_status') or '').upper()!='ACTIVE':
+            continue
+        day = str(entry.get('date') or '')[:10]
+        wid = str(entry.get('nova_workout_id') or entry.get('nova_contract_id') or '')
+        if day and wid:groups.setdefault((day,wid),[]).append(i)
+    current = {}
+    for sess in sessions or []:
+        if not isinstance(sess,dict) or sess.get('hard_spacing_relevant') is not True:
+            continue
+        day = str(sess.get('date') or '')[:10]
+        wid = str(sess.get('nova_workout_id') or '')
+        if day and wid:
+            current[(day,wid)] = _v136_prescription_fingerprint(
+                _v4840_ledger_session_summary(sess))
+    changed=[]
+    for key, indices in groups.items():
+        if len(indices) < 2:continue
+        preferred = current.get(key)
+        selected = max(indices, key=lambda i:(
+            1 if preferred and str(history[i].get('prescription_fingerprint') or '')==preferred else 0,
+            str(history[i].get('recorded_at_local') or ''), i))
+        for i in indices:
+            if i == selected:continue
+            history[i]['prescription_status']='SUPERSEDED'
+            history[i]['supersession_reason']='DUPLICATE_ACTIVE_SAME_DAY_CANONICAL_WORKOUT'
+            history[i]['superseded_by_fingerprint']=history[selected].get('prescription_fingerprint')
+            history[i]['superseded_at_local']=(now or get_rome_now()).isoformat(timespec='seconds')
+            changed.append(i)
+    if not changed:return out, False
+    out=dict(out,prescription_history=history)
+    out['active_identity_reconciliation']={
+        'schema':'NOVA-R196948-ACTIVE-IDENTITY-1',
+        'duplicate_commitments_superseded':len(changed),
+        'prescription_history_preserved':True}
+    return out, True
+
+
 def update_microcycle_ledger_from_snapshot(ledger, sessions, user_id=None, now=None):
     out = _r196920_update_ledger_before(ledger, sessions, user_id=user_id, now=now)
     if not isinstance(out,dict) or not out.get('ledger_id') or out.get('available') is not True:
         return out
     out = _v196946_supersede_redundant_issued_future(out, sessions, user_id=user_id, now=now)
+    out, active_repaired = _nova_reconcile_duplicate_active_commitments(out, sessions, now=now)
+    if active_repaired:
+        _db_execute('UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?',
+            (json.dumps(out,ensure_ascii=False,separators=(',',':'),default=_report_json_default),
+             _now_utc_text(),out['ledger_id'],_data_owner_user_id(user_id)))
     candidates=[s for s in (sessions or []) if isinstance(s,dict) and
                 s.get('nova_evidence_protocol')=='R27_CANONICAL_CONSENTED' and
                 s.get('nova_evidence_mode')=='SUBMAX_DURABILITY' and
@@ -54566,6 +54678,50 @@ def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_de
     if not isinstance(native, tuple) or len(native) != 4:
         return native
     earliest, chosen, reason, selected_row = native
+    # R196.9.48: a repeated, verified HARD DAY cadence is the coach's first
+    # scheduling preference, not a small bonus outweighed by weekday scoring.
+    # This operates ONLY on the upstream filtered slots and physiological
+    # spacing lower bound; it cannot generate a slot or override explicit
+    # athlete intent, race, injury, no-intensity or unavailability exclusions.
+    try:
+        cad = cadence if isinstance(cadence, dict) else {}
+        gap = cad.get('dominant_gap_days')
+        gap = int(gap) if gap is not None and not isinstance(gap, bool) else None
+        samples = int(cad.get('sample_gaps') or 0)
+        confidence = str(cad.get('gap_confidence') or '').upper()
+        if (isinstance(chosen, datetime) and gap is not None and 1 <= gap <= 9
+                and samples >= 3 and confidence in {'MODERATE', 'HIGH'}
+                and not (isinstance(selected_row, dict) and selected_row.get('explicit'))):
+            anchor = (date.fromisoformat(str(cad.get('last_hard_day'))[:10])
+                      if cad.get('last_hard_day') else (last_end.date() if last_end else None))
+            earliest_h = float((spacing or {}).get('earliest_hours') or 36)
+            penalty_h = float(extra_delay or 0)
+            if anchor and all(math.isfinite(v) and v >= 0 for v in (earliest_h, penalty_h)):
+                lower = last_end + timedelta(hours=earliest_h + penalty_h) if last_end else None
+                valid = [row for row in (candidates or []) if isinstance(row, dict)
+                    and isinstance(row.get('dt'), datetime)
+                    and (lower is None or row['dt'] >= lower)]
+                # A separately preferred CALENDAR/athlete HARD remains first.
+                if valid and not any(row.get('explicit') for row in valid):
+                    target_day = anchor + timedelta(days=gap)
+                    on_day = [row for row in valid if row['dt'].date() == target_day]
+                    if on_day:
+                        habituated = cad.get('hard_start_minute')
+                        try:
+                            habituated = float(habituated)
+                            if not math.isfinite(habituated): habituated = None
+                        except (TypeError, ValueError):
+                            habituated = None
+                        part = str(cad.get('hard_daypart') or '').upper()
+                        def _rhythm_distance(row):
+                            dt = row['dt']; minute = dt.hour*60 + dt.minute
+                            mismatch = bool(part and ('AM' if minute < 720 else 'PM') != part)
+                            return (int(mismatch), abs(minute-habituated) if habituated is not None else 0,
+                                row.get('clock_index') is None, dt)
+                        chosen_day = min(on_day, key=_rhythm_distance)
+                        return earliest, chosen_day['dt'], 'NOVA_VERIFIED_HARD_CADENCE_PRIORITY', chosen_day
+    except (TypeError, ValueError, KeyError, OverflowError):
+        pass  # Preserve the tested native scheduling and all safety restrictions.
     if not (isinstance(earliest, datetime) and isinstance(chosen, datetime)
             and chosen - earliest >= timedelta(hours=72)
             and str(reason or '').startswith(('OBSERVED_HARD_', 'SPARSE_HARD_'))):
@@ -55048,6 +55204,59 @@ def _nova_carry_attained_stage(road, science, previous, direction):
             'recomputed':ci,'hard_permission_granted':False}
 
 
+def _nova_workout_execution_memory(ledger, direction, previous_blocks=None):
+    """Read-only issued-vs-executed Nova ledger for future coaching/QA.
+
+    Every row is causally linked by the persisted prescription fingerprint AND
+    the exact executed activity ID; no matching by title, watts or calendar
+    coincidence. Unlinked/missed workouts never receive artificial adherence.
+    """
+    led = ledger if isinstance(ledger,dict) else {}
+    history = [r for r in led.get('prescription_history') or [] if isinstance(r,dict)]
+    links = [r for r in led.get('prescription_execution_history') or [] if isinstance(r,dict)]
+    blocks = {str(b.get('activity_id')):b for b in previous_blocks or []
+              if isinstance(b,dict) and b.get('activity_id')}
+    by_fp = {str(r.get('prescription_fingerprint')):r for r in history
+             if r.get('prescription_fingerprint')}
+    rows = []; seen = set()
+    for link in links:
+        fp = str(link.get('prescription_fingerprint') or '')
+        activity_id = str(link.get('activity_id') or '')
+        if not fp or not activity_id or (fp,activity_id) in seen:
+            continue
+        seen.add((fp,activity_id))
+        plan=by_fp.get(fp)
+        if not plan or str(plan.get('prescription_status') or '').upper()!='FULFILLED':
+            continue
+        if str(plan.get('executed_activity_id') or '') != activity_id:
+            continue
+        b=blocks.get(activity_id) or {}
+        quality=(b.get('execution_quality') or {}).get('adherence') or {}
+        structural = quality.get('score') if quality.get('available') is True else None
+        rows.append({'workout_id':plan.get('nova_workout_id'),
+            'planned_date':str(plan.get('date') or '')[:10],
+            'executed_date':str(link.get('actual_date') or '')[:10],
+            'activity_id':activity_id,'prescription_fingerprint':fp,
+            'execution_match_basis':link.get('match_basis'),
+            'execution_match_confidence':link.get('match_confidence'),
+            'workout_structure_adherence_score':structural,
+            'structure_available':structural is not None,
+            'state':'VERIFIED_EXECUTED'})
+    rows.sort(key=lambda x:(x['executed_date'],x['activity_id']))
+    execution = (direction or {}).get('nova_execution') or {}
+    return {'schema':'NOVA-R196948-EXECUTION-MEMORY-1',
+        'source':'ATHLETE_SCOPED_PRESCRIPTION_AND_EXECUTION_LEDGER',
+        'linked_workout_count':len(rows),
+        'verified_execution':rows[-12:],
+        'historical_unresolved':int(execution.get('unresolved') or 0),
+        'historical_confirmed_missed':int(execution.get('confirmed_missed') or 0),
+        'execution_adherence_score':execution.get('score') if execution.get('available') is True else None,
+        'structure_adherence_count':sum(1 for r in rows if r['structure_available']),
+        'structure_adherence_score':None,  # Never grade from an unmatched/unknown execution.
+        'scoring_policy':'EXACT_ISSUED_ACTIVITY_LINK_ONLY; POWER_ESTIMATES_NOT_PASS_MARKS',
+        'no_retroactive_fulfillment':True}
+
+
 def _nova_prescription_outcome(snapshot, previous=None):
     cur = snapshot if isinstance(snapshot,dict) else {}
     prev = previous if isinstance(previous,dict) else {}
@@ -55090,10 +55299,15 @@ def _nova_prescription_outcome(snapshot, previous=None):
         and str(decision.get('action') or '').upper()=='TRAIN'
         and decision.get('hard_session_allowed') is True):
         issues.append('REQUESTED_QUALITY_LOST_AT_COMPILATION')
-    return {'schema':'NOVA-R196936-OUTCOME-OBSERVABILITY-1',
+    unique_issues = sorted(set(issues))
+    return {'schema':'NOVA-R196948-OUTCOME-OBSERVABILITY-2',
         'state':('QUALITY' if has_quality else 'UNEXPLAINED_QUALITY_LOSS' if issues
                  else 'EASY_OR_RECOVERY'),
-        'issue_codes':sorted(set(issues)), 'source':pres.get('source'),
+        # A quality elsewhere in the horizon cannot erase a missing historical
+        # promise. Keep the public state compatible and expose non-green truth.
+        'integrity_state':'ALERT' if unique_issues else 'PASS',
+        'issue_count':len(unique_issues), 'quality_preserved':has_quality,
+        'issue_codes':unique_issues, 'source':pres.get('source'),
         'fail_reason':pres.get('fail_closed_reason'),
         'coach_action':decision.get('action'),
         'quality_is_not_a_wellness_color':True,
@@ -55249,7 +55463,7 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.147 R196.9.47 · SINGLE COACH AUTHORITY + EXACT SESSION ENVELOPE · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.148 R196.9.48 · ATHLETE HARD CADENCE + COACH-OWNED ADAPTATION · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
