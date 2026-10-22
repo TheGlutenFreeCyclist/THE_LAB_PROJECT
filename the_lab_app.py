@@ -53118,14 +53118,32 @@ def _v196926_initial_request(decision,road,clock,prescription=None):
     c=clock if isinstance(clock,dict) else {}
     p=prescription if isinstance(prescription,dict) else {}
     sci=r.get('scientific_progression') or {};dose=sci.get('dose_contract') or {}
-    dim=str(d.get('dimension') or sci.get('dimension') or '').upper()
+    dim=str(d.get('dimension') or '').upper()
+    science_dim=str(sci.get('dimension') or '').upper()
     goal=str(d.get('goal_key') or r.get('goal_key') or '').upper()
     base={'schema':R196926_SCHEMA,'goal_key':goal,'dimension':dim,
           'issued':False,'executable':False,'purpose':'FIRST_MEASURED_REPEATED_WORK_RECOVERY'}
-    if goal not in R1962_GOALS or goal=='ENDURANCE_BASE' or dim in {'','NONE','REVALIDATION','EXTENSION_OR_REVALIDATION'}:
+    # R196.9.52: an INITIAL work/recovery test belongs exclusively to the
+    # RECOVERY_UNDER_LOAD science question.  An upstream alternative may set
+    # dose.reason=NON_RECOVERY_DIMENSION_WORKOUT_LIBRARY while an older
+    # Decision still carries RECOVERY_UNDER_LOAD; that MUST NOT open a test.
+    if (goal not in R1962_GOALS or goal=='ENDURANCE_BASE' or
+            dim!='RECOVERY_UNDER_LOAD' or science_dim!=dim):
         return dict(base,state='OTHER_SCIENCE_OWNER')
+    # A missing dose does not necessarily mean missing *measurements*: it may
+    # mean the question has already closed, the comparison failed, or a safe
+    # step was refused. Never create an initial test for any of those cases.
     if dose.get('available') is True:
         return dict(base,state='EXISTING_CONTRACT_AVAILABLE')
+    if (dose.get('schema')!=R1959_SCHEMA or
+            str(dose.get('reason') or '') not in {
+                'NO_CURRENT_STRONG_MEASURED_REPEATED_WORK',
+                'REFERENCE_NOT_VERIFIED_IN_CANONICAL_LEDGER',
+                'STALE_OR_FUTURE_UNVERIFIED_REFERENCE'}):
+        return dict(base,state='OTHER_SCIENCE_OWNER')
+    rec=((r.get('question_state') or {}).get('dimensions') or {}).get(dim) or {}
+    if (rec.get('exit_satisfied') is True or rec.get('closed') is True):
+        return dict(base,state='OTHER_SCIENCE_OWNER')
     if (p.get('coupled_evidence_bridge') or {}).get('request'):
         return dict(base,state='COMPARABLE_EVIDENCE_PATH_AVAILABLE')
     test=r.get('test') or {}
@@ -54709,10 +54727,15 @@ def _v196920_prepare_consented_r27(snapshot,user_id=None,read_only=False,agreeme
 def _v196926_prepare_first_observation(decision,road,clock,p):
     out=copy.deepcopy(p if isinstance(p,dict) else {})
     science=(road or {}).get('scientific_progression') or {}
-    dim=str((decision or {}).get('dimension') or science.get('dimension') or '').upper()
-    # A repeated-work observation cannot be promoted to a general-purpose test
-    # for an unrelated science question merely because some dose is unavailable.
-    if dim!='RECOVERY_UNDER_LOAD':return out
+    dim=str((decision or {}).get('dimension') or '').upper()
+    science_dim=str(science.get('dimension') or '').upper()
+    # The former decision fallback could be RECOVERY_UNDER_LOAD while the
+    # actual science owner had selected an unrelated catalog dimension.
+    # Preserve historical issued IDs; discard only an unissued stale preview.
+    if dim!='RECOVERY_UNDER_LOAD' or science_dim!=dim:
+        if not (out.get('initial_evidence_bridge') or {}).get('issued'):
+            out.pop('initial_evidence_bridge',None)
+        return out
     req=_v196926_initial_request(decision,road,clock,p)
     if req.get('state') in {'OTHER_SCIENCE_OWNER','EXISTING_CONTRACT_AVAILABLE',
                             'COMPARABLE_EVIDENCE_PATH_AVAILABLE'}:
@@ -54759,14 +54782,30 @@ def _v196932_test_notice(snapshot):
     dec=s.get('nova_decision') or {}
     road=s.get('adaptive_roadmap') or {}
     b=p.get('initial_evidence_bridge') or {}
-    if isinstance(b,dict) and b.get('policy')==R196932_SCHEMA:
+    if not isinstance(b,dict):b={}
+    sci=road.get('scientific_progression') or {}
+    dose=sci.get('dose_contract') or {}
+    # Read-only rendering of historical snapshots must enforce the same
+    # scientific-owner contract as new issuance: a stored request alone is
+    # not proof that it was legitimate or executable.
+    coherent=(str(dec.get('dimension') or '').upper()=='RECOVERY_UNDER_LOAD'
+        and str(sci.get('dimension') or '').upper()=='RECOVERY_UNDER_LOAD'
+        and dose.get('schema')==R1959_SCHEMA
+        and dose.get('available') is not True
+        and str(dose.get('reason') or '') in {
+            'NO_CURRENT_STRONG_MEASURED_REPEATED_WORK',
+            'REFERENCE_NOT_VERIFIED_IN_CANONICAL_LEDGER',
+            'STALE_OR_FUTURE_UNVERIFIED_REFERENCE'}
+        and (b.get('request') or {}).get('dimension')=='RECOVERY_UNDER_LOAD'
+        and (b.get('request') or {}).get('goal_key')==str(dec.get('goal_key') or road.get('goal_key') or '').upper())
+    if coherent and isinstance(b,dict) and b.get('policy')==R196932_SCHEMA:
         req=b.get('request') or {};t=req.get('template') or {}
         if b.get('state') in {'CANONICAL_OBSERVATION_COMPILED',
             'CONSENTED_PENDING_SAME_DAY_RECHECK','COACH_SELECTED_FOR_CANONICAL_COMPILATION'}:
             return {'kind':'INITIAL_WORK_RECOVERY','date':req.get('date'),
                 'start_minute':req.get('start_minute'),
                 'protocol':t.get('template_id'),
-                'reason':((road.get('scientific_progression') or {}).get('dose_contract') or {}).get('reason') or 'MISSING_VERIFIED_REPEATED_WORK_RECOVERY',
+                'reason':'verified, complete work-and-recovery measurements are still missing',
                 'state':('SCHEDULED' if b.get('issued') else 'PLANNED_PENDING_SAFETY'),
                 'request_id':req.get('request_id'),
                 'work_seconds':t.get('work_seconds'),'reps':t.get('reps'),
@@ -54834,14 +54873,14 @@ HOME_PAGE=HOME_PAGE.replace(_R196932_HOME_ANCHOR,r"""{% if not is_preview and no
 {% if notice_snapshot %}
 {% set missing_power_test = nova_missing_power_test_notice(notice_snapshot) %}
 {% if missing_power_test %}
-<section class="v196932-test-notice" role="status" aria-label="NOVA scheduled measurement test">
-<strong>NOVA COACH · MEASUREMENT TEST {{ missing_power_test.state }}</strong>
-<p>NOVA has selected a {{ missing_power_test.kind }} measurement because {{ missing_power_test.reason }}.</p>
+<section class="v196932-test-notice" role="status" aria-label="NOVA measurement status">
+<strong>NOVA COACH · {% if missing_power_test.state == 'SCHEDULED' %}MEASUREMENT TEST SCHEDULED{% else %}MEASUREMENT CANDIDATE · NOT EXECUTABLE{% endif %}</strong>
+<p>{% if missing_power_test.state == 'SCHEDULED' %}NOVA has scheduled a {{ missing_power_test.kind }} measurement because {{ missing_power_test.reason }}.{% else %}NOVA is evaluating a {{ missing_power_test.kind }} measurement because {{ missing_power_test.reason }}.{% endif %}</p>
 <p><b>Date:</b> {{ missing_power_test.date or 'Awaiting verified slot' }}{% if missing_power_test.start_minute is not none %} · {{ '%02d:%02d'|format(missing_power_test.start_minute // 60, missing_power_test.start_minute % 60) }}{% endif %}. <b>Protocol:</b> {{ missing_power_test.protocol }}.</p>
 {% if missing_power_test.reps %}<p>{{ missing_power_test.reps }} × {{ missing_power_test.work_seconds }} seconds of controlled work, {{ missing_power_test.recovery_seconds }} seconds recovery.</p>{% endif %}
 <p>{{ missing_power_test.instruction }}{% if missing_power_test.state == 'PLANNED_PENDING_SAFETY' %} This is a planned test, not yet executable: current recovery and the canonical compiler must clear it before you ride.{% else %} If illness, safety or availability changes, update NOVA before riding.{% endif %}</p>
-<p>No acceptance checkbox or permission request. NOVA assigns the test; completion must be verified from your actual activity.</p>
-{% if missing_power_test.kind == 'INITIAL_WORK_RECOVERY' and missing_power_test.request_id %}
+<p>No acceptance checkbox or permission request. Only a canonically issued session is executable; completion must be verified from actual activity.</p>
+{% if missing_power_test.state == 'SCHEDULED' and missing_power_test.kind == 'INITIAL_WORK_RECOVERY' and missing_power_test.request_id %}
 <form method="post" action="{{ url_for('nova_initial_evidence') }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="request_id" value="{{ missing_power_test.request_id }}">
@@ -54889,13 +54928,16 @@ def _v196926_build_evidence_backlog(snapshot):
 _r196932_acquisition_before=_v196928_acquisition_instruction
 def _v196928_acquisition_instruction(truth):
     snap=(truth or {}).get('_v196928_snapshot') or {}
-    b=((snap.get('nova_prescription') or {}).get('initial_evidence_bridge') or {})
-    if b.get('policy')==R196932_SCHEMA and b.get('request'):
-        return ('NOVA identified missing measured work/recovery evidence and selected an '
-            'existing catalog test. See the coach test notice for the planned date and '
-            'protocol. No athlete consent is required. The prescribed test remains '
-            'subject to real safety and canonical compilation checks; no power '
-            'performance is credited until actual activity data is verified.')
+    notice=_v196932_test_notice(snap)
+    if notice and notice.get('kind')=='INITIAL_WORK_RECOVERY':
+        if notice.get('state')=='SCHEDULED':
+            return ('NOVA has compiled a canonical work/recovery measurement; '
+                'follow its actual prescribed session, respecting current safety. '
+                'Only verified activity data can establish the outcome.')
+        return ('NOVA has identified a possible canonical measurement for the '
+            'current recovery question, but it is NOT an executable workout. '
+            'Safety and canonical compilation must be verified first; do not '
+            'replace an already prescribed session with this candidate.')
     review=snap.get('evidence_cycle_review') or {}
     if review.get('schema')==R196932_SCHEMA and review.get('native_can_issue'):
         return ('NOVA selected a canonical R27 test to acquire the missing goal '
@@ -55856,7 +55898,7 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.151 R196.9.51 · OBSERVED RECOVERY CYCLE + VERIFIED CLOSURE · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.152 R196.9.52 · INITIAL EVIDENCE SCIENCE-OWNER ALIGNMENT · NOVA R196.2 CORE'
 
 BASE_CSS += ("\n.v196949-wellness-note{margin:12px 0;padding:12px 16px;"
              "border:1px solid var(--border);border-radius:12px;display:flex;"
