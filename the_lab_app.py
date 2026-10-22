@@ -48161,7 +48161,10 @@ def _v196933_raw_attested(prescription, index, compiled_session, roadmap):
     if (not isinstance(reference,dict) or not isinstance(selection,dict)
         or not isinstance(prescription_dose,dict)):
         return False
-    source_id=str(reference.get('activity_id') or '').strip()
+    # R196.9.55: R196.9.24 stores the verified completed-activity ID in
+    # reference_selection, while R195.9.reference retains the measured dose.
+    # Accept either authentic producer shape; still reject absent/conflicting IDs.
+    source_id=str(reference.get('activity_id') or selection.get('activity_id') or '').strip()
     if (not source_id or (selection.get('activity_id') and
         str(selection.get('activity_id'))!=source_id)):
         return False
@@ -55972,7 +55975,7 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.154 R196.9.54 · MEASURED SCIENCE REISSUE AFTER STALE CONTINUITY · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.155 R196.9.55 CANDIDATE · CORRECT COMPLETED-ACTIVITY ANCHOR FOR COUPLED DOSE · NOVA R196.2 CORE'
 
 BASE_CSS += ("\n.v196949-wellness-note{margin:12px 0;padding:12px 16px;"
              "border:1px solid var(--border);border-radius:12px;display:flex;"
