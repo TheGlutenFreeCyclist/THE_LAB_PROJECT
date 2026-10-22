@@ -13970,7 +13970,10 @@ def _race_repeatability_from_block(block):
         if cv is None and statistics.mean(watts):cv=statistics.pstdev(watts)/statistics.mean(watts)*100
         decay=_num(rep.get("first_to_last_decay_pct"))
         if decay is None and watts[0]:decay=max(0,(watts[0]-watts[-1])/watts[0]*100)
-        return {"reps":reps,"interval_secs":interval_secs,"interval_label":rep.get("interval_label"),"recovery_secs":_num(rep.get("recovery_secs")),"recovery_avg_watts":_num(rep.get("recovery_avg_watts")),"watts":watts,"retention_pct":round(retention,1) if retention is not None else None,"cv_pct":round(cv,1) if cv is not None else None,"decay_pct":round(decay,1) if decay is not None else None}
+        return {"reps":reps,"interval_secs":interval_secs,"interval_label":rep.get("interval_label"),"recovery_secs":_num(rep.get("recovery_secs")),"recovery_avg_watts":_num(rep.get("recovery_avg_watts")),"watts":watts,"retention_pct":round(retention,1) if retention is not None else None,"cv_pct":round(cv,1) if cv is not None else None,"decay_pct":round(decay,1) if decay is not None else None,
+                "recovery_observation_complete":rep.get("recovery_observation_complete") is True,
+                "recovery_pair_count":rep.get("recovery_pair_count"),
+                "recovery_pair_expected":rep.get("recovery_pair_expected")}
     ev=[x for x in (block.get("work_interval_evidence") or []) if _num((x or {}).get("secs")) is not None and _num((x or {}).get("watts")) is not None]
     groups={}
     for x in ev:
@@ -14069,6 +14072,10 @@ def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_ke
             watts=[float(x) for x in (rep.get("watts") or []) if _num(x) is not None]
             avg_w=statistics.mean(watts) if watts else _num((b.get("repeatability") or {}).get("avg_watts"));min_w=min(watts) if watts else _num((b.get("repeatability") or {}).get("min_watts"));max_w=max(watts) if watts else _num((b.get("repeatability") or {}).get("max_watts"))
             rep_event={"activity_id":b.get("activity_id"),"date":b.get("date"),"name":b.get("name"),"reps":int(_num(rep.get("reps")) or 0),"interval_secs":_num(rep.get("interval_secs")),"interval_label":rep.get("interval_label"),"recovery_secs":_num(rep.get("recovery_secs")),"recovery_avg_watts":recw,"ftp":ftp,"recovery_ratio":round(ratio,3) if ratio is not None else None,"avg_watts":round(avg_w,1) if avg_w is not None else None,"min_watts":round(min_w,1) if min_w is not None else None,"max_watts":round(max_w,1) if max_w is not None else None,"retention_raw_pct":round(ret,1) if ret is not None else None,"retention_capped_pct":round(max(0.0,min(100.0,ret)),1) if ret is not None else None,"decay_pct":round(decay,1) if decay is not None else None,"cv_pct":round(cv,1) if cv is not None else None,"strong":strong,"source":str((b.get("repeatability") or {}).get("source") or b.get("interval_structure_source") or "OBSERVED"),"activity_truth_source":truth.get("source") or b.get("interval_structure_source"),"tags":tags}
+            rep_event["recovery_observation_complete"] = rep.get("recovery_observation_complete") is True
+            rep_event["recovery_pair_count"] = rep.get("recovery_pair_count")
+            rep_event["recovery_pair_expected"] = rep.get("recovery_pair_expected")
+            rep_event["activity_truth_status"] = truth_status
             rep_events.append(rep_event);event["repeatability"]=rep_event
         else:event["repeatability"]=None
         events.append(event)
@@ -21456,15 +21463,25 @@ def _v4879_repeatability_stats(intervals, source=None):
     e=[x for x in groups.items() if len(x[1])>=3]
     if not e: return None
     b,rows=max(e,key=lambda x:(len(x[1]),x[0])); watts=[x.get("watts") for x in rows]; rec=[]; recw=[]
+    complete=True
     for a,z in zip(rows,rows[1:]):
-        t=0; ej=0
-        for it in seq[a["i"]+1:z["i"]]:
-            if str((it or {}).get("type") or "").upper()!="WORK":
-                q=int((it or {}).get("moving_time") or (it or {}).get("elapsed_time") or 0); rw=_num((it or {}).get("average_watts")); t+=q; ej+=q*(rw or 0)
-        if t>0: rec.append(t); recw.append(ej/t)
+        between=seq[a["i"]+1:z["i"]]
+        if not between or any(str((it or {}).get("type") or "").upper()=="WORK" for it in between):
+            complete=False; break
+        t=0.0; ej=0.0
+        for it in between:
+            q=_num((it or {}).get("moving_time") if (it or {}).get("moving_time") is not None else (it or {}).get("elapsed_time"))
+            rw=_num((it or {}).get("average_watts"))
+            if q is None or q<=0 or rw is None or rw<0:
+                complete=False; break
+            t+=q; ej+=q*rw
+        if not complete or t<20:complete=False;break
+        rec.append(t); recw.append(ej/t)
+    complete=complete and len(rec)==len(rows)-1
+    if not complete:rec=[];recw=[]
     first,last=watts[0],watts[-1]; ch=(last-first)/first*100 if first else None; avg=statistics.mean(watts); early=statistics.mean(watts[:2]); late=statistics.mean(watts[-2:]); cv=statistics.pstdev(watts)/avg*100 if len(watts)>1 and avg else 0
     rsec=int(round(statistics.median(rec))) if rec else None; rw=round(statistics.median(recw),1) if recw else None
-    return {"reps":len(watts),"interval_secs":b,"interval_label":f"{round(b/60):g} min","recovery_secs":rsec,"recovery_avg_watts":rw,"recovery_label":format_duration_label(rsec) if rsec else None,"watts":[int(round(x)) for x in watts],"avg_watts":round(avg,1),"min_watts":int(round(min(watts))),"max_watts":int(round(max(watts))),"spread_watts":int(round(max(watts)-min(watts))),"first_watts":int(round(first)),"last_watts":int(round(last)),"first_to_last_delta_watts":int(round(last-first)),"first_to_last_change_pct":round(ch,1) if ch is not None else None,"first_to_last_decay_pct":round(max(0,-ch),1) if ch is not None else None,"cv_pct":round(cv,1),"early_rep_avg_watts":round(early,1),"late_rep_avg_watts":round(late,1),"late_rep_retention_pct":round(late/early*100,1) if early else None,"source":source or "ICU_INTERVALS"}
+    return {"reps":len(watts),"interval_secs":b,"interval_label":f"{round(b/60):g} min","recovery_secs":rsec,"recovery_avg_watts":rw,"recovery_label":format_duration_label(rsec) if rsec else None,"watts":[int(round(x)) for x in watts],"avg_watts":round(avg,1),"min_watts":int(round(min(watts))),"max_watts":int(round(max(watts))),"spread_watts":int(round(max(watts)-min(watts))),"first_watts":int(round(first)),"last_watts":int(round(last)),"first_to_last_delta_watts":int(round(last-first)),"first_to_last_change_pct":round(ch,1) if ch is not None else None,"first_to_last_decay_pct":round(max(0,-ch),1) if ch is not None else None,"cv_pct":round(cv,1),"early_rep_avg_watts":round(early,1),"late_rep_avg_watts":round(late,1),"late_rep_retention_pct":round(late/early*100,1) if early else None,"source":source or "ICU_INTERVALS","recovery_observation_complete":complete,"recovery_pair_count":len(recw),"recovery_pair_expected":len(rows)-1}
 
 def _v491_session_progression(blocks):
     rows=[b for b in (blocks or []) if (b or {}).get("repeatability")]; out={"available":False,"badges":[],"comparison":None}
@@ -36167,22 +36184,27 @@ def _v150_repeatability_from_work_rows(intervals, source=None):
     if len(selected)<3:
         return None
     watts=[r.get("watts") for r in selected]
-    rec=[];recw=[];seq=list(intervals or [])
+    rec=[];recw=[];seq=list(intervals or []);complete=True
     for a,z in zip(selected,selected[1:]):
+        between=seq[a["i"]+1:z["i"]]
+        if not between or any(str((it or {}).get("type") or "").upper()=="WORK" for it in between):
+            complete=False;break
         t=0.0;ej=0.0
-        for it in seq[a["i"]+1:z["i"]]:
-            if str((it or {}).get("type") or "").upper()=="WORK":
-                continue
-            q=_num((it or {}).get("moving_time") or (it or {}).get("elapsed_time")) or 0
-            rw=_num((it or {}).get("average_watts")) or 0
+        for it in between:
+            q=_num((it or {}).get("moving_time") if (it or {}).get("moving_time") is not None else (it or {}).get("elapsed_time"))
+            rw=_num((it or {}).get("average_watts"))
+            if q is None or q<=0 or rw is None or rw<0:
+                complete=False;break
             t+=q;ej+=q*rw
-        if t>0:
-            rec.append(t);recw.append(ej/t)
+        if not complete or t<20:complete=False;break
+        rec.append(t);recw.append(ej/t)
+    complete=complete and len(rec)==len(selected)-1
+    if not complete:rec=[];recw=[]
     first,last=watts[0],watts[-1];ch=(last-first)/first*100 if first else None
     avg=statistics.mean(watts);early=statistics.mean(watts[:2]);late=statistics.mean(watts[-2:]);cv=statistics.pstdev(watts)/avg*100 if len(watts)>1 and avg else 0
     nominal=int(round(med/15.0)*15)
     rsec=int(round(statistics.median(rec))) if rec else None;rw=round(statistics.median(recw),1) if recw else None
-    return {"reps":len(watts),"interval_secs":nominal,"interval_label":f"{nominal/60:g} min","recovery_secs":rsec,"recovery_avg_watts":rw,"recovery_label":format_duration_label(rsec) if rsec else None,"watts":[int(round(x)) for x in watts],"avg_watts":round(avg,1),"min_watts":int(round(min(watts))),"max_watts":int(round(max(watts))),"spread_watts":int(round(max(watts)-min(watts))),"first_watts":int(round(first)),"last_watts":int(round(last)),"first_to_last_delta_watts":int(round(last-first)),"first_to_last_change_pct":round(ch,1) if ch is not None else None,"first_to_last_decay_pct":round(max(0,-ch),1) if ch is not None else None,"cv_pct":round(cv,1),"early_rep_avg_watts":round(early,1),"late_rep_avg_watts":round(late,1),"late_rep_retention_pct":round(late/early*100,1) if early else None,"source":source or "DEVICE_LAPS_TOLERANT","r150_duration_tolerant":True}
+    return {"reps":len(watts),"interval_secs":nominal,"interval_label":f"{nominal/60:g} min","recovery_secs":rsec,"recovery_avg_watts":rw,"recovery_label":format_duration_label(rsec) if rsec else None,"watts":[int(round(x)) for x in watts],"avg_watts":round(avg,1),"min_watts":int(round(min(watts))),"max_watts":int(round(max(watts))),"spread_watts":int(round(max(watts)-min(watts))),"first_watts":int(round(first)),"last_watts":int(round(last)),"first_to_last_delta_watts":int(round(last-first)),"first_to_last_change_pct":round(ch,1) if ch is not None else None,"first_to_last_decay_pct":round(max(0,-ch),1) if ch is not None else None,"cv_pct":round(cv,1),"early_rep_avg_watts":round(early,1),"late_rep_avg_watts":round(late,1),"late_rep_retention_pct":round(late/early*100,1) if early else None,"source":source or "DEVICE_LAPS_TOLERANT","r150_duration_tolerant":True,"recovery_observation_complete":complete,"recovery_pair_count":len(recw),"recovery_pair_expected":len(selected)-1}
 
 
 def _v4879_repeatability_stats(intervals, source=None):
@@ -36596,14 +36618,26 @@ def _v152_truth_owned_repeatability(truth, detail=None):
     seq.sort(key=lambda x: int(x.get("_truth_pos") if x.get("_truth_pos") is not None else 10**9))
     recoveries, recovery_watts = [], []
     work_pos = [int(x.get("_truth_pos")) for x in work if x.get("_truth_pos") is not None]
-    if len(work_pos) == len(work):
+    complete = len(work_pos) == len(work) and len(set(work_pos)) == len(work_pos)
+    if complete:
         for left, right in zip(work_pos, work_pos[1:]):
-            between = [x for x in seq if x.get("_truth_pos") is not None and left < int(x.get("_truth_pos")) < right and str(x.get("type") or "").upper() != "WORK"]
-            seconds = sum(float(_num(x.get("moving_time") or x.get("elapsed_time")) or 0) for x in between)
-            if seconds > 0:
-                energy = sum(float(_num(x.get("moving_time") or x.get("elapsed_time")) or 0) * float(_num(x.get("average_watts") or x.get("avg_watts") or x.get("power")) or 0) for x in between)
-                recoveries.append(seconds)
-                recovery_watts.append(energy / seconds)
+            between = [x for x in seq if x.get("_truth_pos") is not None and left < int(x.get("_truth_pos")) < right]
+            if not between or any(str(x.get("type") or "").upper() == "WORK" for x in between):
+                complete = False; break
+            secs, joules = 0.0, 0.0
+            for x in between:
+                seconds = _num(x.get("moving_time") if x.get("moving_time") is not None else x.get("elapsed_time"))
+                power = _num(x.get("average_watts") if x.get("average_watts") is not None else x.get("avg_watts") if x.get("avg_watts") is not None else x.get("power"))
+                if seconds is None or seconds <= 0 or power is None or power < 0:
+                    complete = False; break
+                secs += float(seconds); joules += float(seconds) * float(power)
+            if not complete or secs < 20:
+                complete = False; break
+            recoveries.append(secs); recovery_watts.append(joules / secs)
+    complete = complete and len(recoveries) == len(work)-1
+    if not complete:
+        # Never promote partial gaps or missing watts to a measured power claim.
+        recoveries, recovery_watts = [], []
     if not recoveries and _num(truth.get("recovery_median_secs")) is not None:
         recoveries = [float(_num(truth.get("recovery_median_secs")))]
     first, last = watts[0], watts[-1]
@@ -36618,6 +36652,9 @@ def _v152_truth_owned_repeatability(truth, detail=None):
     return {
         "reps": len(watts), "interval_secs": nominal, "interval_label": format_duration_label(nominal),
         "recovery_secs": rsec, "recovery_avg_watts": rw, "recovery_label": format_duration_label(rsec) if rsec else None,
+        "recovery_observation_complete": complete, "recovery_pair_count": len(recovery_watts),
+        "recovery_pair_expected": len(work)-1,
+        "recovery_observation_reason": "ALL_INTER_REP_GAPS_MEASURED" if complete else "PARTIAL_OR_MISSING_INTER_REP_POWER",
         "watts": [int(round(x)) for x in watts], "avg_watts": round(avg, 1), "min_watts": int(round(min(watts))),
         "max_watts": int(round(max(watts))), "spread_watts": int(round(max(watts)-min(watts))),
         "first_watts": int(round(first)), "last_watts": int(round(last)), "first_to_last_delta_watts": int(round(last-first)),
@@ -44631,58 +44668,150 @@ def _v1958_recovery_load_grade(event):
         grade,reason = "INTRODUCTORY","LOW_ACTIVE_RECOVERY_DOES_NOT_ESTABLISH_LOAD_TOLERANCE"
     else:
         grade,reason = "MEANINGFUL","MEASURED_ACTIVE_RECOVERY_ABOVE_CONSERVATIVE_FTP_GUARD"
-    eligible = grade == "MEANINGFUL"
-    return {"grade":grade,"eligible":eligible,"successful":bool(eligible and e.get("strong")),
+    eligible = False  # Only the ledger comparison can establish a meaningful *increase*.
+    return {"grade":grade,"eligible":eligible,"successful":False,
             "reason":reason,"ratio":round(ratio,4),"threshold_ratio":R1958_MIN_MEANINGFUL_RECOVERY_FTP_RATIO,
             "work_reproduced":bool(e.get("strong")),"method":R1958_SCHEMA}
 
 
 def _v1958_rescore_recovery_load(ledger):
-    """Rebuild loaded-recovery evidence strictly from canonical training reps.
+    """Score a full baseline -> measured trial -> independent confirmation cycle.
 
-    Any old ``active_load_recovery`` flag or cached 45%-FTP count is discarded.
-    Races are deliberately excluded; race durability is handled independently.
+    Thresholds are conservative *comparability policy*, not FTP-zone science:
+    at least +max(10 W, 4% FTP) above a verified strong baseline, comparable
+    structure, >=92% work retained and confirmation at comparable load within
+    28 days. The old 70% threshold is descriptive, never an exit prerequisite.
     """
     if not isinstance(ledger,dict):return ledger
-    rep = ledger.get("repeatability") or {}
-    events = rep.get("events") or []
-    kinds = {str(e.get("activity_id")):str(e.get("event_kind") or "").upper()
-             for e in ledger.get("events") or [] if isinstance(e,dict)}
-    meaningful, successes, intro = [], [], []
-    for event in events:
-        if not isinstance(event,dict):continue
-        grade=_v1958_recovery_load_grade(event)
-        if kinds.get(str(event.get("activity_id")))=="RACE":
-            grade={**grade,"grade":"EXCLUDED_RACE","eligible":False,
-                   "successful":False,"reason":"RACE_IS_NOT_STRUCTURED_RECOVERY_WORK"}
-        event["recovery_load_evidence"]=grade
-        if grade["grade"]=="INTRODUCTORY":intro.append(event)
-        if grade["eligible"]:meaningful.append(event)
-        if grade["successful"]:successes.append(event)
-    # Count *distinct activities*, not multiple repeated segments inside a ride.
-    unique_success={str(e.get("activity_id") or _v81_evidence_block_key(e)):e for e in successes}
-    successful_events=list(unique_success.values())
-    unique_exposure={str(e.get("activity_id") or _v81_evidence_block_key(e)):e for e in meaningful}
-    exposed_events=list(unique_exposure.values())
-    latest_success=max((str(e.get("date") or "")[:10] for e in successful_events),default=None) or None
-    latest_exposure=max((str(e.get("date") or "")[:10] for e in exposed_events),default=None) or None
-    feat=ledger.get("science_features")
-    if not isinstance(feat,dict):feat={};ledger["science_features"]=feat
-    feat.update({"recovery_under_load_exposures":len(exposed_events),
-        "recovery_under_load_successes":len(successful_events),
-        "active_load_recovery":len(successful_events)>=2,
-        "max_successful_recovery_ratio":round(max((_rhythm_num(e.get("recovery_avg_watts"))/_rhythm_num(e.get("ftp")) for e in successful_events),default=0),3) if successful_events else None,
-        "latest_recovery_under_load_success_date":latest_success,
-        "latest_recovery_under_load_exposure_date":latest_exposure,
-        "recovery_under_load_introductory_sessions":len(intro),
-        "recovery_under_load_evidence_schema":R1958_SCHEMA})
-    ledger["recovery_load_evidence"]={"schema":R1958_SCHEMA,
-       "meaningful_exposures":len(exposed_events),"successful_exposures":len(successful_events),
-       "introductory_exposures":len(intro),"established":len(successful_events)>=2,
-       "last_success_date":latest_success,"last_exposure_date":latest_exposure,
-       "minimum_observed_ratio":R1958_MIN_MEANINGFUL_RECOVERY_FTP_RATIO,
-       "successful_activity_ids":[e.get("activity_id") for e in successful_events],
-       "reason":"At least two independent successful sessions with measured materially loaded between-rep recovery are required. Z1/easy recovery never establishes this ability; prescribed recovery load alone is not execution evidence. Ratio relative to personal FTP is a conservative product heuristic."}
+    events=[e for e in ((ledger.get('repeatability') or {}).get('events') or []) if isinstance(e,dict)]
+    kinds={str(e.get('activity_id')):str(e.get('event_kind') or '').upper()
+           for e in (ledger.get('events') or []) if isinstance(e,dict)}
+    valid=[]; attempted=[]; successes=[]; introductory=[]
+    for e in sorted(events,key=lambda x:(str(x.get('date') or '')[:10],str(x.get('activity_id') or ''))):
+        grade=_v1958_recovery_load_grade(e)
+        aid=str(e.get('activity_id') or '')
+        expected=int(_rhythm_num(e.get('reps')) or 0)-1
+        measured=int(_rhythm_num(e.get('recovery_pair_count')) or 0)
+        pair_expected=_rhythm_num(e.get('recovery_pair_expected'))
+        trusted=(e.get('recovery_observation_complete') is True and expected>=2
+                 and measured==expected and pair_expected==expected
+                 and str(e.get('activity_truth_source') or e.get('source') or '').upper()
+                    in {'ICU_INTERVALS_CANONICAL','DEVICE_LAPS','ORIGINAL_ACTIVITY_FIT_LAP','ORIGINAL_FIT_LAPS'}
+                 and str(e.get('activity_truth_status') or '').upper() not in {'CONFLICT','UNRESOLVED','RAW_FALLBACK'})
+        if kinds.get(aid)=='RACE':
+            e['recovery_load_evidence']={**grade,'grade':'EXCLUDED_RACE',
+                'reason':'RACE_IS_NOT_STRUCTURED_RECOVERY_WORK'}
+            continue
+        if not trusted or grade['grade']=='UNVERIFIED' or not aid:
+            e['recovery_load_evidence']={**grade,'grade':'UNVERIFIED',
+                'reason':'INTER_REP_RECOVERY_NOT_COMPLETELY_MEASURED_OR_CANONICAL'}
+            continue
+        try:edate=date.fromisoformat(str(e.get('date') or '')[:10])
+        except (ValueError,TypeError):
+            e['recovery_load_evidence']={**grade,'grade':'UNVERIFIED','reason':'ACTIVITY_DATE_MISSING'}
+            continue
+        watts=_rhythm_num(e.get('recovery_avg_watts'))
+        ftp=_rhythm_num(e.get('ftp'))
+        work=_rhythm_num(e.get('avg_watts'))
+        secs=_rhythm_num(e.get('interval_secs'))
+        recsecs=_rhythm_num(e.get('recovery_secs'))
+        reps=int(_rhythm_num(e.get('reps')) or 0)
+        if any(v is None or v<=0 for v in (watts,ftp,work,secs,recsecs)):
+            e['recovery_load_evidence']={**grade,'grade':'UNVERIFIED','reason':'INVALID_MEASURED_WORK_OR_RECOVERY'}
+            continue
+        baselines=[]
+        for b in valid:
+            try:bd=date.fromisoformat(str(b.get('date') or '')[:10])
+            except (ValueError,TypeError):continue
+            gap=(edate-bd).days
+            if not 0<gap<=28 or not b.get('strong'):continue
+            bw=_rhythm_num(b.get('avg_watts'));bf=_rhythm_num(b.get('ftp'))
+            bs=_rhythm_num(b.get('interval_secs'));br=_rhythm_num(b.get('recovery_secs'))
+            brec=_rhythm_num(b.get('recovery_avg_watts'))
+            if (not all(v is not None and v>0 for v in (bw,bf,bs,br,brec))
+                or abs(reps-int(b.get('reps') or 0))>1
+                or abs(secs/bs-1)>.10 or abs(recsecs/br-1)>.25
+                or abs(ftp/bf-1)>.08 or work<bw*.92):continue
+            step=max(10.0,.04*ftp)
+            if watts>=brec+step and (watts-brec)/ftp>=.035:
+                baselines.append(b)
+        baseline=min(baselines,key=lambda x:float(x['recovery_avg_watts'])) if baselines else None
+        if baseline:
+            grade={**grade,'eligible':True,'successful':bool(e.get('strong')),
+                   'grade':'MEANINGFUL' if grade['grade']=='MEANINGFUL' else 'PROGRESSIVE',
+                   'reason':'VERIFIED_RECOVERY_INCREASE_WITH_COMPARABLE_WORK',
+                   'baseline_activity_id':baseline.get('activity_id'),
+                   'baseline_watts':baseline.get('recovery_avg_watts'),
+                   'increase_watts':round(watts-float(baseline['recovery_avg_watts']),1),
+                   'work_retention_vs_baseline':round(work/float(baseline['avg_watts']),3)}
+            attempted.append(e)
+            if grade['successful']:successes.append(e)
+        else:
+            grade={**grade,'reason':'OBSERVED_BASELINE_NOT_YET_MEASURED_PROGRESS',
+                   'eligible':False,'successful':False}
+            introductory.append(e)
+        e['recovery_load_evidence']=grade
+        valid.append(e)
+    # Two comparable independently completed trials with one shared older
+    # baseline, not two arbitrary Z1 rides nor two separate baselines.
+    confirmed=[]
+    for later in successes:
+        ld=date.fromisoformat(str(later['date'])[:10])
+        lp=later['recovery_load_evidence']
+        for earlier in successes:
+            if earlier is later or earlier.get('activity_id')==later.get('activity_id'):continue
+            ed=date.fromisoformat(str(earlier['date'])[:10])
+            if not 0<(ld-ed).days<=28:continue
+            ep=earlier['recovery_load_evidence']
+            if ep.get('baseline_activity_id')!=lp.get('baseline_activity_id'):continue
+            ew=_rhythm_num(earlier.get('recovery_avg_watts'))
+            lw=_rhythm_num(later.get('recovery_avg_watts'))
+            es=_rhythm_num(earlier.get('interval_secs'))
+            ls=_rhythm_num(later.get('interval_secs'))
+            er=_rhythm_num(earlier.get('recovery_secs'))
+            lr=_rhythm_num(later.get('recovery_secs'))
+            ework=_rhythm_num(earlier.get('avg_watts'))
+            lwork=_rhythm_num(later.get('avg_watts'))
+            ftp=_rhythm_num(later.get('ftp'))
+            if (any(x is None or x<=0 for x in (ew,lw,es,ls,er,lr,ework,lwork,ftp))
+                or abs(lw-ew)>max(10.,.05*ftp)
+                or abs(ls/es-1)>.10 or abs(lr/er-1)>.25
+                or lwork<ework*.92):continue
+            confirmed.append((earlier,later))
+    closed=bool(confirmed)
+    confirmed_pair=max(confirmed,key=lambda p:(str(p[1].get('date') or ''),str(p[1].get('activity_id') or ''))) if confirmed else None
+    unique_success={str(e['activity_id']):e for e in successes}
+    unique_exposure={str(e['activity_id']):e for e in attempted}
+    successes=list(unique_success.values());attempted=list(unique_exposure.values())
+    latest_success=max((str(e.get('date') or '')[:10] for e in successes),default=None)
+    latest_exposure=max((str(e.get('date') or '')[:10] for e in attempted),default=None)
+    feat=ledger.get('science_features')
+    if not isinstance(feat,dict):feat={};ledger['science_features']=feat
+    pending=None
+    if not closed and successes:
+        latest=max(successes,key=lambda e:(str(e.get('date') or ''),str(e.get('activity_id') or '')))
+        pending={'activity_id':latest['activity_id'],'date':latest['date'],
+                 'recovery_watts':latest['recovery_avg_watts'],
+                 'baseline_activity_id':latest['recovery_load_evidence'].get('baseline_activity_id'),
+                 'stage':'CONFIRM_SAME_LOAD'}
+    feat.update({'recovery_under_load_exposures':len(attempted),
+       'recovery_under_load_successes':len(successes),'active_load_recovery':closed,
+       'recovery_under_load_closed':closed,'recovery_under_load_trial':pending,
+       'max_successful_recovery_ratio':round(max((float(e['recovery_avg_watts'])/float(e['ftp']) for e in successes),default=0),3) if successes else None,
+       'latest_recovery_under_load_success_date':latest_success,
+       'latest_recovery_under_load_exposure_date':latest_exposure,
+       'recovery_under_load_introductory_sessions':len(introductory),
+       'recovery_under_load_evidence_schema':R1958_SCHEMA})
+    ledger['recovery_load_evidence']={'schema':R1958_SCHEMA,
+       'meaningful_exposures':len(attempted),'successful_exposures':len(successes),
+       'introductory_exposures':len(introductory),'established':closed,
+       'last_success_date':latest_success,'last_exposure_date':latest_exposure,
+       'successful_activity_ids':[e['activity_id'] for e in successes],
+       'confirmed_activity_ids':[confirmed_pair[0]['activity_id'],confirmed_pair[1]['activity_id']] if confirmed_pair else [],
+       'pending_confirmation':pending,
+       'minimum_observed_ratio':None,
+       'minimum_progressive_change_watts':'max(10 W, 0.04 * contemporaneous FTP)',
+       'reason':'Closed only by two independent verified progressive/confirming recoveries against the same older strong baseline, stable comparable work, and a 28-day confirmation window. No mandatory 70%-FTP target.'}
     return ledger
 
 
@@ -44714,17 +44843,18 @@ def build_question_state(goal_key, evidence_ledger=None, performance_evidence=No
     attempted=int(proof.get("meaningful_exposures") or 0)
     intro=int(proof.get("introductory_exposures") or 0)
     day=proof.get("last_success_date") if good else proof.get("last_exposure_date")
-    if good>=2:
-        state,closed,n,reason="CONSOLIDATED",True,good,"Independent measured loaded-recovery efforts preserved repeat quality at a materially meaningful recovery intensity."
-    elif good==1:
-        state,closed,n,reason="SUPPORTED",False,good,"One successful measured loaded-recovery session supports this ability; an independent confirmation is required."
+    established=proof.get("established") is True and len(proof.get("confirmed_activity_ids") or [])==2
+    if established:
+        state,closed,n,reason="CONSOLIDATED",True,good,"A measured recovery-load increase and an independent confirmation preserved comparable repeated-work quality against the same verified baseline."
+    elif good:
+        state,closed,n,reason="SUPPORTED",False,good,"Measured recovery load progressed versus a comparable baseline; hold and confirm this step before raising load again."
     elif attempted:
-        state,closed,n,reason="BUILDING",False,attempted,"Meaningfully loaded recovery was attempted, but repeat-work quality was not yet preserved."
+        state,closed,n,reason="BUILDING",False,attempted,"A higher recovery load was measured, but comparable repeat-work quality was not maintained."
     elif intro:
-        state,closed,n,reason="BUILDING",False,intro,"Introductory active recovery has been observed, but the load is not meaningful enough to establish recovery under load."
-        day=None # introductory work is not an established loaded-recovery witness
+        state,closed,n,reason="BUILDING",False,intro,"Complete measured recovery provides an initial baseline; no comparable higher-load success yet."
+        day=None
     else:
-        state,closed,n,reason="UNPROVEN",False,0,"No directly measured successful work with meaningfully loaded between-rep recovery; free Z1 recovery counts only for repeatability."
+        state,closed,n,reason="UNPROVEN",False,0,"No complete canonical work/recovery evidence establishes the next progression step; the prescribed watts are not execution proof."
         day=None
     dimensions["RECOVERY_UNDER_LOAD"]=_v82_question_record(state,closed,n,day,reason,R1958_SCHEMA)
     goal=str(goal_key or "ENDURANCE_BASE").upper()
@@ -44772,6 +44902,10 @@ def _v1959_comparable_recovery_history(evidence_ledger):
         if not aid or kind.get(aid)!='TRAINING' or aid in seen:continue
         source=str(e.get('activity_truth_source') or e.get('source') or '').upper()
         if source not in {'ICU_INTERVALS_CANONICAL','DEVICE_LAPS','ORIGINAL_ACTIVITY_FIT_LAP','ORIGINAL_FIT_LAPS'}:continue
+        reps=int(_rhythm_num(e.get('reps')) or 0)
+        if (e.get('recovery_observation_complete') is not True
+            or int(_rhythm_num(e.get('recovery_pair_count')) or -1)!=reps-1
+            or int(_rhythm_num(e.get('recovery_pair_expected')) or -1)!=reps-1):continue
         vals={k:_rhythm_num(e.get(k)) for k in ('reps','interval_secs','recovery_secs','avg_watts','recovery_avg_watts','ftp')}
         if any(v is None for v in vals.values()) or any(vals[k]<=0 for k in ('reps','interval_secs','recovery_secs','avg_watts','ftp')) or vals['recovery_avg_watts']<0:continue
         if vals['reps']<2 or vals['recovery_secs']<20:continue
@@ -44815,6 +44949,10 @@ def _v1959_recovery_dose_contract(goal,dimension,features):
     # For safety, a saved scientific-feature cache alone is not proof of
     # chronology or provenance. Match the most recent strong witness to ledger.
     history=list(f.get('recovery_dose_history') or [])
+    if f.get('recovery_under_load_closed') is True:
+        return {'available':False,'schema':R1959_SCHEMA,
+                'reason':'RECOVERY_LOAD_ALREADY_ESTABLISHED',
+                'rule':'The verified baseline, progression and independent confirmation closed this question; do not issue a repeat merely to raise recovery watts.'}
     ref_date=str(ref.get('date') or '')[:10]
     try:
         ref_day=date.fromisoformat(ref_date)
@@ -44862,15 +45000,16 @@ def _v1959_recovery_dose_contract(goal,dimension,features):
     failed.sort(key=lambda h:(h['date'],h['activity_id']),reverse=True)
     if failed and failed[0]['date']>=ref_date:
         return {'available':False,'schema':R1959_SCHEMA,'reason':'LATEST_COMPARABLE_WORK_FAILED','rule':'Do not progress recovery after a failed comparable repetition; first re-establish quality under easy recovery.'}
-    recent_best=max(comparable,key=lambda h:h['recovery_ratio'])
-    # Do not jump from 30% to 52% just because a different 3-minute session
-    # once tolerated it. Same structure & high maintained work are required.
-    anchor_ratio=max(float(recent_best['recovery_ratio']),r['recovery_avg_watts']/r['ftp'])
-    if sum(1 for h in history if h.get('strong') and h['recovery_ratio']>=.70)>=2:
-        return {'available':False,'schema':R1959_SCHEMA,'reason':'RECOVERY_LOAD_ALREADY_ESTABLISHED','rule':'Move to the next adaptation question instead of making recovery progressively harder.'}
-    confirming=bool(anchor_ratio>=.70)
-    # One modest increase in the recovery variable per verified quality session.
-    # The maximum absolute jump is 0.06 FTP, even if the previous recovery was Z1.
+    # The LAST strong comparable completed session is the recovery anchor.
+    # Older higher recoveries are context, not permission to jump past a recent step.
+    recent_best=max(comparable,key=lambda h:(h['date'],h['activity_id']))
+    anchor_ratio=float(recent_best['recovery_ratio'])
+    trial=f.get('recovery_under_load_trial') or {}
+    # A real, recently completed progression needs confirmation, not another
+    # automatic +5% FTP jump. No unverified/cached trial can confer closure.
+    confirming=bool(trial.get('stage')=='CONFIRM_SAME_LOAD'
+                    and trial.get('activity_id')==next((h['activity_id'] for h in history
+                        if h.get('strong') and h['date']==ref_date),None))
     step=.05 if anchor_ratio>=.56 else .06
     candidate=anchor_ratio if confirming else min(.70,anchor_ratio+step)
     if not confirming and candidate<=anchor_ratio+.009:
@@ -44885,18 +45024,12 @@ def _v1959_recovery_dose_contract(goal,dimension,features):
     rec_lo=min(rec_lo,rec_hi)
     if (not confirming and rec_hi<=rec_anchor+2) or rec_hi<=rec_lo:
         return {'available':False,'schema':R1959_SCHEMA,'reason':'RECOVERY_STEP_TOO_SMALL_TO_DOSE_SAFELY'}
-    # R196.1: a tiny increase from free/easy recovery is not a second HARD
-    # coaching stimulus. No de-rated near-duplicate 3x5, 3x10, etc. just to
-    # accumulate an award. At least an independently demonstrated meaningful
-    # loaded-recovery base is needed before a hard repeat can progress this
-    # specific dimension. Other scientific dimensions remain separate.
-    if anchor_ratio < .55 or candidate < .55:
-        return {'available':False,'schema':R1959_SCHEMA,
-                'reason':'NO_MEANINGFUL_LOADED_RECOVERY_STIMULUS',
-                'rule':'Free/easy recovery plus a tiny watt increment does not justify a repeated hard main set, a power sacrifice, or a recovery-under-load award. Select a distinct proven training question or wait for a valid quality window.'}
+    # The first bounded step from a verified easy-recovery baseline is a
+    # legitimate *trial*, not an earned award. Never confuse its intent with
+    # observed success, and never require >55% FTP before training that skill.
     # Use a STABLE recent proven work-capacity anchor rather than compounding
     # reductions. Never increase work above the immediately observed session.
-    work_hi=floor5(min(best_work*.98,r['avg_watts']))
+    work_hi=floor5(min(best_work*.98,r['avg_watts']-3))
     work_lo=floor5(max(best_work*.94,min(best_work*.96,work_hi-5)))
     if work_hi<=0 or work_lo<=0 or work_hi<=work_lo:
         return {'available':False,'schema':R1959_SCHEMA,'reason':'UNSAFE_OR_UNRESOLVED_WORK_BAND'}
@@ -44904,9 +45037,9 @@ def _v1959_recovery_dose_contract(goal,dimension,features):
     # the recovery jump would exceed one safe increment once rounded.
     if work_hi>r['avg_watts']+1 or rec_hi>rec_anchor+r['ftp']*.06+0.01:
         return {'available':False,'schema':R1959_SCHEMA,'reason':'UNSAFE_COUPLED_LOAD_INVARIANT'}
-    stage='MEANINGFUL_LOAD_CONFIRMATION' if confirming else ('CONTROLLED_RECOVERY_BRIDGE' if candidate<.56 else ('ACTIVE_RECOVERY_BUILD' if candidate<.70 else 'MEANINGFUL_LOAD_TRIAL'))
+    stage='MEASURED_RECOVERY_CONFIRMATION' if confirming else ('CONTROLLED_RECOVERY_BRIDGE' if candidate<.56 else ('ACTIVE_RECOVERY_BUILD' if candidate<.70 else 'MEANINGFUL_LOAD_TRIAL'))
     return {'available':True,'schema':R1959_SCHEMA,'stage':stage,
-        'dominant_lever':'RECOVERY_LOAD_WITH_COMPENSATING_WORK_REDUCTION',
+        'dominant_lever':'RECOVERY_LOAD_WITH_WORK_QUALITY_PROTECTION',
         'reference':{'date':ref_date,'reps':int(round(r['reps'])),'interval_secs':int(round(r['interval_secs'])),
             'recovery_secs':int(round(r['recovery_secs'])),'work_avg_watts':round(r['avg_watts'],1),
             'recovery_avg_watts':round(r['recovery_avg_watts'],1),'ftp':round(r['ftp'],1),
@@ -44920,7 +45053,7 @@ def _v1959_recovery_dose_contract(goal,dimension,features):
             'recovery_secs':int(round(r['recovery_secs'])),'work_watts_low':work_lo,'work_watts_high':work_hi,
             'recovery_watts_low':rec_lo,'recovery_watts_high':rec_hi,
             'recovery_ratio_low':round(rec_lo/r['ftp'],3),'recovery_ratio_high':round(rec_hi/r['ftp'],3)},
-        'rule':'The next loaded-recovery trial is conditional on recovery/spacing. Preserve rep count, duration, and interval density; deliberately lower BOTH bounds of work relative to the last strong completed session before increasing recovery. Recovery wattage is an observed-based increment, never an automatic 70% FTP target. If the work fades, return to easy self-selected Z1; do not escalate until a later comparable observed success. No award is promised.',
+        'rule':'Preserve rep count, work/rest duration and minimum proven repeated-work quality. If the prior step succeeded, confirm its recovery load before adding another increment. The first step from easy recovery is a measured trial, not a skill award. No mandatory 70%-FTP target. If work quality fades, revert to easy recovery and do not advance.',
         'evidence_basis':'Canonical independent completed repeated work; same-structure recovery history; explicit small FTP-relative increments and measured work de-rating. Heuristic safety policy, not a clinical/physiological law.'}
 
 
@@ -45156,7 +45289,8 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
     selected_dimension=str(out.get('dimension') or '').upper()
     old=out.get('dose_contract') or {}
     exhausted_recovery=(selected_dimension=='RECOVERY_UNDER_LOAD' and
-                        old.get('reason')=='NO_MEANINGFUL_LOADED_RECOVERY_STIMULUS')
+                        old.get('reason') in {'NO_MEANINGFUL_LOADED_RECOVERY_STIMULUS',
+                                             'RECOVERY_LOAD_ALREADY_ESTABLISHED'})
     # R108/R196.1's existing anti-loop question ranking must see actual
     # fulfilled workout identities, not only delayed repeatability events.
     # A 2x10 -> 2x15 or 3x12 jump is not a lateral stimulus change.
@@ -45204,7 +45338,7 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
         out['candidate_architectures']=list(alt.get('architectures') or [])
         out['open_question']=(str(alt.get('reason') or '').strip()+
             (' The last completed race-transfer microstructure is too recent to repeat unchanged; larger alternatives would increase its hard-volume dose without sufficient evidence.'
-             if recent_transfer else ' The previously top-ranked recovery-load option was declined: easy recovery plus a few extra watts does not justify repeating the same hard main set at reduced power.'))
+             if recent_transfer else ' The recovery-load question is closed or its dose has no safe verified reference; use the next already-ranked scientific question.'))
         out['dose_contract']={'available':False,'reason':'NON_RECOVERY_DIMENSION_WORKOUT_LIBRARY',
                               'selected_alternative':dim}
         base_ids=['TID_ELITE','CYCLIST_TRAINING_DISTRIBUTION','LONG_TERM_DEVELOPMENT']
@@ -55722,7 +55856,7 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.150 R196.9.50 · COACH-OWNED QUALITY + 15MIN FLEXIBLE ENVELOPE · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.151 R196.9.51 · OBSERVED RECOVERY CYCLE + VERIFIED CLOSURE · NOVA R196.2 CORE'
 
 BASE_CSS += ("\n.v196949-wellness-note{margin:12px 0;padding:12px 16px;"
              "border:1px solid var(--border);border-radius:12px;display:flex;"
