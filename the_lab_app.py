@@ -14581,14 +14581,31 @@ def _v109_template_total_quality_min(t):
     return 0.0
 
 def _v109_template_estimated_session_min(t, dimension=None):
-    t=t or {};pat=str(t.get("pattern") or "").upper();base=20.0
-    if pat in {"STANDARD","SHORT_POWER","SPRINT","SUSTAINED","OVER_UNDER"}:
-        reps=int(t.get("reps") or 0);base+=reps*float(t.get("work_s") or 0)/60.0+max(0,reps-1)*float(t.get("recovery_s") or 0)/60.0
-    elif pat in {"MICRO_30_15","SPRINT_CLUSTER"}:
-        sets=int(t.get("sets") or 0);rps=int(t.get("reps_per_set") or 0);base+=sets*rps*(float(t.get("work_s") or 0)+float(t.get("float_s") or 0))/60.0+max(0,sets-1)*float(t.get("set_recovery_s") or 0)/60.0
-    if str(dimension or "").upper()=="DURABILITY":base+=30.0
-    elif str(dimension or "").upper()=="RACE_TRANSFER":base+=20.0
-    return round(base,1)
+    """Canonical main set + ONE real preparation + 5 min minimum cooldown.
+
+    A DURABILITY 30-min preload REPLACES the default warm-up; it is not
+    an additional warm-up. Neither declared rhythm nor owner time is a veto.
+    """
+    t=t or {}
+    core=_v19697_workout_core_seconds(t) if '_v19697_workout_core_seconds' in globals() else None
+    if core is None:
+        pat=str(t.get('pattern') or '').upper()
+        if pat in {'STANDARD','SHORT_POWER','SPRINT','SUSTAINED','OVER_UNDER'}:
+            reps=int(t.get('reps') or 0)
+            seconds=reps*float(t.get('work_s') or 0)+max(0,reps-1)*float(t.get('recovery_s') or 0)
+        elif pat in {'MICRO_30_15','SPRINT_CLUSTER'}:
+            sets=int(t.get('sets') or 0);rps=int(t.get('reps_per_set') or 0)
+            seconds=sets*rps*(float(t.get('work_s') or 0)+float(t.get('float_s') or 0))+max(0,sets-1)*float(t.get('set_recovery_s') or 0)
+        else:
+            # Preserve legacy estimation for non-interval endurance templates.
+            return 20.0
+    else:
+        seconds=core[0]
+    dim=str(dimension or '').upper()
+    pat=str(t.get('pattern') or '').upper()
+    prep=30 if dim=='DURABILITY' else (20 if dim=='RACE_TRANSFER' else
+        (15 if pat in {'SPRINT','SPRINT_CLUSTER','SHORT_POWER'} else 12))
+    return round(seconds/60.0+prep+5,1)
 
 def _v109_event_signature(event):
     e=event or {};r=_rhythm_num(e.get("reps"));w=_rhythm_num(e.get("interval_secs"));rec=_rhythm_num(e.get("recovery_secs"))
@@ -14626,7 +14643,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     scored=[]
     for t in candidates:
         score=float(t.get("priority") or 50);why=[];sig=_v109_template_signature(t);quality_min=_v109_template_total_quality_min(t);est=_v109_template_estimated_session_min(t,dim)
-        if hint is not None and est>float(hint)+5:
+        if hint is not None and est>float(hint)+15:
             score-=45;why.append(f"slot_fit-{round(est-float(hint),1)}")
         recent_exact=0;recent_same_duration=0
         tw=_rhythm_num(t.get("work_s"))
@@ -24489,6 +24506,17 @@ def _v90_prescription_duration_floor(main_set):
             try:recovery=float(m.group(1))
             except Exception:recovery=None
             if recovery is not None:break
+    # Canonical library emits seconds for non-integral-minute work/recovery
+    # (e.g. 4×210 s with 240 s recovery). The old minutes-only parser
+    # miscounted this as ZERO recovery, passed a 60-min plan, then the exact
+    # session composer rejected the same 61-min HARD. Read the actual units.
+    if recovery is None:
+        seconds_rest=re.search(
+            r"\bwith\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\b[^.;]{0,85}\b(?:recover(?:y|ies)?|rest)\b",
+            tail, re.I)
+        if seconds_rest:
+            try: recovery=float(seconds_rest.group(1))/60.0
+            except (TypeError,ValueError,OverflowError): recovery=None
     recovery_count=max(0,reps-1) if recovery is not None else 0
     cooldown=None
     cooldown_patterns=(
@@ -24541,9 +24569,10 @@ def _v90_session_duration_feasibility_guard(main_set, duration_display, slot=Non
             out["core_ceiling_min"]=core_ceiling
             out["cooldown_extension_min"]=round(max(0.0,cooldown_extension),2)
     out["ceiling_min"]=ceiling
-    target=float(int(math.ceil(required/5.0)*5))
-    if ceiling is None or target<=float(ceiling)+0.01:
-        out.update({"state":"ADJUSTED","adjusted":True,"adjusted_min":target})
+    target=float(math.ceil(required-1e-9))
+    if ceiling is None or target<=float(ceiling)+15.0+0.01:
+        out.update({"state":"ADJUSTED","adjusted":True,"adjusted_min":target,
+                    "time_tolerance_min":15.0,"planned_overrun_min":round(max(0.0,target-float(ceiling)),2) if ceiling is not None else None})
         return _v4884_duration_label(target) or f"{int(target)} min",out,["SESSION_DURATION_RAISED_TO_FIT_PRESCRIPTION"]
     out["state"]="BLOCKED"
     return str(duration_display),out,["SESSION_DURATION_INFEASIBLE"]
@@ -29901,7 +29930,7 @@ def _v111_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     scored=[]
     for t in candidates:
         score=float(t.get("priority") or 50); why=[]; sig=_v109_template_signature(t); quality_min=_v109_template_total_quality_min(t); est=_v109_template_estimated_session_min(t,dim); band=_v111_band_for_seconds(goal,t.get("work_s"))
-        if hint is not None and est>float(hint)+5: score-=45;why.append(f"slot_fit-{round(est-float(hint),1)}")
+        if hint is not None and est>float(hint)+15: score-=45;why.append(f"slot_fit-{round(est-float(hint),1)}")
         if target:
             if band==target:score+=42;why.append(f"roadmap_missing_facet_{target}+42")
             elif band is not None:score-=28;why.append(f"out_of_missing_facet_{target}-28")
@@ -45416,7 +45445,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
             # unvalidated 50-80% jump in hard time two days later.
             if originals>0 and quality>originals*1.20:continue
             hint=_rhythm_num((slot or {}).get('duration_hint_min'))
-            if hint is not None and _v109_template_estimated_session_min(t,dimension)>hint+5:continue
+            if hint is not None and _v109_template_estimated_session_min(t,dimension)>hint+15:continue
             if str(t.get('pattern') or '').upper() in {'STANDARD','SUSTAINED','SHORT_POWER'}:
                 power=_v1943_band(t,evidence_ledger=evidence_ledger,
                     ftp_anchor=context.get('ftp_anchor'),as_of_date=as_day,dimension=dimension)
@@ -45469,7 +45498,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     prep=30 if str(dimension or '').upper()=='DURABILITY' else (20 if str(dimension or '').upper()=='RACE_TRANSFER' else 12)
     core=_v19697_workout_core_seconds(template)
     if (chosen.get('state')=='PRESCRIBED' and reliable_minutes is not None
-            and core and core[0]/60+prep+5>reliable_minutes+0.25):
+            and core and core[0]/60+prep+5>reliable_minutes+15.0):
         similar=[]
         original_quality=float(_v109_template_total_quality_min(template) or 0)
         for alt in _NOVA_WORKOUT_LIBRARY:
@@ -45477,7 +45506,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
                     or str(dimension or '').upper() not in set(alt.get('dimensions') or ())
                     or alt.get('adaptive_only') or alt.get('id')==template.get('id')):continue
             acore=_v19697_workout_core_seconds(alt)
-            if not acore or acore[0]/60+prep+5>reliable_minutes+0.25:continue
+            if not acore or acore[0]/60+prep+5>reliable_minutes+15.0:continue
             work=float(_v109_template_total_quality_min(alt) or 0)
             if original_quality and not (0.75*original_quality<=work<=1.10*original_quality):continue
             power=_v1943_band(alt,evidence_ledger=evidence_ledger,
@@ -45494,7 +45523,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     if (chosen.get('state') == 'PRESCRIBED' and not repeat and template.get('id') not in used
             and (reliable_minutes is None or (
                  _v19697_workout_core_seconds(template) is not None and
-                 _v19697_workout_core_seconds(template)[0]/60+prep+8 <= reliable_minutes+0.25))):
+                 _v19697_workout_core_seconds(template)[0]/60+prep+5 <= reliable_minutes+15.0))):
         metadata['feasibility_gate'] = {'schema':R1962_SCHEMA, 'selected':'ORIGINAL',
                                        'power_source':chosen.get('source')}
         return template, metadata
@@ -45514,7 +45543,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
         if not option or str(option.get('pattern') or '').upper() not in patterns:
             continue
         oc=_v19697_workout_core_seconds(option)
-        if reliable_minutes is not None and (not oc or oc[0]/60+prep+5>reliable_minutes+0.25):continue
+        if reliable_minutes is not None and (not oc or oc[0]/60+prep+5>reliable_minutes+15.0):continue
         band = _v1943_band(option, evidence_ledger=evidence_ledger,
                             ftp_anchor=context.get('ftp_anchor'), as_of_date=as_of,
                             dimension=dimension)
@@ -45547,7 +45576,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
                 continue
             core = _v19697_workout_core_seconds(alt)
             qmin = float(_v109_template_total_quality_min(alt) or 0)
-            if (not core or core[0]/60.0 + prep + 5.0 > reliable_minutes + .25
+            if (not core or core[0]/60.0 + prep + 5.0 > reliable_minutes + 15.0
                     or not qmin or (original_quality and
                     not (.75*original_quality <= qmin <= 1.20*original_quality))):
                 continue
@@ -47354,7 +47383,7 @@ def _v19693_race_purpose_candidates(goal, dimension, slot, evidence_ledger):
                 or str(template.get("pattern") or "").upper() not in _R19693_TRANSFER_PATTERNS):
             continue
         est = _v109_template_estimated_session_min(template, dimension)
-        if duration_hint is not None and est > float(duration_hint) + 5:
+        if duration_hint is not None and est > float(duration_hint) + 15:
             continue
         sig = _v109_template_signature(template)
         # Canonical identical previously executed structure is not a new lever.
@@ -48299,6 +48328,18 @@ def _v19697_session_envelope(session):
     older = re.sub(r'\s*Finish with easy spinning to complete [^.]+, without adding an unplanned hard finisher\.\s*',
                    ' ', older, flags=re.I).strip()
     main = older.rstrip() + ' ' + timeline
+    athlete_minutes = (_v19699_number(s.get('expected_duration_max'), 1, 360)
+                       if s.get('is_planned_training') is True else None)
+    if athlete_minutes is None and str(s.get('timing_confidence') or '').upper() in {'HIGH', 'MODERATE'}:
+        athlete_minutes = _v19699_number(s.get('duration_hint_min'), 1, 360)
+    if athlete_minutes is not None and total_seconds / 60.0 > athlete_minutes + .01:
+        over = total_seconds / 60.0 - athlete_minutes
+        main += (f' TIME TRANSPARENCY: this complete session is {over:.1f} min over the '
+                 f'{athlete_minutes:g}-min athlete slot. Keep the prescribed MAIN SET '
+                 'and between-rep recoveries unchanged. If needed, shorten only '
+                 'optional warm-up/cool-down or aerobic fill, never a required '
+                 '30-min durability preload or the safe post-quality cooldown. '
+                 'Do not perform an incomplete main set.')
     comp = {
         'schema': R19697_SCHEMA, 'state':'COMPLETE', 'total_duration':s.get('duration'),
         'total_seconds':total_seconds, 'total_min_low':round(total_seconds / 60, 2),
@@ -48538,9 +48579,9 @@ def _v19698_extension_evidence(session, training_rhythm=None, execution_model=No
     source = ('EXPLICIT_PLANNED_SLOT' if planned else
               'LEARNED_SINGLE_SESSION' if learned else
               'UPSTREAM_COMPILED_SESSION')
-    conflict=(declared is not None and cap is not None and declared > cap + .25)
+    conflict=(declared is not None and cap is not None and declared > cap + 15.0 + .01)
     return {'source':source, 'declared_minutes':declared, 'learned_session_hint_minutes':hint if learned else None,
-            'explicit_slot_max_minutes':cap, 'conflict':conflict,
+            'explicit_slot_max_minutes':cap, 'declared_overrun_min':round(max(0.0,declared-cap),2) if declared is not None and cap is not None else None, 'tolerance_min':15.0, 'conflict':conflict,
             'note':'Learned duration is a probabilistic *single-session* reference, not a daily sum or an order to use every available minute.'}
 
 
@@ -48827,15 +48868,16 @@ def _v19699_dose_decision(original, goal, dimension, slot, evidence, context):
         return t, audit
     if (str(dec.get('action') or '').upper() != 'TRAIN' or
             dec.get('hard_session_allowed') is not True or
-            str(dec.get('quality_window_state') or '').upper() != 'OPEN' or
+            str(dec.get('quality_window_state') or '').upper() in
+                {'HOLD', 'CLOSED', 'RECOVERY HOLD', 'PROVISIONAL'} or
             str((slot or {}).get('quality_window_state') or 'OPEN').upper() in
-                {'WATCH', 'HOLD', 'CLOSED', 'PROVISIONAL'} or
+                {'HOLD', 'CLOSED', 'RECOVERY HOLD', 'PROVISIONAL'} or
             (slot or {}).get('provisional_quality') is True or
             str((slot or {}).get('restriction') or 'NONE').upper() != 'NONE' or
             ((slot or {}).get('is_planned_training') is True and
              str((slot or {}).get('planned_demand') or '').upper() in
                 {'EASY', 'RECOVERY', 'ENDURANCE', 'NORMAL'})):
-        audit['rejected_reasons'].append('NOT_CLEARED_UPSTREAM_OPEN_QUALITY')
+        audit['rejected_reasons'].append('UPSTREAM_HARD_NOT_AUTHORIZED')
         return t, audit
     if _v19699_locked(slot, context.get('ledger')):
         audit['rejected_reasons'].append('CONTINUITY_LOCK_OR_UNIDENTIFIED_SLOT')
@@ -48864,7 +48906,7 @@ def _v19699_dose_decision(original, goal, dimension, slot, evidence, context):
                 or alt.get('adaptive_only') or not _v19699_structure_step(t, alt)):
             continue
         core = _v19697_workout_core_seconds(alt)
-        if not core or core[1] <= current[1] or core[0] + (prep + 8) * 60 > minutes * 60:
+        if not core or core[1] <= current[1] or core[0] + (prep + 5) * 60 > (minutes + 15.0) * 60:
             continue
         if pattern in {'STANDARD', 'SUSTAINED', 'SHORT_POWER'}:
             band = _v1943_band(alt, evidence_ledger=evidence,
@@ -48883,7 +48925,7 @@ def _v19699_dose_decision(original, goal, dimension, slot, evidence, context):
         return t, audit
     candidate = dict(candidates[0][3])
     audit.update(decision='APPROVE_CANONICAL_ESCALATION', proposed_workout_id=candidate['id'],
-                 selected_dose_reason='Two independent strong completed comparable exposures; same exact interval/rest architecture and single bounded progression lever; full canonical duration fits one slot.')
+                 selected_dose_reason='Two independent strong completed comparable exposures; same exact interval/rest architecture and single bounded progression lever; canonical duration fits within the athlete slot plus the disclosed 15-minute tolerance.')
     return candidate, audit
 
 
@@ -48917,7 +48959,7 @@ def _v19699_select_workout_template(goal, dimension, evidence_ledger=None,
         pat = str(original.get('pattern') or '').upper()
         prep = 20 if dim == 'RACE_TRANSFER' else (30 if dim == 'DURABILITY' else
                (15 if pat in {'SPRINT', 'SPRINT_CLUSTER', 'SHORT_POWER'} else 12))
-        over = cap is not None and (not core or core[0] + (prep + 8) * 60 > (cap + .25) * 60)
+        over = cap is not None and (not core or core[0] + (prep + 5) * 60 > (cap + 15.0) * 60)
         if forbidden or over:
             blocked = dict(audit or {})
             blocked.update(reason='R19699_EXPLICIT_SLOT_NOT_EXECUTABLE',
@@ -55680,7 +55722,7 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.149 R196.9.49 · POSTPONE + HEALTH CANONICAL + WELLNESS ADVISORY · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.150 R196.9.50 · COACH-OWNED QUALITY + 15MIN FLEXIBLE ENVELOPE · NOVA R196.2 CORE'
 
 BASE_CSS += ("\n.v196949-wellness-note{margin:12px 0;padding:12px 16px;"
              "border:1px solid var(--border);border-radius:12px;display:flex;"
