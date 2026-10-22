@@ -45326,6 +45326,23 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
         and float(r.get('score') or 0)>=(40 if recent_transfer else 50)
         and bool(r.get('architectures'))
         and not _v82_question_exit_satisfied(question_state,r.get('dimension'))]
+    # R196.9.53 — do not replace an already verified RECOVERY_UNDER_LOAD
+    # dose with a fake 'alternative' which is the VERY SAME dimension.
+    # R196.1 checks recent fulfilled RACE_TRANSFER microstructures to forbid
+    # repeating those microstructures. That rule must not destroy an
+    # independently measured, already selected recovery-under-load contract.
+    # Retain the science dose ONLY if it is R195.9-verified and the ranked
+    # alternative is the same original recovery question. The prescription
+    # compiler, spacing, readiness, execution safety and collision guards
+    # remain entirely authoritative; this is NOT a hard-session override.
+    if (recent_transfer and not exhausted_recovery
+            and selected_dimension=='RECOVERY_UNDER_LOAD'
+            and old.get('schema')==R1959_SCHEMA and old.get('available') is True
+            and isinstance(old.get('reference'),dict)
+            and isinstance(old.get('prescription'),dict)
+            and options
+            and str(options[0].get('dimension') or '').upper()==selected_dimension):
+        return out
     out=dict(out)
     out['deferred_dimension']=deferred
     out['meaningful_stimulus_gate']={'schema':R1961_SCHEMA,'decision':'NO_NEAR_DUPLICATE',
@@ -55898,7 +55915,7 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.152 R196.9.52 · INITIAL EVIDENCE SCIENCE-OWNER ALIGNMENT · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.153 R196.9.53 · SCIENCE CONTRACT SELF-RESELECTION GUARD · NOVA R196.2 CORE'
 
 BASE_CSS += ("\n.v196949-wellness-note{margin:12px 0;padding:12px 16px;"
              "border:1px solid var(--border);border-radius:12px;display:flex;"
