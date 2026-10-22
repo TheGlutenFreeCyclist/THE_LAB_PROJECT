@@ -45094,6 +45094,10 @@ def _v504_scientific_dose_violations(proposed,main_set,road):
         return _v1959_dose_guard_baseline(proposed,main_set,road)
     issues=_v1959_dose_guard_baseline(proposed,main_set,road)
     p=dc.get('prescription') or {};r=dc.get('reference') or {}
+    if (not isinstance(p,dict) or not isinstance(r,dict) or
+            any(_rhythm_num(p.get(k)) is None for k in ('work_watts_high','recovery_watts_high')) or
+            _rhythm_num(r.get('work_avg_watts')) is None):
+        return list(dict.fromkeys(issues+['MALFORMED_COUPLED_DOSE_CONTRACT']))
     pp=_rhythm_num((proposed or {}).get('power_high'))
     rec=_rhythm_num((proposed or {}).get('recovery_power_high'))
     if pp is None or pp>float(p['work_watts_high'])+5 or pp>=float(r['work_avg_watts']):issues.append('WORK_NOT_BELOW_OBSERVED_SUCCESS')
@@ -45159,10 +45163,63 @@ def build_nova_prescription(nova_decision,coach_clock,adaptive_roadmap=None,micr
     bad=(not dc.get('available') or dc.get('schema')!=R1959_SCHEMA
          or bool(_v504_scientific_dose_violations(sig,candidate.get('main_set'),adaptive_roadmap)))
     if not bad:return out
-    # Never resurface an unsafe sticky plan. Explicitly HOLD that hard slot
-    # instead of fabricating a reissued plan ID or covertly changing workouts.
+    # R196.9.54: a stale R153 commitment is not a veto against an independent,
+    # already-measured R195.9 *replacement*.  First try the ORIGINAL full
+    # prescriber again against a read-only selection view that omits ONLY
+    # obsolete, unresolved commitments for the exact same future slot.
+    # Do not edit the actual ledger, completed evidence, primary anchor, or
+    # any current safety/spacing/eligibility inputs.  If the prescriber cannot
+    # make an exact canonical replacement, the original hard safety HOLD wins.
     slots=list((coach_clock or {}).get('next_slots') or [])
     slot=slots[i] if 0<=i<len(slots) and isinstance(slots[i],dict) else {}
+    verified_recovery=(
+        dc.get('available') is True and dc.get('schema')==R1959_SCHEMA
+        and str(sci.get('dimension') or '').upper()=='RECOVERY_UNDER_LOAD'
+        and str((nova_decision or {}).get('action') or '').upper()=='TRAIN'
+        and (nova_decision or {}).get('hard_session_allowed') is True
+        and (nova_decision or {}).get('quality_window_eligible') is True
+        and str(slot.get('restriction') or 'NONE').upper()=='NONE'
+        and not slot.get('is_race') and bool(slot.get('date'))
+        and str((adaptive_roadmap or {}).get('quality_window',{}).get('state') or '').upper() in {'WATCH','OPEN'}
+        and isinstance(dc.get('reference'),dict) and isinstance(dc.get('prescription'),dict)
+        and str(dc.get('stage') or '').upper()!='POST_SEVERE_INTENSITY_REENTRY')
+    if verified_recovery and str(out.get('source') or '').upper()=='PRESCRIPTION_CONTINUITY_LOCK':
+        shadow=copy.deepcopy(microcycle_ledger if isinstance(microcycle_ledger,dict) else {})
+        target=(str(slot.get('date') or '')[:10],str(slot.get('period') or ''))
+        history=list(shadow.get('prescription_history') or [])
+        obsolete=[r for r in history if (isinstance(r,dict) and
+            _v153_plan_slot(r)==target and _v153_is_training_plan(r))]
+        if obsolete:
+            shadow['prescription_history']=[r for r in history if not any(r is x for x in obsolete)]
+            candidate=_v1959_prescription_baseline(nova_decision,coach_clock,
+                adaptive_roadmap=adaptive_roadmap,microcycle_ledger=shadow,
+                evidence_ledger=evidence_ledger,power_model=power_model,
+                ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+                training_definitions=training_definitions)
+            if isinstance(candidate,dict) and (candidate.get('status')=='PRESCRIBED'
+                    and candidate.get('source')!='PRESCRIPTION_CONTINUITY_LOCK'
+                    and candidate.get('hard_prescription_available') is True
+                    and candidate.get('selected_slot_index')==i
+                    and candidate.get('workout_id')=='RECOVERY_UNDER_LOAD_EVIDENCE_DOSE_V1'):
+                rows=candidate.get('raw_sessions') or []
+                fresh=rows[i] if i<len(rows) and isinstance(rows[i],dict) else {}
+                # This production validator verifies exact work/rest mechanics,
+                # both watt bands, reference recency, and the immutable ID.
+                evidence=_v1960_coupled_power_band(fresh,
+                    {'main_set':fresh.get('main_set'),'date':slot.get('date'),
+                     'nova_workout_id':candidate.get('workout_id')},adaptive_roadmap)
+                if evidence is not None:
+                    candidate=copy.deepcopy(candidate)
+                    candidate['prescription_continuity']={
+                        'schema':R1959_SCHEMA,'active':False,
+                        'state':'MEASURED_REISSUE_REPLACES_INCOMPATIBLE_STICKY_PLAN',
+                        'invalidated_workout_id':out.get('workout_id') or out.get('contract_id'),
+                        'replacement_workout_id':candidate.get('workout_id'),
+                        'target_date':target[0],'target_period':target[1],
+                        'reason':'Obsolete slot commitment excluded only from a read-only selection replay; the measured canonical workout passed exact coupled-dose validation. Final compiler, safety, availability and persistence rules remain authoritative.'}
+                    return candidate
+    # Preserve the existing real safety HOLD if no fully verified replacement.
+    # Never resurface an unsafe sticky plan or fabricate a hard workout.
     safe=copy.deepcopy(out)
     safe_raw=list(safe.get('raw_sessions') or [])
     safe_raw[i]=_v84_easy_raw(slot,nova_decision or {})
@@ -55915,7 +55972,7 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.153 R196.9.53 · SCIENCE CONTRACT SELF-RESELECTION GUARD · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.154 R196.9.54 · MEASURED SCIENCE REISSUE AFTER STALE CONTINUITY · NOVA R196.2 CORE'
 
 BASE_CSS += ("\n.v196949-wellness-note{margin:12px 0;padding:12px 16px;"
              "border:1px solid var(--border);border-radius:12px;display:flex;"
