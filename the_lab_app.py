@@ -3968,6 +3968,10 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {%- endmacro %}
 <section class="v4-card v40-learning-panel">
 <div class="v40-learning-head">
+{% if data.training_state and data.training_state.wellness_advisory and data.training_state.wellness_advisory.active %}
+<div class="v196949-wellness-note" role="status" aria-label="Wellness observations advisory only"><strong>⚠️ Recovery signals · for your attention</strong>
+<span>{% for item in data.training_state.wellness_advisory.signals %}{{ item.label }}{% if not loop.last %} · {% endif %}{% endfor %}. These observations do not automatically cancel a Nova workout. Follow explicit health restrictions and stop if unwell.</span></div>
+{% endif %}
 <div class="v40-learning-title"><span class="v40-learning-icon" aria-hidden="true">🔬</span><div><h2>Advanced Physiology · Learning Lab</h2><p>Live metrics rise to the top, learning signals follow, and missing-data metrics stay collapsed. Each card now shows both a dynamic personal comparator where possible and a separate research reference so the number is never left without context.</p></div></div>
 <div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end"><span class="v40-learning-kicker">DYNAMIC PERSONAL BASELINES</span>{% if data.advanced_physiology.summary %}<span class="v41-learning-summary">{{ data.advanced_physiology.summary }}</span>{% endif %}</div>
 </div>
@@ -10545,13 +10549,15 @@ def build_planning_context(now=None):
     future_note_intent = _v132_future_note_intent(now=now)
     items = load_planning_items(active_only=True, limit=100)
     relevant = [i for i in items if str(i.get("end_date")) >= today.isoformat()]
-    health_now = [i for i in relevant if i.get("kind") in ("SICK", "INJURED") and _date_in_item(i, today)]
+    health_now = [i for i in relevant if str(i.get("kind") or "").upper() in
+                  ("SICK", "INJURED", "INJURY") and _date_in_item(i, today)]
     health_override = None
     if health_now:
         health_now.sort(key=lambda i: 0 if i.get("kind") == "SICK" else 1)
         h = health_now[0]
         health_override = {
-            "kind": h.get("kind"), "title": h.get("title"), "note": h.get("note"),
+            "kind": "INJURED" if str(h.get("kind") or "").upper() in ("INJURY", "INJURED") else h.get("kind"),
+            "source_kind": h.get("kind"), "title": h.get("title"), "note": h.get("note"),
             "until": h.get("end_date"), "restriction_type": h.get("restriction_type"),
         }
     blackout_dates = set()
@@ -10633,6 +10639,8 @@ def build_planning_context(now=None):
         "next_training": next_training,
         "active_today": active_today,
         "upcoming_items": relevant[:20],
+        "postponed_workouts": [dict(i["nova_postponement"]) for i in relevant
+                                if isinstance(i.get("nova_postponement"), dict)],
         "daily_availability": daily_availability,
         "future_note_intent": future_note_intent,
         "summary": " · ".join(summary_parts) if summary_parts else "Training as planned",
@@ -17121,7 +17129,10 @@ def build_adaptive_roadmap(training_direction, training_rhythm, activities, coac
     taper_priority = race_days is not None and 3 <= race_days <= 8
     race_prep_watch = race_days is not None and 9 <= race_days <= 14
     recovery_zone = str((metrics or {}).get("race_readiness_zone") or "grey").lower()
-    extra_delay = 0.0 if recovery_zone == "green" else (12.0 if recovery_zone == "grey" else 24.0)
+    # R196.9.49: color-only readiness is ADVISORY, never a second timing
+    # veto. Existing observed hard spacing, Calendar, and race restrictions
+    # still own candidate safety. Preserve the color for the UI and audit.
+    extra_delay = 0.0
     # R117: choose from the same Clock slots that Nova can actually prescribe.
     # Hard-session day/time cadence, general training opportunity and recovery
     # are independent signals. There is no median-hour hard veto.
@@ -29412,6 +29423,13 @@ def planning_add():
             snapshot = report.get("data") or {}
             plan_id = str(request.form.get("nova_postpone_plan_id") or "")
             original_date = str(request.form.get("nova_postpone_from_date") or "")
+            try:
+                if requested <= date.fromisoformat(original_date):
+                    raise ValueError("Postponement must be later than the original workout date")
+            except (TypeError, ValueError) as exc:
+                if str(exc) == "Postponement must be later than the original workout date":
+                    raise
+                raise ValueError("The original workout date is invalid") from exc
             selected = next((x for x in snapshot.get("next_sessions") or []
                 if isinstance(x, dict) and str(x.get("nova_workout_id") or "") == postpone_id
                 and str(x.get("nova_canonical_plan_id") or "") == plan_id
@@ -29430,22 +29448,40 @@ def planning_add():
                 raise ValueError("The selected date conflicts with a race or explicit restriction")
             existing_items = load_planning_items(active_only=True, owner_user_id=owner_id)
             for item in existing_items:
-                if (str(item.get("start_date") or "") == target_date and
+                if (_date_in_item(item, requested) and
                     (str(item.get("restriction_type") or "").upper() in {"NO_TRAINING","NO_INTENSITY"}
                      or str(item.get("kind") or "").upper() == "RACE")):
                     raise ValueError("The selected date conflicts with an existing calendar restriction")
+            # A second postponement must amend the SAME previously issued
+            # commitment, not create a second Calendar plan or rewrite its
+            # original fingerprint/period. The visible moved session can have
+            # a new Snapshot plan id; the first original remains authoritative.
+            prior_move_item = next((item for item in existing_items
+                if isinstance(item.get("nova_postponement"), dict)
+                and str(item["nova_postponement"].get("workout_id") or "") == postpone_id
+                and str(item["nova_postponement"].get("target_date") or "") == original_date), None)
+            prior_move = prior_move_item.get("nova_postponement") if prior_move_item else None
+            original_binding_plan = str((prior_move or {}).get("original_plan_id") or plan_id)
+            original_binding_date = str((prior_move or {}).get("original_date") or original_date)
+            original_binding_period = (prior_move or {}).get("original_period", selected.get("period"))
+            original_binding_session = ((prior_move or {}).get("session")
+                if isinstance((prior_move or {}).get("session"), dict)
+                else _v4840_ledger_session_summary(selected))
             binding = {
-                "workout_id": postpone_id, "original_plan_id": plan_id,
-                "original_date": original_date, "original_period": selected.get("period"),
+                "workout_id": postpone_id, "original_plan_id": original_binding_plan,
+                "original_date": original_binding_date, "original_period": original_binding_period,
                 "target_date": target_date, "snapshot_at": report.get("generated_at_local"),
-                "session": _v4840_ledger_session_summary(selected),
-                "workout_purpose": ((snapshot.get("nova_prescription") or {}).get("workout_library") or {}).get("purpose_consistency"),
+                "commitment_status": "DEFERRED_BY_ATHLETE",
+                "adherence_policy": "NO_MISSED_SESSION_PENALTY_DURING_DEFERRAL",
+                "session": original_binding_session,
+                "workout_purpose": ((prior_move or {}).get("workout_purpose")
+                    if prior_move else ((snapshot.get("nova_prescription") or {}).get("workout_library") or {}).get("purpose_consistency")),
             }
             title = "NOVA · " + str(selected.get("title") or "Coached quality")[:140]
             note = "NOVA_POSTPONE_V1:" + json.dumps(binding, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
             previous = next((item for item in existing_items if isinstance(item.get("nova_postponement"), dict)
-                and str(item["nova_postponement"].get("original_plan_id") or "") == plan_id
-                and str(item["nova_postponement"].get("original_date") or "") == original_date), None)
+                and str(item["nova_postponement"].get("original_plan_id") or "") == original_binding_plan
+                and str(item["nova_postponement"].get("original_date") or "") == original_binding_date), None)
             if previous:
                 update_planning_item(previous["id"], "TRAINING", title, target_date,
                     note=note, training_environment=str(selected.get("environment") or "INDOOR"),
@@ -37155,11 +37191,16 @@ def build_coach_clock(season_activities, now=None, planning_context=None, traini
         out["future_note_intent"] = _v4831_json_clone(intent) if intent else None
         out["explicit_scheduling_schema"] = R154_SCHEMA
         upcoming = list(ctx.get("upcoming_items") or []) + list((ctx.get("training_by_date") or {}).values())
+        all_postponements = list(ctx.get("postponed_workouts") or []) + [
+            item["nova_postponement"] for item in upcoming
+            if isinstance(item, dict) and isinstance(item.get("nova_postponement"), dict)]
         out["postponed_workouts"] = list({
-            (str(item["nova_postponement"].get("original_plan_id") or ""), str(item["nova_postponement"].get("original_date") or "")):
-                dict(item["nova_postponement"])
-            for item in upcoming
-            if isinstance(item, dict) and isinstance(item.get("nova_postponement"), dict)
+            (str(item.get("original_plan_id") or ""), str(item.get("original_date") or "")):
+                dict(item)
+            for item in all_postponements
+            if isinstance(item, dict) and item.get("workout_id")
+               and item.get("original_plan_id") and item.get("original_date")
+               and item.get("target_date")
         }.values())
         for item in out.get("next_slots") or []:
             matching = next((b for b in out["postponed_workouts"] if
@@ -37195,15 +37236,17 @@ def _v154_iso_dt(value):
         return None
 
 
-def _v154_explicit_quality_target(coach_clock, adaptive_roadmap, nova_decision):
+def _v154_explicit_quality_target(coach_clock, adaptive_roadmap, nova_decision, workout_id=None):
     clock = coach_clock or {}
-    plans = list(clock.get("postponed_workouts") or [])
+    all_plans = list(clock.get("postponed_workouts") or [])
+    plans = [p for p in all_plans if isinstance(p, dict)
+             and (not workout_id or str(p.get("workout_id") or "") == str(workout_id))]
     intent = clock.get("future_note_intent") if isinstance(clock.get("future_note_intent"), dict) else {}
     if plans:
         schedule = next((x for x in plans if isinstance(x, dict) and x.get("target_date")), None)
         if schedule:
             intent = {"active": True, "quality_preferred": True, "date": schedule["target_date"],
-                      "preferred_dayparts": ["EVENING"], "session_profile": "QUALITY",
+                      "preferred_dayparts": ["ALL_DAY"], "session_profile": "QUALITY",
                       "hard_blocked": False, "conditional": False}
     if not intent.get("active") or not intent.get("quality_preferred"):
         return None
@@ -37216,9 +37259,19 @@ def _v154_explicit_quality_target(coach_clock, adaptive_roadmap, nova_decision):
 
     road = adaptive_roadmap or {}
     q = road.get("quality_window") if isinstance(road.get("quality_window"), dict) else {}
-    if str(q.get("state") or "").upper() != "OPEN":
+    q_state = str(q.get("state") or "").upper()
+    bound = None
+    if plans:
+        bound = next((p for p in plans if isinstance(p, dict)
+                      and p.get("target_date") == intent.get("date")
+                      and p.get("workout_id") and p.get("original_plan_id")
+                      and isinstance(p.get("session"), dict)
+                      and str(p["session"].get("nova_workout_id") or "") == str(p.get("workout_id"))), None)
+    if q_state != "OPEN" and not (q_state == "WATCH" and bound):
         return None
     earliest = _v154_iso_dt(q.get("earliest_iso"))
+    if q_state == "WATCH" and earliest is None:
+        return None  # no proven spacing boundary to preserve on a moved workout
     target_date = str(intent.get("date") or "")[:10]
     preferred = list(intent.get("preferred_dayparts") or [])
     if not target_date:
@@ -37265,7 +37318,9 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
     )
     if not isinstance(out, dict) or str(out.get("status") or "").upper() != "PRESCRIBED":
         return out
-    target = _v154_explicit_quality_target(coach_clock, adaptive_roadmap, nova_decision)
+    target = _v154_explicit_quality_target(
+        coach_clock, adaptive_roadmap, nova_decision,
+        workout_id=out.get("workout_id") or out.get("contract_id"))
     commitments = list((coach_clock or {}).get("postponed_workouts") or [])
     if commitments and not target:
         slots = list((coach_clock or {}).get("next_slots") or [])
@@ -37293,6 +37348,11 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
                 out["source"] = "ATHLETE_POSTPONED_THIS_OCCURRENCE"
                 out["fail_closed_reason"] = "ATHLETE_REQUESTED_POSTPONEMENT_NOT_SAFETY_VETO"
                 out["postponed_quality"] = {k:binding.get(k) for k in ("workout_id","original_plan_id","original_date","target_date")}
+                out["postponed_quality"].update({
+                    "state": "DEFERRED_BY_ATHLETE", "adherence_penalty": False,
+                    "awaiting_eligible_slot": True,
+                    "prior_workout_identity_preserved": True,
+                })
         return out
     if not target:
         return out
@@ -37309,6 +37369,7 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
         return out
     saved = next((b for b in commitments if
         str(b.get("target_date") or "") == str((target.get("slot") or {}).get("date") or "")
+        and str(b.get("workout_id") or "") == str(out.get("workout_id") or "")
         and isinstance(b.get("session"), dict)), None)
     if saved:
         old = saved["session"]
@@ -37379,6 +37440,9 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
         "learned_preferred_iso": target.get("preferred_iso"),
         "workout_id": out.get("workout_id") or out.get("contract_id"),
         "mechanics_changed": False,
+        "deferred_by_athlete": bool(saved),
+        "quality_window_watch_may_reuse_issued_commitment": bool(saved),
+        "adherence_penalty": False if saved else None,
         "rule": "Safety and quality eligibility outrank the athlete. Once eligible, an explicit athlete date/daypart outranks learned rhythm preference; only timing moves, not workout mechanics.",
     }
     out["explicit_scheduling_schema"] = R154_SCHEMA
@@ -37973,7 +38037,9 @@ def _v159_reentry_active(nova_decision, adaptive_roadmap):
 def _v159_apply_explicit_schedule(out, coach_clock, adaptive_roadmap, nova_decision):
     if not isinstance(out, dict) or str(out.get("status") or "").upper() != "PRESCRIBED":
         return out
-    target = _v154_explicit_quality_target(coach_clock, adaptive_roadmap, nova_decision)
+    target = _v154_explicit_quality_target(
+        coach_clock, adaptive_roadmap, nova_decision,
+        workout_id=out.get("workout_id") or out.get("contract_id"))
     if not target:
         return out
     try:
@@ -40094,6 +40160,9 @@ def _v176_completed_volume_profile(activities, snapshot_day):
                "last_repeated_ride_date": None, "last_easy_ride_date": None,
                "week_recent_hours": None, "week_prior_hours": None,
                "growth_ratio": None, "growth_brake": False,
+               "two_week_comparator_ratio": None,
+               "coverage_state": "UNKNOWN", "weekly_training_days": None,
+               "growth_evidence": "UNASSESSED",
                "source": "RECONCILED_COMPLETED_CYCLING_ACTIVITIES"}
     if not isinstance(activities, (list, tuple)):
         return profile
@@ -40104,6 +40173,8 @@ def _v176_completed_volume_profile(activities, snapshot_day):
     prior_start = end - timedelta(days=41)
     recent_total = prior_total = 0.0
     latest_by_day = {}
+    weekly_hours = [0.0] * 6  # fixed complete calendar-aligned 7-day bins ending snapshot_day
+    weekly_training_days = [set() for _ in range(6)]
     ids_seen = set()
     oldest = None
     for row in activities:
@@ -40129,6 +40200,10 @@ def _v176_completed_volume_profile(activities, snapshot_day):
         if uid:
             ids_seen.add(uid)
         minutes = seconds / 60.0
+        week_index = (end - d).days // 7
+        if 0 <= week_index < 6:
+            weekly_hours[week_index] += minutes / 60.0
+            weekly_training_days[week_index].add(d)
         oldest = min(oldest, d) if oldest else d
         if d >= latest_start:
             recent_total += minutes
@@ -40149,9 +40224,21 @@ def _v176_completed_volume_profile(activities, snapshot_day):
     previous_hours = prior_total / 60.0 / 4.0
     recent_hours = recent_total / 60.0 / 2.0
     ratio = (recent_hours / previous_hours) if previous_hours >= 1.0 else None
-    # A clear rolling volume surge asks for consolidation rather than another
-    # progressive jump. This is a heuristic brake, not a universal optimum.
-    growth_brake = bool(ratio is not None and ratio > 1.15)
+    immediate_prior_weekly = (weekly_hours[2] + weekly_hours[3]) / 2.0
+    short_ratio = (recent_hours / immediate_prior_weekly
+                   if immediate_prior_weekly >= 1.0 else None)
+    # Provider data cannot certify that an empty week was really an off-week.
+    # Require cycling observed in every comparator week before using an
+    # assertive trend description. An absence of evidence is not low volume.
+    # Compare both time scales and an actual hours/week change, not a 15% blip.
+    active_weeks = [len(week) for week in weekly_training_days]
+    coverage_supported = (min(active_weeks) >= 1 and oldest is not None
+                          and oldest <= end - timedelta(days=35))
+    observed_increase = recent_hours - previous_hours
+    short_increase = recent_hours - immediate_prior_weekly
+    growth_brake = bool(coverage_supported and ratio is not None and short_ratio is not None
+                        and ratio >= 1.30 and short_ratio >= 1.30
+                        and observed_increase >= 2.0 and short_increase >= 2.0)
     profile.update({"available": bool(latest_by_day), "easy_ride_count": len(latest_by_day),
                     "recent_easy_days": len(latest_by_day),
                     "repeated_duration_min": round(repeated, 1) if repeated else None,
@@ -40160,6 +40247,13 @@ def _v176_completed_volume_profile(activities, snapshot_day):
                     "week_recent_hours": round(recent_hours, 2),
                     "week_prior_hours": round(previous_hours, 2),
                     "growth_ratio": round(ratio, 3) if ratio is not None else None,
+                    "two_week_comparator_ratio": round(short_ratio, 3) if short_ratio is not None else None,
+                    "immediately_prior_week_hours": round(immediate_prior_weekly, 2),
+                    "weekly_training_days": active_weeks,
+                    "coverage_state": ('ACTIVITY_SPREAD_SUPPORTED_NOT_COMPLETE_PROOF'
+                                       if coverage_supported else 'COVERAGE_UNKNOWN'),
+                    "growth_evidence": ('CORROBORATED_RISE_BOTH_WINDOWS' if growth_brake else
+                                        'UNSUPPORTED_OR_MODEST_CHANGE'),
                     "growth_brake": growth_brake,
                     "history_days_covered": (end - oldest).days + 1 if oldest else 0})
     return profile
@@ -40241,8 +40335,9 @@ def _v176_progressive_volume_advice(sessions, coach_clock, execution_model,
         target = None
         out["suggested_minutes"] = None
     if out["stage"] == "CONSOLIDATE":
-        out["headline"] = ("Your recent overall cycling hours have grown quickly. "
-                           "Consolidate the volume you already tolerate; no longer ride is requested.")
+        out["headline"] = ("Completed ride data suggest a substantial rise in weekly cycling hours "
+                           "across both comparison windows. Consider consolidating easy volume "
+                           "before an optional longer ride; this does not change Nova's hard plan.")
     elif target is not None:
         out["headline"] = (f"On the suggested easy day, you may REPLACE the existing ~{round(base)}-min "
                            f"easy ride with one easy Z1–Z2 ride gradually approaching ~{round(target)} min "
@@ -45661,7 +45756,7 @@ def _v153_is_training_plan(row):
     if not isinstance(row,dict):return False
     if str(row.get('prescription_status') or '').upper() in {
         'SUPERSEDED','WITHDRAWN','EXPIRED','EXPIRED_BY_NEW_HARD_EVIDENCE',
-        'CANCELLED','FULFILLED','COMPLETED'}:
+        'CANCELLED','FULFILLED','COMPLETED','DEFERRED_BY_ATHLETE'}:
         return False
     if str(row.get('effective_execution_authority') or '') == 'NOT_IN_CURRENT_ATHLETE_PLAN':
         return False
@@ -45861,7 +45956,8 @@ def _v1965_verified_quality_execution(ledger, start_date, now=None):
         if not (start <= due < today):
             continue
         status = str(row.get('prescription_status') or '').upper()
-        if status in {'SUPERSEDED', 'CANCELLED', 'WITHDRAWN', 'EXPIRED_BY_NEW_HARD_EVIDENCE'}:
+        if status in {'SUPERSEDED', 'CANCELLED', 'WITHDRAWN', 'EXPIRED_BY_NEW_HARD_EVIDENCE',
+                      'DEFERRED_BY_ATHLETE'}:
             continue
         # A carried-forward instance is one commitment, not multiple missed doses.
         if row.get('carried_forward_to_fingerprint'):
@@ -46467,8 +46563,45 @@ def build_training_state(season_activities, season_wellness, planning_context,
     raw = _r19684_training_state_before(
         season_activities, season_wellness, planning_context, metrics,
         feeling_trend=feeling_trend, now=now)
-    return _v19684_refine_load(raw, metrics=metrics, feeling_trend=feeling_trend,
-                                planning_context=planning_context)
+    out = _v19684_refine_load(raw, metrics=metrics, feeling_trend=feeling_trend,
+                               planning_context=planning_context)
+    if not isinstance(out, dict):
+        return out
+    p = ((metrics or {}).get('personal_baselines') or {})
+    observations = []
+    for key, label in (('hrv', 'HRV outside personal range'),
+                       ('rhr', 'resting HR outside personal range'),
+                       ('sleep', 'sleep below habitual range')):
+        status = str((p.get(key) or {}).get('color') or '').lower()
+        if status == 'red' or (key == 'sleep' and status == 'orange'):
+            observations.append({'code': key.upper(), 'label': label,
+                                 'severity': 'WATCH', 'source': 'PERSONAL_BASELINE'})
+    if (feeling_trend or {}).get('label') == 'TRENDING DOWN':
+        observations.append({'code': 'SUBJECTIVE_TREND', 'label': 'subjective recovery trending down',
+                             'severity': 'WATCH', 'source': 'ATHLETE_FEEDBACK'})
+    drivers = list(out.get('recovery_drivers') or [])
+    if any(x in drivers for x in ('ACUTE_CHRONIC_LOAD', 'RECENT_LOAD_SPIKE')):
+        observations.append({'code': 'TRAINING_LOAD', 'label': 'recent training load elevated',
+                             'severity': 'WATCH', 'source': 'COMPLETED_TRAINING'})
+    out['wellness_advisory'] = {
+        'schema': 'NOVA-R196949-WELLNESS-ALERT-1', 'active': bool(observations),
+        'icon': '⚠️', 'severity': 'WATCH' if observations else 'NORMAL',
+        'signals': observations, 'quality_veto': False,
+        'alters_workout': False, 'creates_training_restriction': False,
+        'message': 'Observed recovery signals warrant attention, not an automatic workout veto. '
+                   'Explicit illness, injury, symptoms and availability restrictions still take priority.'}
+    if (str(out.get('state') or '').upper() == 'RECOVERY'
+            and not (planning_context or {}).get('health_override')):
+        out['wellness_advisory']['previous_state'] = 'RECOVERY'
+        out['state'] = 'BUILD' if (out.get('ctl_delta_28') or 0) >= 1.5 else 'MAINTENANCE'
+        out['state_class'] = 'cyan' if out['state'] == 'BUILD' else 'green'
+        out['icon'] = '⚠️' if observations else ('🏗️' if out['state'] == 'BUILD' else '⚖️')
+        out['headline'] = 'Recovery observations noted · Nova retains coaching authority.'
+        out['why'] = ('Autonomic markers, sleep and training-load estimates are advisory, '
+                      'not an independent quality cancellation. Athlete-entered health restrictions, '
+                      'race priorities and verified hard-session spacing remain binding.')
+        out['r196936_load_policy'] = 'WELLNESS_ADVISORY_ONLY'
+    return out
 
 
 # R196.8.6 — evidence-anchored, DOSE-AWARE exploratory sustained power.
@@ -55241,7 +55374,7 @@ def _nova_workout_execution_memory(ledger, direction, previous_blocks=None):
             'execution_match_confidence':link.get('match_confidence'),
             'workout_structure_adherence_score':structural,
             'structure_available':structural is not None,
-            'state':'VERIFIED_EXECUTED'})
+            'state':'MAIN_SET_VERIFIED' if structural is not None else 'ACTIVITY_LINKED_STRUCTURE_UNVERIFIED'})
     rows.sort(key=lambda x:(x['executed_date'],x['activity_id']))
     execution = (direction or {}).get('nova_execution') or {}
     return {'schema':'NOVA-R196948-EXECUTION-MEMORY-1',
@@ -55252,6 +55385,7 @@ def _nova_workout_execution_memory(ledger, direction, previous_blocks=None):
         'historical_confirmed_missed':int(execution.get('confirmed_missed') or 0),
         'execution_adherence_score':execution.get('score') if execution.get('available') is True else None,
         'structure_adherence_count':sum(1 for r in rows if r['structure_available']),
+        'linked_without_structure_count':sum(1 for r in rows if not r['structure_available']),
         'structure_adherence_score':None,  # Never grade from an unmatched/unknown execution.
         'scoring_policy':'EXACT_ISSUED_ACTIVITY_LINK_ONLY; POWER_ESTIMATES_NOT_PASS_MARKS',
         'no_retroactive_fulfillment':True}
@@ -55281,10 +55415,14 @@ def _nova_prescription_outcome(snapshot, previous=None):
             continue
         replacement=current_by_slot.get((str(s.get('date') or '')[:10],str(s.get('period') or '')))
         moved = pres.get('postponed_quality') if isinstance(pres.get('postponed_quality'),dict) else {}
-        if (str(pres.get('source') or '') == 'ATHLETE_POSTPONED_THIS_OCCURRENCE'
-                and str(moved.get('workout_id') or '') == str(s.get('nova_workout_id') or '')
-                and str(moved.get('original_date') or '') == str(s.get('date') or '')[:10]
-                and str(moved.get('target_date') or '') != str(s.get('date') or '')[:10]):
+        bindings = [moved] + list(((cur.get('coach_clock') or {}).get('postponed_workouts') or []))
+        deliberately_deferred = any(
+            isinstance(b, dict)
+            and str(b.get('workout_id') or '') == str(s.get('nova_workout_id') or '')
+            and str(b.get('original_date') or '') == str(s.get('date') or '')[:10]
+            and str(b.get('target_date') or '') != str(s.get('date') or '')[:10]
+            for b in bindings)
+        if deliberately_deferred:
             continue
         if replacement is None:
             # Slots may move when training availability / clock changes;
@@ -55424,13 +55562,92 @@ def _v196945_repair_ledger_from_saved_report(ledger, plan, user_id=None, read_on
     return restored
 
 
+def _nova_apply_athlete_postponements(ledger, user_id=None):
+    """Project explicit Calendar commitments onto the existing athlete ledger.
+
+    No new table, stage reset, synthetic execution, or database write. The usual
+    issued-Snapshot/ledger transaction persists this projection if the plan is
+    actually saved. In read-only QA the exact same state is projected in memory.
+    Only an existing, non-fulfilled SAME workout on its ORIGINAL date qualifies.
+    """
+    if not isinstance(ledger, dict) or not ledger.get('available'):
+        return ledger
+    items = load_planning_items(active_only=True, limit=100, owner_user_id=user_id)
+    moves = [item.get('nova_postponement') for item in items
+             if isinstance(item, dict) and isinstance(item.get('nova_postponement'), dict)]
+    if not moves:
+        return ledger
+    out = copy.deepcopy(ledger)
+    hist = out.get('prescription_history') or []
+    applied = []
+    for move in moves:
+        wid = str(move.get('workout_id') or '')
+        original = str(move.get('original_date') or '')[:10]
+        target = str(move.get('target_date') or '')[:10]
+        plan_id = str(move.get('original_plan_id') or '')
+        try:
+            valid = bool(wid and plan_id and date.fromisoformat(target) > date.fromisoformat(original))
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            continue
+        for row in hist:
+            if not isinstance(row, dict):
+                continue
+            if (str(row.get('date') or '')[:10] != original or
+                    str(row.get('nova_workout_id') or row.get('nova_contract_id') or '') != wid or
+                    (row.get('nova_canonical_plan_id') and
+                     str(row.get('nova_canonical_plan_id')) != plan_id) or
+                    str(row.get('prescription_status') or '').upper() not in
+                    {'ACTIVE','PLANNED','MISSED_UNEXECUTED','DEFERRED_BY_ATHLETE'} or
+                    row.get('executed_activity_id') or row.get('fulfilled_at_local')):
+                continue
+            # A stable original identity must remain in the ledger. The new
+            # future commitment, if eligible, is separately issued by Nova.
+            row['prescription_status'] = 'DEFERRED_BY_ATHLETE'
+            row['deferred_to_date'] = target
+            row['deferral_original_plan_id'] = plan_id
+            row['automatic_carry_eligibility'] = 'SUSPENDED_BY_ATHLETE_POSTPONEMENT'
+            row.pop('missed_at_local', None)
+            row.pop('missed_reason', None)
+            applied.append((original, wid, target))
+        for key in ('primary_anchor','next_cycle_anchor'):
+            anchor = out.get(key)
+            if (isinstance(anchor, dict) and
+                    str(anchor.get('date') or '')[:10] == original and
+                    str(anchor.get('nova_workout_id') or anchor.get('nova_contract_id') or '') == wid and
+                    not anchor.get('executed_activity_id')):
+                anchor['prescription_status'] = 'DEFERRED_BY_ATHLETE'
+                anchor['status'] = 'DEFERRED_BY_ATHLETE'
+                anchor['deferred_to_date'] = target
+                anchor['automatic_carry_eligibility'] = 'SUSPENDED_BY_ATHLETE_POSTPONEMENT'
+    if applied:
+        out['athlete_postponement_projection'] = {
+            'schema': 'NOVA-R196949-ATHLETE-DEFERRAL-1',
+            'state': 'DEFERRED_WITH_IDENTITY_PRESERVED',
+            'commitments': sorted(set(applied)), 'adherence_penalty': False,
+            'history_preserved': True, 'writes_db_directly': False}
+    return out
+
+
 _v196945_load_ledger_previous = load_microcycle_ledger
 
 def load_microcycle_ledger(plan, training_direction, season_activities, user_id=None, now=None, read_only=False):
     loaded = _v196945_load_ledger_previous(
         plan, training_direction, season_activities, user_id=user_id, now=now, read_only=read_only)
-    return _v196945_repair_ledger_from_saved_report(loaded, plan, user_id=user_id,
-                                                      read_only=read_only)
+    repaired = _v196945_repair_ledger_from_saved_report(
+        loaded, plan, user_id=user_id, read_only=read_only)
+    # Reconcile duplicate already-issued ACTIVE identities on BOTH actual
+    # issuance and read-only replay. Do not hide the integrity defect or
+    # write to a tester's database during QA: it is a copy-on-write ledger
+    # projection, then persisted by the next ordinary snapshot commit.
+    if isinstance(repaired, dict) and repaired.get('available') is True:
+        repaired, duplicate_changed = _nova_reconcile_duplicate_active_commitments(
+            repaired, [], now=now)
+        if duplicate_changed:
+            repaired['active_identity_reconciliation']['persistence'] = 'NEXT_SNAPSHOT_COMMIT'
+            repaired['active_identity_reconciliation']['read_only'] = bool(read_only)
+    return _nova_apply_athlete_postponements(repaired, user_id=user_id)
 
 
 _v196945_save_report_previous = save_latest_report
@@ -55463,7 +55680,13 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
                 pending.clear()
     return result
 
-APP_VERSION = 'THE LAB · PRODUCT V4.9.148 R196.9.48 · ATHLETE HARD CADENCE + COACH-OWNED ADAPTATION · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.149 R196.9.49 · POSTPONE + HEALTH CANONICAL + WELLNESS ADVISORY · NOVA R196.2 CORE'
+
+BASE_CSS += ("\n.v196949-wellness-note{margin:12px 0;padding:12px 16px;"
+             "border:1px solid var(--border);border-radius:12px;display:flex;"
+             "flex-direction:column;gap:6px;line-height:1.5}"
+             ".v196949-wellness-note strong{color:var(--text)}"
+             ".v196949-wellness-note span{color:var(--muted);font-size:13px}\n")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
