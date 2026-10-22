@@ -55990,8 +55990,7 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
 
 APP_VERSION = 'THE LAB · PRODUCT V4.9.156 R196.9.56 CANDIDATE · CANONICAL QUALITY OFFER IN CARD 3 · NOVA R196.2 CORE'
 
-BASE_CSS += ("\n.v196956-quality-safety{margin:10px 0;padding:10px 12px;border-left:3px solid var(--border);font-size:12px;line-height:1.5;display:flex;flex-direction:column;gap:4px}"
-             ".v196956-quality-safety strong{font-size:13px;letter-spacing:.04em}\n")
+BASE_CSS += ("\n.v196956-quality-safety{margin:8px 0 12px;padding:0;border:0;font-size:13px;line-height:1.5;color:var(--muted)}\n")
 
 BASE_CSS += ("\n.v196949-wellness-note{margin:12px 0;padding:12px 16px;"
              "border:1px solid var(--border);border-radius:12px;display:flex;"
@@ -56330,18 +56329,13 @@ def _nova_r196956_install_quality_card_ui():
     chrono='{% if is_chronological_pending %}'
     if t.count(chrono)!=1:raise RuntimeError('R196956_CARD_BODY_ANCHOR_DRIFT')
     safety="""{% if is_quality_slot and next_quality_offer %}
-<div class="v196956-quality-safety" role="note"><strong>LA TUA PROSSIMA QUALITY</strong>
-<span>Data consigliata (non obbligatoria): {{ next_quality_offer.suggested_start_local or 'da definire' }}</span>
-<span>{{ next_quality_offer.execution_message }}</span>
-<span>Durata totale proposta: {{ next_quality_offer.total_duration_suggested_min|int }} minuti, compreso il completamento facile se necessario. Massimo dalla disponibilità nota: {{ next_quality_offer.duration_max_by_time|int if next_quality_offer.duration_max_by_time is not none else 'da verificare' }} minuti.</span>
-<span>Puoi anticiparla solo se recupero e restrizioni lo consentono. Con infortunio o divieto medico, NON eseguirla.</span>
-{% if next_quality_offer.time_adjustment_message %}<span>{{ next_quality_offer.time_adjustment_message }}</span>{% endif %}
-</div>{% endif %}
+<p class="v196956-quality-safety" role="note">You can complete this workout on a day that suits you, provided it's safe for you to train.</p>
+{% endif %}
 """
     t=t.replace(chrono,safety+chrono,1)
     pending='{% elif is_pending %}'
     if t.count(pending)!=1:raise RuntimeError('R196956_QUALITY_MISSING_ANCHOR_DRIFT')
-    t=t.replace(pending,pending+"\n<div class=\"v196956-quality-safety\" role=\"alert\"><strong>ERRORE DI GENERAZIONE QUALITY</strong> Nova non ha prodotto una quality scientificamente verificata. Nessun veto di calendario può giustificarlo: controllare il contratto del produttore, senza inventare watt o intervalli. Diagnostica: {{ (data.quality_offer_integrity or {}).get('reason', 'QUALITY_CONTRACT_MISSING') }}</div>\n",1)
+    t=t.replace(pending,pending+"\n<div class=\"v196956-quality-safety\" role=\"alert\"><strong>QUALITY GENERATION ERROR</strong> Nova could not generate a scientifically verified workout. Diagnostic: {{ (data.quality_offer_integrity or {}).get('reason', 'QUALITY_CONTRACT_MISSING') }}</div>\n",1)
     HOME_PAGE=t
 
 _nova_r196956_install_quality_card_ui()
