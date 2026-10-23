@@ -56539,5 +56539,567 @@ def _nova_r196958_install_recovery_learning_visual_only():
 
 _nova_r196958_install_recovery_learning_visual_only()
 
+# R196.9.59 — Universal scientific provenance + recent-dose alternation.
+# Two independent regressions are fixed here: R196.9.24 attached its source
+# activity only in the 'base unavailable' branch, and R196.9.56 considered a
+# fresh recovery-confirmation dose a new offer even after its same-structure
+# evidence ride had just been completed. Neither guard authorizes new watts.
+R196959_SCHEMA = 'NOVA-R196.9.59-VERIFIED-DOSE-ALTERNATION-1'
+APP_VERSION = ('THE LAB · PRODUCT V4.9.159 R196.9.59 · VERIFIED QUALITY '
+               'PROVENANCE + EVIDENCE-GATED ALTERNATION · NOVA R196.2 CORE')
+
+
+def _nova_r196959_reference_match(dose, features):
+    """Find one unique, completed, strong activity matching the WHOLE reference.
+
+    R195.9 already computed work/recovery and the dose. We only attach the
+    missing database/source ID if that same measured pair is demonstrably in
+    the canonical, completed history. Never infer an ID from a date alone.
+    """
+    if not isinstance(dose, dict) or dose.get('available') is not True:
+        return None
+    ref = dose.get('reference') or {}
+    if not isinstance(ref, dict):
+        return None
+    matches = []
+    for event in (features or {}).get('recovery_dose_history') or []:
+        if not isinstance(event, dict) or event.get('strong') is not True:
+            continue
+        aid = str(event.get('activity_id') or '').strip()
+        if not aid or str(event.get('date') or '')[:10] != str(ref.get('date') or '')[:10]:
+            continue
+        try:
+            exact = (int(event['reps']) == int(ref['reps'])
+                     and abs(float(event['interval_secs']) - float(ref['interval_secs'])) <= 1
+                     and abs(float(event['recovery_secs']) - float(ref['recovery_secs'])) <= 1
+                     and abs(float(event['work_watts']) - float(ref['work_avg_watts'])) <= .11
+                     and abs(float(event['recovery_watts']) - float(ref['recovery_avg_watts'])) <= .11
+                     and abs(float(event['ftp']) - float(ref['ftp'])) <= .11)
+        except (ValueError, TypeError, KeyError, OverflowError):
+            exact = False
+        if exact:
+            matches.append(event)
+    # Ambiguity is a proof failure, not a reason to take the first activity.
+    if len(matches) != 1:
+        return None
+    return {'schema': R196959_SCHEMA,
+            'activity_id': str(matches[0]['activity_id']),
+            'date': str(matches[0]['date'])[:10],
+            'reason': 'EXACT_VERIFIED_COMPLETED_COUPLED_REFERENCE'}
+
+
+_r196959_dose_before = _v1959_recovery_dose_contract
+
+def _v1959_recovery_dose_contract(goal, dimension, features):
+    dose = _r196959_dose_before(goal, dimension, features)
+    if (str(dimension or '').upper() != 'RECOVERY_UNDER_LOAD'
+            or not isinstance(dose, dict) or dose.get('available') is not True):
+        return dose
+    match = _nova_r196959_reference_match(dose, features)
+    # Keep the original compiler's fail-closed decision when canonical source
+    # provenance cannot be established. Do not manufacture or replace a dose.
+    if match is None:
+        return dose
+    old_selection = dose.get('reference_selection') or {}
+    old_reference = dose.get('reference') or {}
+    if ((old_selection.get('activity_id') and
+         str(old_selection['activity_id']) != match['activity_id']) or
+        (old_reference.get('activity_id') and
+         str(old_reference['activity_id']) != match['activity_id'])):
+        return dose
+    return dict(dose, reference_selection=match)
+
+
+def _nova_r196959_recent_same_structure(dose, evidence_ledger, target_day):
+    """An identical 3×5 etc. recently completed is not an alternate stimulus.
+
+    Only a reliable strong independent completed activity qualifies. Work
+    cadence and recovery length are both matched; 5×3 is never equated to
+    3×5. This guards the *next* offer, not completed-activity scoring.
+    """
+    ref = (dose or {}).get('reference') or {}
+    mechanics = (dose or {}).get('prescription') or {}
+    try:
+        when = date.fromisoformat(str(target_day or '')[:10])
+        nr = int(mechanics['reps'])
+        nw = float(mechanics['interval_secs'])
+        nf = float(mechanics['recovery_secs'])
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return None
+    recent = []
+    for event in ((evidence_ledger or {}).get('repeatability') or {}).get('events') or []:
+        if not isinstance(event, dict) or event.get('strong') is not True:
+            continue
+        if (str(event.get('activity_truth_source') or event.get('source') or '').upper()
+            not in {'ICU_INTERVALS_CANONICAL', 'DEVICE_LAPS', 'ORIGINAL_ACTIVITY_FIT_LAP',
+                    'ORIGINAL_FIT_LAPS'}):
+            continue
+        try:
+            day = date.fromisoformat(str(event['date'])[:10])
+            days = (when - day).days
+            if not 0 <= days <= 4:
+                continue
+            if (int(event['reps']) != nr or
+                abs(float(event['interval_secs']) - nw) > 2 or
+                abs(float(event['recovery_secs']) - nf) > 8):
+                continue
+        except (ValueError, TypeError, KeyError, OverflowError):
+            continue
+        if str(event.get('activity_id') or ''):
+            recent.append((day, str(event['activity_id']), days))
+    if not recent:
+        return None
+    day, activity_id, days = max(recent)
+    return {'activity_id': activity_id, 'date': day.isoformat(),
+            'days_before_candidate': days, 'workout_structure':
+            '%sx%ss/%ss' % (nr, int(nw), int(nf))}
+
+
+_r196959_science_before = _v503_scientific_progression
+
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None,
+        session_progression=None, previous_blocks=None,
+        performance_narrative=None, performance_evidence=None,
+        aerobic_metabolic_range=None, evidence_ledger=None, question_state=None):
+    result = _r196959_science_before(goal_key, roadmap, ledger,
+        session_progression, previous_blocks, performance_narrative,
+        performance_evidence, aerobic_metabolic_range,
+        evidence_ledger=evidence_ledger, question_state=question_state)
+    if not isinstance(result, dict) or str(result.get('dimension') or '').upper() != 'RECOVERY_UNDER_LOAD':
+        return result
+    dose = result.get('dose_contract') or {}
+    if not isinstance(dose, dict) or dose.get('available') is not True:
+        return result
+    qw = (roadmap or {}).get('quality_window') or {}
+    target_day = str(qw.get('preferred_iso') or '')[:10] or get_rome_now().date().isoformat()
+    recent = _nova_r196959_recent_same_structure(dose, evidence_ledger, target_day)
+    if not recent:
+        return result
+    closed = set(str(d).upper() for d in result.get('closed_dimensions') or [])
+    alternatives = []
+    for q in result.get('ranked_questions') or []:
+        if not isinstance(q, dict):
+            continue
+        dim = str(q.get('dimension') or '').upper()
+        try:
+            score = float(q.get('score') or 0)
+        except (TypeError, ValueError):
+            continue
+        if (dim in closed | {'', 'NONE', 'RECOVERY_UNDER_LOAD', 'REVALIDATION',
+                              'EXTENSION_OR_REVALIDATION', 'VALIDATE'}
+                or score < 50 or not q.get('architectures')
+                or _v82_question_exit_satisfied(question_state, dim)):
+            continue
+        alternatives.append(q)
+    out = dict(result)
+    out['deferred_dimension'] = 'RECOVERY_UNDER_LOAD'
+    out['meaningful_stimulus_gate'] = {
+        'schema': R196959_SCHEMA, 'decision': 'NO_NEAR_DUPLICATE',
+        'reason': 'LATEST_VERIFIED_COUPLED_STRUCTURE_RECENTLY_COMPLETED',
+        'recent_completed_activity': recent,
+        'same_structure_power_sacrifice_authorized': False,
+        'no_auto_increase_to_force_a_new_workout': True}
+    if alternatives:
+        selected = alternatives[0]
+        dim = str(selected['dimension']).upper()
+        out['dimension'] = dim
+        out['candidate_architectures'] = list(selected['architectures'])
+        out['open_question'] = (str(selected.get('reason') or '')
+            + ' The verified work/recovery structure was just completed; '
+              'rotate to this independently ranked question rather than repeat it.')
+        out['dose_contract'] = {'available': False,
+            'reason': 'ALTERNATE_PREEXISTING_SCIENTIFIC_QUESTION',
+            'selected_alternative': dim}
+        # Keep the same R196.1 evidence/rationale projection for the newly
+        # ranked scientific purpose. Do not describe a RACE_TRANSFER workout
+        # using stale RECOVERY_UNDER_LOAD supporting sources.
+        basis = ['TID_ELITE', 'CYCLIST_TRAINING_DISTRIBUTION', 'LONG_TERM_DEVELOPMENT']
+        if dim in {'DURABILITY', 'RACE_TRANSFER', 'LATE_SESSION_STABILITY'}:
+            basis += ['DURABILITY_INDEPENDENT', 'DURATION_SPECIFIC_FATIGUE',
+                      'PRIOR_INTENSITY_MATTERS']
+        elif dim in {'SPECIFIC_DOSE', 'REPEATABILITY', 'FRESH_CAPACITY',
+                     'TIME_AT_PRESSURE'}:
+            basis += ['HIIT_PROGRAMMING', 'RECOVERY_DURATION_HIIT',
+                      'POWER_DURATION_PROFILE']
+        else:
+            basis += ['POWER_DURATION_PROFILE']
+        library = globals().get('_V503_SCIENCE_EVIDENCE') or {}
+        out['evidence_ids'] = [k for k in basis if k in library]
+        out['evidence'] = [{'id': k, **library[k]} for k in out['evidence_ids']]
+        out['meaningful_stimulus_gate']['alternative_dimension'] = dim
+    else:
+        out['dimension'] = 'NONE'
+        out['candidate_architectures'] = []
+        out['open_question'] = ('The verified hard interval structure was just completed. '
+            'No distinct, evidence-backed quality question is currently eligible; recover.')
+        out['dose_contract'] = {'available': False,
+            'reason': 'RECENT_COMPLETED_DOSE_NO_PURPOSEFUL_ALTERNATIVE'}
+        out['meaningful_stimulus_gate']['alternative_dimension'] = None
+    return out
+
+
+_r196959_offer_before = _nova_r196956_build_offer
+
+def _nova_r196956_build_offer(rows, prescription, prior, decision, clock, road,
+        ledger, user_id, evidence_ledger=None, power_model=None, ftp_anchor=None,
+        aerobic_metabolic_range=None, training_definitions=None,
+        compile_arguments=None, planning_context=None, training_state=None):
+    # A stale prior offer must NOT outrank a newly completed independent ride.
+    # Suppress the stale copy only in the detached card projection: do not
+    # erase any underlying ledger activity or alter the actual coach decision.
+    prior_view = prior
+    prior_offer = ((prior or {}).get('next_quality_offer') or {}) if isinstance(prior, dict) else {}
+    old = prior_offer.get('workout') if isinstance(prior_offer, dict) else None
+    def recently_done(workout):
+        if not isinstance(workout, dict):
+            return False
+        wid = str(workout.get('nova_workout_id') or '')
+        if wid != _R196933_VIRTUAL_ID:
+            return False
+        band = workout.get('power_prescription') or {}
+        candidate_dose = {'prescription': {'reps': band.get('reps'),
+            'interval_secs': band.get('work_seconds'),
+            'recovery_secs': band.get('recovery_seconds')}}
+        return bool(_nova_r196959_recent_same_structure(
+            candidate_dose, evidence_ledger,
+            str((road or {}).get('quality_window', {}).get('preferred_iso') or '')[:10]
+            or get_rome_now().date().isoformat()))
+    if recently_done(old):
+        prior_view = dict(prior, next_quality_offer=None)
+    filtered = [x for x in (rows or []) if not recently_done(x)]
+    offer, integrity = _r196959_offer_before(filtered, prescription, prior_view,
+        decision, clock, road, ledger, user_id,
+        evidence_ledger=evidence_ledger, power_model=power_model,
+        ftp_anchor=ftp_anchor, aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions,
+        compile_arguments=compile_arguments, planning_context=planning_context,
+        training_state=training_state)
+    if offer and recently_done(offer.get('workout')):
+        return None, {'schema': R196959_SCHEMA, 'state': 'WITHHELD_FOR_ALTERNATION',
+            'offer_present': False, 'visible_in_card_3': False,
+            'reason': 'RECENT_COMPLETED_STRUCTURE_NOT_A_NEW_QUALITY_STIMULUS'}
+    if (isinstance(integrity, dict) and not offer and
+            str(((road or {}).get('scientific_progression') or {}).get('dimension') or '').upper() == 'NONE'):
+        integrity = dict(integrity, state='WITHHELD_FOR_ALTERNATION',
+            reason='NO_DISTINCT_EVIDENCE_BACKED_QUALITY_AVAILABLE')
+    return offer, integrity
+
+# Do not call the absence of a scientifically justified quality an application
+# crash. The third card continues to be quality-only: it is never filled with
+# an ordinary recovery ride masquerading as quality.
+HOME_PAGE = HOME_PAGE.replace(
+    '<strong>QUALITY GENERATION ERROR</strong> Nova could not generate a scientifically verified workout. Diagnostic:',
+    '{% if (data.quality_offer_integrity or {}).get("state") == "WITHHELD_FOR_ALTERNATION" %}'
+    '<strong>QUALITY NOT AVAILABLE YET</strong> The recent hard dose cannot be repeated just to fill the card. Reason:'
+    '{% else %}<strong>QUALITY GENERATION ERROR</strong> Nova could not generate a scientifically verified workout. Diagnostic:'
+    '{% endif %}',
+    1)
+
+# R196.9.60 — Universal athlete-scoped quality-offer anti-repetition.
+# All goals, dimensions and canonical workout families are covered at the
+# THIRD CARD projection boundary. This does NOT change Nova's actual decision,
+# authorized schedule, original prescription, workout library, watt calculation,
+# verified evidence, or real ledger. No fabricated alternate prescriptions.
+R196960_SCHEMA = 'NOVA-R196.9.60-UNIVERSAL-QUALITY-ALTERNATION-1'
+APP_VERSION = ('THE LAB · PRODUCT V4.9.160 R196.9.60 · UNIVERSAL VERIFIED QUALITY '
+               'ALTERNATION · NOVA R196.2 CORE')
+
+
+def _nova_r196960_number(value):
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        v = float(value)
+        return v if math.isfinite(v) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _nova_r196960_structure(workout):
+    """Read only canonical workout mechanics, never title/text or target watts.
+
+    The virtual coupled recovery contract has its own measured prescription;
+    ordinary workouts use the versioned canonical library. Variable-intensity
+    sets keep their set/float identity and must not be mistaken for steady reps.
+    """
+    if not isinstance(workout, dict):
+        return None
+    wid = str(workout.get('nova_workout_id') or workout.get('nova_contract_id') or '')
+    if not wid:
+        return None
+    if wid == _R196933_VIRTUAL_ID:
+        b = workout.get('power_prescription') or {}
+        reps = _nova_r196960_number(b.get('reps'))
+        sec = _nova_r196960_number(b.get('work_seconds'))
+        rest = _nova_r196960_number(b.get('recovery_seconds'))
+        if reps and reps >= 1 and sec and sec > 0 and (reps == 1 or (rest and rest > 0)):
+            return ('REPEATED', int(reps), float(sec), float(rest or 0))
+        return None
+    template = (_R19696_LIBRARY_INDEX or {}).get(wid)
+    if not isinstance(template, dict):
+        return None
+    pattern = str(template.get('pattern') or '').upper()
+    sec = _nova_r196960_number(template.get('work_s'))
+    if not sec or sec <= 0:
+        return None
+    if pattern in {'MICRO_30_15', 'SPRINT_CLUSTER'}:
+        sets = _nova_r196960_number(template.get('sets'))
+        per = _nova_r196960_number(template.get('reps_per_set'))
+        flt = _nova_r196960_number(template.get('float_s'))
+        group_rest = _nova_r196960_number(template.get('set_recovery_s'))
+        if not sets or not per or not flt or sets < 1 or per < 1 or flt <= 0:
+            return None
+        return ('SETS_' + pattern, int(sets), int(per), float(sec),
+                float(flt), float(group_rest or 0))
+    reps = _nova_r196960_number(template.get('reps'))
+    rest = _nova_r196960_number(template.get('recovery_s'))
+    if not reps or reps < 1 or (reps > 1 and not (rest and rest > 0)):
+        return None
+    if pattern in {'SPRINT', 'OVER_UNDER'}:
+        return (pattern, int(reps), float(sec), float(rest or 0))
+    if pattern in _R19696_NUMERIC_PATTERNS | _R19696_EFFORT_PATTERNS:
+        return ('REPEATED', int(reps), float(sec), float(rest or 0))
+    return None
+
+
+def _nova_r196960_structure_equivalent(a, b):
+    """Mechanical near-identities only; 5×3 is NEVER the same as 3×5.
+
+    A confirmed 3×300/296 can match a 3×300/300 due to lap rounding.
+    Structurally different repetitions, set patterns and work/rest doses do
+    not become the same merely because their total kilojoules are similar.
+    """
+    if not isinstance(a, tuple) or not isinstance(b, tuple) or a[0] != b[0] or len(a) != len(b):
+        return False
+    if a[0] in {'REPEATED', 'SPRINT', 'OVER_UNDER'}:
+        if a[1] != b[1]:
+            return False
+        aw, bw, ar, br = a[2], b[2], a[3], b[3]
+        return (abs(aw-bw) <= max(2.0, min(15.0, min(aw,bw)*.05))
+                and abs(ar-br) <= max(4.0, min(20.0, min(ar,br)*.05)))
+    if a[0].startswith('SETS_'):
+        if a[1:3] != b[1:3]:
+            return False
+        return (abs(a[3]-b[3]) <= max(2.0, min(10.0, min(a[3],b[3])*.05))
+                and abs(a[4]-b[4]) <= max(2.0, min(10.0, min(a[4],b[4])*.05))
+                and abs(a[5]-b[5]) <= max(4.0, min(20.0, min(a[5],b[5])*.05)))
+    return False
+
+
+def _nova_r196960_recent_completed(workout, evidence_ledger, ledger, target_day):
+    """Match RECENT completed independent quality by two verified routes.
+
+    1. Reconciled fulfilled prescription: exact canonical workout ID, with
+       linked real activity; compare its template mechanics for library IDs.
+    2. Activity Truth RESOLVED repeated intervals: cross-family mechanics.
+    Never match name, estimated zones, raw/unresolved intervals or fake IDs.
+    """
+    structure = _nova_r196960_structure(workout)
+    if structure is None:
+        return None
+    try:
+        candidate_day = date.fromisoformat(str(target_day or '')[:10])
+    except (ValueError, TypeError):
+        return None
+    wid = str(workout.get('nova_workout_id') or workout.get('nova_contract_id') or '')
+    candidates = []
+    def within(day):
+        try:
+            ds = (candidate_day - date.fromisoformat(str(day or '')[:10])).days
+            return ds if 0 <= ds <= 4 else None
+        except (ValueError, TypeError, OverflowError):
+            return None
+    # FULFILLED is reconciliation authority. SAME library ID means the same
+    # versioned mechanics; virtual dose IDs are variable, hence require proof
+    # of matching mechanics (via the independent resolved interval route).
+    for r in (ledger or {}).get('prescription_history') or []:
+        if not isinstance(r, dict) or str(r.get('prescription_status') or '').upper() != 'FULFILLED':
+            continue
+        aid = str(r.get('executed_activity_id') or '').strip()
+        days = within(r.get('actual_date'))
+        if days is None or not aid:
+            continue
+        proof = str(r.get('execution_match_basis') or '').upper()
+        structure_attested = (proof == 'REPEATED_WORK_STRUCTURE' or
+                              proof.startswith('VERIFIED_RAW_POWER_') or
+                              proof in {'CANONICAL_INTERVAL_STRUCTURE',
+                                        'VERIFIED_DEVICE_LAPS', 'VERIFIED_FIT_LAPS'})
+        if not structure_attested:
+            # An EXACT_DATE-only match or same-name ride is not a verified
+            # quality execution. Require independent Activity Truth for this
+            # linked activity before using its identity to suppress a repeat.
+            structure_attested = any(
+                isinstance(e, dict) and str(e.get('activity_id') or '') == aid
+                and e.get('quality_relevant') is True
+                and str(e.get('activity_truth_status') or '').upper() == 'RESOLVED'
+                and str(e.get('activity_truth_source') or '').upper() in
+                    {'ICU_INTERVALS_CANONICAL','DEVICE_LAPS',
+                     'ORIGINAL_ACTIVITY_FIT_LAP','ORIGINAL_FIT_LAPS'}
+                for e in (evidence_ledger or {}).get('events') or [])
+        if not structure_attested:
+            continue
+        old_id = str(r.get('nova_workout_id') or r.get('nova_contract_id') or '')
+        if (old_id == wid and wid != _R196933_VIRTUAL_ID
+                and _nova_r196960_structure({'nova_workout_id': old_id}) == structure):
+            candidates.append((days, {'source':'FULFILLED_CANONICAL_LEDGER',
+                'activity_id':aid, 'date':str(r.get('actual_date'))[:10],
+                'workout_id':old_id, 'days_before_candidate':days}))
+        # Different library IDs can have identical actual mechanics: resolve
+        # both from the same immutable template library, not approximate title.
+        elif old_id != wid and _nova_r196960_structure_equivalent(
+                structure, _nova_r196960_structure({'nova_workout_id':old_id})):
+            candidates.append((days, {'source':'FULFILLED_COMPARABLE_LIBRARY_STRUCTURE',
+                'activity_id':aid, 'date':str(r.get('actual_date'))[:10],
+                'workout_id':old_id, 'days_before_candidate':days}))
+    trusted = {'ICU_INTERVALS_CANONICAL', 'DEVICE_LAPS',
+               'ORIGINAL_ACTIVITY_FIT_LAP', 'ORIGINAL_FIT_LAPS'}
+    # Canonical repeatability evidence (including COMPLETED runs which faded)
+    # can identify near-identical plain repeated workouts without using their
+    # watts as a shortcut. Strong is a progression judgement, not completion.
+    if structure[0] == 'REPEATED':
+        for r in ((evidence_ledger or {}).get('repeatability') or {}).get('events') or []:
+            if not isinstance(r, dict):
+                continue
+            aid = str(r.get('activity_id') or '').strip()
+            days = within(r.get('date'))
+            src = str(r.get('activity_truth_source') or '').upper()
+            if (days is None or not aid or src not in trusted
+                    or str(r.get('activity_truth_status') or '').upper() != 'RESOLVED'):
+                continue
+            count = _nova_r196960_number(r.get('reps'))
+            sec = _nova_r196960_number(r.get('interval_secs'))
+            rec = _nova_r196960_number(r.get('recovery_secs'))
+            if not count or not sec or rec is None:
+                continue
+            if _nova_r196960_structure_equivalent(structure,
+                    ('REPEATED',int(count),float(sec),float(rec))):
+                candidates.append((days, {'source':'RESOLVED_CANONICAL_REPEATABILITY',
+                    'activity_id':aid, 'date':str(r.get('date'))[:10],
+                    'days_before_candidate':days}))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda p: (p[0],p[1]['activity_id']))[1]
+
+
+def _nova_r196960_alternatives(road, decision):
+    """Only the pre-existing rank, only OPEN scientific questions; no tests."""
+    if str((decision or {}).get('action') or '').upper() == 'VALIDATE':
+        return []
+    science = (road or {}).get('scientific_progression') or {}
+    current = str(science.get('dimension') or (decision or {}).get('dimension') or '').upper()
+    if current in {'NONE', 'VALIDATE', 'REVALIDATION', 'EXTENSION_OR_REVALIDATION'}:
+        return []
+    excluded = {'', 'NONE', current, 'VALIDATE', 'REVALIDATION',
+                'EXTENSION_OR_REVALIDATION'}
+    closed = set(str(x).upper() for x in
+                 ((science.get('signals') or {}).get('closed_questions') or []))
+    options = []
+    for q in science.get('ranked_questions') or []:
+        if not isinstance(q, dict):
+            continue
+        dim = str(q.get('dimension') or '').upper()
+        score = _nova_r196960_number(q.get('score'))
+        if (dim in excluded | closed or score is None or score < 50
+                or not q.get('architectures') or any(x['dimension'] == dim for x in options)):
+            continue
+        options.append({'dimension':dim,'score':score,'reason':q.get('reason'),
+                        'architectures':list(q.get('architectures') or [])})
+    return options
+
+
+_r196960_offer_before = _nova_r196956_build_offer
+
+
+def _nova_r196956_build_offer(rows, prescription, prior, decision, clock, road,
+        ledger, user_id, evidence_ledger=None, power_model=None, ftp_anchor=None,
+        aerobic_metabolic_range=None, training_definitions=None,
+        compile_arguments=None, planning_context=None, training_state=None):
+    """Universal, read-only alternation guard for the detached third card.
+
+    The usual Nova offer goes first. If it is a verified near-duplicate or
+    unavailable, replay ranked alternatives through the SAME producer/compiler.
+    A failed alternative is not repaired by lowering standards or inventing W.
+    """
+    qw = (road or {}).get('quality_window') or {}
+    target_day = (str(qw.get('preferred_iso') or '')[:10]
+                  or get_rome_now().date().isoformat())
+    rejected = []
+    def duplicate(s):
+        found = _nova_r196960_recent_completed(s,evidence_ledger,ledger,target_day)
+        if found:
+            rejected.append(found)
+        return bool(found)
+    prior_view = prior
+    previous = ((prior or {}).get('next_quality_offer') or {}) if isinstance(prior,dict) else {}
+    if duplicate(previous.get('workout')):
+        prior_view = dict(prior,next_quality_offer=None)
+    filtered = [r for r in (rows or []) if not duplicate(r)]
+    offer, integrity = _r196960_offer_before(filtered, prescription, prior_view,
+        decision, clock, road, ledger, user_id,
+        evidence_ledger=evidence_ledger, power_model=power_model,
+        ftp_anchor=ftp_anchor, aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions,
+        compile_arguments=compile_arguments, planning_context=planning_context,
+        training_state=training_state)
+    if offer and not duplicate(offer.get('workout')):
+        return offer, integrity
+    initial_reason = ((integrity or {}).get('reason') if isinstance(integrity,dict)
+                      else 'RECENT_COMPLETED_QUALITY')
+    if str((decision or {}).get('action') or '').upper() == 'VALIDATE':
+        return None, {'schema':R196960_SCHEMA,'state':'WITHHELD_FOR_SCIENCE',
+            'offer_present':False,'visible_in_card_3':False,
+            'reason':'FORMAL_TEST_REQUIRES_CANONICAL_VALIDATION_AND_CONSENT'}
+    # Read-only replay; no mutation of decision, science, clock or ledger.
+    # The alternate scientific dimension is chosen by Nova's ranked questions,
+    # not by workout availability, athlete ID or guessed physiology.
+    tried = []
+    for alternative in _nova_r196960_alternatives(road,decision):
+        dim = alternative['dimension']
+        shadow_road = copy.deepcopy(road if isinstance(road,dict) else {})
+        shadow_decision = copy.deepcopy(decision if isinstance(decision,dict) else {})
+        shadow_science = dict(shadow_road.get('scientific_progression') or {})
+        shadow_science.update(dimension=dim,
+            open_question=alternative.get('reason'),
+            candidate_architectures=alternative['architectures'],
+            dose_contract={'available':False,
+              'reason':'ALTERNATE_PREEXISTING_SCIENTIFIC_QUESTION',
+              'selected_alternative':dim})
+        shadow_road['scientific_progression'] = shadow_science
+        shadow_road['decision_dimension'] = dim
+        shadow_decision['dimension'] = dim
+        # Only the detached offer replay may ask the original engine to build
+        # and validate a distinct candidate; never alter actual TRAIN clearance.
+        new_offer,new_integrity = _r196960_offer_before([],prescription,
+            dict(prior_view or {},next_quality_offer=None),shadow_decision,
+            clock,shadow_road,ledger,user_id,evidence_ledger=evidence_ledger,
+            power_model=power_model,ftp_anchor=ftp_anchor,
+            aerobic_metabolic_range=aerobic_metabolic_range,
+            training_definitions=training_definitions,
+            compile_arguments=compile_arguments,
+            planning_context=planning_context,training_state=training_state)
+        reason = (new_integrity or {}).get('reason') if isinstance(new_integrity,dict) else None
+        if not new_offer or duplicate(new_offer.get('workout')):
+            tried.append({'dimension':dim,'reason':reason or 'RECENT_COMPLETED_STRUCTURE'})
+            continue
+        # Original FULL compiler and structural gate are still the authority.
+        if not _nova_r196956_structural_ok(new_offer.get('workout')):
+            tried.append({'dimension':dim,'reason':'COMPILER_CONTRACT_NOT_VALID'})
+            continue
+        new_offer=dict(new_offer)
+        new_offer['alternation_audit']={'schema':R196960_SCHEMA,
+            'source':'EXISTING_RANKED_SCIENTIFIC_QUESTION',
+            'selected_dimension':dim,'score':alternative['score'],
+            'verified_recent_duplicates':rejected,
+            'no_new_watts_or_mechanics':True,'real_decision_unchanged':True}
+        new_integrity=dict(new_integrity or {},alternation=R196960_SCHEMA,
+            alternative_dimension=dim,verified_recent_duplicates=rejected)
+        return new_offer,new_integrity
+    return None, {'schema':R196960_SCHEMA,'state':'WITHHELD_FOR_ALTERNATION',
+        'offer_present':False,'visible_in_card_3':False,
+        'reason':'NO_DISTINCT_VERIFIED_QUALITY_PASSED_ORIGINAL_COMPILER',
+        'initial_reason':initial_reason,'verified_recent_duplicates':rejected,
+        'ranked_alternatives_checked':tried,
+        'execution_clearance_preserved':True,'no_invented_workout':True}
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
