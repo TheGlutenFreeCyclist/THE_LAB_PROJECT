@@ -56443,5 +56443,101 @@ def _nova_r196957_install_direction_visual_only():
 
 _nova_r196957_install_direction_visual_only()
 
+
+# R196.9.58 — SNAPSHOT COPY/LAYOUT ONLY. Runs after all historical HOME_PAGE
+# upgrades, and only changes presentational HTML/CSS. No scientific engine,
+# prescribed watts, recovery dose, adherence, persistence or ledger is modified.
+def _nova_r196958_install_recovery_learning_visual_only():
+    global HOME_PAGE
+    t = HOME_PAGE
+    old_start = '{% if data.aerobic_volume_advice %}\n<section class="v4882-strength-nudge v178-volume-advice"'
+    old_end = '{% if data.strength_suggestion %}<div class="v4882-strength-nudge"'
+    if t.count(old_start) != 1 or t.count(old_end) != 1:
+        raise RuntimeError('R196958_VISUAL_ONLY_VOLUME_TEMPLATE_ANCHOR_DRIFT')
+    a = t.index(old_start)
+    b = t.index(old_end, a)
+    if t[a:b].count('OPTIONAL AEROBIC VOLUME') != 1 or 'data.aerobic_volume_advice.recovery_hold_now' not in t[a:b]:
+        raise RuntimeError('R196958_VISUAL_ONLY_VOLUME_CONTRACT_DRIFT')
+    replacement = r'''<style>
+/* R196.9.58: only the athlete education panel + its in-card link. */
+.v196958-training-insight{display:block!important;padding:clamp(18px,2vw,26px)!important;border:1px solid rgba(91,210,230,.31)!important;background:linear-gradient(115deg,rgba(17,51,70,.39),rgba(36,30,62,.23))!important;border-radius:18px!important}
+.v196958-training-insight .v196958-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:9px;margin:0 0 13px}
+.v196958-training-insight .v196958-kicker{display:flex;align-items:center;gap:9px;color:#90ebf8;font-size:13px;font-weight:900;letter-spacing:.065em}
+.v196958-training-insight .v196958-kicker span[aria-hidden]{font-size:20px}
+.v196958-training-insight .v196958-tag{font-size:11px;font-weight:800;color:#a7caeb;border:1px solid rgba(150,183,235,.29);border-radius:999px;padding:6px 10px;letter-spacing:.02em}
+.v196958-training-insight .v196958-focus{display:grid;grid-template-columns:minmax(0,1fr) minmax(155px,.28fr);gap:16px;align-items:center;padding:18px 20px;border:1px solid rgba(104,213,232,.24);border-left:4px solid #64d9eb;border-radius:13px;background:rgba(33,103,132,.16)}
+.v196958-training-insight .v196958-focus h3{margin:0 0 9px!important;font-size:clamp(20px,1.7vw,26px)!important;line-height:1.23!important;color:#f3fbff!important;font-weight:860!important}
+.v196958-training-insight .v196958-focus p{font-size:15px!important;line-height:1.55!important;color:#d8e7f1!important;margin:0!important}
+.v196958-training-insight .v196958-focus p+p{margin-top:9px!important}
+.v196958-training-insight .v196958-focus p strong{color:#fff;font-weight:800}
+.v196958-training-insight .v196958-steps{align-self:stretch;display:flex;flex-direction:column;justify-content:center;gap:7px;border-left:1px solid rgba(134,199,221,.18);padding-left:16px}
+.v196958-training-insight .v196958-steps b{font-size:14px;color:#94e9f1;line-height:1.4;letter-spacing:.025em}
+.v196958-training-insight .v196958-steps span{font-size:12px;color:#bbd0e0;line-height:1.5}
+.v196958-training-insight .v196958-assurance{display:flex;align-items:flex-start;gap:8px;margin-top:13px;padding:10px 12px;border-radius:9px;background:rgba(30,120,119,.13);color:#c9f1e9;font-size:13px;line-height:1.55}
+.v196958-training-insight .v196958-assurance b{font-size:16px;line-height:1.2;color:#8fe6ce}
+.v196958-training-insight .v196958-volume{margin-top:13px;padding-top:13px;border-top:1px solid rgba(135,181,203,.16)}
+.v196958-training-insight .v196958-volume-header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px}
+.v196958-training-insight .v196958-volume-title{font-size:13px;font-weight:900;color:#9de6f4;letter-spacing:.05em}
+.v196958-training-insight .v196958-volume-stage{font-size:11px;color:#b5badf;line-height:1.45}
+.v196958-training-insight .v196958-volume-stage strong{color:#e1d8ff}
+.v196958-training-insight .v196958-volume p{font-size:14px!important;line-height:1.55!important;color:#cfdded!important;margin:0!important}
+.v196958-training-insight .v196958-volume p strong{color:#f0f7fd}
+.v196958-training-insight .v196958-volume p+p{margin-top:6px!important}
+.v196958-training-insight .v196958-volume-fine{color:#97b4c5!important;font-size:12px!important}
+.v196958-recovery-quicklink{margin:10px 0 0!important;font-size:12px!important;line-height:1.5!important}
+.v196958-recovery-quicklink a{color:#9de9f1!important;text-decoration:underline;text-decoration-color:rgba(157,233,241,.40);text-underline-offset:3px}
+.v196958-recovery-quicklink a:focus-visible{outline:2px solid #8de8ed;outline-offset:4px}
+@media(max-width:700px){.v196958-training-insight .v196958-focus{grid-template-columns:1fr;padding:15px}.v196958-training-insight .v196958-steps{border-left:0;border-top:1px solid rgba(134,199,221,.18);padding:10px 0 0}.v196958-training-insight .v196958-focus p{font-size:14px!important}}
+@media print{.v196958-training-insight .v196958-focus,.v196958-training-insight .v196958-volume{break-inside:avoid}.v196958-training-insight .v196958-focus h3,.v196958-training-insight .v196958-focus p,.v196958-training-insight .v196958-volume p{color:#111!important}}
+</style>
+<section id="nova-adaptive-learning" class="v4882-strength-nudge v178-volume-advice v196958-training-insight" role="note" aria-label="Nova adaptive recovery learning and optional aerobic volume">
+  <div class="v196958-head">
+    <div class="v196958-kicker"><span aria-hidden="true">🧠</span> NOVA ADAPTIVE LEARNING</div>
+    <div class="v196958-tag">ATHLETE-LED PROGRESSION · OPTIONAL</div>
+  </div>
+  <div class="v196958-focus" aria-label="Adaptive recovery power">
+    <div>
+      <h3>Recovery power can progress — and Nova learns from it.</h3>
+      <p><strong>Recovery watts are recommended targets, not a ceiling on your ability.</strong> If you can safely sustain more between hard intervals, you can try higher recovery power while keeping the prescribed hard efforts and recovery durations intact.</p>
+      <p>Nova reads verified work-and-recovery data. When stronger recoveries are successfully repeated in comparable workouts, Nova can use that evidence to adapt future recovery targets.</p>
+      <div class="v196958-assurance"><b aria-hidden="true">✓</b><span><strong>Higher recovery watts alone do not lower adherence.</strong> Protect the quality of the main intervals; extra recovery load is never mandatory.</span></div>
+    </div>
+    <div class="v196958-steps" aria-label="Progression sequence"><b>TRY → VERIFY → ADAPT</b><span>Do more if you truly can. Nova evaluates the completed workout, not just its original target.</span></div>
+  </div>
+  {% if data.aerobic_volume_advice %}
+  <div class="v196958-volume" aria-label="Optional aerobic volume">
+    <div class="v196958-volume-header">
+      <span class="v196958-volume-title">🚴 OPTIONAL AEROBIC VOLUME</span>
+      <span class="v196958-volume-stage">VOLUME STAGE · <strong>{{ data.aerobic_volume_advice.stage_label or 'OPTIONAL' }}</strong></span>
+    </div>
+    {% if data.aerobic_volume_advice.available and data.aerobic_volume_advice.suggested_minutes %}
+      {% if data.aerobic_volume_advice.recovery_hold_now %}
+        <p><strong>Recovery hold:</strong> Do not extend easy rides now. Reassess recovery before considering longer volume.</p>
+      {% else %}
+        <p><strong>Replace, don't add:</strong> On the indicated easy day{% if data.aerobic_volume_advice.date %} ({{ data.aerobic_volume_advice.date[8:10] }}/{{ data.aerobic_volume_advice.date[5:7] }}/{{ data.aerobic_volume_advice.date[:4] }}){% endif %}, you may replace the ~{{ data.aerobic_volume_advice.baseline_minutes }}-min ride with up to ~{{ data.aerobic_volume_advice.suggested_minutes }} min Z1–Z2, only with enough free time and good recovery.</p>
+      {% endif %}
+    {% else %}
+      <p>{{ data.aerobic_volume_advice.headline }}</p>
+    {% endif %}
+    <p class="v196958-volume-fine">Optional · no added session, adherence penalty or training debt · keep Z1–Z2 conversational; skip or stop if unusually fatigued, unwell or heart rate is unexpectedly high. The canonical plan stays unchanged.</p>
+  </div>
+  {% endif %}
+</section>
+'''
+    t = t[:a] + replacement + t[b:]
+
+    # A small context link on the third, canonical quality card only. This is
+    # display text, not a workout target edit or an adherence rule.
+    workout_line = '<div class="v4-session-main">{{ athlete_view.instructions|replace(\'See coach recommendation.\',\'See the recommendation above.\') }}</div>'
+    if t.count(workout_line) != 1:
+        raise RuntimeError('R196958_VISUAL_ONLY_WORKOUT_ANCHOR_DRIFT')
+    quicklink = '''{% if is_quality_slot and s.power_prescription and s.power_prescription.get('state') == 'PRESCRIBED' %}
+<p class="v196958-recovery-quicklink"><a href="#nova-adaptive-learning">↗ Recovery power is adaptive — see how Nova learns from higher recoveries.</a></p>
+{% endif %}'''
+    t = t.replace(workout_line, workout_line + '\n' + quicklink, 1)
+    HOME_PAGE = t
+
+_nova_r196958_install_recovery_learning_visual_only()
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
