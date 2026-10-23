@@ -56340,5 +56340,108 @@ def _nova_r196956_install_quality_card_ui():
 
 _nova_r196956_install_quality_card_ui()
 
+# R196.9.57 — PRESENTATION ONLY. The R196.9.56 science, decisions,
+# persistence, reconciliation and all shared snapshot dictionaries are untouched.
+# This installer edits only the FINAL rendered template, after every legacy UI
+# replacement. It reads already-stored training_direction/nova_execution fields.
+def _nova_r196957_install_direction_visual_only():
+    global HOME_PAGE
+    t = HOME_PAGE
+
+    def replace_once(old, new, key):
+        nonlocal t
+        if t.count(old) != 1:
+            raise RuntimeError('R196957_VISUAL_ONLY_ANCHOR_DRIFT_' + key)
+        t = t.replace(old, new, 1)
+
+    # AUTO remains the athlete's declared input. Never claim a model switch.
+    replace_once(
+        '<div class="v48-plan-stat"><span>YOUR MODEL</span><strong>{{ td.distribution_label }}</strong><small>{{ \'Active since \' ~ td.started_on_display if td.active else \'No plan saved yet\' }}</small></div>',
+        '''<div class="v48-plan-stat v196957-model"><span>YOUR MODEL · DECLARED</span>
+<strong>{% if td.distribution_target == 'AUTO' %}AUTO{% else %}{{ td.distribution_label }}{% endif %}</strong>
+<small>{% if td.distribution_target == 'AUTO' %}Monitors your training mix; does not impose an intensity-distribution model.{% else %}Declared distribution · no quality-execution grade attached.{% endif %}</small>
+<small>{{ 'Active since ' ~ td.started_on_display if td.active else 'No plan saved yet' }}</small></div>''',
+        'MODEL')
+    replace_once(
+        '<div class="v48-plan-stat"><span>THE LAB DETECTS</span><strong>{{ td.observed_model }}</strong><small>Time-in-zone: {{ td.observed_zone_model }} · session pattern: {{ td.observed_session_model }}</small></div>',
+        '''<div class="v48-plan-stat v196957-observed"><span>OBSERVED TRAINING MIX</span>
+<strong>{% if td.distribution_target == 'AUTO' %}AUTO · {% endif %}{% if td.observed_model in ('LEARNING','MIXED') %}{{ td.observed_model }}{% else %}observed {{ td.observed_model }}{% endif %}</strong>
+<small>Time-in-zone: {{ td.observed_zone_model }} · session pattern: {{ td.observed_session_model }}</small>
+<small>Observed from completed training, not an automatic change to your chosen model.</small></div>''',
+        'OBSERVED')
+
+    score_start = '<article class="v48-adherence-card">'
+    score_end = '</article>'
+    if t.count(score_start) != 1:
+        raise RuntimeError('R196957_VISUAL_ONLY_ANCHOR_DRIFT_EXECUTION_CARD')
+    left = t.index(score_start)
+    right = t.index(score_end, left) + len(score_end)
+    old_card = t[left:right]
+    if ('STRATEGY ALIGNMENT' not in old_card or
+        'DISTRIBUTION MATCH' not in old_card or
+        'GOAL STIMULUS MATCH' not in old_card):
+        raise RuntimeError('R196957_VISUAL_ONLY_OLD_CARD_CHANGED')
+    # No scores are recomputed or copied into shared training_direction. UI-only
+    # local Jinja variables read the existing R196.5 quality-only ledger audit.
+    new_card = '''<style>
+.v196957-execution{border-color:rgba(77,211,224,.28);background:linear-gradient(128deg,rgba(77,211,224,.055),rgba(130,99,226,.04) 63%,rgba(0,0,0,0));}
+.v196957-execution .v196957-top{display:flex;align-items:flex-start;justify-content:space-between;gap:15px}
+.v196957-execution .v196957-head{min-width:0;flex:1}
+.v196957-execution .v196957-eyebrow{display:block;color:#94e7ed;font-size:10px;font-weight:900;letter-spacing:.09em}
+.v196957-execution .v196957-state{display:block;margin-top:7px;color:#f0f8fa;font-size:clamp(17px,2.3vw,23px);font-family:var(--display);line-height:1.2}
+.v196957-execution .v196957-subtitle{display:block;margin-top:6px;color:#97aebf;font-size:11px;line-height:1.5}
+.v196957-execution .v196957-big{flex-shrink:0;display:flex;align-items:baseline;font-family:var(--display);font-size:clamp(32px,5vw,52px);line-height:1;color:#e6ffff;font-weight:900;white-space:nowrap}
+.v196957-execution .v196957-big small{font-family:inherit;font-size:.34em;color:#79dee7;margin-left:3px}
+.v196957-execution .v196957-big.unknown{color:#7e99a9}
+.v196957-execution .v196957-bar{height:7px;margin-top:15px;border-radius:20px;background:rgba(255,255,255,.075);overflow:hidden}
+.v196957-execution .v196957-progress{height:100%;border-radius:inherit;background:linear-gradient(90deg,#41b9c9,#8beed2)}
+.v196957-execution .v196957-evidence{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px}
+.v196957-execution .v196957-evidence span{display:inline-flex;gap:5px;align-items:baseline;padding:7px 9px;border:1px solid rgba(255,255,255,.09);border-radius:10px;background:rgba(255,255,255,.018);color:#a4b4c5;font-size:10px}
+.v196957-execution .v196957-evidence strong{font-size:14px;color:#e9f2f6}
+.v196957-execution .v196957-evidence .unresolved strong{color:#ffd38e}
+.v196957-execution .v196957-scope{margin:13px 0 0;padding-top:12px;border-top:1px solid rgba(255,255,255,.07);font-size:11px;color:#9db0be;line-height:1.6}
+.v196957-execution .v196957-scope strong{color:#cceef2}
+.v196957-observed strong{font-size:clamp(14px,1.9vw,19px)!important;overflow-wrap:anywhere}
+.v196957-model strong{color:#d9eff4}
+@media(max-width:440px){.v196957-execution .v196957-top{gap:9px}.v196957-execution .v196957-big{font-size:30px}.v196957-execution .v196957-state{font-size:16px}.v196957-execution .v196957-evidence{gap:5px}.v196957-execution .v196957-evidence span{padding:6px 7px}}
+</style>
+<article class="v48-adherence-card v196957-execution" aria-label="Nova verified quality execution">
+{% set nx = td.get('nova_execution') or {} %}
+{% set nx_completed = nx.get('completed', 0)|int %}
+{% set nx_missed = nx.get('confirmed_missed', 0)|int %}
+{% set nx_unresolved = nx.get('unresolved', 0)|int %}
+{% set nx_due = nx_completed + nx_missed %}
+{% set nx_scored = nx.get('available') and nx.get('score') is not none and nx_unresolved == 0 and nx_due > 0 %}
+<div class="v196957-top"><div class="v196957-head">
+<span class="v196957-eyebrow">🎯 NOVA QUALITY EXECUTION</span>
+<strong class="v196957-state">{% if nx_scored %}VERIFIED EXECUTION{% elif nx_unresolved > 0 %}NOT YET VERIFIABLE{% else %}NO ELIGIBLE QUALITY YET{% endif %}</strong>
+<small class="v196957-subtitle">{% if nx_scored %}{{ nx_completed }} of {{ nx_due }} confirmed quality prescriptions completed.{% elif nx_unresolved > 0 %}{{ nx_unresolved }} prescription–activity link{{ '' if nx_unresolved == 1 else 's' }} unresolved; no percentage issued.{% elif nx %}No matured, verifiable quality commitments to score.{% else %}No verified quality-execution data in this Snapshot.{% endif %}</small>
+</div><div class="v196957-big {{ '' if nx_scored else 'unknown' }}">{% if nx_scored %}{{ nx.get('score')|int }}<small>%</small>{% else %}—{% endif %}</div></div>
+{% if nx_scored %}<div class="v196957-bar" role="img" aria-label="Verified quality execution {{ nx.get('score')|int }} percent"><div class="v196957-progress" style="width:{{ nx.get('score')|int }}%"></div></div>{% endif %}
+<div class="v196957-evidence" aria-label="Verified quality ledger counts">
+<span><strong>{{ nx_completed }}</strong> completed & linked</span>
+<span><strong>{{ nx_missed }}</strong> confirmed missed</span>
+{% if nx_unresolved > 0 %}<span class="unresolved"><strong>{{ nx_unresolved }}</strong> unresolved</span>{% endif %}
+</div>
+<p class="v196957-scope"><strong>Verified quality prescriptions only.</strong> This is not whole-plan adherence: Z2, easy rides and rest are not scored without a confirmed prescription–activity link. Unresolved or missing links are never automatically counted as missed. The training-distribution map remains a separate observation.</p>
+</article>'''
+    t = t[:left] + new_card + t[right:]
+
+    replace_once(
+        'Historical Intervals.icu execution before the current block is context only; strategy alignment still starts on the declared date.',
+        'Previous activity is context only. Your declared model and observed distribution are shown separately from verified Nova quality execution.',
+        'JOURNEY_HEADER')
+    replace_once(
+        "{{ td.assessed_sessions }} post-selection sessions · strategy alignment {{ td.strategy_alignment_score ~ '%' if td.strategy_alignment_score is not none else 'LEARNING' }}",
+        "{{ td.assessed_sessions }} post-selection sessions · observed training mix, not an execution grade",
+        'JOURNEY_CURRENT')
+    replace_once(
+        '<p class="v482-journey-summary">{{ td.journey_summary }}</p>',
+        '<p class="v482-journey-summary">The current mix describes completed training since your declared decision. It is not an instruction to chase a distribution or a score for workouts prescribed by Nova.{% if td.distribution_target == \'AUTO\' %} AUTO remains your selected monitoring mode.{% endif %}</p>',
+        'JOURNEY_SUMMARY')
+    HOME_PAGE = t
+
+_nova_r196957_install_direction_visual_only()
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
