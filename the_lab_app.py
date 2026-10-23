@@ -1,6 +1,7 @@
 import base64
 import csv
 import copy
+from contextvars import ContextVar
 import io
 import json
 import hmac
@@ -14588,7 +14589,7 @@ def _v109_template_total_quality_min(t):
     return 0.0
 
 def _v109_template_estimated_session_min(t, dimension=None):
-    """Canonical main set + ONE real preparation + 5 min minimum cooldown.
+    """Canonical main set + ONE real preparation + 8 min composer cooldown.
 
     A DURABILITY 30-min preload REPLACES the default warm-up; it is not
     an additional warm-up. Neither declared rhythm nor owner time is a veto.
@@ -14612,7 +14613,7 @@ def _v109_template_estimated_session_min(t, dimension=None):
     pat=str(t.get('pattern') or '').upper()
     prep=30 if dim=='DURABILITY' else (20 if dim=='RACE_TRANSFER' else
         (15 if pat in {'SPRINT','SPRINT_CLUSTER','SHORT_POWER'} else 12))
-    return round(seconds/60.0+prep+5,1)
+    return round(seconds/60.0+prep+8,1)
 
 def _v109_event_signature(event):
     e=event or {};r=_rhythm_num(e.get("reps"));w=_rhythm_num(e.get("interval_secs"));rec=_rhythm_num(e.get("recovery_secs"))
@@ -29950,8 +29951,10 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
 # Deep-library selector: use the same facet model as the Roadmap. Novelty remains
 # secondary to purpose; when a facet is missing, a candidate in that band receives
 # a decisive information-value bonus and out-of-band repeats are penalized.
+_NOVA_QUALITY_CANDIDATE_EXCLUSIONS = ContextVar('nova_quality_candidate_exclusions', default=frozenset())
+
 def _v111_select_workout_template(goal, dimension, evidence_ledger=None, training_definitions=None, slot=None):
-    goal=str(goal or "").upper();dim=str(dimension or "").upper();slot=slot or {}; candidates=[dict(x) for x in _NOVA_WORKOUT_LIBRARY if x.get("goal")==goal and dim in set(x.get("dimensions") or ()) and not x.get("adaptive_only")]
+    goal=str(goal or "").upper();dim=str(dimension or "").upper();slot=slot or {}; candidates=[dict(x) for x in _NOVA_WORKOUT_LIBRARY if x.get("goal")==goal and dim in set(x.get("dimensions") or ()) and not x.get("adaptive_only") and x.get("id") not in _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()]
     if not candidates:return None,{"version":NOVA_WORKOUT_LIBRARY_REVISION,"revision":NOVA_WORKOUT_LIBRARY_REVISION,"reason":"NO_LIBRARY_CANDIDATE","candidate_count":0}
     facet=_v111_goal_facet_state(goal,evidence_ledger,None); target=(facet.get("missing") or [None])[0]; hint=_rhythm_num(slot.get("duration_hint_min")) or _parse_duration_minutes(slot.get("duration_hint_label")); events=list((((evidence_ledger or {}).get("repeatability") or {}).get("events") or [])); latest_day=None
     for e in events:
@@ -45657,7 +45660,7 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
         names += [t.get('id') for t in _NOVA_WORKOUT_LIBRARY]
         options=[];seen=set()
         for ident in names:
-            if not ident or ident in seen or ident in used:continue
+            if not ident or ident in seen or ident in used or ident in _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get():continue
             seen.add(ident)
             t=next((x for x in _NOVA_WORKOUT_LIBRARY if x.get('id')==ident and x.get('goal')==str(goal or '').upper() and str(dimension or '').upper() in set(x.get('dimensions') or ()) and not x.get('adaptive_only')),None)
             if not t:continue
@@ -45699,7 +45702,8 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
                 for r in options:
                     candidate=next((t for t in _NOVA_WORKOUT_LIBRARY if t.get('id')==r.get('id')
                                     and t.get('goal')==str(goal or '').upper()
-                                    and str(dimension or '').upper() in set(t.get('dimensions') or ())),None)
+                                    and str(dimension or '').upper() in set(t.get('dimensions') or ())
+                                    and t.get('id') not in _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()),None)
                     if candidate and str(candidate.get('pattern') or '').upper()=='SPRINT' and not _v1962_repeat_guard(candidate,{},evidence_ledger,slot):
                         return dict(candidate),dict(audit or {},reason='NON_REPEATED_SPRINT_STRUCTURE',
                             selected_id=candidate.get('id'),repeatability_guard=check)
@@ -45725,7 +45729,8 @@ def _v109_select_workout_template(goal, dimension, evidence_ledger=None, trainin
         for alt in _NOVA_WORKOUT_LIBRARY:
             if (alt.get('goal')!=str(goal or '').upper() or alt.get('id') in used
                     or str(dimension or '').upper() not in set(alt.get('dimensions') or ())
-                    or alt.get('adaptive_only') or alt.get('id')==template.get('id')):continue
+                    or alt.get('adaptive_only') or alt.get('id')==template.get('id')
+                    or alt.get('id') in _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()):continue
             acore=_v19697_workout_core_seconds(alt)
             if not acore or acore[0]/60+prep+5>reliable_minutes+15.0:continue
             work=float(_v109_template_total_quality_min(alt) or 0)
@@ -47601,7 +47606,8 @@ def _v19693_race_purpose_candidates(goal, dimension, slot, evidence_ledger):
         if (str(template.get("goal") or "").upper() != goal
                 or dimension not in set(template.get("dimensions") or ())
                 or template.get("adaptive_only")
-                or str(template.get("pattern") or "").upper() not in _R19693_TRANSFER_PATTERNS):
+                or str(template.get("pattern") or "").upper() not in _R19693_TRANSFER_PATTERNS
+                or template.get('id') in _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()):
             continue
         est = _v109_template_estimated_session_min(template, dimension)
         if duration_hint is not None and est > float(duration_hint) + 15:
@@ -49127,7 +49133,8 @@ def _v19699_dose_decision(original, goal, dimension, slot, evidence, context):
     candidates = []
     for alt in _NOVA_WORKOUT_LIBRARY:
         if (alt.get('goal') != goal or dimension not in set(alt.get('dimensions') or ())
-                or alt.get('adaptive_only') or not _v19699_structure_step(t, alt)):
+                or alt.get('adaptive_only') or not _v19699_structure_step(t, alt)
+                or alt.get('id') in _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()):
             continue
         core = _v19697_workout_core_seconds(alt)
         if not core or core[1] <= current[1] or core[0] + (prep + 5) * 60 > (minutes + 15.0) * 60:
@@ -49153,7 +49160,7 @@ def _v19699_dose_decision(original, goal, dimension, slot, evidence, context):
     return candidate, audit
 
 
-def _v19699_select_workout_template(goal, dimension, evidence_ledger=None,
+def _v19699_select_workout_template_once(goal, dimension, evidence_ledger=None,
                                    training_definitions=None, slot=None):
     """R196.9.9 selector adapter; R196.9.3 and R196.2 retain first veto."""
     original, audit = _r19699_selector_before(goal, dimension,
@@ -49210,7 +49217,95 @@ def _v19699_select_workout_template(goal, dimension, evidence_ledger=None,
                     candidate_id=selected.get('id'))
     return selected, meta
 
-# No duplicate definition of the legacy named selector: preserve AST lineage.
+def _nova_quality_template_required_seconds(template, dimension):
+    """Minimum duration from the same canonical interval core and preparation/cooldown as R196.9.7.
+
+    For final compiled sessions R196.9.7 remains the authority, including any
+    explicit preloads from the original session text.  This is a conservative
+    preflight for catalogued mechanics, not an execution clearance.
+    """
+    core = _v19697_workout_core_seconds(template)
+    if core is None:
+        return None
+    pat = str((template or {}).get('pattern') or '').upper()
+    if pat.startswith('ENDURANCE'):
+        return None
+    dim = str(dimension or '').upper()
+    prep = 30 if dim == 'DURABILITY' else (20 if dim == 'RACE_TRANSFER' else
+           (15 if pat in {'SPRINT', 'SPRINT_CLUSTER', 'SHORT_POWER'} else 12))
+    return round(core[0]) + prep * 60 + 8 * 60
+
+
+def _nova_quality_slot_declared_seconds(slot):
+    """The compiler receives slot duration; +15min feasibility cushions are NOT declared time."""
+    s = slot if isinstance(slot, dict) else {}
+    value = _rhythm_num(s.get('duration_hint_min'))
+    if value is None:
+        value = _parse_duration_minutes(s.get('duration_hint_label'))
+    if value is None or not math.isfinite(float(value)) or float(value) <= 0:
+        return None
+    # Respect an explicit planned maximum even if a learned duration hint is longer.
+    if s.get('is_planned_training') is True:
+        cap = _rhythm_num(s.get('expected_duration_max'))
+        if cap is not None and cap > 0:
+            value = min(float(value),float(cap))
+    return round(float(value) * 60)
+
+
+def _v19699_select_workout_template(goal, dimension, evidence_ledger=None,
+                                   training_definitions=None, slot=None):
+    """Evaluate the original selector with canonical time before issuing its identity.
+
+    Only when the first candidate is mechanically impossible in the declared
+    slot do we ask the SAME upstream selector to re-rank the remaining catalog.
+    All original scientific/repeat/FTP/consent gates still run for each try.
+    Scoped context avoids cross-athlete concurrency or global library edits.
+    """
+    limit = _nova_quality_slot_declared_seconds(slot)
+    if limit is None or str(goal or '').upper() == 'ENDURANCE_BASE':
+        return _v19699_select_workout_template_once(goal, dimension,
+            evidence_ledger=evidence_ledger, training_definitions=training_definitions, slot=slot)
+    excluded = set(_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get())
+    attempts = []
+    eligible = sum(1 for t in _NOVA_WORKOUT_LIBRARY
+        if t.get('goal') == str(goal or '').upper()
+        and str(dimension or '').upper() in set(t.get('dimensions') or ())
+        and not t.get('adaptive_only'))
+    for _ in range(min(eligible + 1, 100)):
+        token = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(excluded))
+        try:
+            template, audit = _v19699_select_workout_template_once(goal, dimension,
+                evidence_ledger=evidence_ledger, training_definitions=training_definitions, slot=slot)
+        finally:
+            _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
+        if not isinstance(template, dict):
+            detail = dict(audit or {})
+            if attempts:
+                detail['canonical_timing_rejections'] = attempts
+                detail['reason'] = 'NO_SCIENCE_APPROVED_TEMPLATE_FITS_DECLARED_TIME'
+            return template, detail
+        ident = str(template.get('id') or '')
+        required = _nova_quality_template_required_seconds(template, dimension)
+        if required is not None and required <= limit and ident not in excluded:
+            detail = dict(audit or {})
+            if attempts:
+                detail['canonical_timing_rejections'] = attempts
+                detail['selected_id'] = ident
+                detail['reason'] = 'CANONICAL_TIMING_VALIDATED_AFTER_ORIGINAL_RANK_RETRY'
+            return template, detail
+        attempts.append({'workout_id': ident, 'required_seconds': required,
+                         'declared_seconds': limit,
+                         'reason': 'MINIMUM_CANONICAL_TIME_EXCEEDS_DECLARED' if required is not None and required > limit
+                                   else 'UNASSESSED_OR_ALREADY_EXCLUDED'})
+        if not ident or ident in excluded:
+            break
+        excluded.add(ident)
+    return None, {'reason':'NO_SCIENCE_APPROVED_TEMPLATE_FITS_DECLARED_TIME',
+        'candidate_count':eligible,'canonical_timing_rejections':attempts}
+
+
+# Original scientific selector remains a single authoritative implementation,
+# not an alternate amateur prescriber.  Retain its historic function body intact.
 _v109_select_workout_template = _v19699_select_workout_template
 
 
@@ -56084,13 +56179,17 @@ def _nova_r196956_fallback(decision,clock,road,ledger,**kwargs):
     if suggested:
         slot['date']=suggested[:10]
         slot['start_minute']=int(suggested[11:13])*60+int(suggested[14:16])
+    advisory_minutes = _rhythm_num(slot.get('duration_hint_min'))
+    if advisory_minutes is None or advisory_minutes <= 0:
+        advisory_minutes = 60.0
+    # Duration is an actual compile envelope, not permission to borrow +15'.
     slot.update({'label':slot.get('label') or 'Nova advisory quality opportunity',
                  'period':slot.get('period') or 'ADVISORY',
                  'restriction':'NONE','is_race':False,
                  'is_planned_training':False,'training_demand':None,
                  'availability_confirmed':False,
-                 'duration_hint_min':max(60.0, float(_rhythm_num(slot.get('duration_hint_min')) or 60.0)),
-                 'duration_hint_label':'~60 min'})
+                 'duration_hint_min':float(advisory_minutes),
+                 'duration_hint_label':f'~{float(advisory_minutes):g} min'})
     clock_shadow['next_slots']=[slot]
     dec.update({'action':'TRAIN','dimension':dim,'goal_key':goal,
                 'hard_session_allowed':True,'quality_window_eligible':True,
@@ -56105,28 +56204,49 @@ def _nova_r196956_fallback(decision,clock,road,ledger,**kwargs):
     inputs=dict(kwargs.get('builder_args') or {})
     inputs['adaptive_roadmap']=road_shadow
     inputs['microcycle_ledger']=copy.deepcopy(ledger or {})
-    try:
-        selected=build_nova_prescription(dec,clock_shadow,**inputs)
-    except (TypeError,ValueError,KeyError,AttributeError) as exc:
-        return None,'SCIENTIFIC_PRODUCER_'+type(exc).__name__
-    if not isinstance(selected,dict) or selected.get('status')!='PRESCRIBED':
-        return None,'SCIENTIFIC_PRODUCER_'+str((selected or {}).get('fail_closed_reason') or (selected or {}).get('status') or 'NO_CANDIDATE')
     ca=dict(kwargs.get('compile_args') or {})
     ca['adaptive_roadmap']=road_shadow
     ca['microcycle_ledger']=copy.deepcopy(ledger or {})
-    try:
-        compiled=compile_nova_prescription(selected,clock_shadow,**ca)
-    except (TypeError,ValueError,KeyError,AttributeError) as exc:
-        return None,'SCIENTIFIC_COMPILER_'+type(exc).__name__
-    result=[s for s in (compiled or {}).get('sessions') or [] if _nova_r196956_structural_ok(s)]
-    if len(result)!=1:
-        return None,'SCIENTIFIC_COMPILER_'+str((compiled or {}).get('fail_closed_reason') or 'INCOMPLETE_CONTRACT')
-    offer=copy.deepcopy(result[0])
-    offer['nova_offer_only']=True
-    # A projection is NOT clearance, and the real planning restriction is
-    # kept alongside it for presentation and athlete safety.
-    offer['real_execution_permission_inherited']=False
-    return offer,None
+    # Only technical candidate rejection can trigger same-dimension retry.
+    # Each trial runs the FULL original producer AND compiler.  No fabricated
+    # work/recovery, change of question or relaxation of test consent.
+    excluded=set()
+    last_failure=None
+    eligible=sum(1 for t in _NOVA_WORKOUT_LIBRARY
+        if t.get('goal')==goal and dim in set(t.get('dimensions') or ()) and not t.get('adaptive_only'))
+    for _ in range(min(eligible + 1, 100)):
+        token=_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(excluded))
+        try:
+            try:
+                selected=build_nova_prescription(dec,clock_shadow,**inputs)
+            except (TypeError,ValueError,KeyError,AttributeError) as exc:
+                return None,'SCIENTIFIC_PRODUCER_'+type(exc).__name__
+            if not isinstance(selected,dict) or selected.get('status')!='PRESCRIBED':
+                return None,'SCIENTIFIC_PRODUCER_'+str((selected or {}).get('fail_closed_reason') or (selected or {}).get('status') or 'NO_CANDIDATE')
+            try:
+                compiled=compile_nova_prescription(selected,clock_shadow,**ca)
+            except (TypeError,ValueError,KeyError,AttributeError) as exc:
+                return None,'SCIENTIFIC_COMPILER_'+type(exc).__name__
+            if not isinstance(compiled,dict):
+                return None,'SCIENTIFIC_COMPILER_NO_RESULT'
+            compiler_reason=str(compiled.get('fail_closed_reason') or '')
+            if (str(compiled.get('status') or '').upper() in {'HOLD','DEFERRED','BLOCKED'}
+                    and compiler_reason != 'R19696_INCOMPLETE_WORKOUT_CONTRACT'):
+                return None,'SCIENTIFIC_COMPILER_UPSTREAM_VETO_'+(compiler_reason or str(compiled.get('status')))
+            result=[s for s in (compiled or {}).get('sessions') or [] if _nova_r196956_structural_ok(s)]
+            if len(result)==1:
+                offer=copy.deepcopy(result[0])
+                offer['nova_offer_only']=True
+                offer['real_execution_permission_inherited']=False
+                return offer,None
+            last_failure='SCIENTIFIC_COMPILER_'+str((compiled or {}).get('fail_closed_reason') or 'INCOMPLETE_CONTRACT')
+            ident=str(selected.get('workout_id') or '')
+            if ident not in _R19696_LIBRARY_INDEX or ident in excluded:
+                return None,last_failure
+            excluded.add(ident)
+        finally:
+            _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
+    return None,last_failure or 'NO_VERIFIED_CANONICAL_TEMPLATE_AVAILABLE' 
 
 
 def _nova_r196956_max_minutes(clock):
@@ -56140,7 +56260,7 @@ def _nova_r196956_max_minutes(clock):
         if h is not None and math.isfinite(float(h)) and float(h)>=0:
             hints.append(float(h))
     learned=hints[0] if hints else None
-    return max(60.0,learned)+15.0 if learned is not None else None
+    return learned if learned is not None else None
 
 
 def _nova_r196956_execution(decision,clock,road,planning_context,training_state,workout):
@@ -56242,9 +56362,10 @@ def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,ledger
         try:duration=float(comp.get('total_seconds'))/60
         except (ValueError,TypeError):duration=None
     cap=_nova_r196956_max_minutes(clock)
-    additional=round(max(0,60-float(duration)),1) if duration is not None else None
+    target_minutes=min(60.0,float(cap)) if cap is not None else 60.0
+    additional=round(max(0,target_minutes-float(duration)),1) if duration is not None else None
     too_long=bool(duration is not None and cap is not None and duration>cap+.01)
-    note=(f'Per raggiungere 60 minuti: aggiungi {additional:g} min di pedalata Z1–Z2 facile, senza modificare il lavoro quality.'
+    note=(f'Per completare lo slot: aggiungi {additional:g} min di pedalata Z1–Z2 facile, senza modificare il lavoro quality.'
           if additional else None)
     if too_long:
         note=('Il workout strutturato supera la disponibilità stimata + 15 min: NON ridurre arbitrariamente ripetute o recuperi; rivalutare il tempo prima di eseguirlo.')
@@ -56263,9 +56384,9 @@ def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,ledger
         'offer_status':'OFFERED','visibility_status':'QUALITY_OFFER_VISIBLE',
         'execution_authority':state,'execution_message':msg,
         'time_adjustment_message':note,'duration_min_observed':duration,
-        'duration_minimum':60,'duration_cushion_min':15,
+        'duration_minimum':target_minutes,'duration_cushion_min':0,
         'duration_max_by_time':cap,
-        'total_duration_suggested_min':max(60.0,float(duration)) if duration is not None else None,
+        'total_duration_suggested_min':max(target_minutes,float(duration)) if duration is not None else None,
         'source':source,
         'execution_clearance_is_not_part_of_offer':True}
     integrity={'schema':R196956_SCHEMA,'state':'PASS',
@@ -56800,9 +56921,9 @@ HOME_PAGE = HOME_PAGE.replace(
 # THIRD CARD projection boundary. This does NOT change Nova's actual decision,
 # authorized schedule, original prescription, workout library, watt calculation,
 # verified evidence, or real ledger. No fabricated alternate prescriptions.
-R196960_SCHEMA = 'NOVA-R196.9.60-UNIVERSAL-QUALITY-ALTERNATION-1'
-APP_VERSION = ('THE LAB · PRODUCT V4.9.160 R196.9.60 · UNIVERSAL VERIFIED QUALITY '
-               'ALTERNATION · NOVA R196.2 CORE')
+R196960_SCHEMA = 'NOVA-R196.9.61-CANONICAL-COMPILER-FIRST-1'
+APP_VERSION = ('THE LAB · PRODUCT V4.9.161 R196.9.61 · VERIFIED QUALITY CANDIDATE REPLAY '
+               '· NOVA R196.2 CORE')
 
 
 def _nova_r196960_number(value):
@@ -57094,9 +57215,9 @@ def _nova_r196956_build_offer(rows, prescription, prior, decision, clock, road,
         new_integrity=dict(new_integrity or {},alternation=R196960_SCHEMA,
             alternative_dimension=dim,verified_recent_duplicates=rejected)
         return new_offer,new_integrity
-    return None, {'schema':R196960_SCHEMA,'state':'WITHHELD_FOR_ALTERNATION',
+    return None, {'schema':R196960_SCHEMA,'state':('WITHHELD_FOR_ALTERNATION' if rejected else 'RELEASE_FAILURE'),
         'offer_present':False,'visible_in_card_3':False,
-        'reason':'NO_DISTINCT_VERIFIED_QUALITY_PASSED_ORIGINAL_COMPILER',
+        'reason':('RECENT_COMPLETED_STRUCTURE_BLOCKED_VERIFIED_OPTIONS' if rejected else 'NO_COMPILED_CANONICAL_QUALITY_AVAILABLE'),
         'initial_reason':initial_reason,'verified_recent_duplicates':rejected,
         'ranked_alternatives_checked':tried,
         'execution_clearance_preserved':True,'no_invented_workout':True}
