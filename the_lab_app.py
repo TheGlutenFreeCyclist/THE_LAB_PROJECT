@@ -3329,7 +3329,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 <div class="v4860-readiness-inline" aria-label="Daily Readiness">
 <div class="v4-ring v4860-readiness-ring"><svg viewBox="0 0 100 100"><circle class="v4-ring-track" cx="50" cy="50" r="40" pathLength="100"/><circle class="v4-ring-progress {{ data.race_readiness_zone }}" cx="50" cy="50" r="40" pathLength="100" stroke-dasharray="{{ data.race_readiness_score }} 100"/></svg><div class="v4-ring-center"><div class="v4-ring-value">{{ data.race_readiness_score }}</div><div class="v4-ring-sub">/100</div></div></div>
-<div class="v4860-readiness-copy"><div class="v4861-readiness-kicker">DAILY READINESS</div><div class="v4861-readiness-state">{{ data.race_readiness_label }}</div><p class="v4861-readiness-reason">{{ data.race_readiness_reason }}</p></div>
+<div class="v4860-readiness-copy"><div class="v4861-readiness-kicker">DAILY READINESS</div><div class="v4861-readiness-state">{{ data.race_readiness_label }}</div><p class="v4861-readiness-reason">{{ data.race_readiness_reason }}</p>{% if data.health_observatory and data.health_observatory.readiness_line %}<p class="r196962-readiness-context">{{ data.health_observatory.readiness_line }}</p>{% endif %}</div>
 </div>
 </article>
 <article class="v4-card v4-energy-card">
@@ -3349,6 +3349,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 <div class="v4-badge {{ data.energy_zone }}">{{ data.energy_label }}</div>
 <div class="v7-energy-live"><strong>{{ data.energy_today_sessions }}</strong> session{% if data.energy_today_sessions != 1 %}s{% endif %} today · load <strong>{{ data.energy_today_load }}</strong>{% if data.energy_today_steps is defined and data.energy_today_steps is not none %} · steps <strong>{{ data.energy_today_steps_label }}</strong> · <strong>{{ data.energy_steps_context }}</strong>{% endif %} · <strong>{{ data.energy_training_context if data.energy_training_context is defined else 'CURRENT TRAINING CONTEXT' }}</strong> · starting reserve <strong>{{ data.energy_starting_score if data.energy_starting_score is defined else data.energy_morning_score }}</strong></div>
+{% if data.health_observatory and data.health_observatory.energy_line %}<p class="r196962-energy-context">{{ data.health_observatory.energy_line }}</p>{% endif %}
 {% if data.recent_trend %}
 <div class="v4-trend">{% set form_norm_ready = (data.recent_trend[0].delta is not none) %}<div class="v4-trend-head"><strong>Last 5 days · Form{% if form_norm_ready %} vs your norm{% endif %}</strong><span>{% if form_norm_ready %}Near zero = normal for you{% else %}ASSESSING · personal norm still learning{% endif %}</span></div><div class="v4-trend-grid">{% for d in data.recent_trend %}<div class="v4-trend-item"><div class="v4-trend-track"><div class="v4-trend-fill {{ d.zone }}" data-height="{{ [((d.tsb + 30) / 60 * 100), 7]|max }}" style="height:7%;"></div></div><div class="v4-trend-delta">{% if d.delta is not none %}{{ "%+d"|format(d.delta) }}{% else %}{{ d.tsb }}{% endif %}</div><div class="v4-trend-day">{{ d.weekday }}</div></div>{% endfor %}</div></div>
 {% endif %}
@@ -3682,9 +3683,17 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v4865-macro-panel" id="v4865-physiology-panel">
 {# R196.9.22 · athlete-first view; no new scientific decision or safety clearance. #}
 <div class="v196922-recovery-summary" aria-label="Recovery summary">
+{% if data.health_observatory %}
+ <div class="r196962-observatory-head"><span>YOUR PHYSIOLOGY · OBSERVATIONAL</span><strong>{{ data.health_observatory.state }}</strong></div>
+ <p>{{ data.health_observatory.headline }}</p>
+ {% if data.health_observatory.detail and data.health_observatory.state == 'WATCH' %}<p>{{ data.health_observatory.detail }}</p>{% endif %}
+ {% if data.health_observatory.insights %}<div class="r196962-observations">{% for item in data.health_observatory.insights %}<span>{{ item }}</span>{% endfor %}</div>{% endif %}
+ <small>Informative only · never changes Nova training prescriptions, readiness or Energy Bank scores.</small>
+{% else %}
  <div class="v196922-summary-line"><span>YOUR RECOVERY CONTEXT</span><strong>{{ data.race_readiness_label or 'Assessment pending' }}</strong></div>
  {% if data.race_readiness_reason %}<p>{{ data.race_readiness_reason }}</p>{% endif %}
  <small>This describes current signals; it is not medical clearance or permission to start a hard session. Nova checks training safety and timing separately.</small>
+{% endif %}
 </div>
 <div class="v4-metric-grid">
 <article class="v4-card v4-metric"><div class="v4-metric-label">Resting HR</div><div class="v4-ring"><svg viewBox="0 0 100 100"><circle class="v4-ring-track" cx="50" cy="50" r="40" pathLength="100"/><circle class="v4-ring-progress {{ data.health_rings.rhr.color }}" cx="50" cy="50" r="40" pathLength="100" stroke-dasharray="{{ data.health_rings.rhr.pct }} 100"/></svg><div class="v4-ring-center"><div class="v4-ring-value">{{ data.latest_rhr }}</div><div class="v4-ring-sub">bpm</div></div></div><div class="v4-metric-status {{ data.health_rings.rhr.color }}">{{ data.health_rings.rhr.status }}{% if data.latest_rhr_note %}<small class="v4818-provenance">{{ data.latest_rhr_note }}</small>{% endif %}</div></article>
@@ -29101,6 +29110,9 @@ def analyze():
             data,question_state=question_state,adaptive_roadmap=adaptive_roadmap,
             repair=True)
         data = _v87_cross_module_authority_guard(data, repair=True)
+        # R196.9.62: strictly AFTER the sealed training decision and workout.
+        # This observational sidecar cannot feed the scientific compiler.
+        _r196962_attach_health_observatory(data, season_wellness)
         snapshot_fault_stage = "AUTHORITY_VALIDATION"
         # Trace the exact code path selected for this Snapshot (billing is verified
         # independently in the admin usage table; no zero-cost DB event is invented).
@@ -57221,6 +57233,263 @@ def _nova_r196956_build_offer(rows, prescription, prior, decision, clock, road,
         'initial_reason':initial_reason,'verified_recent_duplicates':rejected,
         'ranked_alternatives_checked':tried,
         'execution_clearance_preserved':True,'no_invented_workout':True}
+
+
+
+# R196.9.62 — observational health context, completely outside Nova's
+# scientific decision, dose compiler, restrictions and workout authority.
+# Intervals' native wellness is already fetched for the original engines.
+# Optional CUSTOM fields are fetched separately, only when actually defined;
+# their values never enter compute_metrics(), training_state or the prescriber.
+R196962_HEALTH_SCHEMA = 'R196.9.62-OBSERVATIONAL-HEALTH-V1'
+_R196962_CUSTOM_FIELDS = {
+    'GarminSkinTempDeviationC': ('Skin temperature deviation', -4.0, 4.0, '°C'),
+    'GarminStressAvg': ('Garmin daily stress', 0.0, 100.0, '/100'),
+    'BodyBatteryMax': ('Garmin Body Battery high', 0.0, 100.0, '/100'),
+    'BodyBatteryMin': ('Garmin Body Battery low', 0.0, 100.0, '/100'),
+    'GarminSleepDeepMinutes': ('Deep sleep', 0.0, 720.0, 'min'),
+    'GarminSleepREMMinutes': ('REM sleep', 0.0, 720.0, 'min'),
+    'GarminSleepLightMinutes': ('Light sleep', 0.0, 1000.0, 'min'),
+    'GarminSleepAwakeMinutes': ('Night awakenings', 0.0, 720.0, 'min'),
+}
+_R196962_NATIVE_FIELDS = {
+    'hrv': ('HRV', 4.0, 300.0, 'ms'),
+    'restingHR': ('Resting HR', 25.0, 130.0, 'bpm'),
+    'sleepSecs': ('Sleep', 3600.0, 54000.0, 's'),
+    'respiration': ('Respiration', 5.0, 35.0, 'br/min'),
+    'spO2': ('SpO₂', 70.0, 100.0, '%'),
+}
+
+
+def _r196962_number(value, low, high):
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        result = float(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return result if math.isfinite(result) and low <= result <= high else None
+
+
+def _r196962_day(row):
+    try:
+        return date.fromisoformat(str(row.get('id') or '')[:10])
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _r196962_native_observations(wellness):
+    # Copy and select ONLY the existing documented Intervals native fields.
+    # The original input is never changed, even when optional data is bad.
+    return [dict(id=r.get('id'), tempRestingHR=r.get('tempRestingHR'), **{k: r.get(k) for k in _R196962_NATIVE_FIELDS})
+            for r in (wellness or []) if isinstance(r, dict) and _r196962_day(r)]
+
+
+def _r196962_optional_intervals_wellness(now):
+    '''Read-only optional probe. Failure means unknown, NOT unhealthy.'''
+    result = {'rows': [], 'fields': [], 'availability': 'NOT_CONFIRMED'}
+    try:
+        runtime = _resolve_intervals_runtime()
+        headers = get_intervals_headers(runtime)
+        base = 'https://intervals.icu/api/v1/athlete/' + str(runtime['athlete_id'])
+        response = requests.get(base + '/custom-item', headers=headers, timeout=5)
+        response.raise_for_status()
+        definitions = response.json()
+        if isinstance(definitions, dict):
+            definitions = definitions.get('items') or definitions.get('customItems') or []
+        available = set()
+        if isinstance(definitions, list):
+            for item in definitions:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get('content') if isinstance(item.get('content'), dict) else {}
+                code = item.get('code') or content.get('code')
+                if code in _R196962_CUSTOM_FIELDS:
+                    available.add(code)
+        codes = sorted(available)
+        if not codes:
+            result['availability'] = 'NO_OPTIONAL_FIELDS_CONFIGURED'
+            return result
+        # Documented custom wellness codes must be named in the fields query.
+        # Do not touch existing engine wellness rows, nor create any fields.
+        oldest = (now.date() - timedelta(days=60)).isoformat()
+        params = {'oldest': oldest, 'newest': now.date().isoformat(),
+                  'fields': 'id,' + ','.join(codes)}
+        response = requests.get(base + '/wellness', headers=headers,
+                                params=params, timeout=7)
+        response.raise_for_status()
+        rows = response.json()
+        if not isinstance(rows, list):
+            return result
+        result.update(rows=[r for r in rows if isinstance(r, dict) and _r196962_day(r)],
+                      fields=codes, availability='CUSTOM_FIELDS_CHECKED')
+    except Exception:
+        # Health enrichment may NEVER take down or withhold a Snapshot.
+        result['availability'] = 'OPTIONAL_SOURCE_UNAVAILABLE'
+    return result
+
+
+def _r196962_series(rows, name, bounds, now):
+    '''Deduplicate by day, reject bad/future/stale data; no artificial zeros.'''
+    valid = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        day = _r196962_day(row)
+        if day is None or day > now.date() or (now.date() - day).days > 60:
+            continue
+        if name == 'restingHR' and _intervals_temp_flag(row, 'tempRestingHR'):
+            continue
+        raw = _r196962_number(row.get(name), bounds[1], bounds[2])
+        if raw is not None:
+            valid[day] = raw
+    return sorted(valid.items())
+
+
+def _r196962_signal(series, name, now):
+    '''Use robust personal comparisons, not generic clinical red zones.'''
+    if not series:
+        return None
+    day, value = series[-1]
+    age = (now.date() - day).days
+    if age > 2:
+        return {'name': name, 'available': False, 'reason': 'STALE', 'age_days': age}
+    historical = [v for d, v in series[:-1] if (day - d).days <= 35 and d < day]
+    samples = len(historical)
+    baseline = statistics.median(historical) if samples >= 7 else None
+    direction = 'UNKNOWN'
+    delta = None
+    if baseline is not None:
+        delta = value - baseline
+        if name == 'hrv':
+            direction = 'WATCH' if baseline > 0 and value < baseline * 0.86 else 'USUAL'
+        elif name == 'restingHR':
+            direction = 'WATCH' if delta >= 4.0 else 'USUAL'
+        elif name == 'respiration':
+            direction = 'WATCH' if delta >= 1.8 else 'USUAL'
+        elif name == 'GarminSkinTempDeviationC':
+            direction = 'WATCH' if delta >= 0.45 else 'USUAL'
+        elif name == 'sleepSecs':
+            direction = 'WATCH' if delta < -2700 else 'USUAL'
+        else:
+            direction = 'DESCRIPTIVE'
+    return {'name': name, 'value': round(value, 2), 'baseline': round(baseline, 2)
+            if baseline is not None else None,
+            'delta': round(delta, 2) if delta is not None else None,
+            'samples': samples, 'date': day.isoformat(), 'age_days': age,
+            'available': True, 'state': direction}
+
+
+def _r196962_build_health_observatory(metrics, native_wellness, optional=None, now=None):
+    '''Pure, descriptive sidecar. It never changes readiness/energy or workouts.'''
+    now = now or get_rome_now()
+    optional = optional if isinstance(optional, dict) else {}
+    native_rows = _r196962_native_observations(native_wellness)
+    custom_rows = [r for r in optional.get('rows') or [] if isinstance(r, dict)]
+    supported = set(optional.get('fields') or []) & set(_R196962_CUSTOM_FIELDS)
+    observations = {}
+    for key, meta in _R196962_NATIVE_FIELDS.items():
+        observations[key] = _r196962_signal(_r196962_series(native_rows, key, meta, now), key, now)
+    for key in sorted(supported):
+        observations[key] = _r196962_signal(_r196962_series(custom_rows, key,
+                                       _R196962_CUSTOM_FIELDS[key], now), key, now)
+    current = {k: v for k, v in observations.items() if v and v.get('available')}
+    watched = [k for k in ('hrv', 'restingHR', 'respiration', 'GarminSkinTempDeviationC', 'sleepSecs')
+               if (current.get(k) or {}).get('state') == 'WATCH']
+    # At least TWO independently measured deviations are required for WATCH.
+    status = 'WATCH' if len(watched) >= 2 else ('OBSERVING' if current else 'LEARNING')
+    readable = {'hrv': 'HRV below its usual range',
+                'restingHR': 'resting heart rate higher than usual',
+                'respiration': 'respiratory rate higher than usual',
+                'GarminSkinTempDeviationC': 'skin-temperature deviation above recent norm',
+                'sleepSecs': 'sleep duration below recent habit'}
+    if len(watched) >= 2:
+        headline = 'Several recent physiological signals differ from your personal norm.'
+        detail = ' · '.join(readable[k] for k in watched[:3])
+    elif watched:
+        headline = 'One signal differs from your recent norm; no multi-signal pattern established.'
+        detail = readable[watched[0]]
+    elif current:
+        headline = 'No multi-signal deviation established from the available recent measurements.'
+        detail = 'Observed signals only; missing measurements have no adverse interpretation.'
+    else:
+        headline = 'Wellness context is still learning from the data available.'
+        detail = 'Missing or stale measurements are not interpreted as poor recovery.'
+    contextual = []
+    temp = current.get('GarminSkinTempDeviationC')
+    if temp:
+        unit = '°C'
+        contextual.append('Skin temperature %+.2f %s vs device reference' % (temp['value'], unit))
+        if temp['samples'] < 7:
+            contextual.append('skin-temperature trend still learning')
+    battery = current.get('BodyBatteryMax')
+    if battery:
+        contextual.append('Garmin Body Battery high %.0f/100 (separate from Nova Energy Bank)' % battery['value'])
+    stress = current.get('GarminStressAvg')
+    if stress:
+        contextual.append('Garmin stress %.0f/100 (not Intervals subjective stress)' % stress['value'])
+    stage_keys = ('GarminSleepDeepMinutes', 'GarminSleepREMMinutes', 'GarminSleepLightMinutes')
+    if all(current.get(k) for k in stage_keys):
+        durations = [current[k]['value'] for k in stage_keys]
+        latest_dates = {current[k]['date'] for k in stage_keys}
+        if len(latest_dates) == 1 and 60 <= sum(durations) <= 900:
+            contextual.append('Sleep stages: deep %.0f · REM %.0f · light %.0f min' % tuple(durations))
+    freshness = sum(1 for v in current.values() if v['age_days'] <= 2)
+    # Explanations, not surrogate scoring formulas. Neither raw nor derived
+    # optional values are ever passed back into compute_race_readiness/energy.
+    readiness_line = 'Health context: ' + (detail if watched else headline)
+    energy_line = 'Estimated reserve, not a measured Body Battery. ' + (
+        'Additional wearable observations are shown below, not deducted from this score.'
+        if contextual else 'Missing wearable metrics do not reduce this score.')
+    return {
+        'schema': R196962_HEALTH_SCHEMA, 'read_only': True,
+        'affects_training_decision': False, 'affects_readiness_score': False,
+        'affects_energy_score': False, 'state': status,
+        'headline': headline, 'detail': detail,
+        'readiness_line': readiness_line, 'energy_line': energy_line,
+        'insights': contextual[:3], 'signals': observations,
+        'available_measurements': freshness,
+        'custom_fields_detected': sorted(supported),
+        'optional_source': optional.get('availability', 'NOT_CHECKED'),
+        'note': 'Descriptive, not diagnostic. Never overrides Nova workouts or explicit clinical restrictions.',
+    }
+
+
+def _r196962_attach_health_observatory(snapshot, native_wellness, now=None,
+                                        optional_fetch=None):
+    '''Fail-open boundary AFTER Nova's completed prescription/authority guard.'''
+    if not isinstance(snapshot, dict):
+        return snapshot
+    clock = now or get_rome_now()
+    try:
+        fetch = optional_fetch or _r196962_optional_intervals_wellness
+        optional = fetch(clock)
+        snapshot['health_observatory'] = _r196962_build_health_observatory(
+            snapshot, native_wellness, optional, now=clock)
+    except Exception:
+        snapshot['health_observatory'] = {
+            'schema': R196962_HEALTH_SCHEMA, 'read_only': True,
+            'affects_training_decision': False, 'affects_readiness_score': False,
+            'affects_energy_score': False, 'state': 'LEARNING',
+            'headline': 'Health enrichment is temporarily unavailable.',
+            'readiness_line': 'Additional wellness interpretation unavailable; original metrics remain unchanged.',
+            'energy_line': 'Energy Bank remains the original Nova estimate.',
+            'insights': [], 'signals': [], 'optional_source': 'UNAVAILABLE',
+            'note': 'Descriptive only.'}
+    return snapshot
+
+
+BASE_CSS += """
+.r196962-readiness-context,.r196962-energy-context{font-size:12px;line-height:1.5;color:#aebdcc;margin:8px 0 0;}
+.r196962-energy-context{padding:0 14px 8px;text-align:center;}
+.r196962-observatory-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px;}
+.r196962-observatory-head span{font-size:11px;color:#9ad9dd;font-weight:700;letter-spacing:.09em;}
+.r196962-observatory-head strong{font-size:11px;color:#d5e5e8;}
+.r196962-observations{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;}
+.r196962-observations span{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:4px 8px;color:#c5d1dc;font-size:11px;}
+"""
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.162 R196.9.62 · OBSERVATIONAL HEALTH ISOLATION · NOVA R196.2 CORE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
