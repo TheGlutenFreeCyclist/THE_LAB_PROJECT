@@ -58085,6 +58085,7 @@ def _nova_r196956_build_offer(*args, **kwargs):
 # learned double-session clock must not disagree. Scoped, no invented work,
 # no change to TRAIN/HOLD, physiological clearance or science catalogue.
 R196966_SCHEMA = 'NOVA-R196.9.66-OBSERVED-IDENTITY-AND-RHYTHM-1'
+R196968_SCHEMA = 'NOVA-R196.9.68-VERIFIED-MICRO-FAMILY-COOLDOWN-1'
 _R196966_TRUSTED_ACTIVITY_SOURCES = frozenset({
     'ICU_RAW_WATTS_30_15', 'ICU_INTERVALS_CANONICAL', 'DEVICE_LAPS',
     'ORIGINAL_ACTIVITY_FIT_LAP', 'ORIGINAL_FIT_LAPS'})
@@ -58157,13 +58158,39 @@ def _r196966_named_exposure(workout, evidence_ledger, candidate_date):
             return dict(exposure,workout_id=wid,
                         type='OBSERVED_NAMED_WORKOUT_COMPLETION_UNVERIFIED',
                         canonical_fulfillment_asserted=False)
-        # A different catalogue title can describe exactly the same recently
-        # measured total micro-interval DOSE. Event evidence here gives 20 raw
-        # 30/15 repetitions but not a trustworthy 2×10 grouping; do not claim
-        # structural adherence or identify the entire set/rest architecture.
-        # This is a conservative four-day *reissue* hold for equal total work.
+        # An independently resolved raw 30/15 exposure is a RECENT STIMULUS,
+        # not just one catalogue name or a single total-repetition number.
+        # Otherwise correcting a detector from 20 to 30 observed repeats
+        # accidentally re-opens the shorter 2x10 variant the next day.
+        # Scope is one verified 30/15 family and the existing 0..4-day window:
+        # no unrelated VO2/sustained template, no title-only activity, no
+        # unverified stream, and NO assertion of fulfilled adherence.
         if str((template or {}).get('pattern') or '').upper() != 'MICRO_30_15':
             continue
+        try:
+            candidate_work = float(template['work_s'])
+            candidate_float = float(template['float_s'])
+            candidate_dose = int(template['sets'])*int(template['reps_per_set'])
+            observed_float = exposure.get('observed_float_seconds')
+            same_cadence = (candidate_work > 0 and observed_float is not None and
+                abs(candidate_work-exposure['observed_work_seconds']) <= 1.0 and
+                abs(candidate_float-observed_float) <= 1.0)
+            # Do not turn one noisy sprint into a whole 30/15 micro-session.
+            reliable_micro_dose = exposure['observed_reps'] >= 16
+            if (exposure['source'] == 'ICU_RAW_WATTS_30_15' and
+                    same_cadence and reliable_micro_dose and candidate_dose > 0):
+                return dict(exposure, workout_id=wid,
+                    type='RECENT_VERIFIED_30_15_STIMULUS_FAMILY',
+                    matched_family='MICRO_30_15',
+                    candidate_total_reps=candidate_dose,
+                    same_total_dose=candidate_dose == exposure['observed_reps'],
+                    canonical_fulfillment_asserted=False,
+                    grouping_equivalence_asserted=False,
+                    cooldown_schema=R196968_SCHEMA)
+        except (ValueError, TypeError, KeyError, OverflowError):
+            continue
+        # Other independently verified structural sources retain the older
+        # exact-dose guard. Never assume a full family from canonical labels.
         try:
             total = int(template['sets'])*int(template['reps_per_set'])
             work = float(template['work_s'])
@@ -58307,7 +58334,9 @@ def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,
                          named_exposure_policy=R196966_SCHEMA)
         if blocked:
             audit.update(recent_exposure_exclusions=blocked,
-                         recent_exposure_exclusion_schema=R196966_SCHEMA)
+                         recent_exposure_exclusion_schema=R196968_SCHEMA,
+                         recent_exposure_policy='VERIFIED_30_15_FAMILY_COOLDOWN_OR_EXACT_MATCH',
+                         recent_exposure_does_not_assert_fulfillment=True)
             if not offer and audit.get('state') in {'WITHHELD_FOR_ALTERNATION',
                               'WITHHELD_FOR_SCIENCE', 'RELEASE_FAILURE'}:
                 audit.update(state='WITHHELD_FOR_ALTERNATION',
@@ -58446,6 +58475,15 @@ def _v4891_prepare_snapshot_for_ui(data):
                     completion_not_assumed=True))
                 break
     ui['r196966_calendar_conflicts']=issues[:8]
+    # A booked calendar event is an ATHLETE commitment, not authorization to
+    # automatically reissue the workout already measured. Present it as a
+    # conflict, not as a new Coach prescription or retroactive FULFILLED proof.
+    for issue in ui['r196966_calendar_conflicts']:
+        issue['measured_equals_nominal_count'] = bool(issue.get('nominal_reps') is not None
+            and issue.get('nominal_reps') == issue.get('measured_reps'))
+        issue['calendar_action_required'] = 'ATHLETE_REVIEW_OR_RECONCILIATION'
+        issue['calendar_automatically_changed'] = False
+        issue['stimulus_family_recently_executed'] = True
     return ui
 
 
@@ -58462,10 +58500,13 @@ A workout with the same name is still scheduled in your Calendar, but an activit
 with that name was already recorded.
 {% set cc = data.r196966_calendar_conflicts[0] %}
 {% if cc.nominal_and_measured_differ %}Measured: {{ cc.measured_reps }} work intervals;
-the scheduled title describes {{ cc.nominal_reps }}. These are not proof of the
-same full completed main set.{% endif %}
-Nova has not marked the workout fully completed or changed the calendar booking.
-Review the planned entry before following it again.</div>
+the scheduled title describes {{ cc.nominal_reps }}. This mismatch needs review.
+{% elif cc.measured_equals_nominal_count %}The raw Intervals power trace confirms
+{{ cc.measured_reps }} work intervals, matching the scheduled count. This does
+not by itself establish a completed, linked prescription in the execution ledger.
+{% endif %}
+Nova has NOT changed the athlete's calendar event or asserted ledger fulfillment.
+Review or reschedule this already-observed stimulus before following the booking again.</div>
 {% endif %}
 ''' + _R196966_UI_CALENDAR_ANCHOR,1)
 HOME_PAGE = HOME_PAGE.replace(
@@ -58480,7 +58521,18 @@ Recheck recovery and available time before training.</p>{% endif %}
 <div class="v4-session-main">{{ s.main_set|replace(''',1)
 HOME_PAGE = HOME_PAGE.replace(
     "{{ (data.quality_offer_integrity or {}).get('reason', 'QUALITY_CONTRACT_MISSING') }}",
-    "{{ 'A recent measured workout requires reconciliation and no independently compiled quality alternative is currently available.' if (data.quality_offer_integrity or {}).get('reason') == 'RECENT_OBSERVED_WORKOUT_RECONCILIATION_REQUIRED_AND_NO_DISTINCT_QUALITY' else (data.quality_offer_integrity or {}).get('reason', 'QUALITY_CONTRACT_MISSING') }}",1)
+    "{{ 'A recent measured 30/15 workout is already in the training record. Nova will not automatically repeat the same micro-interval stimulus during this short recovery window; no separately verified quality alternative is available yet.' if (data.quality_offer_integrity or {}).get('reason') == 'RECENT_OBSERVED_WORKOUT_RECONCILIATION_REQUIRED_AND_NO_DISTINCT_QUALITY' else (data.quality_offer_integrity or {}).get('reason', 'QUALITY_CONTRACT_MISSING') }}",1)
+# Intentional scientific non-reissue is not an application/quality GENERATION
+# ERROR. Explain the distinction in the same card that shows the held offer;
+# retain the original error pathway for actual compiler/integrity failures.
+_R196968_QUALITY_ERROR_ANCHOR = '<strong>QUALITY GENERATION ERROR</strong> Nova could not generate a scientifically verified workout. Diagnostic:'
+if HOME_PAGE.count(_R196968_QUALITY_ERROR_ANCHOR) != 1:
+    raise RuntimeError('R196968_QUALITY_REASON_UI_DRIFT')
+HOME_PAGE = HOME_PAGE.replace(_R196968_QUALITY_ERROR_ANCHOR,
+    "{% if (data.quality_offer_integrity or {}).get('reason') == 'RECENT_OBSERVED_WORKOUT_RECONCILIATION_REQUIRED_AND_NO_DISTINCT_QUALITY' %}"
+    "<strong>QUALITY HELD · RECENT 30/15</strong> The last 30/15 stimulus was measured successfully. No distinct independently validated quality is ready to offer yet. Reason: "
+    "{% else %}<strong>QUALITY GENERATION ERROR</strong> Nova could not generate a scientifically verified workout. Diagnostic: {% endif %}",1)
+
 BASE_CSS += '''
 .v196966-coherence-alert{margin:12px 0 16px;padding:13px 15px;border:1px solid rgba(255,191,102,.5);border-radius:12px;background:rgba(255,191,102,.06);color:#ffe5bc;line-height:1.55;font-size:12px}
 .v196966-coherence-alert strong{display:block;font-size:12px;letter-spacing:.05em;margin-bottom:4px}
@@ -58493,6 +58545,7 @@ APP_VERSION = ('THE LAB · PRODUCT V4.9.166 R196.9.66 · VERIFIED NAMED-EXPOSURE
 
 # R196.9.67 — complete measured raw 30/15 series from Intervals streams.
 APP_VERSION = "THE LAB · PRODUCT V4.9.167 R196.9.67 · INTERVALS RAW 30/15 COMPLETE-SERIES RECONSTRUCTION · NOVA R196.2 CORE"
+APP_VERSION = 'THE LAB · PRODUCT V4.9.168 R196.9.68 · VERIFIED MICRO-INTERVAL FAMILY COOLDOWN AND CALENDAR COHERENCE · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
