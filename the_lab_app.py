@@ -52306,8 +52306,9 @@ app.jinja_env.globals['nova_native_r27_pending'] = _v196920_ui_native_pending
 # decision, safety and any real consent action remain immediately visible.
 _r196922_evidence_title = "<strong>NOVA NEEDS EVIDENCE · {{ 'TEST PROPOSAL' if calibration.test else 'NEXT STEP' }}</strong>"
 assert HOME_PAGE.count(_r196922_evidence_title) == 1, 'R196.9.22 quality evidence heading drift'
-HOME_PAGE=HOME_PAGE.replace(_r196922_evidence_title, """<strong>{{ 'MORE EVIDENCE NEEDED' if calibration.state != 'WAIT_FOR_SAFETY' else 'RECOVERY CHECK REQUIRED' }}</strong>
+HOME_PAGE=HOME_PAGE.replace(_r196922_evidence_title, """<strong>{{ 'RECOVERY CHECK REQUIRED' if calibration.state == 'WAIT_FOR_SAFETY' else ('QUALITY SELECTION UNRESOLVED' if data.nova_decision.action == 'TRAIN' and data.nova_prescription.fail_closed_reason == 'WORKOUT_LIBRARY_NO_CANDIDATE' and not (data.next_quality_offer or {}) else 'MORE EVIDENCE NEEDED') }}</strong>
 <p>{% if calibration.state == 'WAIT_FOR_SAFETY' %}Hard work is not cleared. Recovery and timing checks come first.
+{% elif data.nova_decision.action == 'TRAIN' and data.nova_prescription.fail_closed_reason == 'WORKOUT_LIBRARY_NO_CANDIDATE' and not (data.next_quality_offer or {}) %}The requested training quality is not prohibited by missing evidence. No distinct canonical workout could be safely compiled within the available advisory windows. No test is scheduled.
 {% elif calibration.gap_kind == 'COUPLED_REPEATABILITY' %}Nova needs verified work-and-recovery evidence before it can prescribe the next quality with confidence. No new test is scheduled.
 {% elif calibration.state == 'ASK_TO_VALIDATE' %}A goal-specific test may help Nova refine your next quality. You can request a safety and feasibility review below; nothing is scheduled yet.
 {% else %}Nova has not established enough evidence to safely prescribe the next quality. No test is scheduled.{% endif %}</p>
@@ -57695,131 +57696,236 @@ def _nova_r196963_retryable_producer_ids(prescription):
 # Reuse the original full producer and compiler. A producer EASY_ONLY result
 # does NOT mean "no other canonical candidate"; keep searching only when
 # the producer supplied real, newly excluded candidate identities.
-def _nova_r196956_fallback(decision,clock,road,ledger,**kwargs):
-    dec = copy.deepcopy(decision if isinstance(decision,dict) else {})
-    science = (road or {}).get('scientific_progression') or {}
+# R196.9.65 — canonical-catalogue proof search. ONE producer, ONE compiler,
+# unchanged science/decision. This replaces the broken bounded-ID retry rather
+# than adding a UI-only wrapper. An offer is never generated from a template.
+R196965_SCHEMA = 'NOVA-R196.9.65-CANONICAL-CATALOGUE-PROOF-1'
+
+
+def _nova_r196965_verified_duplicate(workout, ledger, target_day, evidence_ledger=None):
+    """Compare work/rest mechanics, not aliases or titles.
+
+    Include the athlete's separately attested FULFILLED main set even when an
+    auxiliary warm-up/extra lap was ignored by reconciliation. An EXACT_DATE
+    match without structural attestation must *not* suppress workouts.
+    """
+    verified = _nova_r196960_recent_completed(workout, evidence_ledger, ledger, target_day)
+    if verified:
+        return verified
+    structure = _nova_r196960_structure(workout)
+    if structure is None:
+        return None
+    try:
+        day = date.fromisoformat(str(target_day)[:10])
+    except (ValueError, TypeError):
+        return None
+    for entry in (ledger or {}).get('prescription_history') or []:
+        if not isinstance(entry, dict) or str(entry.get('prescription_status') or '').upper() != 'FULFILLED':
+            continue
+        if str(entry.get('execution_match_basis') or '').upper() != 'PRESCRIBED_MAIN_SET_WITH_AUXILIARY_WORK_IGNORED':
+            continue
+        linked = str(entry.get('executed_activity_id') or '').strip()
+        if not linked:
+            continue
+        try:
+            gap = (day - date.fromisoformat(str(entry.get('actual_date') or '')[:10])).days
+        except (ValueError, TypeError):
+            continue
+        if not 0 <= gap <= 4:
+            continue
+        prior = {'nova_workout_id':entry.get('nova_workout_id') or entry.get('nova_contract_id')}
+        prior_structure = _nova_r196960_structure(prior)
+        if _nova_r196960_structure_equivalent(structure, prior_structure):
+            return {'source':'RECONCILED_FULFILLED_MAIN_SET_WITH_AUXILIARY_IGNORED',
+                    'date':str(entry.get('actual_date') or '')[:10],
+                    'days_before_candidate':gap,
+                    'workout_id':prior['nova_workout_id']}
+    return None
+
+
+def _nova_r196956_fallback(decision, clock, road, ledger, **kwargs):
+    """Exhaustively *ask* the existing science to validate known identities.
+
+    R196.9.63 only retried IDs named in a producer rejection. A generic
+    WORKOUT_LIBRARY_NO_CANDIDATE often has no rejection IDs for a later slot,
+    so up to 22 genuine templates were never examined there. Masking the
+    existing selector to one identity is a **probe**, not a prescription:
+    only an unchanged producer PRESCRIBED + matching canonical compiler,
+    complete timeline, real power evidence and anti-duplication may return.
+    """
+    dec = copy.deepcopy(decision) if isinstance(decision,dict) else {}
+    goal = str(dec.get('goal_key') or (road or {}).get('goal_key') or '').upper()
     dim = str(dec.get('dimension') or '').upper()
     if dim in {'','NONE','REVALIDATION','EXTENSION_OR_REVALIDATION'}:
-        dim = str(science.get('dimension') or '').upper()
-    goal = str(dec.get('goal_key') or (road or {}).get('goal_key') or '').upper()
-    if not goal or dim in {'','NONE','REVALIDATION','EXTENSION_OR_REVALIDATION'}:
+        dim = str((((road or {}).get('scientific_progression') or {}).get('dimension') or '')).upper()
+    if dim in {'','NONE','REVALIDATION','EXTENSION_OR_REVALIDATION'} or not goal:
         return None,'NO_ACTIVE_SCIENTIFIC_QUALITY_DIMENSION'
     if str(dec.get('action') or '').upper() == 'VALIDATE' or dim == 'VALIDATE':
         return None,'VALIDATION_CONSENT_REQUIRED_NOT_ROUTINE_QUALITY'
-    # A detached offer is not authorization to override an actual HOLD.
-    if (str(dec.get('action') or '').upper() != 'TRAIN' or
-            dec.get('hard_session_allowed') is not True):
+    if str(dec.get('action') or '').upper() != 'TRAIN' or dec.get('hard_session_allowed') is not True:
         return None,'CURRENT_NOVA_DECISION_DOES_NOT_AUTHORIZE_HARD'
+    # A TRAIN label alone never upgrades an explicitly ineligible timing gate.
+    # A WATCH recommendation can be previewed only when its own decision has
+    # already authorized the quality-window eligibility and HARD class.
+    if dec.get('quality_window_eligible') is False:
+        return None,'CURRENT_QUALITY_WINDOW_NOT_ELIGIBLE'
+    qw = (road or {}).get('quality_window') or {}
+    if str(qw.get('state') or 'WATCH').upper() in {'HOLD','CLOSED','BLOCKED','PROVISIONAL'}:
+        return None,'CURRENT_QUALITY_WINDOW_BLOCKED'
     slots = _nova_r196963_advisory_slots(clock,road)
     if not slots:
         return None,'NO_UNRESTRICTED_DECLARED_FUTURE_SLOT'
-    eligible = {str(t.get('id')) for t in _NOVA_WORKOUT_LIBRARY
-        if t.get('goal') == goal and dim in set(t.get('dimensions') or ())
-        and not t.get('adaptive_only')}
-    if not eligible and dim != 'RECOVERY_UNDER_LOAD':
+    catalogue = {str(t.get('id')):t for t in _NOVA_WORKOUT_LIBRARY
+                 if str(t.get('goal') or '').upper() == goal
+                 and dim in set(t.get('dimensions') or ()) and not t.get('adaptive_only')
+                 and t.get('id') not in _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()}
+    if not catalogue and dim != 'RECOVERY_UNDER_LOAD':
         return None,'NO_CANONICAL_LIBRARY_FOR_SCIENTIFIC_DIMENSION'
-    last_failure = 'NO_DISTINCT_SCIENTIFICALLY_VALID_QUALITY'
-    for start, base_slot, capacity_seconds in slots:
+    inputs = dict(kwargs.get('builder_args') or {})
+    original_compile = dict(kwargs.get('compile_args') or {})
+    attempts = _R196964_SLOT_TRACE.get()
+    def record(start, capacity, wid, phase, reason, selected=None):
+        if isinstance(attempts,list):
+            attempts.append({'slot':start, 'declared_minutes':round(capacity/60,2),
+                             'template_id':wid, 'selected_id':selected,
+                             'phase':phase,'reason':reason,'schema':R196965_SCHEMA})
+    terminal = None
+    completed_rejections = 0
+    time_rejections = 0
+    for start, base, cap in slots:
         shadow_clock = copy.deepcopy(clock if isinstance(clock,dict) else {})
-        slot = copy.deepcopy(base_slot)
-        slot.update({'label':slot.get('label') or 'Nova advisory quality opportunity',
-                     'period':slot.get('period') or 'ADVISORY',
-                     'availability_confirmed':False,
-                     'duration_hint_min':capacity_seconds/60,
-                     'duration_hint_label':f'~{capacity_seconds/60:g} min'})
+        slot = copy.deepcopy(base)
+        # The compiler rounds a declared 78.4-minute learned session UP to
+        # 80 min. That violates the final <=78.4-min cap and discarded every
+        # valid longer-slot candidate in the beta QA. For unconfirmed RHYTHM
+        # only, provide a conservative FIVE-minute floor to BOTH the original
+        # producer and original compiler (78.4 -> 75). They can then compose
+        # the optional easy aerobic fill inside the envelope. Canonical HARD
+        # reps/recoveries and explicit calendar caps are NEVER modified.
+        learned = (str(slot.get('source') or '').upper() == 'RHYTHM'
+                   and slot.get('is_planned_training') is not True
+                   and str(slot.get('availability_source') or '').upper()
+                       not in {'CALENDAR','ATHLETE_EXPLICIT'})
+        compiler_minutes = cap / 60.0
+        if learned and compiler_minutes >= 5.0:
+            compiler_minutes = math.floor((compiler_minutes + 1e-9) / 5.0) * 5.0
+        slot.update(label=slot.get('label') or 'Nova advisory quality opportunity',
+                    period=slot.get('period') or 'ADVISORY',
+                    availability_confirmed=False,
+                    duration_hint_min=compiler_minutes,
+                    duration_hint_label=f'~{compiler_minutes:g} min')
+        slot['nova_offer_source_declared_minutes'] = round(cap/60.0,2)
+        slot['nova_offer_compiler_envelope_minutes'] = compiler_minutes
+        slot['nova_offer_envelope_schema'] = R196965_SCHEMA
         shadow_clock['next_slots'] = [slot]
         shadow_road = copy.deepcopy(road if isinstance(road,dict) else {})
-        qw = dict(shadow_road.get('quality_window') or {})
-        qw.update(state='OPEN',decision_action='TRAIN',hard_session_allowed=True,
-                  preferred_iso=start,earliest_iso=start,availability_confirmed=False)
-        shadow_road.update(quality_window=qw,decision_action='TRAIN',
+        shadow_window = dict(shadow_road.get('quality_window') or {})
+        shadow_window.update(state='OPEN',decision_action='TRAIN',hard_session_allowed=True,
+                             preferred_iso=start,earliest_iso=start,availability_confirmed=False)
+        shadow_road.update(quality_window=shadow_window,decision_action='TRAIN',
                            decision_dimension=dim)
         shadow_dec = dict(dec,action='TRAIN',dimension=dim,goal_key=goal,
                           hard_session_allowed=True,quality_window_eligible=True,
                           quality_window_state='OPEN')
-        shadow_road['nova_decision'] = shadow_dec
-        inputs = dict(kwargs.get('builder_args') or {})
-        inputs.update(adaptive_roadmap=shadow_road,
-                      microcycle_ledger=copy.deepcopy(ledger or {}))
-        ca = dict(kwargs.get('compile_args') or {})
-        ca.update(adaptive_roadmap=shadow_road,
+        shadow_road['nova_decision']=shadow_dec
+        kw = dict(inputs, adaptive_roadmap=shadow_road,
                   microcycle_ledger=copy.deepcopy(ledger or {}))
-        excluded = set()
-        for _ in range(min(len(eligible) + 1,100)):
-            token = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(excluded))
+        ck = dict(original_compile, adaptive_roadmap=shadow_road,
+                  microcycle_ledger=copy.deepcopy(ledger or {}))
+        # Canonical source order first; authoritative selector may prefer an
+        # equivalent different ID, but that is never accepted as novelty.
+        candidates = sorted(catalogue, key=lambda wid:(
+            -float(catalogue[wid].get('priority') or 0),wid))
+        for wid in candidates:
+            template=catalogue[wid]
+            required=_nova_quality_template_required_seconds(template,dim)
+            if required is None or required > cap + 0.1:
+                time_rejections += 1
+                record(start,cap,wid,'CANONICAL_PREFLIGHT','COMPLETE_TEMPLATE_EXCEEDS_SLOT'
+                       if required is not None else 'INVALID_TEMPLATE_TIMELINE')
+                continue
+            if _nova_r196965_verified_duplicate({'nova_workout_id':wid},ledger,start[:10],
+                                                  inputs.get('evidence_ledger')):
+                completed_rejections += 1
+                record(start,cap,wid,'VERIFIED_MAIN_SET','RECENT_COMPLETED_EQUIVALENT_STRUCTURE')
+                continue
+            # A singleton identity probe cannot override a scientific veto:
+            # it only changes which *existing* library identity the original
+            # unchanged selector is allowed to consider.
+            excluded = set(catalogue).difference({wid})
+            excluded.update(_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get())
+            token=_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(excluded))
             try:
                 try:
-                    produced = build_nova_prescription(shadow_dec,shadow_clock,**inputs)
+                    produced=build_nova_prescription(shadow_dec,shadow_clock,**kw)
                 except (TypeError,ValueError,KeyError,AttributeError) as exc:
-                    return None,'SCIENTIFIC_PRODUCER_'+type(exc).__name__
-                if not isinstance(produced,dict) or produced.get('status') != 'PRESCRIBED':
-                    last_failure = 'SCIENTIFIC_PRODUCER_'+str(
-                        (produced or {}).get('fail_closed_reason') or
-                        (produced or {}).get('status') or 'NO_CANDIDATE')
-                    producer_reason = str((produced or {}).get('fail_closed_reason') or '') if isinstance(produced,dict) else ''
-                    # A timing/catalogue miss belongs to THIS learned slot, not
-                    # to the athlete's entire future clock. The next slot may
-                    # have enough time for a complete canonical workout.
-                    # Clinical/HOLD/test/power safety vetoes remain terminal.
-                    slot_local_failures = {
-                        'RECENT_OBSERVED_QUALITY_ALREADY_PERFORMED',
-                        'WORKOUT_LIBRARY_NO_CANDIDATE',
-                        'NO_SCIENCE_APPROVED_TEMPLATE_FITS_DECLARED_TIME',
-                    }
-                    if producer_reason not in slot_local_failures:
-                        return None,last_failure
-                    fresh = _nova_r196963_retryable_producer_ids(produced) - excluded
-                    if not fresh:
-                        break
-                    excluded.update(fresh)
+                    reason='SCIENTIFIC_PRODUCER_'+type(exc).__name__
+                    record(start,cap,wid,'PRODUCER_EXCEPTION',reason)
+                    return None,reason
+                if not isinstance(produced,dict):
+                    return None,'SCIENTIFIC_PRODUCER_NO_RESULT'
+                if produced.get('status')!='PRESCRIBED':
+                    reason=str(produced.get('fail_closed_reason') or produced.get('status') or 'NO_CANDIDATE')
+                    record(start,cap,wid,'SCIENTIFIC_PRODUCER',reason)
+                    if reason not in {'WORKOUT_LIBRARY_NO_CANDIDATE',
+                                      'RECENT_OBSERVED_QUALITY_ALREADY_PERFORMED',
+                                      'NO_SCIENCE_APPROVED_TEMPLATE_FITS_DECLARED_TIME'}:
+                        # Global safety/validation/power contract: no probes of
+                        # other days can quietly turn this into permission.
+                        return None,'SCIENTIFIC_PRODUCER_'+reason
+                    terminal=reason
+                    continue
+                selected=str(produced.get('workout_id') or '')
+                if selected != wid:
+                    record(start,cap,wid,'PRODUCER_IDENTITY','SCIENTIFIC_SELECTOR_IGNORED_CANDIDATE_MASK',selected)
                     continue
                 try:
-                    compiled = compile_nova_prescription(produced,shadow_clock,**ca)
+                    compiled=compile_nova_prescription(produced,shadow_clock,**ck)
                 except (TypeError,ValueError,KeyError,AttributeError) as exc:
-                    return None,'SCIENTIFIC_COMPILER_'+type(exc).__name__
+                    reason='SCIENTIFIC_COMPILER_'+type(exc).__name__
+                    record(start,cap,wid,'COMPILER_EXCEPTION',reason,selected)
+                    return None,reason
                 if not isinstance(compiled,dict):
                     return None,'SCIENTIFIC_COMPILER_NO_RESULT'
-                fail = str(compiled.get('fail_closed_reason') or '')
-                if (str(compiled.get('status') or '').upper() in
-                      {'HOLD','DEFERRED','BLOCKED'} and
-                      fail != 'R19696_INCOMPLETE_WORKOUT_CONTRACT'):
-                    last_failure = 'SCIENTIFIC_COMPILER_UPSTREAM_VETO_'+(
-                        fail or str(compiled.get('status')))
-                    return None,last_failure  # never retry a safety veto on another day
-                verified = [s for s in compiled.get('sessions') or []
-                            if _nova_r196956_structural_ok(s)]
-                ident = str(produced.get('workout_id') or '')
-                if len(verified) == 1:
-                    s = verified[0]
-                    # The compiler must deliver exactly the producer's identity,
-                    # never an unrelated HARD candidate inherited from history.
-                    if ident and str(s.get('nova_workout_id') or '') != ident:
-                        last_failure = 'SCIENTIFIC_COMPILER_IDENTITY_DIVERGENCE'
-                        break
-                    dose_seconds = _nova_r196960_number(
-                        (s.get('session_composition') or {}).get('total_seconds'))
-                    if dose_seconds is None:
-                        minutes = _parse_duration_minutes(s.get('duration'))
-                        dose_seconds = minutes*60 if minutes is not None else None
-                    duplicate = _nova_r196960_recent_completed(s,
-                        inputs.get('evidence_ledger'),ledger,start[:10])
-                    if (dose_seconds is not None and dose_seconds <= capacity_seconds + .1
-                            and not duplicate):
-                        s = copy.deepcopy(s)
-                        s['nova_offer_only'] = True
-                        s['real_execution_permission_inherited'] = False
-                        return s,None
-                    last_failure = ('RECENT_COMPLETED_CANONICAL_STRUCTURE' if duplicate
-                                    else 'COMPILED_DURATION_EXCEEDS_DECLARED_SLOT')
-                else:
-                    last_failure = 'SCIENTIFIC_COMPILER_'+(
-                        fail or 'INCOMPLETE_CONTRACT')
-                if not ident or ident not in eligible or ident in excluded:
-                    break
-                excluded.add(ident)
+                status=str(compiled.get('status') or '').upper()
+                if status in {'HOLD','DEFERRED','BLOCKED'} and (
+                        compiled.get('fail_closed_reason')!='R19696_INCOMPLETE_WORKOUT_CONTRACT'):
+                    return None,'SCIENTIFIC_COMPILER_UPSTREAM_VETO_'+str(
+                        compiled.get('fail_closed_reason') or status)
+                quality=[s for s in (compiled.get('sessions') or [])
+                         if _nova_r196956_structural_ok(s)]
+                if len(quality)!=1 or str(quality[0].get('nova_workout_id') or '')!=wid:
+                    record(start,cap,wid,'CANONICAL_COMPILER','NO_EXACT_SINGLE_CANONICAL_WORKOUT',selected)
+                    continue
+                s=quality[0]
+                seconds=_nova_r196960_number((s.get('session_composition') or {}).get('total_seconds'))
+                displayed=_parse_duration_minutes(s.get('duration'))
+                if seconds is None or seconds<=0 or displayed is None or abs(seconds-displayed*60)>60:
+                    record(start,cap,wid,'TIMELINE_IDENTITY','COMPILER_TOTAL_DURATION_DIVERGENCE',selected)
+                    continue
+                if seconds>cap+0.1:
+                    time_rejections+=1
+                    record(start,cap,wid,'CANONICAL_COMPILER','COMPLETE_DURATION_EXCEEDS_SLOT',selected)
+                    continue
+                if _nova_r196965_verified_duplicate(s,ledger,start[:10],inputs.get('evidence_ledger')):
+                    completed_rejections+=1
+                    record(start,cap,wid,'VERIFIED_MAIN_SET','RECENT_COMPLETED_EQUIVALENT_STRUCTURE',selected)
+                    continue
+                record(start,cap,wid,'FULL_CANONICAL_PROOF','PASS',selected)
+                workout=copy.deepcopy(s)
+                workout['nova_offer_only']=True
+                workout['real_execution_permission_inherited']=False
+                return workout,None
             finally:
                 _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
-    return None,last_failure
+    if terminal:
+        return None,'SCIENTIFIC_PRODUCER_'+terminal
+    if time_rejections and time_rejections == len(catalogue)*len(slots):
+        return None,'NO_SCIENCE_APPROVED_TEMPLATE_FITS_DECLARED_TIME'
+    if completed_rejections:
+        return None,'RECENT_COMPLETED_EQUIVALENT_STRUCTURE_NO_APPROVED_ALTERNATIVE'
+    return None,'NO_DISTINCT_SCIENTIFICALLY_VALID_QUALITY'
+
 
 
 # The R196.9.60 universal duplicate/alternative guard is authoritative, but
@@ -57926,15 +58032,15 @@ def _nova_r196956_build_offer(*args, **kwargs):
         attempts = _R196964_SLOT_TRACE.get()
         if isinstance(audit, dict):
             audit = dict(audit)
-            audit['slot_attempts'] = list(attempts or [])[:24]
-            audit['slot_attempts_schema'] = R196964_SCHEMA
+            audit['slot_attempts'] = list(attempts or [])[:160]
+            audit['slot_attempts_schema'] = R196965_SCHEMA
             audit['slot_attempts_are_unconfirmed'] = True
         return offer, audit
     finally:
         _R196964_SLOT_TRACE.reset(token)
 
-APP_VERSION = ('THE LAB · PRODUCT V4.9.164 R196.9.64 · VERIFIED QUALITY SLOT RETRIES '
-               'AND PERSONAL SESSION DURATION · NOVA R196.2 CORE')
+APP_VERSION = ('THE LAB · PRODUCT V4.9.165 R196.9.65 · VERIFIED CATALOGUE PROOF SEARCH '
+               'AND STRUCTURAL EXECUTION DEDUPLICATION · NOVA R196.2 CORE')
 
 
 if __name__ == "__main__":
