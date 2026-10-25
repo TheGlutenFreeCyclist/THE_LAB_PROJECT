@@ -53700,7 +53700,7 @@ def compile_nova_prescription(prescription,coach_clock,training_definitions=None
                     # plan identity stay unchanged. No retrospective FULFILLED.
                     sess['why'] = ('You already performed a matching measured hard interval dose on '
                         +str(observation.get('actual_date') or 'a recent day')
-                        +'. Friday is aerobic absorption, not another 2×7-minute quality session. '
+                        +'. This opportunity is aerobic absorption, not another identical quality session. '
                         'No distinct hard dose was justified in the available slot.')
                     sess['observed_quality_credit'] = {
                         'schema':R196946_SCHEMA,
@@ -57497,6 +57497,7 @@ APP_VERSION = 'THE LAB · PRODUCT V4.9.162 R196.9.62 · OBSERVATIONAL HEALTH ISO
 # build_nova_prescription(), compile_nova_prescription(), workout library,
 # training-state gates, watt derivation, ledger or wellness computations.
 R196963_QUALITY_SCHEMA = 'NOVA-R196.9.63-SLOT-AWARE-EXHAUSTIVE-OFFER-1'
+_R196964_SLOT_TRACE = ContextVar('nova_quality_slot_attempts_r196964', default=None)
 
 
 def _nova_r196963_advisory_slots(clock, road, compiled_rows=None):
@@ -57596,8 +57597,12 @@ def _nova_r196963_offer_before(rows, prescription, prior, decision, clock, road,
             compile_arguments=compile_arguments,
             planning_context=planning_context, training_state=training_state)
         if not offer:
-            audits.append({'slot':start, 'declared_minutes':round(available_seconds/60,1),
-                           'reason':(audit or {}).get('reason')})
+            failed = {'slot':start, 'declared_minutes':round(available_seconds/60,1),
+                      'reason':(audit or {}).get('reason')}
+            audits.append(failed)
+            trail = _R196964_SLOT_TRACE.get()
+            if isinstance(trail, list):
+                trail.append(dict(failed, phase='CANONICAL_OFFER'))
             continue
         workout = offer.get('workout') or {}
         secs = _nova_r196960_number((workout.get('session_composition') or {}).get('total_seconds'))
@@ -57752,10 +57757,17 @@ def _nova_r196956_fallback(decision,clock,road,ledger,**kwargs):
                         (produced or {}).get('fail_closed_reason') or
                         (produced or {}).get('status') or 'NO_CANDIDATE')
                     producer_reason = str((produced or {}).get('fail_closed_reason') or '') if isinstance(produced,dict) else ''
-                    if producer_reason not in {
-                            'RECENT_OBSERVED_QUALITY_ALREADY_PERFORMED',
-                            'WORKOUT_LIBRARY_NO_CANDIDATE'}:
-                        return None,last_failure  # hard/clinical/test veto: no later-slot replay
+                    # A timing/catalogue miss belongs to THIS learned slot, not
+                    # to the athlete's entire future clock. The next slot may
+                    # have enough time for a complete canonical workout.
+                    # Clinical/HOLD/test/power safety vetoes remain terminal.
+                    slot_local_failures = {
+                        'RECENT_OBSERVED_QUALITY_ALREADY_PERFORMED',
+                        'WORKOUT_LIBRARY_NO_CANDIDATE',
+                        'NO_SCIENCE_APPROVED_TEMPLATE_FITS_DECLARED_TIME',
+                    }
+                    if producer_reason not in slot_local_failures:
+                        return None,last_failure
                     fresh = _nova_r196963_retryable_producer_ids(produced) - excluded
                     if not fresh:
                         break
@@ -57848,8 +57860,82 @@ HOME_PAGE = HOME_PAGE.replace(
     'No distinct, fully compiled quality workout fits the current advisory windows. Reason:',
     1)
 
-APP_VERSION = ('THE LAB · PRODUCT V4.9.163 R196.9.63 · SLOT-AWARE QUALITY '
-               'CANONICAL REPLAY · NOVA R196.2 CORE')
+# R196.9.64 — general QA repair: learned one-day medians must not silently
+# truncate a normal session, and the quality replay must expose each attempted
+# future slot. Neither a learned slot nor a proposed duration is a confirmed
+# athlete availability. Explicit calendar entries remain the hard limits.
+R196964_SCHEMA = 'NOVA-R196.9.64-SLOT-LOCAL-RETRY-AND-RHYTHM-DURATION-1'
+_r196964_clock_before = build_coach_clock
+
+
+def _r196964_learned_duration(row, rhythm):
+    if not isinstance(row, dict):
+        return row
+    out = dict(row)
+    if (str(out.get('source') or '').upper() != 'RHYTHM'
+            or out.get('is_planned_training') is True
+            or out.get('is_race') is True
+            or str(out.get('availability_source') or '').upper() in {'CALENDAR', 'ATHLETE_EXPLICIT'}):
+        return out
+    # Per-session evidence must not be replaced by the usually longer
+    # total of all physical sessions recorded on the same training day.
+    if not _v4895_rhythm_duration_reliable(rhythm):
+        return out
+    n = _rhythm_num(out.get('duration_hint_min'))
+    median = _rhythm_num((rhythm or {}).get('median_session_duration_min'))
+    if n is None or median is None or not 0 < n < median:
+        return out
+    count = int((rhythm or {}).get('training_day_duration_samples') or 0)
+    if count < 5:
+        return out
+    # A low weekday median may simply be an early/secondary ride from a
+    # multi-session day. Use the proven session median as a descriptive
+    # baseline, not a promised time window or permission to add intensity.
+    out['original_weekday_duration_hint_min'] = n
+    out['duration_hint_min'] = round(median, 1)
+    out['duration_hint_label'] = _rhythm_format_duration(median)
+    out['duration_estimate_source'] = 'PERSONAL_MEDIAN_SESSION_FROM_HISTORY'
+    out['duration_estimate_not_availability'] = True
+    out['duration_revision_schema'] = R196964_SCHEMA
+    return out
+
+
+def build_coach_clock(season_activities, now=None, planning_context=None, training_rhythm=None):
+    # Reuse the complete official Clock: notes, calendar restrictions, race,
+    # double-recording reconciliation and all learned date/time positions.
+    # Only a predicted RHYTHM duration may be revised, never an explicit cap.
+    rhythm = training_rhythm or build_training_rhythm(season_activities, now or get_rome_now())
+    clock = _r196964_clock_before(season_activities, now=now,
+        planning_context=planning_context, training_rhythm=rhythm)
+    if not isinstance(clock, dict):
+        return clock
+    rows = [_r196964_learned_duration(r, rhythm) for r in clock.get('next_slots') or []]
+    return dict(clock, next_slots=rows)
+
+
+_r196964_offer_before = _nova_r196956_build_offer
+
+
+def _nova_r196956_build_offer(*args, **kwargs):
+    # A fresh ContextVar trace for each Snapshot prevents another athlete's
+    # QA from leaking into this one. Individual offer attempts record real
+    # slot/date, declared historical estimate and the actual rejection code.
+    token = _R196964_SLOT_TRACE.set([])
+    try:
+        offer, audit = _r196964_offer_before(*args, **kwargs)
+        attempts = _R196964_SLOT_TRACE.get()
+        if isinstance(audit, dict):
+            audit = dict(audit)
+            audit['slot_attempts'] = list(attempts or [])[:24]
+            audit['slot_attempts_schema'] = R196964_SCHEMA
+            audit['slot_attempts_are_unconfirmed'] = True
+        return offer, audit
+    finally:
+        _R196964_SLOT_TRACE.reset(token)
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.164 R196.9.64 · VERIFIED QUALITY SLOT RETRIES '
+               'AND PERSONAL SESSION DURATION · NOVA R196.2 CORE')
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
