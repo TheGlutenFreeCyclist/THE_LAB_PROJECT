@@ -49410,7 +49410,7 @@ APP_VERSION = 'THE LAB · PRODUCT V4.9.110 R196.9.9 · DOSE DECISION V1 (CANDIDA
 # R196.9.10 — bounded Garmin Connect adapter and read-only, power-stream
 # reconstruction of unmarked 30/15 blocks (all users, not a profile-specific fix).
 # Leaves the 161 canonical prescriptions, FTP authorities and dose decisions intact.
-R196910_SCHEMA = "R196.9.10-RAW-30-15-1"
+R196910_SCHEMA = "R196.9.67-RAW-30-15-FULL-SERIES-2"
 
 # Garmin Connect's official client can hang in login/API calls. Never let it
 # become a blocking dependency of an athlete Snapshot. A single daemon worker
@@ -49509,99 +49509,124 @@ def _v196910_raw_power_samples(payload):
 
 
 def _v196910_find_micro_30_15(samples):
-    """Extract OBSERVED 30/15 morphology, not title-/plan-imputed intervals.
+    """Resolve the FULL measured 30/15 sets, without a hard-coded 10-rep window.
 
-    Match two independent 10-repeat sets. Each window must have measured watts
-    on at least 85% of its seconds, contrast on at least 9 of 10 reps, positive
-    work/float separation in both sets and a plausible inter-set recovery.
-    All sample means and boundaries remain actual stream observations.
+    Use the complete per-second time/watts streams delivered by Intervals.icu.
+    Never use the workout name, Zwift laps or the requested prescription as an
+    input to the detected repetition count. Each 45-s cycle needs an observed
+    30-s work and 15-s float; at most isolated noisy/missing cycles are allowed.
+    Two distinct maximal runs with the same measured length and a measured
+    inter-set break are required. Unsupported/truncated evidence fails closed.
     """
     if not isinstance(samples, list) or not 900 <= len(samples) <= 21600:
         return None
-    count = [0]; power = [0.]
+    sums = [0.0]; counts = [0]
     for w in samples:
         ok = isinstance(w, (int, float)) and math.isfinite(w) and 0 <= w <= 1600
-        count.append(count[-1] + int(ok))
-        power.append(power[-1] + (float(w) if ok else 0.))
-    def _mean(start, sec):
-        if start < 0 or start + sec > len(samples): return None
-        n = count[start+sec] - count[start]
-        if n < math.ceil(sec*.85): return None
-        return (power[start+sec] - power[start]) / n
-    # Avoid slow nested processing: 10 constant-time prefix window lookups per start.
-    eligible = []
-    for begin in range(0, len(samples)-450+1):
-        high = []; low = []; passing = 0
-        valid = True
-        for idx in range(10):
-            h = _mean(begin + idx*45, 30)
-            l = _mean(begin + idx*45 + 30, 15)
-            if h is None or l is None:
-                valid = False; break
-            high.append(h); low.append(l)
-            if h-l >= max(30, .16*h): passing += 1
-        if not valid or passing < 9: continue
-        if statistics.median(high) < max(85, statistics.median(low)*1.25): continue
-        if statistics.median(high) - statistics.median(low) < 35: continue
-        contrasts = [h-l for h,l in zip(high,low)]
-        # Aggregate concordance matters more than one exaggerated peak.
-        score = passing*50 + statistics.median(contrasts) - 0.04*sum(abs(v-statistics.median(contrasts)) for v in contrasts)
-        eligible.append((begin, score, high, low, passing))
-    if not eligible: return None
-    # Pick best separated two-set pairing; do not count overlapping sliding windows.
-    # Canonical 240 s set recovery is allowed observed variation, not presumed.
-    rank = sorted(eligible, key=lambda x: (-x[1], x[0]))[:1500]
-    best = None
-    for x in rank:
-        for y in rank:
-            space = y[0] - x[0] - 450
-            if not 150 <= space <= 420: continue
-            # Penalise departure from prescribed rest but preserve the observed rest.
-            score = x[1] + y[1] - .04*abs(space-240)
-            if best is None or score > best[0]:
-                best = (score, x, y, space)
-    if best is None: return None  # One set is not 2x10.
-    _, first, second, between = best
-    # A set may be shifted 1-2 seconds by recording alignment; report measured means.
-    reps = []
-    seq = []
-    for set_num, item in enumerate((first, second), 1):
-        begin, _, highs, floats, passing = item
-        for idx, (h, l) in enumerate(zip(highs, floats), 1):
-            start = begin+(idx-1)*45
-            work_row = {'type':'WORK', 'moving_time':30,'elapsed_time':30,
-                        'start_time':start,'end_time':start+30,'average_watts':round(h,2),
-                        'set':set_num, 'rep_in_set':idx, '_v196910_observed':True}
-            float_row = {'type':'RECOVERY','moving_time':15,'elapsed_time':15,
-                         'start_time':start+30,'end_time':start+45,
-                         'average_watts':round(l,2),'set':set_num,'rep_in_set':idx,
-                         '_v196910_observed':True}
-            seq.extend((work_row, float_row));reps.append(work_row)
-        if set_num == 1:
-            # This is an observed interval; no claim that the break was exactly 240 s.
-            rest_w = _mean(begin+450, between)
-            if rest_w is not None:
-                seq.append({'type':'RECOVERY','moving_time':between,'elapsed_time':between,
-                            'start_time':begin+450, 'end_time':begin+450+between,
-                            'average_watts':round(rest_w,2), 'between_sets':True,
-                            '_v196910_observed':True})
-    seq.sort(key=lambda x:(x['start_time'], x['type'] != 'WORK'))
-    for idx, row in enumerate(seq): row['_truth_pos'] = idx
-    watts = [r['average_watts'] for r in reps]
-    return {'schema':R196910_SCHEMA, 'status':'RESOLVED',
-            'source':'ICU_RAW_WATTS_30_15','confidence':'HIGH',
-            'pattern':'MICRO_30_15', 'sets':2,'reps_per_set':10,'work_s':30,
-            'float_s':15,'set_recovery_s':between, 'prescribed_set_recovery_s':240,
-            'repeated_work_count':len(reps),'interval_secs':30,
-            'sequence':seq,'work_rows':reps,'corrections':[],
-            'recovery_median_secs':15,'raw_icu_work_count':0,
-            'set_start_secs':[first[0], second[0]],
-            'measured_work_watts':watts,
-            'coverage_rule':'EACH_30S_AND_15S_WINDOW_AT_LEAST_85_PERCENT_SAMPLES',
-            'contrast_rule':'AT_LEAST_9_OF_10_IN_EACH_SET_AND_AGGREGATE_SEPARATION',
-            'verified_set_pass_counts':[first[4], second[4]],
-            'complete_pattern_verified':True}
+        counts.append(counts[-1] + int(ok))
+        sums.append(sums[-1] + (float(w) if ok else 0.0))
+    def avg(t, size):
+        if t < 0 or t+size > len(samples):
+            return None
+        n = counts[t+size]-counts[t]
+        if n < math.ceil(size*.85):
+            return None
+        return (sums[t+size]-sums[t])/n
 
+    # Every possible second-phase is inspected. Splitting a continuous block
+    # at 10 repetitions (as R196.9.10 did) is specifically prohibited.
+    sets = []
+    for phase in range(45):
+        cycles = []
+        for start in range(phase, len(samples)-45+1, 45):
+            h, f = avg(start,30), avg(start+30,15)
+            good = (h is not None and f is not None and h >= 85 and
+                    h-f >= max(30.0, .16*h))
+            cycles.append((start,h,f,good))
+        # Recover ONE isolated low-contrast cycle between verified neighbours,
+        # without extrapolating outside the measured first/last repetition.
+        for i in range(1,len(cycles)-1):
+            if (not cycles[i][3] and cycles[i-1][3] and cycles[i+1][3] and
+                cycles[i][1] is not None and cycles[i][2] is not None):
+                start,h,f,_ = cycles[i]
+                cycles[i]=(start,h,f,'BRIDGED')
+        i=0
+        while i<len(cycles):
+            if not cycles[i][3]:
+                i+=1;continue
+            j=i+1
+            while j<len(cycles) and cycles[j][3]:
+                j+=1
+            part=cycles[i:j]
+            n=len(part)
+            if 8 <= n <= 24:
+                hs=[r[1] for r in part];fs=[r[2] for r in part]
+                passed=sum(r[3] is True for r in part)
+                if (passed >= math.ceil(n*.85) and
+                    statistics.median(hs)>=max(85,statistics.median(fs)*1.25) and
+                    statistics.median(hs)-statistics.median(fs)>=35):
+                    contrast=statistics.median(h-f for h,f in zip(hs,fs))
+                    sets.append((part[0][0],part[-1][0]+45,n,passed,contrast,part))
+            i=j
+    # One complete group is not sufficient: two nonoverlapping sets need an
+    # observed break, and equal repetitions, not an inferred title-based dose.
+    if not sets:
+        return None
+    sets.sort(key=lambda r:(r[0],r[2]))
+    best=None
+    for a in sets:
+        for b in sets:
+            rest=b[0]-a[1]
+            if not 150 <= rest <= 540 or a[2]!=b[2]:
+                continue
+            # Maximise VERIFIED repetitions first (not 10-window contrast).
+            # Prefer a low-contrast break and stable measured phase afterwards.
+            f=avg(a[1],min(90,rest))
+            if f is None:
+                continue
+            hmed=statistics.median(x[1] for x in a[5]+b[5])
+            if f > hmed*.82:
+                continue
+            key=(a[2]+b[2], a[3]+b[3], round(a[4]+b[4],1),
+                 -abs(rest-300),-a[0])
+            if best is None or key>best[0]:
+                best=(key,a,b,rest)
+    if best is None:
+        return None
+    _,first,second,between=best
+    repetitions=first[2]
+    seq=[];work=[]
+    for set_no,grp in enumerate((first,second),1):
+        for rep_idx,(start,h,f,passed) in enumerate(grp[5],1):
+            wr={'type':'WORK','moving_time':30,'elapsed_time':30,
+                'start_time':start,'end_time':start+30,'average_watts':round(h,2),
+                'set':set_no,'rep_in_set':rep_idx,'_v196910_observed':True}
+            fl={'type':'RECOVERY','moving_time':15,'elapsed_time':15,
+                'start_time':start+30,'end_time':start+45,'average_watts':round(f,2),
+                'set':set_no,'rep_in_set':rep_idx,'_v196910_observed':True}
+            seq.extend((wr,fl));work.append(wr)
+        if set_no==1:
+            rest_w=avg(first[1],between)
+            if rest_w is not None:
+                seq.append({'type':'RECOVERY','moving_time':between,
+                            'elapsed_time':between,'start_time':first[1],
+                            'end_time':second[0],'average_watts':round(rest_w,2),
+                            'between_sets':True,'_v196910_observed':True})
+    seq.sort(key=lambda r:(r['start_time'],r['type']!='WORK'))
+    for i,r in enumerate(seq):r['_truth_pos']=i
+    return {'schema':R196910_SCHEMA,'status':'RESOLVED','source':'ICU_RAW_WATTS_30_15',
+            'confidence':'HIGH','pattern':'MICRO_30_15','sets':2,
+            'reps_per_set':repetitions,'work_s':30,'float_s':15,
+            'set_recovery_s':between,'prescribed_set_recovery_s':None,
+            'repeated_work_count':len(work),'interval_secs':30,
+            'sequence':seq,'work_rows':work,'corrections':[],
+            'recovery_median_secs':15,'raw_icu_work_count':0,
+            'set_start_secs':[first[0],second[0]],
+            'measured_work_watts':[r['average_watts'] for r in work],
+            'coverage_rule':'EACH_30S_AND_15S_WINDOW_AT_LEAST_85_PERCENT_SAMPLES',
+            'contrast_rule':'AT_LEAST_85_PERCENT_CONTRAST_IN_EACH_FULL_SET',
+            'verified_set_pass_counts':[first[3],second[3]],
+            'complete_pattern_verified':True}
 
 _r196910_fetch_detail_baseline = fetch_activity_details
 
@@ -49635,8 +49660,11 @@ def fetch_activity_details(activity_ids):
                 probe['status']='TIME_OR_WATTS_UNAVAILABLE'
             else:
                 detected = _v196910_find_micro_30_15(samples)
-                probe['status']='TWO_SETS_VERIFIED' if detected else 'NO_VERIFIED_2X10_30_15'
+                probe['status']='TWO_FULL_SETS_VERIFIED' if detected else 'NO_COMPLETE_MEASURED_30_15_PAIR'
                 probe['sample_duration_seconds']=len(samples)
+                if detected:
+                    probe['observed_reps_per_set']=detected['reps_per_set']
+                    probe['observed_total_reps']=detected['repeated_work_count']
                 if detected:
                     out['_v196910_micro_truth']=detected
         except Exception as exc:
@@ -49683,16 +49711,18 @@ def _v4879_repeatability_stats(intervals, source=None):
         return _r196910_stats_baseline(intervals, source=source)
     works=[r for r in (intervals or []) if isinstance(r,dict) and r.get('type')=='WORK'
            and r.get('_v196910_observed') is True]
-    if len(works)!=20 or len({r.get('set') for r in works})!=2:
+    set_ids={r.get('set') for r in works}
+    counts=[sum(r.get('set')==z for r in works) for z in (1,2)]
+    if set_ids!={1,2} or counts[0]!=counts[1] or not 8 <= counts[0] <= 24:
         return None
     watts=[float(x['average_watts']) for x in works]
     floats=[float(x['average_watts']) for x in (intervals or [])
             if isinstance(x,dict) and x.get('type')=='RECOVERY' and x.get('moving_time')==15]
-    if len(floats)!=20:return None
+    if len(floats)!=len(works):return None
     avg=statistics.mean(watts);first,last=watts[0],watts[-1]
     early,late=statistics.mean(watts[:2]),statistics.mean(watts[-2:])
     change=(last-first)/first*100 if first else None
-    return {'reps':20,'sets':2,'reps_per_set':10,'interval_secs':30,
+    return {'reps':len(works),'sets':2,'reps_per_set':counts[0],'interval_secs':30,
             'interval_label':'30 sec','recovery_secs':15,
             'set_recovery_secs':next((r.get('moving_time') for r in intervals if r.get('between_sets')),None),
             'recovery_avg_watts':round(statistics.median(floats),1),
@@ -49721,7 +49751,7 @@ def _v4895_activity_quality_truth(activity=None, family=None):
     # Classification from raw samples only, not from workout title or HR alone.
     if ((activity or {}).get('_v196910_micro_truth') or {}).get('complete_pattern_verified') is True \
             and not _v1954_confirmed_competition(activity):
-        return {'quality_relevant':True,'basis':'VERIFIED_RAW_POWER_2X10_30_15'}
+        return {'quality_relevant':True,'basis':f"VERIFIED_RAW_POWER_2X{int((activity or {}).get('_v196910_micro_truth',{}).get('reps_per_set') or 0)}_30_15"}
     return result
 
 
@@ -49746,13 +49776,13 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
         block['activity_truth'] = _v79_activity_truth_summary(truth)
         block['repeatability'] = _v4879_repeatability_stats(truth['sequence'], 'ICU_RAW_WATTS_30_15')
         block['quality_relevant']=True
-        block['quality_basis']='VERIFIED_RAW_POWER_2X10_30_15'
+        block['quality_basis']=f"VERIFIED_RAW_POWER_2X{truth['reps_per_set']}_30_15"
         block['work_interval_evidence']=[{'secs':30,'watts':round(float(r['average_watts']),1),
                                           'set':r['set'],'rep_in_set':r['rep_in_set']}
                                          for r in truth['work_rows']]
-        block['intervals']=['2 sets × 10 × 30s work / 15s float',
+        block['intervals']=[f"2 sets × {truth['reps_per_set']} × 30s work / 15s float",
                             f"Observed between-set recovery: {truth['set_recovery_s']}s",
-                            f"20 measured work intervals · source: raw power stream"]
+                            f"{truth['repeated_work_count']} measured work intervals · source: raw power stream"]
         block['consideration']='⚡ Verified raw 30/15 quality · count actual high-intensity load for recovery spacing.'
         changed = True
     if changed:
@@ -49773,7 +49803,7 @@ def _v196911_verified_micro(row):
     return bool(isinstance(truth, dict)
                 and truth.get('schema') == R196910_SCHEMA
                 and truth.get('complete_pattern_verified') is True
-                and truth.get('sets') == 2 and truth.get('reps_per_set') == 10
+                and truth.get('sets') == 2 and 8 <= int(truth.get('reps_per_set') or 0) <= 24
                 and truth.get('work_s') == 30 and truth.get('float_s') == 15
                 and not _v1954_confirmed_competition(row))
 
@@ -49817,8 +49847,8 @@ def _v81_repeatability_signature(event):
         reps = _rhythm_num(e.get('reps'))
         work = _rhythm_num(e.get('interval_secs'))
         rec = _rhythm_num(e.get('recovery_secs'))
-        if reps == 20 and work == 30 and rec == 15:
-            return '20x30s/15s'
+        if reps is not None and 16 <= reps <= 48 and work == 30 and rec == 15:
+            return f'{int(reps)}x30s/15s'
     return _r196911_signature_baseline(event)
 
 
@@ -49851,49 +49881,47 @@ _r196911_execution_match_baseline = _v146_match_plan_block
 
 
 def _v146_match_plan_block(plan, block, allow_fulfilled=True):
-    # R196.9.45: the loaded 2x7 is defined by 300 seconds EASY recovery.
-    # If the device measured a different recovery, equal work-rep lengths
-    # alone do not prove this prescribed dose was executed. Do not require
-    # a missing field or invent power compliance after the fact.
-    if str(_v146_plan_identity(plan or {}) or '') == 'P5X_2X420_R300':
-        observed_recovery = _num(((block or {}).get('repeatability') or {}).get('recovery_secs'))
-        if observed_recovery is not None and abs(observed_recovery - 300.0) > 30.0:
-            return None
-    prior = _r196911_execution_match_baseline(plan, block, allow_fulfilled=allow_fulfilled)
-    if prior is not None:
-        return prior
-    p = plan if isinstance(plan, dict) else {}
-    b = block if isinstance(block, dict) else {}
-    if str(_v146_plan_identity(p) or '') != 'P5_2X10_30_15':
-        return None
-    status = str(p.get('prescription_status') or 'ACTIVE').upper()
-    if status in {'WITHDRAWN', 'CANCELLED'} or (not allow_fulfilled and status in {'SUPERSEDED', 'FULFILLED'}):
-        return None
-    date_value = str(p.get('date') or '')[:10]
-    if not date_value or date_value != str(b.get('date') or '')[:10]:
-        return None
-    truth = b.get('activity_truth') or {}
+    p = plan if isinstance(plan,dict) else {}
+    b = block if isinstance(block,dict) else {}
     observed = b.get('micro_30_15_observed') or {}
-    rep = b.get('repeatability') or {}
-    if not (isinstance(truth, dict) and isinstance(observed, dict) and isinstance(rep, dict)
-            and truth.get('schema') == R196910_SCHEMA
-            and truth.get('complete_pattern_verified') is True
-            and observed.get('complete_pattern_verified') is True
-            and truth.get('source') == 'ICU_RAW_WATTS_30_15'
-            and rep.get('source') == 'ICU_RAW_WATTS_30_15'
-            and rep.get('reps') == 20 and rep.get('sets') == 2
-            and rep.get('reps_per_set') == 10
-            and rep.get('interval_secs') == 30 and rep.get('recovery_secs') == 15
-            and not _v1954_confirmed_competition(b)):
-        return None
-    # Preserve the original timing/authorization guard: the athlete cannot
-    # complete a prescription that was created after the activity started.
-    if not _v146_causally_eligible(p, b, explicit_identity=False):
-        return None
-    return {'score':94, 'basis':'VERIFIED_RAW_POWER_2X10_30_15',
-            'confidence':'EXACT_DATE', 'date_delta_days':0,
-            'explicit_identity':False, 'duration_match':True,
-            'reps_match':True}
+    if observed.get('source') == 'ICU_RAW_WATTS_30_15':
+        identity=str(_v146_plan_identity(p) or '')
+        tpl=next((t for t in _NOVA_WORKOUT_LIBRARY if t.get('id')==identity),None)
+        if not tpl or str(tpl.get('pattern') or '').upper()!='MICRO_30_15':
+            return None
+        status=str(p.get('prescription_status') or 'ACTIVE').upper()
+        if status in {'WITHDRAWN','CANCELLED'} or (not allow_fulfilled and status in {'SUPERSEDED','FULFILLED'}):
+            return None
+        if not str(p.get('date') or '')[:10] or str(p.get('date') or '')[:10]!=str(b.get('date') or '')[:10]:
+            return None
+        truth=b.get('activity_truth') or {};rep=b.get('repeatability') or {}
+        n=int(tpl.get('reps_per_set') or 0)
+        rest=_num(observed.get('set_recovery_s'))
+        planned=_num(tpl.get('set_recovery_s'))
+        if not (8<=n<=24 and truth.get('schema')==R196910_SCHEMA and
+                truth.get('complete_pattern_verified') is True and
+                observed.get('complete_pattern_verified') is True and
+                truth.get('source')=='ICU_RAW_WATTS_30_15' and
+                rep.get('source')=='ICU_RAW_WATTS_30_15' and
+                int(tpl.get('sets') or 0)==int(observed.get('sets') or 0)==int(rep.get('sets') or 0)==2 and
+                int(observed.get('reps_per_set') or 0)==int(rep.get('reps_per_set') or 0)==n and
+                int(rep.get('reps') or 0)==n*2 and
+                int(tpl.get('work_s') or 0)==int(observed.get('work_s') or 0)==int(rep.get('interval_secs') or 0)==30 and
+                int(tpl.get('float_s') or 0)==int(observed.get('float_s') or 0)==int(rep.get('recovery_secs') or 0)==15 and
+                rest is not None and planned is not None and abs(rest-planned)<=90 and
+                not _v1954_confirmed_competition(b) and
+                _v146_causally_eligible(p,b,explicit_identity=False)):
+            return None
+        return {'score':94,'basis':f'VERIFIED_RAW_POWER_2X{n}_30_15',
+                'confidence':'EXACT_DATE','date_delta_days':0,
+                'explicit_identity':False,'duration_match':True,'reps_match':True}
+    # No raw full-series evidence: preserve the legacy generic matcher.
+    if str(_v146_plan_identity(p) or '')=='P5X_2X420_R300':
+        recovered=_num((b.get('repeatability') or {}).get('recovery_secs'))
+        if recovered is not None and abs(recovered-300.0)>30.0:
+            return None
+    return _r196911_execution_match_baseline(plan,block,allow_fulfilled=allow_fulfilled)
+
 
 APP_VERSION = 'THE LAB · PRODUCT V4.9.112 R196.9.11 · RAW 30/15 TRUTH PROPAGATION + BOUNDED GARMIN · NOVA R196.2 CORE'
 
@@ -49912,6 +49940,11 @@ def _v196912_raw_30_15_adherence(block, ledger):
         return None
     if _v1954_confirmed_competition(block):
         return None
+    # Only the canonical measured micro pattern, never title-derived or partial.
+    template_id=None
+    expected_sets=2
+    expected_per_set=None
+    expected_total=None
     # Only R146's authoritative, persisted prescription->activity reconciliation
     # can unlock this narrow scorer. No title/date-only attribution.
     link = _v156_execution_history_link(block, ledger)
@@ -49921,15 +49954,24 @@ def _v196912_raw_30_15_adherence(block, ledger):
     rec = link.get("execution") or {}
     if not isinstance(p, dict) or not isinstance(rec, dict):
         return None
+    template_id=str(_v146_plan_identity(p) or '')
+    tpl=next((t for t in _NOVA_WORKOUT_LIBRARY if t.get('id')==template_id),None)
+    if not tpl or str(tpl.get('pattern') or '').upper()!='MICRO_30_15':
+        return None
+    expected_per_set=int(tpl.get('reps_per_set') or 0)
+    expected_total=expected_per_set*expected_sets
+    if not 8<=expected_per_set<=24:
+        return None
+    expected_basis=f'VERIFIED_RAW_POWER_2X{expected_per_set}_30_15'
     aid = str(block.get("activity_id") or block.get("id") or "").strip()
     day = str(block.get("date") or "")[:10]
     fp = str(p.get("prescription_fingerprint") or _v136_prescription_fingerprint(p))
     if not (aid and day and
-            str(_v146_plan_identity(p) or "") == "P5_2X10_30_15" and
-            str(rec.get("nova_workout_id") or "") == "P5_2X10_30_15" and
+            str(_v146_plan_identity(p) or "") == template_id and
+            str(rec.get("nova_workout_id") or "") == template_id and
             str(rec.get("activity_id") or "") == aid and
             str(rec.get("prescription_fingerprint") or "") == fp and
-            str(rec.get("match_basis") or "") == "VERIFIED_RAW_POWER_2X10_30_15" and
+            str(rec.get("match_basis") or "") == expected_basis and
             str(rec.get("match_confidence") or "") in {"EXACT_DATE", "EXACT_IDENTITY"} and
             str(rec.get("planned_date") or "")[:10] == day and
             str(rec.get("actual_date") or "")[:10] == day and
@@ -49948,17 +49990,17 @@ def _v196912_raw_30_15_adherence(block, ledger):
             truth.get("complete_pattern_verified") is True and
             observed.get("source") == "ICU_RAW_WATTS_30_15" and
             observed.get("complete_pattern_verified") is True and
-            observed.get("sets") == 2 and observed.get("reps_per_set") == 10 and
+            observed.get("sets") == 2 and observed.get("reps_per_set") == expected_per_set and
             observed.get("work_s") == 30 and observed.get("float_s") == 15 and
             rep.get("source") == "ICU_RAW_WATTS_30_15" and
-            rep.get("reps") == 20 and rep.get("sets") == 2 and
-            rep.get("reps_per_set") == 10 and
+            rep.get("reps") == expected_total and rep.get("sets") == 2 and
+            rep.get("reps_per_set") == expected_per_set and
             rep.get("interval_secs") == 30 and rep.get("recovery_secs") == 15):
         return None
     # Main-set windows, independent of any Zwift lap segmentation. The full
     # indexed set/rep matrix must be measured; duplicates and partials fail closed.
     rows = block.get("work_interval_evidence") or []
-    if not isinstance(rows, list) or len(rows) != 20:
+    if not isinstance(rows, list) or len(rows) != expected_total:
         return None
     seen = set()
     watts = []
@@ -49970,12 +50012,12 @@ def _v196912_raw_30_15_adherence(block, ledger):
             seconds = float(row.get("secs"))
         except (ValueError, TypeError, OverflowError):
             return None
-        if s not in (1, 2) or not (1 <= r <= 10) or (s, r) in seen or not math.isfinite(seconds) or abs(seconds-30) > 2:
+        if s not in (1, 2) or not (1 <= r <= expected_per_set) or (s, r) in seen or not math.isfinite(seconds) or abs(seconds-30) > 2:
             return None
         seen.add((s, r))
         w = _num(row.get("watts"))
         watts.append((s, r, float(w) if w is not None and math.isfinite(w) and w >= 0 else None))
-    if len(seen) != 20:
+    if len(seen) != expected_total:
         return None
     watts.sort(key=lambda x: (x[0], x[1]))
     measured = [w for _, _, w in watts]
@@ -49983,18 +50025,18 @@ def _v196912_raw_30_15_adherence(block, ledger):
     low = _num(p.get("prescribed_power_low"))
     high = _num(p.get("prescribed_power_high"))
     valid_band = bool(low is not None and high is not None and math.isfinite(low) and math.isfinite(high) and 0 < low <= high)
-    band_complete = valid_band and len(known) == 20
+    band_complete = valid_band and len(known) == expected_total
     if valid_band:
         within = sum(low <= w <= high for w in known)
         above = sum(w > high for w in known)
         below = sum(w < low for w in known)
-        if len(known) < 20:
+        if len(known) < expected_total:
             state, label = "POWER_INCOMPLETE", "POWER DATA INCOMPLETE"
-        elif within == 20:
+        elif within == expected_total:
             state, label = "IN_TARGET", "IN TARGET"
-        elif above == 20:
+        elif above == expected_total:
             state, label = "ABOVE_TARGET", "ABOVE TARGET"
-        elif below == 20:
+        elif below == expected_total:
             state, label = "BELOW_TARGET", "BELOW TARGET"
         else:
             state, label = "MIXED_DEVIATION", "MIXED POWER DEVIATION"
@@ -50003,20 +50045,20 @@ def _v196912_raw_30_15_adherence(block, ledger):
         state, label = "EXPLORATORY_NOT_GRADED", "POWER OBSERVED · NOT GRADED"
     structure = {
         "state": "COMPLETE", "complete": True,
-        "completed_reps": 20, "prescribed_reps": 20, "completion_percent": 100,
+        "completed_reps": expected_total, "prescribed_reps": expected_total, "completion_percent": 100,
         "prescribed_interval_seconds": 30.0,
         "observed_interval_seconds": [float(row.get("secs")) for row in rows],
         "prescribed_recovery_seconds": 15.0,
         "observed_set_recovery_seconds": _num(observed.get("set_recovery_s")),
-        "sets": 2, "reps_per_set": 10, "scope": "PRESCRIBED_MAIN_SET_ONLY",
+        "sets": expected_sets, "reps_per_set": expected_per_set, "scope": "PRESCRIBED_MAIN_SET_ONLY",
         "structure_truth_source": "ICU_RAW_WATTS_30_15",
     }
     power = {
         "state": state, "label": label, "available": bool(band_complete),
         "in_target_reps": within, "above_target_reps": above,
         "below_target_reps": below, "known_power_reps": len(known),
-        "missing_power_reps": 20 - len(known), "prescribed_reps": 20,
-        "in_target_percent": round(100*within/20) if band_complete else None,
+        "missing_power_reps": expected_total - len(known), "prescribed_reps": expected_total,
+        "in_target_percent": round(100*within/expected_total) if band_complete else None,
         "observed_power_min_w": min(known) if known else None,
         "observed_power_max_w": max(known) if known else None,
         "observed_power_watts": measured,
@@ -50029,7 +50071,7 @@ def _v196912_raw_30_15_adherence(block, ledger):
         "source_schema": R196912_SCHEMA, "score": None,
         "score_semantics": "NO_GLOBAL_PERCENTAGE__INDEPENDENT_AXES",
         "label": "MAIN SET COMPLETE · " + label,
-        "detail": "20/20 measured 30s efforts, 15s recoveries; power assessed only against explicit numerical target",
+        "detail": f"{expected_total}/{expected_total} measured 30s efforts, 15s recoveries; power assessed only against explicit numerical target",
         "presentation": "INDEPENDENT_STRUCTURE_AND_POWER",
         "adherence_scope": "PRESCRIBED_MAIN_SET_ONLY",
         "structure": structure, "power_band": power,
@@ -58039,8 +58081,418 @@ def _nova_r196956_build_offer(*args, **kwargs):
     finally:
         _R196964_SLOT_TRACE.reset(token)
 
-APP_VERSION = ('THE LAB · PRODUCT V4.9.165 R196.9.65 · VERIFIED CATALOGUE PROOF SEARCH '
-               'AND STRUCTURAL EXECUTION DEDUPLICATION · NOVA R196.2 CORE')
+# R196.9.66 — CA 2026-10-25 20:05: real activity / promised identity /
+# learned double-session clock must not disagree. Scoped, no invented work,
+# no change to TRAIN/HOLD, physiological clearance or science catalogue.
+R196966_SCHEMA = 'NOVA-R196.9.66-OBSERVED-IDENTITY-AND-RHYTHM-1'
+_R196966_TRUSTED_ACTIVITY_SOURCES = frozenset({
+    'ICU_RAW_WATTS_30_15', 'ICU_INTERVALS_CANONICAL', 'DEVICE_LAPS',
+    'ORIGINAL_ACTIVITY_FIT_LAP', 'ORIGINAL_FIT_LAPS'})
+
+
+def _r196966_normalize_title(value):
+    # Only identity-level exact matches after harmless formatting normalization;
+    # no substring, generic name, day-only or zone-based matches.
+    return re.sub(r'\s+', ' ', str(value or '').casefold()).strip()
+
+
+def _r196966_recent_exposures(evidence_ledger, candidate_date):
+    """Verified *exposure*, not FULFILLED adherence or completed main-set.
+
+    Repeating an activity's exact canonical NAME when raw actual intervals
+    differ is unsafe to label a fresh prescription. This evidence blocks
+    re-issuance only; it does not grade adherence, invent repetitions or alter
+    existing user-owned calendar commitments. The four-day window is bounded
+    relative to each candidate slot, not system UTC today.
+    """
+    try:
+        target = date.fromisoformat(str(candidate_date or '')[:10])
+    except (TypeError, ValueError):
+        return []
+    found = []
+    for event in (evidence_ledger or {}).get('events') or []:
+        if not isinstance(event, dict) or event.get('quality_relevant') is not True:
+            continue
+        if str(event.get('activity_truth_status') or '').upper() != 'RESOLVED':
+            continue
+        source = str(event.get('activity_truth_source') or '').upper()
+        if source not in _R196966_TRUSTED_ACTIVITY_SOURCES:
+            continue
+        aid = str(event.get('activity_id') or '').strip()
+        name = _r196966_normalize_title(event.get('name'))
+        if not aid or not name:
+            continue
+        try:
+            day = date.fromisoformat(str(event.get('date') or '')[:10])
+            days = (target - day).days
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= days <= 4:
+            continue
+        observed = event.get('repeatability') or {}
+        # RESOLVED + a measured cadence / structure is required. Mere same
+        # activity title or imported planned event is not sufficient evidence.
+        reps = _nova_r196960_number(observed.get('reps'))
+        work = _nova_r196960_number(observed.get('interval_secs'))
+        if not reps or not work or reps < 1 or work <= 0:
+            continue
+        found.append({'activity_id':aid,'date':day.isoformat(),
+                      'title':name,'source':source,'observed_reps':int(reps),
+                      'observed_work_seconds':work,
+                      'observed_float_seconds':_nova_r196960_number(observed.get('recovery_secs')),
+                      'days_before_candidate':days})
+    return found
+
+
+def _r196966_named_exposure(workout, evidence_ledger, candidate_date):
+    if not isinstance(workout, dict):
+        return None
+    wid = str(workout.get('nova_workout_id') or workout.get('nova_contract_id') or '')
+    template = _R19696_LIBRARY_INDEX.get(wid) if wid else None
+    title = _r196966_normalize_title((template or {}).get('title'))
+    if not title:
+        return None
+    for exposure in _r196966_recent_exposures(evidence_ledger,candidate_date):
+        if exposure['title'] == title:
+            return dict(exposure,workout_id=wid,
+                        type='OBSERVED_NAMED_WORKOUT_COMPLETION_UNVERIFIED',
+                        canonical_fulfillment_asserted=False)
+        # A different catalogue title can describe exactly the same recently
+        # measured total micro-interval DOSE. Event evidence here gives 20 raw
+        # 30/15 repetitions but not a trustworthy 2×10 grouping; do not claim
+        # structural adherence or identify the entire set/rest architecture.
+        # This is a conservative four-day *reissue* hold for equal total work.
+        if str((template or {}).get('pattern') or '').upper() != 'MICRO_30_15':
+            continue
+        try:
+            total = int(template['sets'])*int(template['reps_per_set'])
+            work = float(template['work_s'])
+            flt = float(template['float_s'])
+            observed_float = exposure.get('observed_float_seconds')
+            if (total == exposure['observed_reps'] and
+                    abs(work-exposure['observed_work_seconds']) <= 1 and
+                    observed_float is not None and abs(flt-observed_float) <= 1):
+                return dict(exposure,workout_id=wid,
+                    type='RECENT_VERIFIED_RAW_EQUAL_TOTAL_MICRO_DOSE',
+                    canonical_fulfillment_asserted=False,
+                    grouping_equivalence_asserted=False)
+        except (ValueError,TypeError,KeyError,OverflowError):
+            continue
+    return None
+
+
+def _r196966_producer_exclusions(evidence_ledger, date_value, goal_key=None):
+    recent = _r196966_recent_exposures(evidence_ledger, date_value)
+    if not recent:
+        return set()
+    selected = set()
+    for t in _NOVA_WORKOUT_LIBRARY:
+        if goal_key and str(t.get('goal') or '').upper() != str(goal_key).upper():
+            continue
+        if _r196966_named_exposure({'nova_workout_id':t.get('id')},evidence_ledger,date_value):
+            selected.add(str(t['id']))
+    return selected
+
+
+_r196966_prescriber_before = build_nova_prescription
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None,
+        microcycle_ledger=None, evidence_ledger=None, power_model=None,
+        ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    """Exclude recent, independently observed same-named canonical exposure.
+
+    The ordinary prescriber still chooses a scientifically valid alternative;
+    exclusions cannot change the decision, add watt targets or lower evidence
+    thresholds. A title without RESOLVED measured repetitions cannot veto.
+    """
+    goal = (nova_decision or {}).get('goal_key')
+    slots = (coach_clock or {}).get('next_slots') or []
+    # Use the offered scientific window first; never use a past calendar slot
+    # to hide a future exposure or a future exposure to block today's plan.
+    target = str(((adaptive_roadmap or {}).get('quality_window') or {}).get('preferred_iso') or '')[:10]
+    if not target:
+        target = next((str(s.get('date') or '')[:10] for s in slots
+                       if isinstance(s,dict) and s.get('date')), '')
+    blocked = _r196966_producer_exclusions(evidence_ledger,target,goal)
+    old = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()
+    token = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(set(old) | blocked))
+    try:
+        result = _r196966_prescriber_before(nova_decision,coach_clock,
+            adaptive_roadmap=adaptive_roadmap,microcycle_ledger=microcycle_ledger,
+            evidence_ledger=evidence_ledger,power_model=power_model,
+            ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+            training_definitions=training_definitions)
+        if not isinstance(result,dict):
+            return result
+        if result.get('status') != 'PRESCRIBED':
+            # Original science reason retained; add a bounded audit of why
+            # its ordinary selection set had to avoid same-day real exposure.
+            return dict(result, recent_exposure_exclusions=sorted(blocked),
+                recent_exposure_exclusion_schema=R196966_SCHEMA) if blocked else result
+        chosen = str(result.get('workout_id') or '')
+        if chosen in blocked:
+            # Some ancient producer branches bypass the shared exclusion
+            # context: do not let one resurrect a measured same-name exposure.
+            out = dict(result, status='EASY_ONLY',workout_id=None,
+                hard_prescription_available=False,
+                fail_closed_reason='RECENT_OBSERVED_NAMED_WORKOUT_RECONCILIATION_REQUIRED',
+                selected_slot_index=None, raw_sessions=[], sessions=[],
+                recent_exposure_veto_schema=R196966_SCHEMA)
+            return out
+        return result
+    finally:
+        _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
+
+
+_r196966_duplicate_before = _nova_r196965_verified_duplicate
+
+def _nova_r196965_verified_duplicate(workout,ledger,target_day,evidence_ledger=None):
+    observed = _r196966_named_exposure(workout,evidence_ledger,target_day)
+    if observed:
+        return observed
+    return _r196966_duplicate_before(workout,ledger,target_day,evidence_ledger)
+
+
+_r196966_offer_before = _nova_r196956_build_offer
+
+def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,
+        ledger,user_id,evidence_ledger=None,power_model=None,ftp_anchor=None,
+        aerobic_metabolic_range=None,training_definitions=None,
+        compile_arguments=None,planning_context=None,training_state=None):
+    """Protect direct, historical AND fallback card sources from same-name reissue."""
+    candidate = str(((road or {}).get('quality_window') or {}).get('preferred_iso') or '')[:10]
+    if not candidate:
+        candidate = next((str(r.get('date') or '')[:10] for r in rows or []
+                          if isinstance(r,dict) and r.get('date')), '')
+    def exposure(s):
+        day = str((s or {}).get('date') or '')[:10] or candidate
+        return _r196966_named_exposure(s,evidence_ledger,day)
+    stale = []
+    filtered = []
+    for row in rows or []:
+        if not isinstance(row,dict):
+            filtered.append(row)
+            continue
+        match = exposure(row) if row.get('nova_workout_id') else None
+        if match:
+            stale.append(match)
+        else:
+            filtered.append(row)
+    prior_view = prior
+    p = (prior or {}).get('next_quality_offer') if isinstance(prior,dict) else None
+    if isinstance(p,dict) and exposure(p.get('workout')):
+        stale.append(exposure(p.get('workout')))
+        prior_view = dict(prior,next_quality_offer=None)
+    offer,audit = _r196966_offer_before(filtered,prescription,prior_view,decision,clock,road,
+        ledger,user_id,evidence_ledger=evidence_ledger,power_model=power_model,
+        ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions,
+        compile_arguments=compile_arguments,planning_context=planning_context,
+        training_state=training_state)
+    if offer:
+        match = exposure(offer.get('workout'))
+        if match:
+            stale.append(match)
+            offer = None
+            audit = {'schema':R196966_SCHEMA,'state':'WITHHELD_FOR_ALTERNATION',
+                     'reason':'RECENT_OBSERVED_NAMED_WORKOUT_RECONCILIATION_REQUIRED',
+                     'offer_present':False,'visible_in_card_3':False,
+                     'no_invented_workout':True,'execution_clearance_preserved':True}
+    if isinstance(audit,dict):
+        blocked = sorted(_r196966_producer_exclusions(evidence_ledger,candidate,
+                        (decision or {}).get('goal_key')))
+        audit = dict(audit)
+        if stale:
+            audit.update(recent_observed_named_exposures=stale[:10],
+                         named_exposure_policy=R196966_SCHEMA)
+        if blocked:
+            audit.update(recent_exposure_exclusions=blocked,
+                         recent_exposure_exclusion_schema=R196966_SCHEMA)
+            if not offer and audit.get('state') in {'WITHHELD_FOR_ALTERNATION',
+                              'WITHHELD_FOR_SCIENCE', 'RELEASE_FAILURE'}:
+                audit.update(state='WITHHELD_FOR_ALTERNATION',
+                    reason='RECENT_OBSERVED_WORKOUT_RECONCILIATION_REQUIRED_AND_NO_DISTINCT_QUALITY',
+                    science_failure_reason=audit.get('reason'),
+                    no_invented_workout=True)
+    return offer,audit
+
+
+_r196966_clock_before = build_coach_clock
+
+def _r196966_recover_morning_slot(clock,rhythm):
+    """A single explicit PM event must not erase a HIGH-confidence AM habit.
+
+    Only create a clearly unconfirmed RHYTHM opportunity. Do not fabricate
+    athlete availability or overwrite the calendar's PM booking. If the
+    rhythm is weak, an explicit restriction exists, or AM already exists,
+    preserve the original Clock unchanged.
+    """
+    out = copy.deepcopy(clock) if isinstance(clock,dict) else clock
+    if not isinstance(out,dict) or not isinstance(rhythm,dict):
+        return out
+    if (str(rhythm.get('confidence') or '').upper() != 'HIGH' or
+        str(rhythm.get('state') or '').upper() not in {'STABLE','ADAPTING'}):
+        return out
+    cp = rhythm.get('clock_profile') or {}
+    first = cp.get('first_start_min') or {}
+    dur = cp.get('duration_min') or {}
+    scores = rhythm.get('weekday_double_scores') or {}
+    recent_double = _rhythm_num((rhythm.get('recent') or {}).get('double_day_pct'))
+    if recent_double is None or recent_double < .75:
+        return out
+    slots = list(out.get('next_slots') or [])
+    groups = {}
+    for s in slots:
+        if isinstance(s,dict) and s.get('date'):
+            groups.setdefault(str(s['date'])[:10],[]).append(s)
+    rebuilt = []
+    for day, items in groups.items():
+        if (not any(x.get('is_planned_training') is True and
+                    str(x.get('source') or '').upper() == 'CALENDAR' for x in items)
+            or any(str(x.get('restriction') or 'NONE').upper() != 'NONE'
+                   or x.get('is_race') is True for x in items)):
+            continue
+        try:
+            weekday = str(date.fromisoformat(day).weekday())
+        except ValueError:
+            continue
+        score = _rhythm_num(scores.get(weekday))
+        evidence = (rhythm.get('weekday_evidence') or {}).get(weekday) or {}
+        if score is None or score < .75 or evidence.get('supported') is not True:
+            continue
+        v = _rhythm_num(first.get(weekday))
+        length = _rhythm_num(dur.get(weekday))
+        # The expected AM opportunity must be independently supported; no
+        # generic 6AM/60m fantasy for athletes without weekday evidence.
+        if v is None or length is None or not 0 <= v < 720 or length <= 0:
+            continue
+        if any((_rhythm_num(x.get('start_minute')) is not None and
+                abs(float(x['start_minute']) - v) < 120) for x in items):
+            continue
+        if any(_rhythm_num(x.get('start_minute')) is not None and
+               float(x['start_minute']) <= v + max(90.0,length+30.0)
+               for x in items):
+            continue
+        # The calendar may be a fully exclusive availability limit. Do not
+        # infer AM if explicit daily availability declares a single session.
+        availability = out.get('daily_availability') or {}
+        if isinstance(availability,dict):
+            constraints = availability.get(day) or {}
+            if isinstance(constraints,dict) and (constraints.get('single_session_only') is True
+                 or constraints.get('morning_available') is False):
+                continue
+        minute=int(round(v))
+        rebuilt.append(dict(date=day,period='RHYTHM',
+            window='history-learned opportunity',
+            label=f'{date.fromisoformat(day).strftime("%A")} · learned morning rhythm · around {minute//60}:{minute%60:02d}',
+            restriction='NONE',is_race=False,is_planned_training=False,
+            event_title=None,event_note=None,training_environment=None,
+            training_demand=None,expected_duration_min=None,
+            expected_duration_max=None,planning_item_id=None,source='RHYTHM',
+            timing_confidence='HIGH',start_minute=minute,
+            duration_hint_min=round(length,1),
+            duration_hint_label=_rhythm_format_duration(length),
+            duration_estimate_source='LEARNED_WEEKDAY_SINGLE_SESSION',
+            duration_estimate_not_availability=True,
+            availability_confirmed=False,r196966_recovered_morning=True))
+    if rebuilt:
+        out['next_slots']=sorted(slots+rebuilt,
+            key=lambda s:(str(s.get('date') or ''),
+                          _rhythm_num(s.get('start_minute')) if _rhythm_num(s.get('start_minute')) is not None else 1440))
+        out['r196966_recovered_morning_slots']=[x['date'] for x in rebuilt]
+        out['next_slot_label']=out['next_slots'][0].get('label')
+    return out
+
+
+def build_coach_clock(season_activities,now=None,planning_context=None,training_rhythm=None):
+    rhythm = training_rhythm or build_training_rhythm(season_activities,now or get_rome_now())
+    original = _r196966_clock_before(season_activities,now=now,
+        planning_context=planning_context,training_rhythm=rhythm)
+    return _r196966_recover_morning_slot(original,rhythm)
+
+
+_r196966_ui_before = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui = _r196966_ui_before(data)
+    if not isinstance(ui,dict):
+        return ui
+    # Display a calendar conflict, not invented FULFILLED adherence. This is
+    # read-only presentation metadata; neither Calendar nor Ledger is edited.
+    evidence = ui.get('evidence_ledger') or {}
+    clock = ui.get('coach_clock') or {}
+    issues = []
+    for slot in clock.get('next_slots') or []:
+        if not isinstance(slot,dict) or slot.get('is_planned_training') is not True:
+            continue
+        name = _r196966_normalize_title(slot.get('event_title'))
+        if name.startswith('nova · '):
+            name = name[len('nova · '):]
+        if not name:
+            continue
+        for exposure in _r196966_recent_exposures(evidence,slot.get('date')):
+            if name == exposure['title']:
+                title_reps = re.search(r'(\d+)\s*[×x]\s*(\d+)\s*[×x]\s*(\d+)\s*/\s*(\d+)',
+                                       str(slot.get('event_title') or ''),re.I)
+                nominal_reps = (int(title_reps.group(1))*int(title_reps.group(2))) if title_reps else None
+                issues.append(dict(date=slot.get('date'),
+                    planned_title=slot.get('event_title'),
+                    measured_reps=exposure['observed_reps'],
+                    nominal_reps=nominal_reps,
+                    nominal_and_measured_differ=bool(nominal_reps is not None and
+                        nominal_reps != exposure['observed_reps']),
+                    activity_id=exposure['activity_id'],
+                    kind='CALENDAR_STILL_PLANNED_BUT_NAMED_ACTIVITY_ALREADY_OBSERVED',
+                    completion_not_assumed=True))
+                break
+    ui['r196966_calendar_conflicts']=issues[:8]
+    return ui
+
+
+# Page warnings are attached after all prior template transformations. The
+# chronological card remains a recommendation; the athlete's distinct booked
+# workout is NEVER relabelled fulfilled or automatically deleted.
+_R196966_UI_CALENDAR_ANCHOR = '<div class="v23-session-fuel-grid v23-count-3">'
+if HOME_PAGE.count(_R196966_UI_CALENDAR_ANCHOR) != 1:
+    raise RuntimeError('R196966_CALENDAR_WARNING_TEMPLATE_DRIFT')
+HOME_PAGE = HOME_PAGE.replace(_R196966_UI_CALENDAR_ANCHOR,
+    '''{% if data.r196966_calendar_conflicts %}
+<div class="v196966-coherence-alert" role="note"><strong>CALENDAR REVIEW · WORKOUT ALREADY OBSERVED</strong>
+A workout with the same name is still scheduled in your Calendar, but an activity
+with that name was already recorded.
+{% set cc = data.r196966_calendar_conflicts[0] %}
+{% if cc.nominal_and_measured_differ %}Measured: {{ cc.measured_reps }} work intervals;
+the scheduled title describes {{ cc.nominal_reps }}. These are not proof of the
+same full completed main set.{% endif %}
+Nova has not marked the workout fully completed or changed the calendar booking.
+Review the planned entry before following it again.</div>
+{% endif %}
+''' + _R196966_UI_CALENDAR_ANCHOR,1)
+HOME_PAGE = HOME_PAGE.replace(
+    'Nova has not yet established an executable next quality session. No date, duration, power or structure has been invented.',
+    'Nova has not yet established an executable next quality session. No date, duration, power or structure has been invented.'
+    '{% if data.r196966_calendar_conflicts %}<p class="v196966-coherence-note">A same-named session is already recorded, but the measured execution and the scheduled workout have not been reconciled. Nova will not recycle it as a new quality just to fill this card.</p>{% endif %}',1)
+HOME_PAGE = HOME_PAGE.replace(
+    '<div class="v4-session-main">{{ s.main_set|replace(',
+    '''{% if is_quality_slot and next_quality_offer and next_quality_offer.suggested_start_confirmed == false %}
+<p class="v196966-coherence-note">Suggested quality opportunity, not a booked session.
+Recheck recovery and available time before training.</p>{% endif %}
+<div class="v4-session-main">{{ s.main_set|replace(''',1)
+HOME_PAGE = HOME_PAGE.replace(
+    "{{ (data.quality_offer_integrity or {}).get('reason', 'QUALITY_CONTRACT_MISSING') }}",
+    "{{ 'A recent measured workout requires reconciliation and no independently compiled quality alternative is currently available.' if (data.quality_offer_integrity or {}).get('reason') == 'RECENT_OBSERVED_WORKOUT_RECONCILIATION_REQUIRED_AND_NO_DISTINCT_QUALITY' else (data.quality_offer_integrity or {}).get('reason', 'QUALITY_CONTRACT_MISSING') }}",1)
+BASE_CSS += '''
+.v196966-coherence-alert{margin:12px 0 16px;padding:13px 15px;border:1px solid rgba(255,191,102,.5);border-radius:12px;background:rgba(255,191,102,.06);color:#ffe5bc;line-height:1.55;font-size:12px}
+.v196966-coherence-alert strong{display:block;font-size:12px;letter-spacing:.05em;margin-bottom:4px}
+.v196966-coherence-note{color:#c1d5e0;font-size:12px;line-height:1.55;margin:10px 0}
+'''
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.166 R196.9.66 · VERIFIED NAMED-EXPOSURE RECONCILIATION '
+               'AND PERSONAL DOUBLE-SESSION CLOCK · NOVA R196.2 CORE')
+
+
+# R196.9.67 — complete measured raw 30/15 series from Intervals streams.
+APP_VERSION = "THE LAB · PRODUCT V4.9.167 R196.9.67 · INTERVALS RAW 30/15 COMPLETE-SERIES RECONSTRUCTION · NOVA R196.2 CORE"
 
 
 if __name__ == "__main__":
