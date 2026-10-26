@@ -58487,57 +58487,56 @@ def _v4891_prepare_snapshot_for_ui(data):
     return ui
 
 
-# Page warnings are attached after all prior template transformations. The
-# chronological card remains a recommendation; the athlete's distinct booked
-# workout is NEVER relabelled fulfilled or automatically deleted.
-_R196966_UI_CALENDAR_ANCHOR = '<div class="v23-session-fuel-grid v23-count-3">'
-if HOME_PAGE.count(_R196966_UI_CALENDAR_ANCHOR) != 1:
-    raise RuntimeError('R196966_CALENDAR_WARNING_TEMPLATE_DRIFT')
-HOME_PAGE = HOME_PAGE.replace(_R196966_UI_CALENDAR_ANCHOR,
-    '''{% if data.r196966_calendar_conflicts %}
-<div class="v196966-coherence-alert" role="note"><strong>CALENDAR REVIEW · WORKOUT ALREADY OBSERVED</strong>
-A workout with the same name is still scheduled in your Calendar, but an activity
-with that name was already recorded.
-{% set cc = data.r196966_calendar_conflicts[0] %}
-{% if cc.nominal_and_measured_differ %}Measured: {{ cc.measured_reps }} work intervals;
-the scheduled title describes {{ cc.nominal_reps }}. This mismatch needs review.
-{% elif cc.measured_equals_nominal_count %}The raw Intervals power trace confirms
-{{ cc.measured_reps }} work intervals, matching the scheduled count. This does
-not by itself establish a completed, linked prescription in the execution ledger.
+# R196.9.69 — Athlete-facing third card contract.
+# This replaces the R196.9.66/68 stacked warnings instead of adding another
+# visible layer. Internal causes remain in the CA, not in the athlete's page.
+# Scientific selection, athlete Calendar, execution evidence and HOLD/TRAIN
+# decisions are untouched.
+_PENDING_BEGIN = '{% elif is_pending %}'
+_PENDING_AFTER = '{% else %}\n<div class="v4-session-slot">'
+if HOME_PAGE.count(_PENDING_BEGIN) != 1:
+    raise RuntimeError('R196969_PENDING_CARD_START_DRIFT')
+_pb = HOME_PAGE.index(_PENDING_BEGIN)
+_pe = HOME_PAGE.find(_PENDING_AFTER, _pb)
+if _pe < 0:
+    raise RuntimeError('R196969_PENDING_CARD_END_DRIFT')
+_HOME_PENDING_CLEAR = """{% elif is_pending %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY</span></div>
+<h3>Next quality session</h3>
+<div class="v4-session-meta"><span class="v4-session-pill">Not scheduled</span></div>
+{% set qi = data.quality_offer_integrity or {} %}
+{% if data.nova_decision and data.nova_decision.action == 'HOLD' %}
+<div class="v4-session-main">A hard workout is not advised right now.</div>
+<div class="v4-session-why">Nova will reassess your recovery before offering another quality session.</div>
+{% elif qi.get('state') == 'WITHHELD_FOR_ALTERNATION' %}
+<div class="v4-session-main">Your recent hard workout is already in the training record. For now, Nova recommends easy riding rather than another similar quality session.</div>
+<div class="v4-session-why">A new quality workout will appear here when a different, suitable session is ready.</div>
+{% elif qi.get('state') == 'WITHHELD_FOR_SCIENCE' %}
+<div class="v4-session-main">A suitable new quality workout has not been verified yet.</div>
+<div class="v4-session-why">You can follow the easy sessions above while Nova checks the next quality opportunity.</div>
+{% else %}
+<div class="v4-session-main">No verified quality workout has been scheduled for your upcoming training opportunities.</div>
+<div class="v4-session-why">Nova will reassess when a suitable workout can be defined.</div>
 {% endif %}
-Nova has NOT changed the athlete's calendar event or asserted ledger fulfillment.
-Review or reschedule this already-observed stimulus before following the booking again.</div>
-{% endif %}
-''' + _R196966_UI_CALENDAR_ANCHOR,1)
-HOME_PAGE = HOME_PAGE.replace(
-    'Nova has not yet established an executable next quality session. No date, duration, power or structure has been invented.',
-    'Nova has not yet established an executable next quality session. No date, duration, power or structure has been invented.'
-    '{% if data.r196966_calendar_conflicts %}<p class="v196966-coherence-note">A same-named session is already recorded, but the measured execution and the scheduled workout have not been reconciled. Nova will not recycle it as a new quality just to fill this card.</p>{% endif %}',1)
-HOME_PAGE = HOME_PAGE.replace(
-    '<div class="v4-session-main">{{ s.main_set|replace(',
-    '''{% if is_quality_slot and next_quality_offer and next_quality_offer.suggested_start_confirmed == false %}
-<p class="v196966-coherence-note">Suggested quality opportunity, not a booked session.
-Recheck recovery and available time before training.</p>{% endif %}
-<div class="v4-session-main">{{ s.main_set|replace(''',1)
-HOME_PAGE = HOME_PAGE.replace(
-    "{{ (data.quality_offer_integrity or {}).get('reason', 'QUALITY_CONTRACT_MISSING') }}",
-    "{{ 'A recent measured 30/15 workout is already in the training record. Nova will not automatically repeat the same micro-interval stimulus during this short recovery window; no separately verified quality alternative is available yet.' if (data.quality_offer_integrity or {}).get('reason') == 'RECENT_OBSERVED_WORKOUT_RECONCILIATION_REQUIRED_AND_NO_DISTINCT_QUALITY' else (data.quality_offer_integrity or {}).get('reason', 'QUALITY_CONTRACT_MISSING') }}",1)
-# Intentional scientific non-reissue is not an application/quality GENERATION
-# ERROR. Explain the distinction in the same card that shows the held offer;
-# retain the original error pathway for actual compiler/integrity failures.
-_R196968_QUALITY_ERROR_ANCHOR = '<strong>QUALITY GENERATION ERROR</strong> Nova could not generate a scientifically verified workout. Diagnostic:'
-if HOME_PAGE.count(_R196968_QUALITY_ERROR_ANCHOR) != 1:
-    raise RuntimeError('R196968_QUALITY_REASON_UI_DRIFT')
-HOME_PAGE = HOME_PAGE.replace(_R196968_QUALITY_ERROR_ANCHOR,
-    "{% if (data.quality_offer_integrity or {}).get('reason') == 'RECENT_OBSERVED_WORKOUT_RECONCILIATION_REQUIRED_AND_NO_DISTINCT_QUALITY' %}"
-    "<strong>QUALITY HELD · RECENT 30/15</strong> The last 30/15 stimulus was measured successfully. No distinct independently validated quality is ready to offer yet. Reason: "
-    "{% else %}<strong>QUALITY GENERATION ERROR</strong> Nova could not generate a scientifically verified workout. Diagnostic: {% endif %}",1)
+"""
+HOME_PAGE = HOME_PAGE[:_pb] + _HOME_PENDING_CLEAR + HOME_PAGE[_pe:]
 
-BASE_CSS += '''
-.v196966-coherence-alert{margin:12px 0 16px;padding:13px 15px;border:1px solid rgba(255,191,102,.5);border-radius:12px;background:rgba(255,191,102,.06);color:#ffe5bc;line-height:1.55;font-size:12px}
-.v196966-coherence-alert strong{display:block;font-size:12px;letter-spacing:.05em;margin-bottom:4px}
-.v196966-coherence-note{color:#c1d5e0;font-size:12px;line-height:1.55;margin:10px 0}
-'''
+# Present a Calendar commitment accurately without suggesting that its
+# already-observed hard workout was re-prescribed as EASY. Do not alter the
+# actual calendar entry, stored appointment or canonical session fields.
+_CALENDAR_TITLE_START = '<div class="v4-session-slot">{% if is_quality_slot %}'
+if HOME_PAGE.count(_CALENDAR_TITLE_START) != 1:
+    raise RuntimeError('R196969_SLOT_LABEL_ANCHOR_DRIFT')
+_st = HOME_PAGE.index(_CALENDAR_TITLE_START)
+_en = HOME_PAGE.index('</div>', _st) + len('</div>')
+_previous_slot_label = HOME_PAGE[_st:_en]
+_new_slot_label = '''<div class="v4-session-slot">{% if not is_quality_slot and s.source == 'CALENDAR' and data.r196966_calendar_conflicts %}
+{{ s.date[8:10] }}/{{ s.date[5:7] }}/{{ s.date[:4] }} · Calendar booking · review the planned workout
+{% else %}''' + _previous_slot_label[len('<div class="v4-session-slot">'):-len('</div>')] + '''{% endif %}</div>'''
+HOME_PAGE = HOME_PAGE[:_st] + _new_slot_label + HOME_PAGE[_en:]
+
+# No extra banner, no "Diagnostic:" / internal reason codes, and no duplicate
+# PENDING + AWAITING PLAN + QUALITY ERROR labels for one withheld offer.
 
 APP_VERSION = ('THE LAB · PRODUCT V4.9.166 R196.9.66 · VERIFIED NAMED-EXPOSURE RECONCILIATION '
                'AND PERSONAL DOUBLE-SESSION CLOCK · NOVA R196.2 CORE')
@@ -58545,7 +58544,7 @@ APP_VERSION = ('THE LAB · PRODUCT V4.9.166 R196.9.66 · VERIFIED NAMED-EXPOSURE
 
 # R196.9.67 — complete measured raw 30/15 series from Intervals streams.
 APP_VERSION = "THE LAB · PRODUCT V4.9.167 R196.9.67 · INTERVALS RAW 30/15 COMPLETE-SERIES RECONSTRUCTION · NOVA R196.2 CORE"
-APP_VERSION = 'THE LAB · PRODUCT V4.9.168 R196.9.68 · VERIFIED MICRO-INTERVAL FAMILY COOLDOWN AND CALENDAR COHERENCE · NOVA R196.2 CORE'
+APP_VERSION = 'THE LAB · PRODUCT V4.9.169 R196.9.69 · ATHLETE THIRD-CARD OUTPUT CONTRACT · NOVA R196.2 CORE'
 
 
 if __name__ == "__main__":
