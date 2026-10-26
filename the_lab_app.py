@@ -3060,7 +3060,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% elif report_mode %}
 <div class="v4-top-actions v27-report-actions no-print">
 <span class="v45-view-pill stored">{% if download_mode %}Downloaded copy{% else %}Stored Snapshot{% endif %}</span>
-{% if not download_mode %}<a class="v27-report-link" href="{{ url_for('home') }}">Back to dashboard</a><a class="v27-report-link" href="{{ url_for('last_report_download') }}">Download HTML</a><a class="v27-report-link" href="{{ url_for('last_report_content_audit') }}">Content Audit · MD</a>{% endif %}
+{% if not download_mode %}<a class="v27-report-link" href="{{ url_for('home') }}">Back to dashboard</a><a class="v27-report-link" href="{{ url_for('last_report_download') }}">Download HTML</a><a class="v27-report-link" href="{{ url_for('last_report_content_audit') }}">Content Audit · MD</a><a class="v27-report-link" href="{{ url_for('last_report_nova_replay_fixture') }}">Nova Replay · JSON</a>{% endif %}
 <button class="v4-btn v4-btn-cyan" type="button" id="report-print-btn">Print / Save PDF</button>
 {% if not download_mode %}<a class="v4-logout" href="{{ url_for('logout') }}">Log out</a>{% endif %}
 </div>
@@ -3073,7 +3073,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <div class="v4832-modal" id="report-actions-modal" role="dialog" aria-modal="true" aria-labelledby="report-actions-title" hidden>
 <div class="v4832-modal-backdrop" data-v4832-close></div><div class="v4832-modal-panel" tabindex="-1"><div class="v4832-modal-head"><div class="v4832-modal-title"><strong id="report-actions-title">Report actions</strong><span>Snapshot, stored report and export tools.</span></div><button class="v4832-modal-close" type="button" data-v4832-close aria-label="Close report actions">×</button></div><div class="v4832-modal-actions">
 <a class="v4832-menu-item" href="{{ url_for('last_report') }}">Last Full Report</a>
-{% if latest_report_meta %}<a class="v4832-menu-item" href="{{ url_for('last_report_content_audit') }}">Download Content Audit · MD</a>{% endif %}
+{% if latest_report_meta %}<a class="v4832-menu-item" href="{{ url_for('last_report_content_audit') }}">Download Content Audit · MD</a><a class="v4832-menu-item" href="{{ url_for('last_report_nova_replay_fixture') }}">Download Nova Replay · JSON</a>{% endif %}
 </div></div>
 </div>
 {% if session.get('role') == 'admin' %}<div class="v4832-modal qa" id="qa-actions-modal" role="dialog" aria-modal="true" aria-labelledby="qa-actions-title" hidden>
@@ -4008,7 +4008,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 </div>
 </section>
-<div class="v4-export no-print">{% if is_preview %}<a class="v4-btn v4-btn-ghost" href="{{ url_for('home') if session.get('logged_in') else url_for('login') }}">{{ 'Back to Dashboard' if session.get('logged_in') else 'Back to Sign In' }}</a>{% elif qa_mode %}<a class="v4-btn v4-btn-ghost" href="{{ url_for('home') }}">Back to Dashboard</a><button class="v4-btn v4-btn-ghost" type="button" id="qa-audit-download-btn-bottom">Download QA Content Audit · MD</button><button class="v4-btn v4-btn-cyan" type="button" id="report-print-btn-bottom">Print / Save PDF</button>{% elif report_mode %}{% if not download_mode %}<a class="v4-btn v4-btn-ghost" href="{{ url_for('home') }}">Back to Dashboard</a><a class="v4-btn v4-btn-ghost" href="{{ url_for('last_report_download') }}">Download Full Report · HTML</a><a class="v4-btn v4-btn-ghost" href="{{ url_for('last_report_content_audit') }}">Download Content Audit · MD</a>{% endif %}<button class="v4-btn v4-btn-cyan" type="button" id="report-print-btn-bottom">Print / Save PDF</button>{% else %}<a class="v4-btn v4-btn-ghost" href="{{ url_for('preview') }}">UI Preview</a><a class="v4-btn v4-btn-cyan" href="{{ url_for('last_report') }}">Last Full Report</a>{% if data %}<a class="v4-btn v4-btn-ghost" href="{{ url_for('last_report_content_audit') }}">Download Content Audit · MD</a>{% endif %}{% endif %}</div>
+<div class="v4-export no-print">{% if is_preview %}<a class="v4-btn v4-btn-ghost" href="{{ url_for('home') if session.get('logged_in') else url_for('login') }}">{{ 'Back to Dashboard' if session.get('logged_in') else 'Back to Sign In' }}</a>{% elif qa_mode %}<a class="v4-btn v4-btn-ghost" href="{{ url_for('home') }}">Back to Dashboard</a><button class="v4-btn v4-btn-ghost" type="button" id="qa-audit-download-btn-bottom">Download QA Content Audit · MD</button><button class="v4-btn v4-btn-cyan" type="button" id="report-print-btn-bottom">Print / Save PDF</button>{% elif report_mode %}{% if not download_mode %}<a class="v4-btn v4-btn-ghost" href="{{ url_for('home') }}">Back to Dashboard</a><a class="v4-btn v4-btn-ghost" href="{{ url_for('last_report_download') }}">Download Full Report · HTML</a><a class="v4-btn v4-btn-ghost" href="{{ url_for('last_report_content_audit') }}">Download Content Audit · MD</a><a class="v4-btn v4-btn-ghost" href="{{ url_for('last_report_nova_replay_fixture') }}">Download Nova Replay · JSON</a>{% endif %}<button class="v4-btn v4-btn-cyan" type="button" id="report-print-btn-bottom">Print / Save PDF</button>{% else %}<a class="v4-btn v4-btn-ghost" href="{{ url_for('preview') }}">UI Preview</a><a class="v4-btn v4-btn-cyan" href="{{ url_for('last_report') }}">Last Full Report</a>{% if data %}<a class="v4-btn v4-btn-ghost" href="{{ url_for('last_report_content_audit') }}">Download Content Audit · MD</a>{% endif %}{% endif %}</div>
 </section>
 {% endif %}
 </main>
@@ -11329,7 +11329,7 @@ ATHLETE_SETUP_PAGE = """
 <label class="ps-field"><span>GI RESPONSE AT THAT INTAKE <em class="ps-required">* REQUIRED IF KNOWN</em></span><select name="gi_tolerance" id="gi-tolerance"><option value="UNKNOWN" {% if profile.fueling.gi_tolerance == 'UNKNOWN' %}selected{% endif %}>Choose…</option><option value="GOOD" {% if profile.fueling.gi_tolerance == 'GOOD' %}selected{% endif %}>Good · no meaningful GI issues</option><option value="MIXED" {% if profile.fueling.gi_tolerance == 'MIXED' %}selected{% endif %}>Mixed · some GI issues</option><option value="POOR" {% if profile.fueling.gi_tolerance == 'POOR' %}selected{% endif %}>Poor · GI issues limit me</option></select></label>
 </div><p class="ps-field-note">If you do not know yet, leave THE LAB in learning mode. It will use recorded intake as exposure evidence, not as proof that a higher dose is tolerated.</p></div>
 <button class="ps-btn primary" type="submit">Save athlete profile</button></form></section>
-<section class="ps-card ps-qa-sharing" id="beta-qa-sharing"><div class="ps-qa-sharing-head"><div><div class="ps-muted">OPTIONAL · BETA QUALITY ASSURANCE</div><h2>Share latest Snapshot for beta QA</h2><p class="ps-qa-sharing-copy">If you opt in, the THE LAB owner may download a <strong>Content Audit</strong> of your latest stored Snapshot to investigate recommendation quality and bugs. It can include training, recovery, sleep, weight, subjective notes and nutrition/race context. The owner may review that export directly or use an AI-assisted QA tool to help analyse product quality. Direct account identifiers are redacted from the beta-QA export; passwords, API keys and hidden provider credentials are never included.</p></div><span class="ps-pill ps-qa-sharing-status {{ 'active' if profile.qa_snapshot_sharing_enabled else 'expired' }}">{{ 'SHARING ON' if profile.qa_snapshot_sharing_enabled else 'SHARING OFF' }}</span></div>
+<section class="ps-card ps-qa-sharing" id="beta-qa-sharing"><div class="ps-qa-sharing-head"><div><div class="ps-muted">OPTIONAL · BETA QUALITY ASSURANCE</div><h2>Share latest Snapshot for beta QA</h2><p class="ps-qa-sharing-copy">If you opt in, the THE LAB owner may download a <strong>Content Audit and its Nova Replay JSON</strong> from your latest stored Snapshot to investigate recommendation quality and bugs. It can include training, recovery, sleep, weight, subjective notes and nutrition/race context. The owner may review that export directly or use an AI-assisted QA tool to help analyse product quality. Direct account identifiers are redacted from the beta-QA export; passwords, API keys and hidden provider credentials are never included. The JSON is a scientific replay fixture captured after provider and database acquisition, not a raw provider stream. It may include sensitive training and wellness context.</p></div><span class="ps-pill ps-qa-sharing-status {{ 'active' if profile.qa_snapshot_sharing_enabled else 'expired' }}">{{ 'SHARING ON' if profile.qa_snapshot_sharing_enabled else 'SHARING OFF' }}</span></div>
 <div class="ps-qa-sharing-actions"><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="update_qa_sharing"><input type="hidden" name="qa_snapshot_sharing" value="{{ '0' if profile.qa_snapshot_sharing_enabled else '1' }}"><button class="ps-btn {{ 'warn' if profile.qa_snapshot_sharing_enabled else 'primary' }}" type="submit" {% if not status.profile_saved %}disabled aria-disabled="true"{% endif %}>{{ 'Withdraw beta QA sharing' if profile.qa_snapshot_sharing_enabled else 'I consent to beta QA sharing' }}</button></form><span class="ps-muted">{{ 'You can withdraw at any time; future admin downloads stop immediately.' if profile.qa_snapshot_sharing_enabled else ('Save your profile first, then choose whether to opt in.' if not status.profile_saved else 'Optional. THE LAB works normally if you leave this off.') }}</span></div><p class="ps-qa-sharing-note">Existing audit sharing permits downloading the latest stored Snapshot. Separately, if you grant the updated remote-QA consent, the owner may trigger a fresh read-only Python-only QA analysis of your live Intervals.icu and THE LAB data, view its training/wellness results, and download its Content Audit. No AI calls or saved-report replacement. This is initiated only on demand, not continuous monitoring. You can withdraw consent.</p>{% if profile.qa_snapshot_sharing_enabled and profile.qa_snapshot_sharing_version != '2026-10-remote-qa-v1' %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="update_qa_sharing"><input type="hidden" name="qa_snapshot_sharing" value="1"><button class="ps-btn primary" type="submit">I consent to remote read-only QA</button></form>{% endif %}</section>
 <section class="ps-card"><div class="ps-step-head"><div><h2>2 · Connect Intervals.icu</h2><p>Intervals.icu is mandatory because THE LAB needs an authenticated athlete ID and training-data connection before the workspace can open.</p></div><span class="ps-step-badge">REQUIRED</span></div>{% if not status.complete %}
 <div class="ps-source-guidance"><strong>GARMIN · VO₂ FRESHNESS</strong><span>If you use Garmin, Intervals.icu may not expose Garmin's latest VO₂ value. THE LAB can therefore show an older Wearable VO₂ than the value currently visible in Garmin Connect.</span></div>
@@ -11362,7 +11362,7 @@ ADMIN_PAGE = """
 {% for u in users %}{% if u.role != 'admin' %}<article class="ps59-athlete-card"><div class="ps59-user-head"><div class="ps59-user-id"><strong>{{ u.username }}</strong><span>{{ u.email or '—' }}</span>{% if u.must_change_password %}<span class="ps-password-required">PASSWORD CHANGE REQUIRED</span>{% endif %}</div><div class="ps59-head-badges"><span class="ps-pill {{ u.status }}">{{ u.status|upper }}</span>{% if u.license %}<span class="ps-pill {{ u.license_effective_status }}">{{ u.license.license_type }} · {{ u.license_effective_status|upper }}</span>{% endif %}</div></div>
 <div class="ps59-status-grid"><div class="ps59-status"><span>SETUP</span><strong class="{{ 'good' if u.setup_complete and u.ai_ready else ('warn' if u.setup_complete else '') }}">{% if u.setup_complete and u.ai_ready %}READY{% elif u.setup_complete %}AI STANDBY{% else %}PENDING{% endif %}</strong></div><div class="ps59-status"><span>DOB / AGE</span><strong class="{{ 'good' if u.birth_date_ready else 'warn' }}">{% if u.birth_date_ready %}{{ u.birth_date_display }} · {{ u.age_years }}Y{% else %}DOB MISSING{% endif %}</strong></div><div class="ps59-status"><span>INTERVALS</span><strong class="{{ 'good' if u.intervals_status == 'connected' else 'warn' }}">{{ u.intervals_status|upper }}</strong></div><div class="ps59-status"><span>LAST LOGIN</span><strong>{{ u.last_login_at_utc|admin_dt if u.last_login_at_utc else 'NEVER' }}</strong></div><div class="ps59-status"><span>LAST SAVED REPORT</span><strong class="{{ 'warn' if u.snapshot_ai_newer_than_report else ('good' if u.report_generated else '') }}">{{ u.report_generated_at_utc|admin_dt if u.report_generated else 'NONE' }}</strong>{% if u.snapshot_ai_newer_than_report %}<small class="warn">Newer AI Snapshot call {{ u.last_snapshot_ai_at_utc|admin_dt }} · {{ u.last_snapshot_ai_status or 'UNKNOWN' }} · no newer saved report</small>{% endif %}</div></div>
 <div class="ps59-ai-box"><div class="ps59-ai-top"><div class="ps59-ai-mode"><span class="ps-pill {{ 'platform' if u.ai_access_mode == 'PLATFORM' else ('standard' if u.ai_access_mode == 'STANDARD' else 'byok') }}">{% if u.ai_access_mode == 'PLATFORM' %}THE LAB MANAGED · OWNER FUNDED{% elif u.ai_access_mode == 'STANDARD' %}THE LAB STANDARD · OWNER FUNDED{% else %}ATHLETE BYOK{% endif %}</span><small>{{ u.ai_provider|title }}{% if u.ai_model and u.ai_model != '—' %} · {{ u.ai_model }}{% endif %}</small></div><div class="ps59-ai-meta"><span class="ps59-mini {{ 'good' if u.personal_ai_ready else 'warn' }}">PERSONAL KEY · {{ 'READY' if u.personal_ai_ready else 'MISSING' }}</span><span class="ps59-mini {{ 'good' if u.qa_snapshot_sharing_enabled else '' }}">BETA QA · {{ 'ON' if u.qa_snapshot_sharing_enabled else 'OFF' }}</span>{% if u.owner_sponsored %}<span class="ps59-mini">TODAY · {{ u.ai_usage_today.quota_calls or 0 }}/{{ u.ai_usage_today.limit or '—' }}</span>{% endif %}</div></div></div>
-<div class="ps59-card-actions"><button class="ps-btn archive" type="button" data-ps59-open="account-{{ u.id }}">Account & license</button><button class="ps-btn archive" type="button" data-ps59-open="ai-{{ u.id }}">AI & limits</button>{% if u.qa_snapshot_sharing_enabled and u.qa_snapshot_sharing_version == '2026-10-remote-qa-v1' %}<form method="post" action="{{ url_for('admin_remote_python_qa', user_id=u.id) }}" style="display:contents" onsubmit="return confirm('Run a read-only live-data Python QA Snapshot for this athlete? The athlete report will not be overwritten.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn primary" type="submit">Run remote QA</button></form>{% endif %}{% if not (u.qa_snapshot_sharing_enabled and u.qa_snapshot_sharing_version == '2026-10-remote-qa-v1') %}<form method="post" action="{{ url_for('admin_request_remote_qa_consent', user_id=u.id) }}" style="display:contents"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn archive" type="submit">Request remote QA consent</button></form><span class="ps-pill">Remote QA · CONSENT REQUIRED</span>{% else %}<span class="ps-pill">Remote QA · READY</span>{% endif %}{% if u.qa_snapshot_sharing_enabled and u.report_generated %}<form method="post" action="{{ url_for('admin_user_latest_content_audit', user_id=u.id) }}" style="display:contents"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn restore" type="submit">QA audit · MD</button></form>{% elif not u.qa_snapshot_sharing_enabled %}<span class="ps-btn disabled">QA sharing off</span>{% else %}<span class="ps-btn disabled">No report yet</span>{% endif %}</div>
+<div class="ps59-card-actions"><button class="ps-btn archive" type="button" data-ps59-open="account-{{ u.id }}">Account & license</button><button class="ps-btn archive" type="button" data-ps59-open="ai-{{ u.id }}">AI & limits</button>{% if u.qa_snapshot_sharing_enabled and u.qa_snapshot_sharing_version == '2026-10-remote-qa-v1' %}<form method="post" action="{{ url_for('admin_remote_python_qa', user_id=u.id) }}" style="display:contents" onsubmit="return confirm('Run a read-only live-data Python QA Snapshot for this athlete? The athlete report will not be overwritten.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn primary" type="submit">Run remote QA</button></form>{% endif %}{% if not (u.qa_snapshot_sharing_enabled and u.qa_snapshot_sharing_version == '2026-10-remote-qa-v1') %}<form method="post" action="{{ url_for('admin_request_remote_qa_consent', user_id=u.id) }}" style="display:contents"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn archive" type="submit">Request remote QA consent</button></form><span class="ps-pill">Remote QA · CONSENT REQUIRED</span>{% else %}<span class="ps-pill">Remote QA · READY</span>{% endif %}{% if u.qa_snapshot_sharing_enabled and u.report_generated %}<form method="post" action="{{ url_for('admin_user_latest_content_audit', user_id=u.id) }}" style="display:contents"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn restore" type="submit">QA audit · MD</button></form><form method="post" action="{{ url_for('admin_user_latest_nova_replay_fixture', user_id=u.id) }}" style="display:contents"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn restore" type="submit">Nova replay · JSON</button></form>{% elif not u.qa_snapshot_sharing_enabled %}<span class="ps-btn disabled">QA sharing off</span>{% else %}<span class="ps-btn disabled">No report yet</span>{% endif %}</div>
 </article>
 <div class="ps59-modal" id="account-{{ u.id }}" role="dialog" aria-modal="true" aria-labelledby="account-title-{{ u.id }}" hidden><div class="ps59-modal-backdrop" data-ps59-close></div><section class="ps59-modal-panel" tabindex="-1"><div class="ps59-modal-head"><div><div class="ps-muted">ATHLETE CONTROL</div><h2 id="account-title-{{ u.id }}">{{ u.username }}</h2></div><button class="ps59-modal-close" type="button" data-ps59-close aria-label="Close">×</button></div><div class="ps59-modal-section"><h3>Athlete identity · date of birth</h3><p>Required physiological context. Stored on the account; the raw birth date is not sent to the AI provider.</p><form method="post" action="{{ url_for('admin_update_birth_date', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="ps59-form-row"><label class="ps-field"><span>DATE OF BIRTH · REQUIRED</span><input name="birth_date" type="date" autocomplete="bday" max="{{ today_iso }}" value="{{ u.birth_date or '' }}" required></label><button class="ps-btn primary" type="submit">Save DOB</button></div></form></div>{% if u.license %}<div class="ps59-modal-section"><h3>License</h3><p>{{ u.license.license_type }} · {{ u.license_effective_status|upper }} · {{ 'Expires ' ~ u.license_expiry_display if u.license.expires_at_utc else 'No expiry' }}</p><form method="post" action="{{ url_for('admin_update_license', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label class="ps-field"><span>NEW EXPIRY · GG/MM/AAAA</span><input name="expires_on" type="date" min="{{ today_iso }}" autocomplete="off" value="{{ u.license_expiry_iso }}"></label><div class="ps59-account-actions"><button class="ps-btn primary" name="license_action" value="set" type="submit">Save date</button><button class="ps-btn" name="license_action" value="add_30" type="submit">+30 days</button><button class="ps-btn" name="license_action" value="add_90" type="submit">+90 days</button><button class="ps-btn restore" name="license_action" value="no_expiry" type="submit">No expiry</button></div></form></div>{% endif %}<div class="ps59-modal-section"><h3>Account actions</h3><p>Security and access controls for this athlete.</p><div class="ps59-account-actions"><form method="post" action="{{ url_for('admin_user_action', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="logout_all"><button class="ps-btn" type="submit">Log out all</button></form><form method="post" action="{{ url_for('admin_reset_password', user_id=u.id) }}" onsubmit="return confirm('Reset this athlete password? Every active session will be closed and a temporary password will be shown once.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="ps-btn reset" type="submit">Reset password</button></form>{% if u.status == 'active' %}<form method="post" action="{{ url_for('admin_user_action', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="suspend"><button class="ps-btn warn" type="submit">Suspend</button></form><form method="post" action="{{ url_for('admin_user_action', user_id=u.id) }}" onsubmit="return confirm('Revoke this athlete access and every active session?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="revoke"><button class="ps-btn danger" type="submit">Revoke</button></form>{% else %}<form method="post" action="{{ url_for('admin_user_action', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="reactivate"><button class="ps-btn primary" type="submit">Reactivate</button></form><form method="post" action="{{ url_for('admin_user_visibility', user_id=u.id) }}" onsubmit="return confirm('Archive this inactive athlete from the main roster? Account, data, license history and audit trail are preserved.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="visibility" value="archive"><button class="ps-btn archive" type="submit">Archive</button></form>{% endif %}</div></div></section></div>
 <div class="ps59-modal" id="ai-{{ u.id }}" role="dialog" aria-modal="true" aria-labelledby="ai-title-{{ u.id }}" hidden><div class="ps59-modal-backdrop" data-ps59-close></div><section class="ps59-modal-panel" tabindex="-1"><div class="ps59-modal-head"><div><div class="ps-muted">AI ACCESS + COST CONTROL</div><h2 id="ai-title-{{ u.id }}">{{ u.username }}</h2></div><button class="ps59-modal-close" type="button" data-ps59-close aria-label="Close">×</button></div><div class="ps59-modal-section"><h3>AI mode</h3><p>Standard and Managed use owner-funded credentials. BYOK uses only the athlete's tested personal credential.</p><form method="post" action="{{ url_for('admin_update_ai_access', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label class="ps-field"><span>AI MODE</span><select name="ai_access_mode"><option value="BYOK" {% if u.ai_access_mode == 'BYOK' %}selected{% endif %}>Athlete personal key · BYOK</option><option value="STANDARD" {% if u.ai_access_mode == 'STANDARD' %}selected{% endif %}>THE LAB Standard · Gemini · owner funded</option><option value="PLATFORM" {% if u.ai_access_mode == 'PLATFORM' %}selected{% endif %}>THE LAB Managed · owner funded</option></select></label><button class="ps-btn primary" type="submit">Save AI mode</button></form></div><div class="ps59-modal-section"><h3>Owner-funded daily limit</h3><p>This cap applies to optional owner-funded AI Coach usage. Ordinary Nova-only Snapshot does not use this allowance. Leave blank for the lane default; BYOK does not use owner-funded calls.</p><div class="ps59-usage-line"><span>TODAY</span><strong>{{ u.ai_usage_today.quota_calls or 0 }} owner-funded call(s){% if u.ai_usage_today.limit is not none %} / {{ u.ai_usage_today.limit }} allowed{% endif %}</strong></div><form method="post" action="{{ url_for('admin_update_ai_limit', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="ps59-form-row"><label class="ps-field"><span>CALLS / LOCAL DAY · 1–100 · BLANK = DEFAULT</span><input name="owner_ai_daily_limit" type="number" min="1" max="100" step="1" value="{{ u.owner_ai_daily_limit_override if u.owner_ai_daily_limit_override is not none else '' }}" placeholder="Use lane default"></label><button class="ps-btn primary" type="submit">Save limit</button></div></form><p class="ps59-privacy-note">Managed keeps its premium sub-cap; any remaining custom allowance uses the configured Standard fallback. Switching to BYOK stops owner-funded consumption immediately.</p></div><div class="ps59-modal-section"><h3>Personal key</h3><p>{{ 'A tested personal key is already stored and can take over immediately.' if u.personal_ai_ready else 'No tested personal key is stored yet.' }}</p>{% if u.owner_sponsored %}<form style="margin-top:10px" method="post" action="{{ url_for('admin_update_ai_access', user_id=u.id) }}" onsubmit="return confirm('{% if u.personal_ai_ready %}Stop owner-funded AI for this athlete and switch to the already-tested personal API key?{% else %}Stop owner-funded AI for this athlete? Nova-only Snapshot stays available; only optional AI Coach chat is unavailable until the athlete adds a personal API key.{% endif %}');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="ai_access_mode" value="BYOK"><button class="ps-btn warn" type="submit">Require athlete API key</button></form>{% endif %}</div></section></div>
@@ -11896,6 +11896,59 @@ def admin_user_latest_content_audit(user_id):
     response.headers["Content-Disposition"] = f'attachment; filename="the_lab_beta_qa_{safe_ref}_{stamp}.md"'
     response.headers["Cache-Control"] = "no-store"
     return response
+# R196.9.72 — consent-aware, athlete-isolated normalized replay JSON export.
+# R115 already appends this fixture to the beta Content Audit; separate download
+# reduces file size and makes provenance and redaction explicit. No API/AI calls.
+@app.route("/admin/users/<user_id>/latest-nova-replay-fixture.json", methods=["POST"])
+def admin_user_latest_nova_replay_fixture(user_id):
+    admin = require_admin()
+    if not admin:
+        return redirect(url_for("login"))
+    target = _get_user_by_id(user_id)
+    if not target or target.get("role") == "admin":
+        abort(404)
+    profile = get_athlete_profile(user_id)
+    if not profile.get("qa_snapshot_sharing_enabled"):
+        audit_event("ADMIN_BETA_QA_REPLAY_BLOCKED", actor_user_id=admin["id"],
+                    target_user_id=user_id, details={"reason": "CONSENT_NOT_ACTIVE"})
+        abort(403)
+    report = load_latest_report(include_payload=False, owner_user_id=user_id,
+                                include_qa_replay=True)
+    replay = (report or {}).get("qa_replay") or {}
+    fixture = replay.get("nova_replay_fixture") if isinstance(replay, dict) else None
+    if not isinstance(fixture, dict):
+        session["admin_error"] = "No Nova Replay JSON is stored for this athlete. Generate a new Snapshot first."
+        return redirect(url_for("admin_control_center"))
+    integration = get_intervals_integration(user_id) or {}
+    identifiers = (target.get("username"), target.get("email"),
+                   profile.get("display_name"), integration.get("external_athlete_id"), user_id)
+    safe = _beta_qa_redact_direct_identifiers(_v115_replay_sanitize(fixture), identifiers)
+    # Redacting account references can change the replay input and its identity.
+    # Distinguish the original expected identity from the exported input fingerprint.
+    source_fingerprint = str(fixture.get("input_fingerprint") or "")
+    exported_fingerprint = _v115_replay_fingerprint(safe.get("core_inputs") or {})
+    safe["input_fingerprint"] = exported_fingerprint
+    safe["beta_qa_export"] = {
+        "scope": "CONSENTED_ATHLETE_NORMALIZED_REPLAY_POST_IO",
+        "direct_identifiers_redacted": True,
+        "input_modified_by_redaction": exported_fingerprint != source_fingerprint,
+        "identity_parity_attested_after_redaction": False,
+        "raw_intervals_stream_included": False,
+        "notice": "The expected outcome belongs to the original stored Snapshot. Re-run parity checks if redaction changed input values."
+    }
+    body = json.dumps(safe, ensure_ascii=False, indent=2, default=_report_json_default)
+    audit_event("ADMIN_BETA_QA_REPLAY_DOWNLOADED", actor_user_id=admin["id"],
+                target_user_id=user_id,
+                details={"consent_version": profile.get("qa_snapshot_sharing_version"),
+                         "report_generated_at_utc": report.get("generated_at_utc"),
+                         "redaction_changed_input": exported_fingerprint != source_fingerprint})
+    stamp = str(report.get("generated_at_local") or get_rome_now().isoformat())[:16].replace("-", "").replace(":", "").replace("T", "_")
+    safe_ref = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:12]
+    return Response(body, mimetype="application/json", headers={
+        "Content-Disposition": f'attachment; filename="the_lab_beta_nova_replay_{safe_ref}_{stamp}.json"',
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    })
+
 @app.route("/admin/users/<user_id>/reset-password", methods=["POST"])
 def admin_reset_password(user_id):
     admin = require_admin()
@@ -27111,7 +27164,21 @@ def _v4897_semantic_compile_snapshot(parsed, adaptive_roadmap=None, microcycle_l
     if seal_session_reasons:
         unresolved["session_semantics"]=[{"reason":x,"sentence":""} for x in seal_session_reasons]
     test_state=str((truth.get("test") or {}).get("state") or "").upper()
-    if truth.get("formal_validation") and truth.get("pending_validation"):
+    # R196.9.73 EXPERIMENTAL: a prior formal checkpoint that predates the
+    # evidence cycle is historical evidence, not completion of the NEW question.
+    # Without a proven cycle boundary, retain the conservative existing veto.
+    _formal_row = truth.get("formal_validation") or {}
+    _cycle_start = str((((truth.get("roadmap") or {}).get("block_evidence") or {})
+                        .get("effective_cycle_start") or ""))[:10]
+    _formal_day = str((_formal_row.get("date") if isinstance(_formal_row,dict) else None) or "")[:10]
+    _older_completed_checkpoint = False
+    if (re.fullmatch(r"\d{4}-\d{2}-\d{2}",_formal_day)
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}",_cycle_start)):
+        try:
+            _older_completed_checkpoint = date.fromisoformat(_formal_day) < date.fromisoformat(_cycle_start)
+        except ValueError:
+            _older_completed_checkpoint = False
+    if truth.get("formal_validation") and truth.get("pending_validation") and not _older_completed_checkpoint:
         unresolved.setdefault("cross_section",[]).append({"reason":"COMPLETED_CHECKPOINT_REPRESCRIBED","sentence":str((truth.get("validation_session") or {}).get("title") or test_state)[:280]})
     if test_state == "COMPLETED" and truth.get("validation_index") is not None:
         unresolved.setdefault("cross_section",[]).append({"reason":"COMPLETED_CHECKPOINT_REPRESCRIBED","sentence":str((truth.get("validation_session") or {}).get("title") or "")[:280]})
@@ -29040,6 +29107,9 @@ def analyze():
             "nova_prescription": nova_prescription,
             "next_quality_offer": _r196956_offer,
             "quality_offer_integrity": _r196956_integrity,
+            # R196.9.75: announcing a direction is NOT issuing or booking it.
+            "next_quality_direction": _nova_r196975_quality_direction(
+                nova_decision, adaptive_roadmap, _r196956_offer),
             "nova_stage_continuity": _nova_stage_audit,
             "session_progression": session_progression,
             "scientific_progression": scientific_progression,
@@ -30941,6 +31011,16 @@ def _v115_replay_nova_core(fixture):
         aerobic_metabolic_range=aerobic_metabolic_range,
         training_definitions=training_definitions,
     )
+    # R196.9.71: R115 replay must not silently skip the R196.9.32
+    # native R27 test safety gate that production executes BEFORE compilation.
+    # This gate uses ONLY the already-frozen prescription, decision, Clock,
+    # Roadmap and planning context. No user/DB lookup is performed by the
+    # effective R196.9.32 definition. If the gate cannot authorize the
+    # canonical slot, it replaces the raw test with genuine easy sessions.
+    replay_native_r27_review = {}
+    nova_prescription, replay_native_r27_review = _v196920_guard_native_r27(
+        nova_prescription, nova_decision, adaptive_roadmap,
+        coach_clock, planning_context, microcycle_ledger, user_id=None)
     nova_prescription = compile_nova_prescription(
         nova_prescription, coach_clock, training_definitions=training_definitions,
         ftp_anchor=ftp_anchor, recent_activities=recent_activities,
@@ -30949,6 +31029,26 @@ def _v115_replay_nova_core(fixture):
         adaptive_roadmap=adaptive_roadmap, strength_pattern=strength_pattern,
         training_rhythm=training_rhythm, execution_model=execution_model,
     )
+    # A positive native decision is conditional, never an automatic test
+    # release. Production attests the compiled R27 structure/slot and falls
+    # back to the native hold when that final attestation fails.
+    if replay_native_r27_review.get('native_can_issue') is True:
+        replay_compiled_check = _v196920_attest_compiled_r27(
+            nova_prescription, replay_native_r27_review, coach_clock)
+        if replay_compiled_check.get('issued') is True:
+            nova_prescription = _r196920_stamp_compiled_r27(
+                nova_prescription, replay_compiled_check)
+        else:
+            nova_prescription = compile_nova_prescription(
+                _v196920_hold_native_r27(nova_prescription, nova_decision, coach_clock),
+                coach_clock, training_definitions=training_definitions,
+                ftp_anchor=ftp_anchor, recent_activities=recent_activities,
+                undefined_training_intent=undefined_training_intent,
+                power_model=power_model, microcycle_ledger=microcycle_ledger,
+                coaching_contract=coaching_contract,
+                adaptive_roadmap=adaptive_roadmap, strength_pattern=strength_pattern,
+                training_rhythm=training_rhythm, execution_model=execution_model)
+            replay_native_r27_review = replay_compiled_check
     recovery_signal = dict(c.get("recovery_signal") or {})
     nova_prescription = _v1953_adapt_prescription(nova_prescription, recovery_signal)
     recovery_signal["recovery_variant_count"] = int(((nova_prescription.get("recovery_variant_audit") or {}).get("count") or 0))
@@ -31014,6 +31114,8 @@ def _v115_replay_nova_core(fixture):
     data["nova_only_regression"] = _v88_nova_only_regression_contract(data)
     data["r115_replay"] = {
         "schema": R115_REPLAY_SCHEMA,
+        "native_r27_gate_state": replay_native_r27_review.get('state'),
+        "native_r27_gate_applied": bool(replay_native_r27_review),
         "source_input_fingerprint": fixture.get("input_fingerprint"),
         "expected": fixture.get("expected") or {},
         "actual": _v115_replay_expected(data),
@@ -31324,17 +31426,43 @@ def _v87_cross_module_authority_guard(snapshot, repair=False):
     return out
 
 def _v116_apply_completed_multiminute_mutation(fixture, *, strong, add_high_minutes, activity_id):
-    """Apply one internally self-consistent completed 3x6 exposure to a frozen POWER_5 fixture."""
+    """Create a synthetic *post-I/O* R116 exposure without forging provider provenance.
+
+    The original 2026-09-30 mutation was outside the current dose window and
+    labelled a fabricated session as ICU_INTERVALS_CANONICAL. That could make a
+    scientific QA failure or pass appear to reflect a measured workout.
+    This helper now rejects incoherent clocks, preserves chronological order,
+    and never claims to have received a genuine Intervals/FIT performance.
+    """
     fx = _v115_json_clone(fixture or {})
     core = fx.setdefault("core_inputs", {})
+    mc = core.get("microcycle_ledger_base") or {}
+    dose = mc.get("dose_context") or {}
+    clock = core.get("coach_clock") or {}
+    raw_clock = str(clock.get("iso") or "")
+    try:
+        event_day = datetime.fromisoformat(raw_clock).date()
+        window_start = date.fromisoformat(str(dose["window_start"]))
+        through_day = date.fromisoformat(str(dose["through_date"]))
+        cycle_end = date.fromisoformat(str(mc["cycle_end"])[:10])
+    except (ValueError, KeyError, TypeError, OverflowError) as exc:
+        raise ValueError("R116_QA_INCOMPLETE_OR_INVALID_DATE_CONTEXT") from exc
+    if not (window_start <= through_day <= event_day <= cycle_end):
+        raise ValueError("R116_QA_ACTIVITY_OUTSIDE_DOSE_WINDOW")
+    if not isinstance(activity_id, str) or not activity_id.startswith("R116_"):
+        raise ValueError("R116_QA_INVALID_SYNTHETIC_ACTIVITY_ID")
     ev = core.setdefault("evidence_ledger", {})
     rep = ev.setdefault("repeatability", {})
     events = rep.setdefault("events", [])
-    date_s = "2026-09-30"
-    re = {
+    ledger_events = ev.setdefault("events", [])
+    if any(str(r.get("activity_id")) == activity_id for r in events + ledger_events if isinstance(r, dict)):
+        raise ValueError("R116_QA_DUPLICATE_ACTIVITY_ID")
+    date_s = event_day.isoformat()
+    source = "SYNTHETIC_POST_IO_QA_NOT_PROVIDER_MEASURED"
+    row = {
         "activity_id": activity_id,
         "date": date_s,
-        "name": "R116 simulated completed 3×6",
+        "name": "R116 synthetic completed 3×6 (NOT FIT/ICU)",
         "reps": 3,
         "interval_secs": 360.0,
         "interval_label": "6 min",
@@ -31343,40 +31471,39 @@ def _v116_apply_completed_multiminute_mutation(fixture, *, strong, add_high_minu
         "min_watts": 330.0,
         "max_watts": 350.0,
         "strong": bool(strong),
-        "source": "ICU_INTERVALS_CANONICAL",
-        "activity_truth_source": "ICU_INTERVALS_CANONICAL",
+        "source": source,
+        "activity_truth_source": source,
     }
-    events.insert(0, re)
+    events.append(row)
+    events.sort(key=lambda r: (str(r.get("date") or ""), str(r.get("activity_id") or "")), reverse=True)
     rep["sessions"] = len(events)
-    rep["strong_sessions"] = sum(1 for x in events if x.get("strong"))
-    rep["efforts"] = sum(int(_rhythm_num(x.get("reps")) or 0) for x in events)
+    rep["strong_sessions"] = sum(1 for r in events if r.get("strong"))
+    rep["efforts"] = sum(int(_rhythm_num(r.get("reps")) or 0) for r in events)
 
-    ledger_events = ev.setdefault("events", [])
-    ledger_events.insert(0, {
+    ledger_events.append({
         "activity_id": activity_id,
         "date": date_s,
-        "name": "R116 simulated completed 3×6",
+        "name": row["name"],
         "quality_relevant": True,
-        "quality_basis": "TRAINING_FAMILY",
-        "activity_truth_status": "RESOLVED",
-        "activity_truth_source": "ICU_INTERVALS_CANONICAL",
-        "repeatability": dict(re),
+        "quality_basis": "SYNTHETIC_HYPOTHETICAL_QA",
+        "activity_truth_status": "SYNTHETIC",
+        "activity_truth_source": source,
+        "repeatability": dict(row),
     })
+    ledger_events.sort(key=lambda r: (str(r.get("date") or ""), str(r.get("activity_id") or "")), reverse=True)
     counts = ev.setdefault("counts", {})
     counts["observed_sessions"] = len(ledger_events)
-    counts["quality_sessions"] = sum(1 for x in ledger_events if x.get("quality_relevant"))
+    counts["quality_sessions"] = sum(1 for r in ledger_events if r.get("quality_relevant"))
     counts["repeatability_sessions"] = len(events)
-    counts["repeatability_strong_sessions"] = sum(1 for x in events if x.get("strong"))
-    counts["repeatability_efforts"] = sum(int(_rhythm_num(x.get("reps")) or 0) for x in events)
+    counts["repeatability_strong_sessions"] = rep["strong_sessions"]
+    counts["repeatability_efforts"] = rep["efforts"]
 
-    mc = core.setdefault("microcycle_ledger_base", {})
-    dose = mc.setdefault("dose_context", {})
     cur = dose.setdefault("current", {})
     cur["sessions"] = int(_rhythm_num(cur.get("sessions")) or 0) + 1
     cur["zoned_sessions"] = int(_rhythm_num(cur.get("zoned_sessions")) or 0) + 1
     cur["high_minutes"] = round(float(_rhythm_num(cur.get("high_minutes")) or 0.0) + float(add_high_minutes), 1)
-    dose["through_date"] = date_s
-    fx["expected"] = {}
+    dose["through_date"] = max(through_day, event_day).isoformat()
+    fx["expected"] = {}  # this is a counterfactual, NOT the original R115 oracle
     return fx
 
 def _v116_realistic_completion_suite(fixture):
@@ -31390,6 +31517,38 @@ def _v116_realistic_completion_suite(fixture):
         return {'schema':'V4.8.92-R116-REALISTIC-REPLAY-1',
                 'pass':None, 'applicable':False, 'state':'SKIPPED_WRONG_GOAL',
                 'goal_key':goal, 'required_goal':'POWER_5', 'scenarios':[]}
+    # R196.9.76: a phase-specific *scientific* expectation must only be
+    # evaluated against a fixture that meets its observed preconditions.
+    # An already-complete TRANSFER case is NOT three failures of early-dose
+    # physiology. It is three NOT-APPLICABLE test cases. Neither this skip
+    # nor the original late-phase replay counts as scientific validation.
+    # Use the effective production-like R115 replay, not a manually edited
+    # string in the input, to establish current stage, question and facet.
+    original = _v115_replay_nova_core(fixture)
+    road = original.get('adaptive_roadmap') or {}
+    decision = original.get('nova_decision') or {}
+    specific = (((original.get('question_state') or {}).get('dimensions') or {}).get('SPECIFIC_DOSE') or {})
+    observed = {
+        'stage': (road.get('stage') or {}).get('code'),
+        'decision_dimension': decision.get('dimension'),
+        'missing_facets': list((road.get('facet_profile') or {}).get('missing') or []),
+        'specific_dose_exit': bool(specific.get('exit_satisfied')),
+        'authority_final_pass': bool(original.get('authority_final_pass')),
+    }
+    early_phase_applicable = (
+        observed['stage'] == 'REPEAT'
+        and observed['decision_dimension'] == 'SPECIFIC_DOSE'
+        and 'EXTENDED_PUNCH' in observed['missing_facets']
+        and not observed['specific_dose_exit']
+        and observed['authority_final_pass']
+    )
+    if not early_phase_applicable:
+        return {'schema':'V4.8.92-R116-REALISTIC-REPLAY-1',
+                'pass':None, 'applicable':False, 'state':'SKIPPED_WRONG_PHASE',
+                'goal_key':goal, 'required_stage':'REPEAT',
+                'required_dimension':'SPECIFIC_DOSE',
+                'required_missing_facet':'EXTENDED_PUNCH',
+                'observed_preconditions':observed, 'scenarios':[]}
     scenarios = []
 
     def run(name, fx, expect):
@@ -58337,12 +58496,36 @@ def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,
                          recent_exposure_exclusion_schema=R196968_SCHEMA,
                          recent_exposure_policy='VERIFIED_30_15_FAMILY_COOLDOWN_OR_EXACT_MATCH',
                          recent_exposure_does_not_assert_fulfillment=True)
+            # R196.9.70: a recent observed exposure is supplementary evidence,
+            # never authority to relabel a VALIDATE / HOLD scientific veto as
+            # a mere alternation delay. Retain the original gate for replay.
             if not offer and audit.get('state') in {'WITHHELD_FOR_ALTERNATION',
-                              'WITHHELD_FOR_SCIENCE', 'RELEASE_FAILURE'}:
-                audit.update(state='WITHHELD_FOR_ALTERNATION',
-                    reason='RECENT_OBSERVED_WORKOUT_RECONCILIATION_REQUIRED_AND_NO_DISTINCT_QUALITY',
-                    science_failure_reason=audit.get('reason'),
-                    no_invented_workout=True)
+                                                   'WITHHELD_FOR_SCIENCE'}:
+                action = str((decision or {}).get('action') or '').upper()
+                if action in {'VALIDATE', 'HOLD'} or audit.get('state') == 'WITHHELD_FOR_SCIENCE':
+                    prior_reason = str(audit.get('reason') or '')
+                    audit.update(
+                        state='WITHHELD_FOR_SCIENCE',
+                        reason=(prior_reason if prior_reason and prior_reason !=
+                                'RECENT_OBSERVED_WORKOUT_RECONCILIATION_REQUIRED_AND_NO_DISTINCT_QUALITY'
+                                else 'CURRENT_SCIENTIFIC_OR_SAFETY_GATE'),
+                        withholding_authority=('NOVA_DECISION_'+action if action in {'VALIDATE', 'HOLD'}
+                                               else 'UPSTREAM_SCIENTIFIC_GATE'),
+                        recent_exposure_is_secondary=True,
+                        recheck_contract={
+                            'trigger':'NEXT_SNAPSHOT_WITH_UPDATED_SCIENTIFIC_OR_SAFETY_EVIDENCE',
+                            'verified_return_date':None,
+                            'requires_canonical_validation':action == 'VALIDATE',
+                            'requires_current_safety_clearance':True,
+                            'consent_alone_is_not_clearance':True,
+                        },
+                        no_invented_workout=True)
+                else:
+                    audit.update(state='WITHHELD_FOR_ALTERNATION',
+                        reason='RECENT_OBSERVED_WORKOUT_RECONCILIATION_REQUIRED_AND_NO_DISTINCT_QUALITY',
+                        science_failure_reason=audit.get('reason'),
+                        no_invented_workout=True)
+            # Keep RELEASE_FAILURE as an error; a cooldown cannot hide it.
     return offer,audit
 
 
@@ -58508,12 +58691,15 @@ _HOME_PENDING_CLEAR = """{% elif is_pending %}
 {% if data.nova_decision and data.nova_decision.action == 'HOLD' %}
 <div class="v4-session-main">A hard workout is not advised right now.</div>
 <div class="v4-session-why">Nova will reassess your recovery before offering another quality session.</div>
-{% elif qi.get('state') == 'WITHHELD_FOR_ALTERNATION' %}
-<div class="v4-session-main">Your recent hard workout is already in the training record. For now, Nova recommends easy riding rather than another similar quality session.</div>
-<div class="v4-session-why">A new quality workout will appear here when a different, suitable session is ready.</div>
+{% elif data.nova_decision and data.nova_decision.action == 'VALIDATE' %}
+<div class="v4-session-main">Nova is reviewing whether a formal performance check is appropriate. No quality workout is cleared for now.</div>
+<div class="v4-session-why">A test needs a validated protocol, your approval and current safety clearance. The next Snapshot will reassess new evidence; no test date is promised.</div>
 {% elif qi.get('state') == 'WITHHELD_FOR_SCIENCE' %}
-<div class="v4-session-main">A suitable new quality workout has not been verified yet.</div>
-<div class="v4-session-why">You can follow the easy sessions above while Nova checks the next quality opportunity.</div>
+<div class="v4-session-main">No suitable quality workout has passed the scientific checks.</div>
+<div class="v4-session-why">Continue with the permitted easier sessions. A new Snapshot will review updated evidence and training opportunities.</div>
+{% elif qi.get('state') == 'WITHHELD_FOR_ALTERNATION' %}
+<div class="v4-session-main">The recent hard workout has been recorded. No distinct quality session is cleared for the upcoming opportunities.</div>
+<div class="v4-session-why">Nova will reassess the next opportunity using updated training and recovery evidence; a date cannot yet be guaranteed.</div>
 {% else %}
 <div class="v4-session-main">No verified quality workout has been scheduled for your upcoming training opportunities.</div>
 <div class="v4-session-why">Nova will reassess when a suitable workout can be defined.</div>
@@ -58535,6 +58721,18 @@ _new_slot_label = '''<div class="v4-session-slot">{% if not is_quality_slot and 
 {% else %}''' + _previous_slot_label[len('<div class="v4-session-slot">'):-len('</div>')] + '''{% endif %}</div>'''
 HOME_PAGE = HOME_PAGE[:_st] + _new_slot_label + HOME_PAGE[_en:]
 
+# R196.9.70: show third-card fuel only when a per-row fuel value exists.
+# First two chronological-session fuel cards remain unchanged. This is an
+# explicit template condition (not CSS hiding a diagnostic placeholder).
+_R196970_FUEL_OPEN = '</article>\n<div class="v23-session-fuel v23-col-{{ loop.index }}">'
+_R196970_FUEL_CLOSE = '</div>\n{% endfor %}\n</div>\n<style>'
+if HOME_PAGE.count(_R196970_FUEL_OPEN) != 1 or HOME_PAGE.count(_R196970_FUEL_CLOSE) != 1:
+    raise RuntimeError('R196970_FUEL_VISIBILITY_TEMPLATE_DRIFT')
+HOME_PAGE = HOME_PAGE.replace(_R196970_FUEL_OPEN,
+    '</article>\n{% if not is_quality_slot or n %}\n<div class="v23-session-fuel v23-col-{{ loop.index }}">', 1)
+HOME_PAGE = HOME_PAGE.replace(_R196970_FUEL_CLOSE,
+    '</div>\n{% endif %}\n{% endfor %}\n</div>\n<style>', 1)
+
 # No extra banner, no "Diagnostic:" / internal reason codes, and no duplicate
 # PENDING + AWAITING PLAN + QUALITY ERROR labels for one withheld offer.
 
@@ -58544,7 +58742,364 @@ APP_VERSION = ('THE LAB · PRODUCT V4.9.166 R196.9.66 · VERIFIED NAMED-EXPOSURE
 
 # R196.9.67 — complete measured raw 30/15 series from Intervals streams.
 APP_VERSION = "THE LAB · PRODUCT V4.9.167 R196.9.67 · INTERVALS RAW 30/15 COMPLETE-SERIES RECONSTRUCTION · NOVA R196.2 CORE"
-APP_VERSION = 'THE LAB · PRODUCT V4.9.169 R196.9.69 · ATHLETE THIRD-CARD OUTPUT CONTRACT · NOVA R196.2 CORE'
+
+
+# R196.9.75 — Card 3 ANNOUNCES a direction, not an appointment/prescription.
+# This is an observational projection of existing roadmap/library descriptions,
+# independent of HOLD/VALIDATE/current slot readiness. Never add the preview to
+# next_sessions, microcycle_ledgers, prescription_history or Calendar.
+R196975_DIRECTION_SCHEMA = 'NOVA-R196.9.75-QUALITY-DIRECTION-NO-SCHEDULING-1'
+_R196975_GOAL_LABELS = {
+    'POWER_1':'potenza su 1 minuto',
+    'POWER_5':'potenza su 5 minuti',
+    'POWER_20':'potenza su 20 minuti',
+    'SPRINTER':'sprint',
+    'TIME_TRIAL':'cronometro',
+    'VO2MAX':'VO₂max',
+    'ENDURANCE_BASE':'resistenza',
+}
+
+def _nova_r196975_quality_direction(decision, road, offer=None):
+    """Read-only next-QUALITY communication; never use it as training clearance.
+
+    Priority is an already-selected canonical workout, then an existing formal
+    validation step, then a known goal/dimension-specific catalogue identity,
+    then the actual roadmap stage. No invented watts, dosing, date or booking.
+    Even HOLD/VALIDATE keep a direction; their decision remains unchanged.
+    """
+    d = decision if isinstance(decision, dict) else {}
+    r = road if isinstance(road, dict) else {}
+    goal = str(d.get('goal_key') or r.get('goal_key') or '').upper()
+    action = str(d.get('action') or '').upper()
+    science = r.get('scientific_progression') or {}
+    if not isinstance(science, dict):
+        science = {}
+    dimension = str(science.get('dimension') or d.get('dimension') or '').upper()
+    current_offer = offer if isinstance(offer, dict) else {}
+    existing = current_offer.get('workout') or {}
+    title = None
+    source = None
+    identity = None
+    if isinstance(existing, dict) and existing.get('title'):
+        title = str(existing['title'])
+        identity = existing.get('nova_workout_id')
+        source = 'EXISTING_CANONICAL_QUALITY_OFFER'
+    steps = [x for x in (r.get('steps') or []) if isinstance(x, dict)]
+    if not title and action == 'VALIDATE':
+        checkpoint = next((x for x in steps
+                           if str(x.get('code') or '').upper() == 'VALIDATE'
+                           and x.get('label') and str(x.get('state') or '').upper() != 'BUILT'), None)
+        if checkpoint:
+            title = str(checkpoint['label'])
+            source = 'ROADMAP_FORMAL_VALIDATION_STEP'
+    if not title and action != 'VALIDATE':
+        candidates = [t for t in _NOVA_WORKOUT_LIBRARY
+                      if str(t.get('goal') or '').upper() == goal
+                      and dimension in (t.get('dimensions') or ())
+                      and not t.get('adaptive_only') and t.get('title')]
+        if candidates:
+            chosen = sorted(candidates, key=lambda t:(-float(t.get('priority') or 0),str(t.get('id') or '')))[0]
+            title, identity = str(chosen['title']), chosen.get('id')
+            source = 'CANONICAL_LIBRARY_DIRECTION_ONLY_NOT_COMPILED'
+    if not title:
+        stage = next((x for x in steps if str(x.get('state') or '').upper() == 'NEXT'
+                      and x.get('label')), None)
+        if not stage:
+            stage = next((x for x in steps if str(x.get('state') or '').upper() == 'NOW'
+                          and x.get('label')), None)
+        if stage:
+            title, source = str(stage['label']), 'ROADMAP_STAGE_DIRECTION'
+    if not title:
+        title = 'Next quality · ' + _R196975_GOAL_LABELS.get(goal,'specific development')
+        source = 'GOAL_DIRECTION_NO_WORKOUT_CLAIM'
+    return {
+        'schema':R196975_DIRECTION_SCHEMA,
+        'title':title,'goal_key':goal,'decision_action_observed':action,
+        'roadmap_dimension_observed':dimension,'source':source,
+        'referenced_canonical_template_id':identity,
+        'direction_only':True,'is_a_prescription':False,
+        'is_scheduled':False,'suggested_date':None,'suggested_time':None,
+        'execution_authorized_by_preview':False,
+        'adds_workout_to_ledger':False,'adds_calendar_event':False,
+    }
+
+# Reports from the earlier version retain the old science, but acquire the
+# new read-only wording when opened. This never alters the stored Snapshot.
+_r196975_prepare_ui_before = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui = _r196975_prepare_ui_before(data)
+    if not isinstance(ui, dict):
+        return ui
+    ui['next_quality_direction'] = _nova_r196975_quality_direction(
+        ui.get('nova_decision'),ui.get('adaptive_roadmap'),
+        ui.get('next_quality_offer'))
+    return ui
+
+# Replace the pre-existing withheld-status body rather than stacking another
+# warning. A third card always names the next quality direction. Dates and
+# booking actions remain exclusively with athlete-owned chronological plans.
+_R196975_PENDING_START = '{% elif is_pending %}'
+_R196975_PENDING_END = '{% else %}\n<div class="v4-session-slot">'
+assert HOME_PAGE.count(_R196975_PENDING_START)==1, 'R196975_PENDING_START_DRIFT'
+_qstart=HOME_PAGE.index(_R196975_PENDING_START)
+_qend=HOME_PAGE.index(_R196975_PENDING_END.replace('\\n','\n'),_qstart)
+assert _qend>_qstart, 'R196975_PENDING_END_DRIFT'
+_R196975_PENDING_BODY = '''{% elif is_pending %}
+{% set qd = data.next_quality_direction or {} %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · DIRECTION</span></div>
+<h3>{{ (qd.title if qd.title else 'Next quality')|e }}</h3>
+<div class="v4-session-meta"><span class="v4-session-pill">YOU CHOOSE WHEN · NOT SCHEDULED</span></div>
+<div class="v4-session-main">This is NOVA’s direction for your next quality session. No date is set; you decide when to do it.</div>
+{% if data.nova_decision and data.nova_decision.action == 'HOLD' %}
+<div class="v4-session-why">Your next quality stays visible during recovery. This is not an instruction to perform it today.</div>
+{% elif data.nova_decision and data.nova_decision.action == 'VALIDATE' %}
+<div class="v4-session-why">The next roadmap step is a performance checkpoint. The exact protocol and workload require current evidence.</div>
+{% else %}
+<div class="v4-session-why">A preview of the training direction, not a Calendar booking. The final workload depends on updated evidence.</div>
+{% endif %}
+'''
+HOME_PAGE=HOME_PAGE[:_qstart]+_R196975_PENDING_BODY+HOME_PAGE[_qend:]
+# A detached offer can have an advisory calendar date internally, but Card 3
+# deliberately displays NO date, and offers no booking/postponement control.
+_R196975_SLOT_MARK = "<div class=\"v4-session-slot\">{% if not is_quality_slot and s.source == 'CALENDAR' and data.r196966_calendar_conflicts %}"
+assert HOME_PAGE.count(_R196975_SLOT_MARK)==1,'R196975_SLOT_LABEL_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196975_SLOT_MARK,
+    "<div class=\"v4-session-slot\">{% if is_quality_slot %}<span class=\"v1962-quality-eyebrow\">NEXT QUALITY · NOT SCHEDULED</span>{% elif not is_quality_slot and s.source == 'CALENDAR' and data.r196966_calendar_conflicts %}",1)
+# Do not accidentally publish a detached preview as an athlete-booked item.
+# The card's "postpone" form is reserved for chronological cards only.
+_R196975_POSTPONE = '{% if not is_preview and not download_mode and not qa_mode and s.hard_spacing_relevant and not s.provisional_quality and s.nova_workout_id and s.nova_canonical_plan_id %}'
+assert HOME_PAGE.count(_R196975_POSTPONE)==1,'R196975_POSTPONE_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196975_POSTPONE,
+    '{% if not is_quality_slot and not is_preview and not download_mode and not qa_mode and s.hard_spacing_relevant and not s.provisional_quality and s.nova_workout_id and s.nova_canonical_plan_id %}',1)
+
+# R196.9.77 — compose R131 safe intensity re-entry with observed comparable reps.
+# R131 reduces post-severe work dose; R195.9's *loaded recovery* watt contract
+# must not be imposed on a bridge that explicitly keeps recoveries easy.
+# R194.3/R196.7 still attests repeated-work, recovery and source provenance.
+R196977_SCHEMA = 'V4.9.177-R196.9.77-R131-MEASURED-REENTRY-1'
+_R196977_REENTRY_ID = 'POST_SEVERE_INTENSITY_REENTRY_V1'
+
+_r196977_science_before = _v503_scientific_progression
+
+def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None,
+        previous_blocks=None, performance_narrative=None, performance_evidence=None,
+        aerobic_metabolic_range=None, evidence_ledger=None, question_state=None):
+    out = _r196977_science_before(goal_key, roadmap, ledger, session_progression,
+        previous_blocks, performance_narrative, performance_evidence,
+        aerobic_metabolic_range,evidence_ledger=evidence_ledger,question_state=question_state)
+    if not isinstance(out,dict) or str(out.get('dimension') or '').upper()!='RECOVERY_UNDER_LOAD':
+        return out
+    dose=out.get('dose_contract') or {}; p=dose.get('prescription') or {}
+    if (dose.get('schema')!=R131_SCHEMA or dose.get('stage')!='POST_SEVERE_INTENSITY_REENTRY'
+            or dose.get('available') is not True or not (out.get('severe_session_guard') or {}).get('active')):
+        return out
+    secs=_v1943_finite(p.get('interval_secs'),60,1200)
+    n=_v1943_finite(p.get('reps'),2,12)
+    basic_recovery=_v1943_finite(p.get('recovery_secs'),60,600)
+    max_dose=_v1943_finite(p.get('max_total_work_secs'),60,20000)
+    low_ratio=_v1943_finite(p.get('work_reference_ratio_low'),0.2,1.0)
+    high_ratio=_v1943_finite(p.get('work_reference_ratio_high'),0.2,1.0)
+    if (None in (secs,n,basic_recovery,max_dose,low_ratio,high_ratio)
+            or not float(n).is_integer() or n*secs>max_dose or low_ratio>=high_ratio):
+        return out
+    window=(roadmap or {}).get('quality_window') or {}
+    as_of=str(window.get('preferred_iso') or '')[:10] or get_rome_now().date().isoformat()
+    events=((evidence_ledger or {}).get('repeatability') or {}).get('events') or []
+    # Match actual completed repeat duration (not a single peak), number of
+    # reps and canonical source; never shorten measured recoveries for the same
+    # proposed power. The existing R194.3/R196.7 function remains the arbiter.
+    candidates=sorted((e for e in events if isinstance(e,dict)
+        and e.get('strong') is True
+        and str(e.get('activity_truth_source') or e.get('source') or '').upper()
+            in {'ICU_INTERVALS_CANONICAL','DEVICE_LAPS'}
+        and abs((_v1943_finite(e.get('interval_secs'),60,1200) or -999)-secs)<=1
+        and (_v1943_finite(e.get('reps'),1,30) or 0)>=n
+        and (_v1943_finite(e.get('recovery_secs'),60,600) or 0)>=basic_recovery
+        and (_v1943_finite(e.get('recovery_secs'),60,600) or 9999)<=300),
+        key=lambda e:(str(e.get('date') or ''),str(e.get('activity_id') or '')),reverse=True)
+    for event in candidates:
+        rest=int(math.ceil(float(event['recovery_secs'])))
+        template={'pattern':'STANDARD','goal':goal_key,'reps':int(n),
+                  'work_s':int(secs),'recovery_s':rest}
+        band=_v1943_band(template,evidence_ledger=evidence_ledger,
+                          ftp_anchor=None,as_of_date=as_of,dimension='RECOVERY_UNDER_LOAD')
+        if (band.get('state')!='PRESCRIBED'
+            or band.get('source')!='COMPARABLE_VERIFIED_REPEATED_WORK'
+            or band.get('repeatability_state')!='VERIFIED_COMPARABLE_REPEATS'
+            or band.get('observed_repeated_work_is_direct_evidence') is not True
+            or str(band.get('activity_id') or '')!=str(event.get('activity_id') or '')):
+            continue
+        actual_recovery=_v1943_finite(band.get('observed_recovery_seconds'),60,600)
+        observed=_v1943_finite(band.get('observed_repeated_avg_watts'),70,1200)
+        if actual_recovery is None or observed is None or actual_recovery>rest:
+            continue
+        lo=int(round(observed*low_ratio/5)*5)
+        hi=int(round(observed*high_ratio/5)*5)
+        if not (0<lo<hi<observed):continue
+        verified=dict(band,target_watts=int(round((lo+hi)/10)*5),low_watts=lo,high_watts=hi,
+            confidence='HIGH',reentry_reduction_from_verified_repeats=True,
+            reentry_schema=R196977_SCHEMA,reentry_ratio_low=low_ratio,
+            reentry_ratio_high=high_ratio,recovery_mode='EASY_SELF_SELECTED',
+            recovery_seconds=rest,planned_recovery_seconds=rest,
+            severe_reference_activity_id=(dose.get('reference') or {}).get('activity_id'),
+            severe_reps=(dose.get('reference') or {}).get('reps'),
+            severe_interval_seconds=(dose.get('reference') or {}).get('interval_secs'),
+            reentry_total_work_seconds=int(n*secs))
+        revised=copy.deepcopy(dose)
+        revised['prescription'].update(recovery_secs=rest,work_watts_low=lo,work_watts_high=hi)
+        revised['verified_reentry_power']=verified
+        revised['verified_reentry_schema']=R196977_SCHEMA
+        return dict(out,dose_contract=revised)
+    # Original science remains, but a precise re-entry watt contract was not
+    # established: the prescriber does NOT issue numerical hard work.
+    return out
+
+_r196977_repair_before = _v503_scientific_hard_repair
+
+def _v503_scientific_hard_repair(ledger,road,power_model,ftp_anchor=None):
+    sci=(road or {}).get('scientific_progression') or {};dose=sci.get('dose_contract') or {}
+    if dose.get('stage')!='POST_SEVERE_INTENSITY_REENTRY':
+        return _r196977_repair_before(ledger,road,power_model,ftp_anchor=ftp_anchor)
+    band=dose.get('verified_reentry_power') or {};p=dose.get('prescription') or {}
+    if (dose.get('schema')!=R131_SCHEMA or dose.get('available') is not True
+            or dose.get('verified_reentry_schema')!=R196977_SCHEMA
+            or band.get('state')!='PRESCRIBED'
+            or (road.get('quality_window') or {}).get('state') not in {'WATCH','OPEN'}):
+        return None
+    n=int(p['reps']);secs=int(p['interval_secs']);rest=int(p['recovery_secs'])
+    lo=int(p['work_watts_low']);hi=int(p['work_watts_high'])
+    work_label=f'{secs/60:g} min';recovery_label=f'{rest/60:g} min'
+    title=f'Post-ceiling re-entry {n}×{work_label}'
+    main=(f'{n}×{work_label} free at {lo}–{hi} W; {recovery_label} easy Z1 between reps, self-selected watts. '
+          'Keep every repetition controlled. No PB attempt, no prolonged effort, no loaded recoveries.')
+    why=('Reduced post-severe intensity dose from real, verified repeated work with comparable recovery. '
+         'The watt range is deliberately lower than the measured repeatability reference; recovery stays easy.')
+    sig=_v4886_primary_stimulus_signature(title=title,main_set=main,intensity_class='vo2')
+    if _v504_scientific_dose_violations(sig,main,road):return None
+    return title,'Hard · controlled re-entry',main,why,{
+        'state':'POST_SEVERE_INTENSITY_REENTRY','allowed':True,
+        'domain':sig.get('domain'),'domain_label':sig.get('domain_label'),
+        'role':'TRAIN','dimensions':['WORK_DOSE_REDUCTION','RECOVERY_LOAD_DEFERRED'],
+        'architecture_pattern':sig.get('architecture_pattern'),
+        'intensity_class':'vo2','dose_contract_stage':dose.get('stage')}
+
+_r196977_prescriber_before = build_nova_prescription
+
+def build_nova_prescription(nova_decision,coach_clock,adaptive_roadmap=None,
+        microcycle_ledger=None,evidence_ledger=None,power_model=None,
+        ftp_anchor=None,aerobic_metabolic_range=None,training_definitions=None):
+    result=_r196977_prescriber_before(nova_decision,coach_clock,
+        adaptive_roadmap=adaptive_roadmap,microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger,power_model=power_model,ftp_anchor=ftp_anchor,
+        aerobic_metabolic_range=aerobic_metabolic_range,training_definitions=training_definitions)
+    if not isinstance(result,dict) or result.get('status')!='PRESCRIBED':return result
+    dose=((adaptive_roadmap or {}).get('scientific_progression') or {}).get('dose_contract') or {}
+    if (dose.get('stage')!='POST_SEVERE_INTENSITY_REENTRY'
+        or dose.get('verified_reentry_schema')!=R196977_SCHEMA):return result
+    band=dose.get('verified_reentry_power') or {}
+    if band.get('state')!='PRESCRIBED':return result
+    for raw in result.get('raw_sessions') or []:
+        if isinstance(raw,dict) and raw.get('_tl_nova_workout_id')==_R196977_REENTRY_ID:
+            raw['_tl_v1943_power_band']=copy.deepcopy(band)
+    future=result.get('future_quality_candidate') or {}
+    raw=future.get('raw_quality') if isinstance(future,dict) else None
+    if isinstance(raw,dict) and raw.get('_tl_nova_workout_id')==_R196977_REENTRY_ID:
+        raw['_tl_v1943_power_band']=copy.deepcopy(band)
+    return result
+
+_r196977_completeness_before = _v19696_execution_contract
+
+def _v19696_execution_contract(session):
+    s=session if isinstance(session,dict) else {}
+    if str(s.get('nova_workout_id') or '')!=_R196977_REENTRY_ID:
+        return _r196977_completeness_before(session)
+    band=s.get('power_prescription') or {}
+    issues=[]
+    if (band.get('schema')!=R1943_SCHEMA or band.get('state')!='PRESCRIBED'
+        or band.get('source')!='COMPARABLE_VERIFIED_REPEATED_WORK'
+        or band.get('reentry_schema')!=R196977_SCHEMA
+        or band.get('reentry_reduction_from_verified_repeats') is not True
+        or band.get('repeatability_state')!='VERIFIED_COMPARABLE_REPEATS'
+        or band.get('observed_repeated_work_is_direct_evidence') is not True):
+        issues.append('REENTRY_MEASURED_WORK_NOT_ATTESTED')
+    reps=_v1943_finite(band.get('reps'),2,12)
+    work=_v1943_finite(band.get('work_seconds'),60,1200)
+    recovery=_v1943_finite(band.get('recovery_seconds'),60,600)
+    measured_recovery=_v1943_finite(band.get('observed_recovery_seconds'),60,600)
+    lo=_v1943_finite(band.get('low_watts'),70,1200)
+    hi=_v1943_finite(band.get('high_watts'),70,1200)
+    severe_reps=_v1943_finite(band.get('severe_reps'),2,20)
+    severe_work=_v1943_finite(band.get('severe_interval_seconds'),60,1200)
+    if (None in (reps,work,recovery,measured_recovery,lo,hi,severe_reps,severe_work)
+        or not 0<lo<hi or not float(reps).is_integer()
+        or recovery<measured_recovery
+        or reps*work>0.75*severe_reps*severe_work
+        or s.get('prescribed_power_low')!=int(lo)
+        or s.get('prescribed_power_high')!=int(hi)):
+        issues.append('REENTRY_DOSE_OR_POWER_INCONSISTENT')
+    if (s.get('stimulus_architecture_state')!='NOVA_CANONICAL_LIBRARY'
+        or s.get('nova_prescription_authority') is not True
+        or s.get('nova_prescription_dimension')!='RECOVERY_UNDER_LOAD'
+        or not s.get('hard_spacing_relevant')):
+        issues.append('REENTRY_NO_UPSTREAM_AUTHORITY')
+    if not issues:
+        work_label=f'{work/60:g} min';rest_label=f'{recovery/60:g} min'
+        expected=(f'{int(reps)}×{work_label} free at {int(lo)}–{int(hi)} W; '
+                  f'{rest_label} easy Z1 between reps, self-selected watts.')
+        instructions=_v19696_strip_conflicting_power_headers(s.get('main_set'))
+        if expected not in instructions or re.search(r'\b(?:recovery|recoveries|float)[^.]{0,90}\b\d{2,3}\s*W\b',instructions,re.I):
+            issues.append('REENTRY_WORK_RECOVERY_TEXT_MISMATCH')
+    return {'schema':R19696_SCHEMA,'available':True,'ready':not issues,
+        'workout_id':_R196977_REENTRY_ID,'goal':'POWER_5','pattern':'STANDARD',
+        'work':f'{int(reps)} × {work/60:g} min' if reps and work else None,
+        'recovery':f'{recovery/60:g} min easy between reps' if recovery else None,
+        'power':f'{int(lo)}–{int(hi)} W validated prescription range' if lo and hi else None,
+        'total':s.get('duration'),'issues':issues,
+        'source':R196977_SCHEMA}
+
+# Card 3 is a direction announcement, never a second booking surface.
+# A legacy R196.9.31 note was incorrectly advertising a scheduled slot inside
+# that same preview. Keep the note in genuine chronological cards only.
+_R196977_FORWARD_NOTE = '{% if s.nova_coach_planned_ahead %}'
+assert HOME_PAGE.count(_R196977_FORWARD_NOTE)==1, 'R196977_FORWARD_NOTE_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196977_FORWARD_NOTE,
+    '{% if not is_quality_slot and s.nova_coach_planned_ahead %}',1)
+
+_r196977_ui_before = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui=_r196977_ui_before(data)
+    if not isinstance(ui,dict):return ui
+    p=ui.get('nova_prescription') or {}
+    if (p.get('source')!='SEVERE_SESSION_REENTRY_CONTRACT'
+        or p.get('status')!='PRESCRIBED'
+        or p.get('execution_status')!='READY'
+        or p.get('workout_id')!=_R196977_REENTRY_ID):
+        return ui
+    # Do not let an unrelated (unapproved) fallback library offer replace the
+    # scientifically chosen R131 re-entry. This changes only the read-only
+    # direction. It does not authorize a time, post to Calendar or mutate a plan.
+    source=next((s for s in ui.get('next_sessions') or []
+        if isinstance(s,dict) and s.get('nova_workout_id')==_R196977_REENTRY_ID
+        and (s.get('power_prescription') or {}).get('reentry_schema')==R196977_SCHEMA),None)
+    if source is None:return ui
+    out=dict(ui)
+    offer=(out.get('next_quality_offer') or {}).get('workout') or {}
+    if offer and offer.get('nova_workout_id')!=_R196977_REENTRY_ID:
+        out['next_quality_offer']=None  # UI-only stale fallback, not ledger deletion.
+    direction=dict(out.get('next_quality_direction') or {})
+    direction.update({'schema':R196975_DIRECTION_SCHEMA,'title':str(source.get('title') or 'Post-ceiling re-entry'),
+        'source':'CURRENT_VERIFIED_R131_QUALITY_DIRECTION',
+        'referenced_canonical_template_id':_R196977_REENTRY_ID,
+        'direction_only':True,'is_a_prescription':False,'is_scheduled':False,
+        'suggested_date':None,'suggested_time':None,
+        'execution_authorized_by_preview':False,'adds_calendar_event':False,'adds_workout_to_ledger':False})
+    out['next_quality_direction']=direction
+    return out
+
+APP_VERSION = 'THE LAB · PRODUCT V4.9.177 R196.9.77 EXPERIMENTAL QA · OBSERVED R131 REENTRY COMPOSITION · UNSCHEDULED QUALITY DIRECTION'
+
 
 
 if __name__ == "__main__":
