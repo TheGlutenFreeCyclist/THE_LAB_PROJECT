@@ -58848,8 +58848,12 @@ assert _qend>_qstart, 'R196975_PENDING_END_DRIFT'
 _R196975_PENDING_BODY = '''{% elif is_pending %}
 {% set qd = data.next_quality_direction or {} %}
 <div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · DIRECTION</span></div>
-<h3>{{ (qd.title if qd.title else 'Next quality')|e }}</h3>
+<h3>{{ (qd.athlete_title if qd.athlete_title else qd.title if qd.title else 'Next quality')|e }}</h3>
 <div class="v4-session-meta"><span class="v4-session-pill">YOU CHOOSE WHEN · NOT SCHEDULED</span></div>
+{% if qd.athlete_explanation %}
+<div class="v4-session-main">{{ qd.athlete_explanation|e }}</div>
+<div class="v4-session-why">{{ qd.athlete_status|e }}</div>
+{% else %}
 <div class="v4-session-main">This is NOVA’s direction for your next quality session. No date is set; you decide when to do it.</div>
 {% if data.nova_decision and data.nova_decision.action == 'HOLD' %}
 <div class="v4-session-why">Your next quality stays visible during recovery. This is not an instruction to perform it today.</div>
@@ -58857,6 +58861,7 @@ _R196975_PENDING_BODY = '''{% elif is_pending %}
 <div class="v4-session-why">The next roadmap step is a performance checkpoint. The exact protocol and workload require current evidence.</div>
 {% else %}
 <div class="v4-session-why">A preview of the training direction, not a Calendar booking. The final workload depends on updated evidence.</div>
+{% endif %}
 {% endif %}
 '''
 HOME_PAGE=HOME_PAGE[:_qstart]+_R196975_PENDING_BODY+HOME_PAGE[_qend:]
@@ -59099,6 +59104,59 @@ def _v4891_prepare_snapshot_for_ui(data):
     return out
 
 APP_VERSION = 'THE LAB · PRODUCT V4.9.177 R196.9.77 EXPERIMENTAL QA · OBSERVED R131 REENTRY COMPOSITION · UNSCHEDULED QUALITY DIRECTION'
+
+# R196.9.78 — athlete-language rendering for the POWER_5 formal checkpoint.
+# This deliberately does NOT rename roadmap steps or modify the scientific
+# decision, stored report, prescription, session slots, or Calendar. A future
+# direction stays visible regardless of HOLD / VALIDATE / EASY_ONLY.
+R196978_COPY_SCHEMA = 'NOVA-R196.9.78-ATHLETE-QUALITY-EXPLANATION-1'
+
+def _nova_r196978_checkpoint_athlete_copy(direction):
+    """Read-only human explanation of one already-identified formal checkpoint.
+
+    Strict provenance: an exact POWER_5 / formal-validation / roadmap label;
+    do not reinterpret a canonical workout, guessed fallback, or another goal.
+    """
+    if not isinstance(direction, dict):
+        return {}
+    if (str(direction.get('source') or '') != 'ROADMAP_FORMAL_VALIDATION_STEP'
+            or str(direction.get('goal_key') or '').upper() != 'POWER_5'
+            or str(direction.get('title') or '').strip() != '5-minute checkpoint'
+            or direction.get('direction_only') is not True
+            or direction.get('is_scheduled') is not False):
+        return {}
+    return {
+        'athlete_copy_schema': R196978_COPY_SCHEMA,
+        'athlete_title': '5-minute maximal power test',
+        'athlete_explanation': (
+            'A single best-effort 5-minute test to measure your current power ' 
+            'against your last verified 5-minute result. This is the roadmap '
+            'step NOVA calls the 5-minute checkpoint, not a prescribed workout.'),
+        'athlete_status': (
+            'This roadmap direction does not schedule or authorize a test. '
+            'You decide if and when to attempt it. If you perform it independently, '
+            'NOVA can evaluate the recorded effort at a later Snapshot, subject '
+            'to its normal evidence and recovery checks; it must not claim '
+            'that the test was retrospectively prescribed.'),
+    }
+
+_r196978_ui_before = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui = _r196978_ui_before(data)
+    if not isinstance(ui, dict):
+        return ui
+    extras = _nova_r196978_checkpoint_athlete_copy(ui.get('next_quality_direction'))
+    if not extras:
+        return ui
+    ui = dict(ui)
+    direction = dict(ui['next_quality_direction'])
+    direction.update(extras)
+    ui['next_quality_direction'] = direction
+    return ui
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.178 R196.9.78 · PLAIN-LANGUAGE '
+               'POWER_5 VALIDATION DIRECTION · R196.9.77 SCIENCE UNCHANGED')
 
 
 
