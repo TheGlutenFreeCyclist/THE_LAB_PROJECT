@@ -17349,13 +17349,29 @@ def build_adaptive_roadmap(training_direction, training_rhythm, activities, coac
         window_headline = "THE LAB has not earned a dated quality window yet; keep the next valid opportunity adaptive."
     test_cfg = _v502_adaptive_checkpoint(goal_key, cfg.get("field_test") or {}, pe, power_model, stage_idx, now=now)
     test_mode = str(test_cfg.get("mode") or "MAXIMAL").upper()
-    if formal_today:
+    # INC-033: a completed PRIMARY (e.g. 300 s) cannot complete an
+    # adjacent EXTENSION (e.g. 360 s) merely because both share today's date.
+    # Compare the actual canonical FORMAL_VALIDATION with the checkpoint
+    # selected by the existing adaptive ladder, for EVERY athlete goal.
+    test_completed_today = bool(
+        formal_today and latest_formal.get("formal_validation") is True
+        and str(latest_formal.get("goal_key") or "").upper() == goal_key
+        and int(latest_formal.get("secs") or 0) == int(test_cfg.get("seconds") or 0)
+        and str(latest_formal.get("validation_mode") or "").upper() == test_mode
+    )
+    if test_completed_today:
         test_state = "COMPLETED"
         test_when = f"Completed {str(latest_formal.get('date') or '')}"
         if latest_formal.get("outcome") == "VALIDATED_GAIN":
             test_reason = "The checkpoint was completed and produced a higher benchmark. That closes the current validation question; do not add a second checkpoint before the next progression cycle."
         else:
             test_reason = "The checkpoint was completed and recorded a benchmark. Formal validation is complete even without a PB; the result now informs the next progression cycle."
+    elif formal_today:
+        # A different checkpoint was completed today. Preserve today's
+        # absorption window but never label the new extension as completed.
+        test_state = "ON HOLD"
+        test_when = "After today's validated effort has been absorbed"
+        test_reason = "A different-duration checkpoint was completed today. This next checkpoint is not completed and is not authorized today; absorb the actual effort first."
     elif health:
         test_state = "ON HOLD"
         test_when = "After restriction clears"
@@ -58864,20 +58880,29 @@ def _nova_r196975_quality_direction(decision, road, offer=None):
         identity = existing.get('nova_workout_id')
         source = 'EXISTING_CANONICAL_QUALITY_OFFER'
     steps = [x for x in (r.get('steps') or []) if isinstance(x, dict)]
-    if not title and action == 'VALIDATE':
+    # Only an actually OPEN future validation may be named as a checkpoint.
+    # A completed/on-hold checkpoint cannot be recycled as Card 3's next
+    # workout; this applies to every goal and every duration, not just POWER_5.
+    test_state = str((r.get('test') or {}).get('state') or '').upper()
+    if not title and action == 'VALIDATE' and test_state not in {'COMPLETED', 'ON HOLD'}:
         checkpoint = next((x for x in steps
                            if str(x.get('code') or '').upper() == 'VALIDATE'
-                           and x.get('label') and str(x.get('state') or '').upper() != 'BUILT'), None)
+                           and x.get('label') and str(x.get('state') or '').upper() not in {'BUILT', 'COMPLETED'}), None)
         if checkpoint:
             title = str(checkpoint['label'])
             source = 'ROADMAP_FORMAL_VALIDATION_STEP'
-    if not title and action != 'VALIDATE':
-        candidates = [t for t in _NOVA_WORKOUT_LIBRARY
-                      if str(t.get('goal') or '').upper() == goal
-                      and dimension in (t.get('dimensions') or ())
-                      and not t.get('adaptive_only') and t.get('title')]
-        if candidates:
-            chosen = sorted(candidates, key=lambda t:(-float(t.get('priority') or 0),str(t.get('id') or '')))[0]
+    if not title:
+        # Prefer the correct *dimension* first. If a new dimension is not in
+        # the catalogue (RECOVERY_UNDER_LOAD on the real 2026-10-27 replay),
+        # fall back to an existing template for the SAME GOAL, never to a
+        # historical roadmap/validation label that isn't a workout.
+        available = [t for t in _NOVA_WORKOUT_LIBRARY
+                     if str(t.get('goal') or '').upper() == goal
+                     and not t.get('adaptive_only') and t.get('title')]
+        candidates = [t for t in available if dimension in (t.get('dimensions') or ())]
+        if candidates or available:
+            chosen = sorted(candidates or available,
+                            key=lambda t:(-float(t.get('priority') or 0),str(t.get('id') or '')))[0]
             title, identity = str(chosen['title']), chosen.get('id')
             source = 'CANONICAL_LIBRARY_DIRECTION_ONLY_NOT_COMPILED'
     if not title:
@@ -60081,8 +60106,8 @@ def _v4891_prepare_snapshot_for_ui(data):
     out['quality_direction_fuel']=_nova_r196979_quality_direction_fuel(out)
     return out
 
-APP_VERSION=('THE LAB · PRODUCT V4.9.185 R196.9.85 · SINGLE CANONICAL CHECKPOINT '
-             '+ ALWAYS-VISIBLE QUALITY CARD 3 + COPY · SCIENCE FORMULAS UNCHANGED')
+APP_VERSION=('THE LAB · PRODUCT V4.9.186 R196.9.86 · INC-033 EXACT CHECKPOINT MATCH '
+             '+ ALL-GOAL CANONICAL QUALITY DIRECTION · SCIENCE FORMULAS UNCHANGED')
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
 
