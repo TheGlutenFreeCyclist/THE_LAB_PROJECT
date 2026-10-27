@@ -58729,7 +58729,7 @@ _R196970_FUEL_CLOSE = '</div>\n{% endfor %}\n</div>\n<style>'
 if HOME_PAGE.count(_R196970_FUEL_OPEN) != 1 or HOME_PAGE.count(_R196970_FUEL_CLOSE) != 1:
     raise RuntimeError('R196970_FUEL_VISIBILITY_TEMPLATE_DRIFT')
 HOME_PAGE = HOME_PAGE.replace(_R196970_FUEL_OPEN,
-    '</article>\n{% if not is_quality_slot or n %}\n<div class="v23-session-fuel v23-col-{{ loop.index }}">', 1)
+    '</article>\n{% if not is_quality_slot or n or (data.quality_direction_fuel and not quality_already_shown) %}\n<div class="v23-session-fuel v23-col-{{ loop.index }}">', 1)
 HOME_PAGE = HOME_PAGE.replace(_R196970_FUEL_CLOSE,
     '</div>\n{% endif %}\n{% endfor %}\n</div>\n<style>', 1)
 
@@ -59159,6 +59159,214 @@ APP_VERSION = ('THE LAB · PRODUCT V4.9.178 R196.9.78 · PLAIN-LANGUAGE '
                'POWER_5 VALIDATION DIRECTION · R196.9.77 SCIENCE UNCHANGED')
 
 
+
+# R196.9.79 / DTM-1.0.13 — athlete-facing quality-day advisor.
+# READ-ONLY UI projection. Never used by canonical decision, offer, ledger,
+# Calendar, nutrition planning, or persisted Snapshot construction.
+R196979_QUALITY_ADVISOR_SCHEMA = 'NOVA-R196.9.79-QUALITY-DAY-READONLY-1'
+
+
+def _nova_r196979_quality_day_advisor(data):
+    """Explain today's quality opportunity, without prescribing or vetoing it.
+
+    Event count is context, never a fatigue/safety gate. HEAT identity and its
+    longitudinal association are not clearance gates; only the physiological
+    signals observed for the athlete and the existing canonical authority are.
+    """
+    d = data if isinstance(data, dict) else {}
+    decision = d.get('nova_decision') or {}
+    pres = d.get('nova_prescription') or {}
+    offer = (d.get('next_quality_offer') or {}).get('workout') or {}
+    clock = d.get('coach_clock') or {}
+    rhythm = (clock.get('rhythm') or d.get('training_rhythm') or {})
+    recent = rhythm.get('recent') or {}
+    health = d.get('health_observatory') or {}
+    signals = health.get('signals') or {}
+    systems = (d.get('physiological_state') or {}).get('systems') or []
+    count = d.get('energy_today_sessions')
+    if count is None:
+        count = clock.get('today_activity_count')
+    try:
+        count = max(0, int(count or 0))
+    except (ValueError, TypeError):
+        count = 0
+    double_rate = recent.get('double_day_pct')
+    training_days = recent.get('training_days')
+    try:
+        double_habit = (float(double_rate) >= .65 and int(training_days or 0) >= 10)
+    except (ValueError, TypeError):
+        double_habit = False
+    # No number-of-sessions penalty. Completion is inferred only with strong
+    # athlete-specific evidence of a stable two-session routine.
+    ratio = d.get('energy_today_load_ratio')
+    try:
+        ratio = float(ratio) if ratio is not None else None
+    except (TypeError, ValueError):
+        ratio = None
+    duration_ratio = d.get('energy_today_duration_ratio')
+    try:
+        duration_ratio = float(duration_ratio) if duration_ratio is not None else None
+    except (ValueError, TypeError):
+        duration_ratio = None
+    # Two micro-sessions do not automatically complete a normal two-a-day:
+    # compare cumulative duration/load with the athlete's own normal day.
+    workload_context = [x for x in (ratio, duration_ratio) if x is not None]
+    day_complete = bool(double_habit and count >= 2 and
+                        (not workload_context or max(workload_context) >= .65))
+    personal_context = ('Prima di due sedute abituali' if double_habit and count == 1
+                        else 'Giornata abituale completata' if day_complete
+                        else f'{count} sedut' + ('a' if count == 1 else 'e') + ' completate')
+    activities = str(clock.get('today_activities_text') or '')
+    # Classification label HEAT is NOT a negative input.
+    heat_today = 'HEAT' in activities.upper()
+    checks = []
+    by_label = {str(s.get('label') or '').upper(): s for s in systems if isinstance(s, dict)}
+    for label, display in (('AUTONOMIC', 'Recupero autonomico'), ('RECOVERY', 'Sonno e recupero'),
+                           ('TRAINING LOAD', 'Carico recente')):
+        system = by_label.get(label) or {}
+        if system:
+            checks.append({'label': display, 'value': str(system.get('status') or 'Osservato'),
+                           'tone': 'warn' if str(system.get('status_class')).lower() in ('orange','red') else 'ok'})
+    checks.append({'label': 'Ritmo personale', 'value': personal_context, 'tone': 'ok'})
+    for key, label in (('hrv','HRV'), ('restingHR','FC a riposo'), ('sleepSecs','Sonno')):
+        item = signals.get(key) or {}
+        if item.get('available') is True:
+            checks.append({'label':label, 'value':'Nella norma personale' if item.get('state')=='USUAL' else 'Da osservare',
+                           'tone':'ok' if item.get('state')=='USUAL' else 'warn'})
+    concerns = [s for key in ('AUTONOMIC','RECOVERY')
+                for s in [by_label.get(key) or {}]
+                if str(s.get('status_class') or '').lower() == 'red']
+    source_day = str(clock.get('iso') or '')[:10]
+    offer_day = str(offer.get('date') or offer.get('planned_date') or '')[:10]
+    offer_on_day = not (source_day and offer_day and offer_day != source_day)
+    eligible = (str(decision.get('action') or '').upper() == 'TRAIN'
+                and str(pres.get('status') or '').upper() == 'PRESCRIBED'
+                and decision.get('hard_session_allowed') is not False
+                and decision.get('quality_window_eligible') is not False
+                and offer_on_day and bool(offer)
+                and offer.get('provisional_quality') is not True)
+    if day_complete:
+        code, title, message, tone = ('DAY_COMPLETE', 'Per oggi hai completato gli allenamenti',
+            'Il tuo ritmo abituale comprende due sedute e le hai già completate. Non aggiungere una nuova quality oggi; la prossima rimane visibile nella terza scheda.', 'neutral')
+    elif str(decision.get('action') or '').upper() == 'HOLD':
+        code, title, message, tone = ('CORE_RECOVERY', 'Oggi dai priorità al recupero',
+            'Nova mantiene una restrizione di recupero. La prossima quality resta il tuo obiettivo, non una seduta da aggiungere oggi.', 'warn')
+    elif not eligible:
+        code, title, message, tone = ('FOLLOW_CANONICAL', 'Oggi mantieni il lavoro indicato da Nova',
+            'La prossima quality resta visibile nella terza scheda. Il motore non ha emesso una quality eseguibile per questa giornata: segui il lavoro già indicato, senza aggiungere intensità.', 'neutral')
+    elif concerns or health.get('state') == 'WATCH':
+        code, title, message, tone = ('RECOVERY_ALERT', 'Oggi meglio evitare una quality aggiuntiva',
+            'I segnali di recupero osservati richiedono attenzione. Controlla le condizioni prima di qualsiasi lavoro intenso; la quality prevista rimane visibile.', 'warn')
+    elif ratio is not None and ratio > 1.35 and count > 0:
+        code, title, message, tone = ('ABOVE_NORMAL_DAY', 'Oggi non aggiungere ulteriore intensità',
+            'Il carico gia completato supera nettamente la tua giornata abituale. Evita di aggiungere una quality fuori dal lavoro gia definito.', 'warn')
+    else:
+        code, title, message, tone = ('QUALITY_COMPATIBLE', 'Quality compatibile con la giornata',
+            'Il lavoro gia svolto non è un veto automatico. Le condizioni osservate e la direzione canonica sono compatibili con una quality già emessa da Nova; considera il tuo stato prima di eseguirla.', 'ok')
+    context = ('Una prima seduta HEAT non blocca la quality in automatico: contano le risposte individuali osservate.'
+               if heat_today and not day_complete else
+               'Il numero di allenamenti svolti non è un indicatore autonomo di affaticamento.')
+    if double_habit and count == 1:
+        context = ('Hai completato la prima di due sedute abituali. ' + context)
+    return {'schema':R196979_QUALITY_ADVISOR_SCHEMA, 'code':code, 'tone':tone,
+            'title':title, 'message':message, 'context':context,
+            'checks':checks[:7], 'sessions_today':count,
+            'double_habit':double_habit,'day_complete':day_complete,
+            'heat_today':heat_today,'session_count_is_never_a_veto':True,
+            'read_only':True,'changes_decision':False,'changes_prescription':False}
+
+
+def _nova_r196979_quality_direction_fuel(data):
+    """Conditional nutrition context for the unscheduled direction, not a plan.
+
+    Use existing fueling logic and only a historically learned session-duration
+    example. Never borrow fuel from an unrelated easy chronological session.
+    """
+    d = data if isinstance(data, dict) else {}
+    q = d.get('next_quality_direction') or {}
+    if not q or q.get('direction_only') is not True:
+        return None
+    kind = {'POWER_5':'VO2', 'VO2MAX':'VO2', 'POWER_20':'THRESHOLD',
+            'TIME_TRIAL':'THRESHOLD', 'POWER_1':'SPRINTS',
+            'SPRINTER':'SPRINTS', 'ENDURANCE_BASE':'ENDURANCE'}.get(str(q.get('goal_key') or '').upper())
+    if not kind:
+        return {'display':'Depends on session length',
+                'detail':'Fueling is linked to the total ride duration, not to a calendar date. A short test alone is not a full session.',
+                'example':True,'read_only':True}
+    clock = d.get('coach_clock') or {}
+    recent = (clock.get('rhythm') or d.get('training_rhythm') or {}).get('recent') or {}
+    try:
+        typical = float(recent.get('median_duration_min'))
+        if typical < 30 or typical > 240:
+            typical = None
+    except (ValueError, TypeError):
+        typical = None
+    if typical is None:
+        return {'display':'Depends on session length',
+                'detail':'The quality remains visible. A CHO/h estimate requires a credible total session duration, not a scheduled date.',
+                'example':True,'read_only':True}
+    # Session duration is an illustrative personal baseline, not an authorized
+    # workout length. Do not assume an environment: display both.
+    metabolic = d.get('metabolic_context') or {}
+    pressure = metabolic.get('glycogen_pressure')
+    indoor = _intra_fueling_strategy(kind, 'INDOOR',kind,typical,
+                                     glycogen_pressure=pressure,metabolic_context=metabolic)
+    outdoor = _intra_fueling_strategy(kind, 'OUTDOOR',kind,typical,
+                                      glycogen_pressure=pressure,metabolic_context=metabolic)
+    return {'display':str(indoor.get('display') or 'See duration'),
+            'outdoor_display':str(outdoor.get('display') or 'See duration'),
+            'detail':f'Conditional example for a ~{typical:g}-min total ride based on your history, not a prescribed duration or date. Indoor and outdoor needs differ. Start well fueled.',
+            'example':True,'read_only':True,'total_minutes_example':typical}
+
+
+_R196979_OLD_READINESS = '''<div class="v4860-readiness-inline" aria-label="Daily Readiness">
+<div class="v4-ring v4860-readiness-ring"><svg viewBox="0 0 100 100"><circle class="v4-ring-track" cx="50" cy="50" r="40" pathLength="100"/><circle class="v4-ring-progress {{ data.race_readiness_zone }}" cx="50" cy="50" r="40" pathLength="100" stroke-dasharray="{{ data.race_readiness_score }} 100"/></svg><div class="v4-ring-center"><div class="v4-ring-value">{{ data.race_readiness_score }}</div><div class="v4-ring-sub">/100</div></div></div>
+<div class="v4860-readiness-copy"><div class="v4861-readiness-kicker">DAILY READINESS</div><div class="v4861-readiness-state">{{ data.race_readiness_label }}</div><p class="v4861-readiness-reason">{{ data.race_readiness_reason }}</p>{% if data.health_observatory and data.health_observatory.readiness_line %}<p class="r196962-readiness-context">{{ data.health_observatory.readiness_line }}</p>{% endif %}</div>
+</div>'''
+_R196979_NEW_ADVISOR = '''{% set advisor = data.quality_day_advisor or {} %}
+<div class="v4860-readiness-inline r196979-quality-day" aria-label="Quality today advisory" data-advisor="{{ advisor.code|e }}">
+<div class="r196979-guide {{ advisor.tone|e }}">
+<div class="v4861-readiness-kicker">QUALITY OGGI? · LETTURA DELLO SNAPSHOT</div>
+<strong class="r196979-guide-title">{{ advisor.title|e }}</strong>
+<p>{{ advisor.message|e }}</p><p class="r196979-context">{{ advisor.context|e }}</p>
+<div class="r196979-signals">{% for check in advisor.checks or [] %}<span class="r196979-signal {{ check.tone|e }}"><b>{{ check.label|e }}</b> · {{ check.value|e }}</span>{% endfor %}</div>
+<small>Guida informativa: non modifica il motore, non autorizza o programma sedute.</small>
+</div></div>
+<style>
+.r196979-quality-day{display:block!important}.r196979-guide{padding:16px 19px;display:block;width:100%;border-left:3px solid #b8aec3;background:rgba(150,150,160,.055);border-radius:7px}
+.r196979-guide.ok{border-left-color:#56a27d}.r196979-guide.warn{border-left-color:#cba96e}
+.r196979-guide-title{font-size:17px;font-weight:750;display:block;margin:5px 0 7px}.r196979-guide p{font-size:13px;line-height:1.52;margin:7px 0}
+.r196979-guide .r196979-context{opacity:.85}.r196979-signals{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.r196979-signal{border:1px solid rgba(128,128,128,.3);padding:5px 8px;border-radius:6px;font-size:11px}.r196979-signal b{font-weight:700}
+.r196979-guide small{display:block;margin-top:8px;opacity:.76;font-size:10px}
+</style>'''
+assert HOME_PAGE.count(_R196979_OLD_READINESS)==1, 'R196979_READINESS_TEMPLATE_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196979_OLD_READINESS,_R196979_NEW_ADVISOR,1)
+_R196979_OLD_NO_FUEL = '''<div class="v23-fuel-dose">—</div><div class="v23-fuel-copy">{{ 'See the fueling in its chronological card.' if quality_already_shown else 'Fueling will follow the confirmed quality prescription.' if is_quality_slot else 'No fueling target available.' }}</div>'''
+_R196979_NEW_NO_FUEL = '''{% if is_quality_slot and not quality_already_shown and data.quality_direction_fuel %}
+{% set qfuel = data.quality_direction_fuel %}
+<div class="v23-fuel-dose">{{ qfuel.display|e }}</div>
+<div class="v23-fuel-copy">INDOOR EXAMPLE · {{ qfuel.detail|e }}{% if qfuel.outdoor_display %}<p>OUTDOOR EXAMPLE: {{ qfuel.outdoor_display|e }}</p>{% endif %}</div>
+{% else %}<div class="v23-fuel-dose">—</div><div class="v23-fuel-copy">{{ 'See the fueling in its chronological card.' if quality_already_shown else 'No quality fueling estimate yet.' if is_quality_slot else 'No fueling target available.' }}</div>{% endif %}'''
+_R196979_FUEL_BEGIN = '<div class="v23-fuel-dose">—</div><div class="v23-fuel-copy">{{ '
+assert HOME_PAGE.count(_R196979_FUEL_BEGIN) == 1, 'R196979_FUEL_TEMPLATE_DRIFT'
+_fuel_start = HOME_PAGE.index(_R196979_FUEL_BEGIN)
+_fuel_end = HOME_PAGE.index('</div>', _fuel_start) + len('</div>')
+HOME_PAGE=HOME_PAGE[:_fuel_start]+_R196979_NEW_NO_FUEL+HOME_PAGE[_fuel_end:]
+
+_r196979_ui_before = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui = _r196979_ui_before(data)
+    if not isinstance(ui, dict):
+        return ui
+    out = dict(ui)
+    out['quality_day_advisor'] = _nova_r196979_quality_day_advisor(ui)
+    out['quality_direction_fuel'] = _nova_r196979_quality_direction_fuel(ui)
+    return out
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.179 R196.9.79 · READ-ONLY QUALITY DAY '
+               'ADVISOR + CONDITIONAL CARD-3 FUEL · R196.9.78 SCIENCE UNCHANGED')
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
