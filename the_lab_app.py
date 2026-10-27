@@ -59362,7 +59362,7 @@ def _nova_r196979_quality_day_advisor(data):
                        and is_today and offer.get('provisional_quality') is not True)
     name = str(direction.get('athlete_title') or direction.get('title') or '').strip()
     # Direction title is source data displayed escaped in the Jinja template.
-    next_quality = ('Next quality: ' + name + ' · Not scheduled') if name else 'Next quality: Awaiting roadmap direction'
+    next_quality = ('Next quality: ' + name) if name else 'Next quality: Awaiting roadmap direction'
     permission = ('A quality session is issued for today — follow the official workout.'
                   if canonical_today else 'No quality session prescribed for today.')
     if day_complete:
@@ -59462,56 +59462,77 @@ _R196979_NEW_ADVISOR = '''{% set advisor = data.quality_day_advisor or {} %}
       </div>
     </div>
     <p class="r196979-summary">{{ advisor.message|e }}</p>
-    <div class="r196979-signal-heading"><span>YOUR PERFORMANCE SIGNALS</span><span class="r196979-signal-sub">VS PERSONAL BASELINE</span></div>
-    <div class="r196979-signals" aria-label="Individual recovery signals">
+    <div class="r196979-signal-heading"><span>PERFORMANCE SYSTEMS</span><span class="r196979-signal-sub">YOUR BASELINE</span></div>
+    <div class="r196979-systems" aria-label="Primary performance systems">
       {% for check in advisor.checks or [] %}
-      <div class="r196979-signal {{ check.tone|e }}" aria-label="{{ check.label|e }}: {{ check.value|e }}">
-        <span class="r196979-chip-icon" aria-hidden="true">{{ check.icon|e }}</span>
+      {% if check.label in ['Autonomic', 'Sleep & recovery', 'Training load'] %}
+      <div class="r196979-signal r196981-system {{ check.tone|e }}" aria-label="{{ check.label|e }}: {{ check.value|e }}">
+        <div class="r196981-system-top">
+          <span class="r196981-system-icon" aria-hidden="true">
+            {% if check.label == 'Autonomic' %}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12h4l2.4-5.5 3.1 11 3.2-8 2 2.5H22"/></svg>
+            {% elif check.label == 'Sleep & recovery' %}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.7 15.4A8 8 0 0 1 8.6 5.3 8.1 8.1 0 1 0 18.7 15.4Z"/><path d="m17.6 4.4.5 1.5 1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z"/></svg>
+            {% else %}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V14m5 5V10m5 9V7m5 12V4"/><path d="M2.5 21.2h19"/></svg>
+            {% endif %}
+          </span>
+          <span class="r196981-system-dash" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
         <span class="r196979-chip-label">{{ check.label|e }}<small>{{ check.value|e }}</small></span>
-        <span class="r196979-chip-dot" aria-hidden="true"></span>
       </div>
+      {% endif %}
       {% endfor %}
     </div>
-    <div class="r196979-session-context"><span aria-hidden="true">◷</span> {{ advisor.context|e }}</div>
-    <div class="r196979-direction">
-      <span class="r196979-direction-icon" aria-hidden="true">⚑</span>
-      <div><div class="r196979-direction-kicker">THE COACH'S CALL · SEPARATE FROM READINESS</div>
-        <strong>{{ advisor.next_quality|e }}</strong>
-        <small>{{ advisor.permission|e }}</small>
+    <div class="r196981-detail-heading">KEY MARKERS <span>VS PERSONAL RANGE</span></div>
+    <div class="r196979-signals r196981-metrics" aria-label="Individual recovery markers">
+      {% for check in advisor.checks or [] %}
+      {% if check.label not in ['Autonomic', 'Sleep & recovery', 'Training load'] %}
+      <div class="r196979-signal r196981-metric {{ check.tone|e }}" aria-label="{{ check.label|e }}: {{ check.value|e }}">
+        <span class="r196981-metric-dot" aria-hidden="true"></span>
+        <span class="r196979-chip-label">{{ check.label|e }}<small>{{ check.value|e }}</small></span>
       </div>
+      {% endif %}
+      {% endfor %}
     </div>
+    <div class="r196979-session-context"><span class="r196981-clock" aria-hidden="true">◷</span>{{ advisor.context|e }}</div>
   </section>
 </div>
 <style>
-/* Uses NOVA's existing --purple/green/orange/red/cyan and Arial font tokens. */
+/* Inc-028: use NOVA's existing typography and palette; deliberate outlined SVG,
+   no icon dependency, no icon-boxes, no duplicated calendar/prescription copy. */
 .r196979-quality-day{display:block!important;min-width:0!important;width:100%!important;padding:0!important;border:0!important;background:transparent!important}
-.r196979-guide{--status:var(--cyan);--glow:rgba(23,201,242,.10);position:relative;min-width:0;width:100%;padding:17px 17px 15px;overflow:hidden;border:1px solid rgba(255,255,255,.11);border-radius:17px;background:radial-gradient(ellipse at 95% 0,var(--glow),transparent 62%),linear-gradient(160deg,rgba(255,255,255,.045),rgba(255,255,255,.012)),#101821;box-shadow:inset 0 1px 0 rgba(255,255,255,.065);font-family:var(--font)}
+.r196979-guide{--status:var(--cyan);--glow:rgba(23,201,242,.10);position:relative;min-width:0;width:100%;padding:17px 17px 13px;overflow:hidden;border:1px solid rgba(255,255,255,.11);border-radius:17px;background:radial-gradient(ellipse at 95% 0,var(--glow),transparent 62%),linear-gradient(160deg,rgba(255,255,255,.045),rgba(255,255,255,.012)),#101821;box-shadow:inset 0 1px 0 rgba(255,255,255,.065);font-family:var(--font)}
 .r196979-guide:before{content:"";position:absolute;top:0;left:17px;right:17px;height:2px;background:linear-gradient(90deg,var(--status),transparent 75%);opacity:.9}
 .r196979-guide.purple{--status:var(--purple);--glow:rgba(155,114,255,.14)}
 .r196979-guide.green{--status:var(--green);--glow:rgba(18,216,159,.10)}
 .r196979-guide.amber{--status:var(--orange);--glow:rgba(255,177,44,.10)}
 .r196979-guide.red{--status:var(--red);--glow:rgba(255,88,113,.11)}
 .r196979-head{display:flex;align-items:center;gap:12px;min-width:0;padding-top:2px}
-.r196979-status-icon{flex:0 0 45px;width:45px;height:45px;display:grid;place-items:center;border:1px solid color-mix(in srgb,var(--status) 44%,transparent);border-radius:13px;background:color-mix(in srgb,var(--status) 11%,transparent);color:var(--status);font-family:var(--font);font-size:24px;font-weight:800;box-shadow:0 0 20px color-mix(in srgb,var(--status) 8%,transparent)}
+.r196979-status-icon{flex:0 0 43px;width:43px;height:43px;display:grid;place-items:center;border:1px solid color-mix(in srgb,var(--status) 45%,transparent);border-radius:50%;background:color-mix(in srgb,var(--status) 8%,transparent);color:var(--status);font-family:var(--font);font-size:23px;font-weight:800;line-height:1}
 .r196979-head-text{min-width:0}.r196979-kicker{color:var(--cyan)!important;font-size:9px!important;letter-spacing:.15em!important;margin-bottom:4px}
 .r196979-guide-title{display:block;color:#f5f7fa;font-family:var(--display);font-size:clamp(17px,2.4vw,22px);font-weight:800;line-height:1.13;letter-spacing:-.012em;overflow-wrap:break-word}
 .r196979-summary{margin:10px 0 13px;color:#c2cfdb;font-size:12px;line-height:1.5}
-.r196979-signal-heading{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:5px;margin:12px 0 8px;color:#d7e3ed;font-size:9px;font-weight:850;letter-spacing:.12em}
-.r196979-signal-heading .r196979-signal-sub{color:#8595a4;font-size:8px;letter-spacing:.07em}
-.r196979-signals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
-.r196979-signal{--chip:var(--grey);display:flex;align-items:center;gap:8px;min-width:0;min-height:43px;border:1px solid color-mix(in srgb,var(--chip) 31%,transparent);border-radius:11px;background:color-mix(in srgb,var(--chip) 7%,transparent);padding:7px 8px;color:#e2eaf2}
+.r196979-signal-heading,.r196981-detail-heading{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:5px;color:#d7e3ed;font-size:9px;font-weight:850;letter-spacing:.12em}
+.r196979-signal-heading{margin:12px 0 9px}
+.r196979-signal-sub,.r196981-detail-heading span{color:#8595a4;font-size:8px;letter-spacing:.06em}
+.r196979-systems{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.r196979-signal{--chip:var(--grey);min-width:0;color:#e2eaf2}
 .r196979-signal.green{--chip:var(--green)}.r196979-signal.purple{--chip:var(--purple)}.r196979-signal.red{--chip:var(--red)}.r196979-signal.grey{--chip:var(--grey)}
-.r196979-chip-icon{display:grid;place-items:center;flex:0 0 25px;width:25px;height:25px;border-radius:8px;background:color-mix(in srgb,var(--chip) 15%,transparent);color:var(--chip);font-size:18px;font-weight:800;line-height:1}
-.r196979-chip-label{display:block;flex:1;min-width:0;font-weight:750;font-size:11px;line-height:1.13;overflow-wrap:break-word}.r196979-chip-label small{display:block;margin-top:4px;font-size:10px;font-weight:550;color:#bac8d3}
-.r196979-chip-dot{flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:var(--chip)}
-.r196979-session-context{display:flex;align-items:baseline;gap:6px;color:#9cb0be;font-size:10px;line-height:1.5;margin:12px 0}
-.r196979-session-context span{font-size:15px;color:var(--cyan)}
-.r196979-direction{display:flex;gap:9px;align-items:flex-start;border-top:1px solid rgba(255,255,255,.09);padding:12px 0 0;min-width:0}
-.r196979-direction-icon{flex:0 0 27px;width:27px;height:27px;display:grid;place-items:center;border:1px solid rgba(23,201,242,.2);border-radius:9px;color:var(--cyan);font-size:16px;background:rgba(23,201,242,.07)}
-.r196979-direction>div{min-width:0}.r196979-direction-kicker{color:var(--cyan);font-size:8px;font-weight:850;letter-spacing:.095em;margin-bottom:3px}
-.r196979-direction strong{display:block;color:#e6edf4;font-size:11px;line-height:1.35;overflow-wrap:break-word}.r196979-direction small{display:block;color:#a4b2c0;margin-top:4px;line-height:1.4;font-size:10px}
-@media(max-width:390px){.r196979-guide{padding:14px 12px}.r196979-head{gap:9px}.r196979-status-icon{flex-basis:39px;width:39px;height:39px;font-size:21px}.r196979-guide-title{font-size:17px}.r196979-signals{gap:6px}.r196979-signal{gap:5px;padding:6px;min-height:46px}.r196979-chip-icon{width:20px;flex-basis:20px;height:22px;font-size:15px}.r196979-chip-label{font-size:10px}.r196979-chip-label small{font-size:9px}.r196979-chip-dot{display:none}}
-@media(min-width:850px){.r196979-signals{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.r196981-system{display:flex;flex-direction:column;justify-content:space-between;gap:11px;min-height:87px;padding:10px 11px 9px;border:1px solid rgba(255,255,255,.095);border-left:2px solid var(--chip);border-radius:11px;background:linear-gradient(140deg,color-mix(in srgb,var(--chip) 9%,transparent),rgba(255,255,255,.013));}
+.r196981-system-top{display:flex;justify-content:space-between;gap:6px;align-items:flex-start}
+.r196981-system-icon{color:var(--chip);display:inline-flex;width:23px;height:23px;flex-shrink:0}.r196981-system-icon svg{width:100%;height:100%;display:block}
+.r196981-system-dash{display:inline-flex;gap:3px;margin-top:4px}.r196981-system-dash i{display:block;width:3px;height:3px;border-radius:50%;background:var(--chip);opacity:.36}.r196981-system-dash i:first-child{opacity:1}
+.r196979-chip-label{display:block;min-width:0;font-weight:750;font-size:11px;line-height:1.15;overflow-wrap:break-word}
+.r196979-chip-label small{display:block;margin-top:5px;font-size:10px;line-height:1.2;font-weight:550;color:var(--chip);opacity:.98}
+.r196981-detail-heading{margin:13px 0 7px}
+.r196981-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.r196981-metric{display:flex;align-items:flex-start;gap:7px;min-height:41px;padding:7px 7px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.022)}
+.r196981-metric-dot{display:block;flex:0 0 5px;width:5px;height:5px;border-radius:50%;background:var(--chip);margin-top:3px}
+.r196981-metric .r196979-chip-label{font-size:10px}.r196981-metric .r196979-chip-label small{margin-top:4px;color:#a7b8c4;font-size:9px}
+.r196979-session-context{display:flex;align-items:baseline;gap:7px;color:#9cb0be;font-size:10px;line-height:1.5;margin:12px 0 0;padding-top:9px;border-top:1px solid rgba(255,255,255,.075)}
+.r196981-clock{font-size:15px;color:var(--cyan);line-height:1}
+@media(max-width:390px){.r196979-guide{padding:14px 12px 12px}.r196979-head{gap:9px}.r196979-status-icon{flex-basis:39px;width:39px;height:39px;font-size:21px}.r196979-guide-title{font-size:17px}.r196979-systems{gap:6px}.r196981-system{gap:8px;min-height:85px;padding:8px 6px 8px}.r196981-system-icon{width:21px;height:21px}.r196979-chip-label{font-size:10px}.r196979-chip-label small{font-size:9px}.r196981-metrics{gap:5px}.r196981-metric{padding:7px 5px;gap:5px}.r196981-metric .r196979-chip-label{font-size:9px}.r196981-metric .r196979-chip-label small{font-size:8px}}
 @media(prefers-reduced-motion:reduce){.r196979-guide,.r196979-signal{transition:none!important}}
 </style>'''
 assert HOME_PAGE.count(_R196979_OLD_READINESS)==1, 'R196979_READINESS_TEMPLATE_DRIFT'
@@ -59539,8 +59560,26 @@ def _v4891_prepare_snapshot_for_ui(data):
     out['quality_direction_fuel'] = _nova_r196979_quality_direction_fuel(ui)
     return out
 
-APP_VERSION = ('THE LAB · PRODUCT V4.9.180 R196.9.80 · FOUR-TIER QUALITY READINESS '
+# INC-028 / DTM-1.0.16 — read-only athlete-copy refinement AFTER the
+# historical composition. No existing science or old template function changed.
+_R196981_CARD3_COPY = (
+    ('YOU CHOOSE WHEN · NOT SCHEDULED','YOU CHOOSE WHEN'),
+    ('NEXT QUALITY · NOT SCHEDULED','NEXT QUALITY · YOUR CALL'),
+    ('<div class="v4-session-why">{{ qd.athlete_status|e }}</div>',
+     '<div class="v4-session-why">Checkpoint direction, not an instruction to test today. If you attempt it independently, NOVA can assess the recorded effort at a later Snapshot.</div>'),
+    ('This is NOVA’s direction for your next quality session. No date is set; you decide when to do it.',
+     'NOVA’s next training direction. Choose the day only after checking your current recovery and workout guidance.'),
+    ('A preview of the training direction, not a Calendar booking. The final workload depends on updated evidence.',
+     'Training direction only. The final workload still depends on updated evidence.'),
+)
+for _old_card3_text,_new_card3_text in _R196981_CARD3_COPY:
+    assert HOME_PAGE.count(_old_card3_text)==1, 'R196981_CARD3_COPY_TEMPLATE_DRIFT'
+    HOME_PAGE=HOME_PAGE.replace(_old_card3_text,_new_card3_text,1)
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.181 R196.9.81 · REFINED READINESS UI '
                '+ CONDITIONAL CARD-3 FUEL · R196.9.78 SCIENCE UNCHANGED')
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+
+# INC-028 (R196.9.81): clarified Card 3 ownership and refined readiness visuals.
