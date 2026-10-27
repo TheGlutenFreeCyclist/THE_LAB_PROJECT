@@ -3848,9 +3848,10 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% set pa = data.power_achievements if data.power_achievements is defined and data.power_achievements else none %}
 {% if pa and pa.available %}
 <article class="v4873-milestones">
-<div class="v4873-milestone-head"><div><span>🏆 THE LAB POWER MILESTONE</span><strong>{{ pa.display_scope_label or pa.scope_label }}</strong></div><small>Detected from your power history.</small></div>
+<div class="v4873-milestone-head"><div><span>{% if pa.events or pa.get('badges') %}🏆 THE LAB POWER MILESTONE{% else %}⚡ RECENT BEST POWER{% endif %}</span><strong>{% if pa.events or pa.get('badges') %}{{ pa.display_scope_label or pa.scope_label }}{% else %}LAST 21 DAYS{% endif %}</strong></div><small>Detected from your power history.</small></div>
 <div class="v4873-milestone-grid">{% for ach in pa.events %}<div class="v4873-milestone"><div class="v4873-milestone-top"><span class="v4873-milestone-duration">{{ ach.duration }}</span><span class="v4873-milestone-timing">{{ ach.timing_label or ach.date_display }}</span></div><strong class="v4873-milestone-value">{{ ach.watts }} W</strong><b class="v4873-milestone-delta">+{{ ach.delta_w }} W{% if ach.delta_pct is not none %} · +{{ ach.delta_pct }}%{% endif %}</b><small class="v4873-milestone-reference">vs prior {{ ach.scope_label or pa.scope_label }} reference</small></div>{% endfor %}{% for b in pa.get('badges',[]) %}<div class="v4873-milestone"><div class="v4873-milestone-top"><span class="v4873-milestone-duration">{{ b.icon }} {{ b.duration }}</span><span class="v4873-milestone-timing">{{ b.rank_label }} · {{ b.date|ui_date }}</span></div><strong class="v4873-milestone-value">{{ b.watts_label }}</strong><small class="v4873-milestone-reference">{{ b.detail }}</small></div>{% endfor %}</div>
-<p>Milestones and recent minute-by-minute podium efforts from your power history.</p>
+{% if pa.get('featured_efforts') %}<div class="v4873-milestone-head" style="margin-top:16px"><div><span>⚡ AUTO-DETECTED POWER WINDOWS</span><strong>Best efforts · recent rides</strong></div><small>Rolling averages · no manual LAP required</small></div><div class="v4873-milestone-grid">{% set feature_secs = [300,420,600,720,1200] %}{% for sec in feature_secs %}{% for e in pa.get('featured_efforts',[]) if e.secs == sec %}<div class="v4873-milestone"><div class="v4873-milestone-top"><span class="v4873-milestone-duration">{{ (e.secs / 60)|int }} min</span><span class="v4873-milestone-timing">{{ e.date|ui_date }}</span></div><strong class="v4873-milestone-value">{{ e.watts }} W</strong><small class="v4873-milestone-reference">Best in observed recent rides · not necessarily a PB</small></div>{% endfor %}{% endfor %}</div>{% endif %}
+<p>Milestones and ranked efforts use historical curves; auto-detected rolling windows require no manual lap and do not automatically validate a test.</p>
 </article>
 {% endif %}
 {% set lf = data.latest_activity_feedback if data.latest_activity_feedback is defined and data.latest_activity_feedback else none %}
@@ -12124,6 +12125,7 @@ def _v491_power_podium_badges(goal_key=None, now=None, lookback_days=7, cycle_st
     except Exception: cycle_day=None
     try: payload=_v491_fetch_activity_power_curves(start.isoformat(),today.isoformat(),secs)
     except Exception as e: return {"available":False,"badges":[],"api_note":str(e)[:180],"scope_label":f"{today.year} YTD"}
+    auto = _nova_r196982_activity_power_windows(payload, now=today, cycle_start=cycle_start)
     ps=payload.get("secs") or secs; curves=payload.get("curves") or []; cutoff=today-timedelta(days=int(lookback_days)); raw=[]
     for i,sec in enumerate(ps):
         rows=[]
@@ -12161,7 +12163,86 @@ def _v491_power_podium_badges(goal_key=None, now=None, lookback_days=7, cycle_st
     # A dated historical PB must never become a new plan achievement.
     badges = [x for x in badges if cycle_day is not None and date.fromisoformat(x["date"]) >= cycle_day]
     badges.sort(key=lambda x:(x["rank"],abs(x["secs"]-c),-x["secs"])); recent=[x for x in badges if x.get("recent")][:6]; badges=badges[:6]
-    return {"available":bool(badges),"badges":badges,"recent_badges":recent,"scope_label":f"{today.year} YTD","method_note":"Power-history baseline remains year-to-date; THE LAB awards only show dated efforts on or after the active plan start. Gold requires ≥3 W over prior best; ranks are relative to YTD history. No active plan, no plan awards."}
+    return {"available":bool(badges),"badges":badges,"recent_badges":recent,"observed_efforts":auto["observed_efforts"],"featured_efforts":auto["featured_efforts"],"auto_method_note":auto["method_note"],"scope_label":f"{today.year} YTD","method_note":"Power-history baseline remains year-to-date; THE LAB awards only show dated efforts on or after the active plan start. Gold requires ≥3 W over prior best; ranks are relative to YTD history. No active plan, no plan awards."}
+# R196.9.82 / INC-029: provider-derived best rolling windows, without LAP dependence.
+# Observation is NOT a PB, a completed prescribed test or a change to FTP/CP.
+_NOVA_AUTO_EFFORT_DURATIONS = (60, 120, 180, 300, 360, 420, 480, 540, 600, 720, 900, 1200, 1800, 3600)
+
+def _nova_r196982_activity_power_windows(payload, now=None, cycle_start=None, lookback_days=21):
+    """Read exact seconds from ICU activity-power-curves; fail closed on missing provenance.
+
+    A point is the best ROLLING average inside the activity, including a 300 s
+    window in a continuous 420 s climb. No lap, interval parser or title used.
+    Observations remain read-only; only authoritative execution reconciliation
+    can use them as an exact-duration input for a prescribed checkpoint.
+    """
+    now = now or get_rome_now()
+    today = now.date() if isinstance(now, datetime) else now
+    try:
+        cycle_day = date.fromisoformat(str(cycle_start)[:10]) if cycle_start else None
+    except (ValueError, TypeError):
+        cycle_day = None
+    cutoff = today - timedelta(days=max(1, min(int(lookback_days), 45)))
+    lower = max(cutoff, cycle_day) if cycle_day else cutoff
+    if not isinstance(payload, dict):
+        return {"observed_efforts": [], "featured_efforts": [], "method_note": "Activity power curves unavailable; no automatic effort claim."}
+    secs = payload.get("secs")
+    curves = payload.get("curves")
+    if not isinstance(secs, list) or not isinstance(curves, list):
+        return {"observed_efforts": [], "featured_efforts": [], "method_note": "Activity power curves unavailable; no automatic effort claim."}
+    indexes = {}
+    for i, value in enumerate(secs):
+        try:
+            sec = int(value)
+            if sec in _NOVA_AUTO_EFFORT_DURATIONS and float(value) == float(sec):
+                indexes[sec] = i
+        except (TypeError, ValueError, OverflowError):
+            continue
+    observed = []
+    for curve in curves:
+        if not isinstance(curve, dict):
+            continue
+        aid = str(curve.get("id") or "").strip()
+        day_text = str(curve.get("start_date_local") or "")[:10]
+        try:
+            day = date.fromisoformat(day_text)
+        except ValueError:
+            continue
+        if not aid or not (lower <= day <= today):
+            continue
+        watts = curve.get("watts")
+        if not isinstance(watts, list):
+            continue
+        for sec, i in indexes.items():
+            if i >= len(watts):
+                continue
+            try:
+                w = float(watts[i])
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not (20.0 <= w <= 2500.0) or not math.isfinite(w):
+                continue
+            observed.append({"activity_id": aid, "date": day_text, "secs": sec,
+                             "watts": int(round(w)), "source": "INTERVALS_ACTIVITY_POWER_CURVE",
+                             "rolling_window": True, "manual_lap_required": False,
+                             "formal_validation": False, "pb_confirmed": False})
+    # One best native curve point per activity / duration, same identity as ICU.
+    dedup = {}
+    for row in observed:
+        key = (row["activity_id"], row["date"], row["secs"])
+        if key not in dedup or row["watts"] > dedup[key]["watts"]:
+            dedup[key] = row
+    observed = sorted(dedup.values(), key=lambda r: (r["date"], r["secs"], r["watts"]), reverse=True)[:384]
+    featured = []
+    for sec in _NOVA_AUTO_EFFORT_DURATIONS:
+        candidates = [r for r in observed if r["secs"] == sec]
+        if not candidates:
+            continue
+        best = max(candidates, key=lambda r: (r["watts"], r["date"]))
+        featured.append(dict(best))
+    return {"observed_efforts": observed, "featured_efforts": featured,
+            "method_note": "Exact-duration rolling power from Intervals.icu activity curves; no LAP needed. Featured efforts are best among fetched recent rides, NOT proven YTD PBs. No automatic formal validation, FTP or CP adjustment."}
+
 def extract_power_curve_points(payload):
     array_results = []
     point_list_results = []
@@ -12405,7 +12486,7 @@ def _fetch_power_curve_resilient(newest=None, curve="42d", attempts=2, timeout=1
     return None
 V4873_POWER_DURATIONS = (5, 15, 20, 30, 60, 75, 90, 120, 150, 180, 300, 360, 420, 480, 540, 600, 720, 1200, 1500, 1800, 2100, 2400, 3000, 3600, 4500, 5400, 7200)
 V4873_VISIBLE_BEST_DURATIONS = (5, 15, 60, 180, 300, 1200, 3600)
-V4873_MILESTONE_DURATIONS = (15, 30, 60, 120, 180, 300, 480, 720, 1200, 3600)
+V4873_MILESTONE_DURATIONS = (15, 30, 60, 120, 180, 300, 360, 420, 480, 540, 600, 720, 1200, 1800, 3600)
 V4873_MILESTONE_LOOKBACK_DAYS = 7
 def _v4873_ytd_curve_name(day):
     if not isinstance(day, date):
@@ -12422,14 +12503,28 @@ def build_power_achievement_engine(points_ytd, points_prior_ytd, points_recent_b
     current = {}
     prior = {}
     recent_baseline = {}
+    # INC-029: new milestone durations must be explicit provider observations.
+    # Never synthesize a 7-minute record by interpolating 5 and 10 minutes.
+    new_exact_durations = {360, 420, 540, 600, 1800}
+    def exact_watts(points, sec):
+        for pt in points or []:
+            try:
+                if abs(float(pt.get("secs")) - sec) < 0.5:
+                    watts = float(pt.get("watts") if pt.get("watts") is not None else pt.get("power"))
+                    if math.isfinite(watts) and watts > 0:
+                        return watts
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                continue
+        return None
     for sec in V4873_POWER_DURATIONS:
-        value = _power_at_duration(points_ytd or [], sec)
+        get = exact_watts if sec in new_exact_durations else _power_at_duration
+        value = get(points_ytd or [], sec)
         if value is not None:
             current[sec] = float(value)
-        value0 = _power_at_duration(points_prior_ytd or [], sec)
+        value0 = get(points_prior_ytd or [], sec)
         if value0 is not None:
             prior[sec] = float(value0)
-        value7 = _power_at_duration(points_recent_baseline or [], sec)
+        value7 = get(points_recent_baseline or [], sec)
         if value7 is not None:
             recent_baseline[sec] = float(value7)
     events = []
@@ -12499,7 +12594,7 @@ def build_power_achievement_engine(points_ytd, points_prior_ytd, points_recent_b
                 )
             except Exception:
                 pass
-    priority = {180: 0, 300: 1, 60: 2, 1200: 3, 30: 4, 15: 5, 480: 6, 720: 7, 3600: 8}
+    priority = {300: 0, 420: 1, 180: 2, 360: 3, 480: 4, 540: 5, 600: 6, 720: 7, 60: 8, 1200: 9, 30: 10, 15: 11, 1800: 12, 3600: 13}
     events.sort(key=lambda x: (priority.get(int(x.get("secs") or 0), 99), -int(x.get("delta_w") or 0)))
     return {
         "available": bool(events),
@@ -12522,6 +12617,9 @@ def power_achievement_text(context):
         delta = f"+{event.get('delta_w')} W" if event.get("delta_w") is not None else "new high"
         lines.append(f"- {event.get('scope_label')}: {event.get('duration')} {event.get('watts')} W ({delta} vs prior reference).")
     for b in c.get("badges") or []: lines.append(f"- {b.get('icon')} {b.get('duration')} {b.get('rank_label')}: {b.get('watts_label')} · {b.get('detail')}.")
+    for x in c.get("featured_efforts") or []:
+        if int(x.get("secs") or 0) in (300, 420, 600, 720, 1200):
+            lines.append(f"- Activity curve window (not proven PB): {format_duration_label(int(x['secs']))} {x.get('watts')} W on {x.get('date')} · no lap required; not formal validation.")
     lines.append("- Derived from Intervals power curves; do not treat a milestone alone as a reason to override recovery, health or race constraints.")
     return "\n".join(lines)
 def _v4873_prioritize_power_achievements(context, goal_key):
@@ -12529,8 +12627,8 @@ def _v4873_prioritize_power_achievements(context, goal_key):
     events = [dict(x) for x in (c.get("events") or [])]
     goal_key = str(goal_key or "").upper()
     goal_orders = {
-        "POWER_5": (300, 180, 120, 60, 480, 720, 1200, 30, 15, 3600),
-        "VO2MAX": (300, 180, 120, 480, 60, 720, 1200, 30, 15, 3600),
+        "POWER_5": (300, 420, 360, 480, 540, 600, 720, 180, 120, 60, 1200, 1800, 30, 15, 3600),
+        "VO2MAX": (300, 360, 420, 480, 540, 600, 720, 180, 120, 60, 1200, 30, 15, 3600),
         "POWER_20": (1200, 720, 480, 300, 180, 3600, 120, 60, 30, 15),
         "TIME_TRIAL": (1200, 3600, 720, 480, 300, 180, 120, 60, 30, 15),
         "POWER_1": (60, 30, 120, 180, 15, 300, 480, 720, 1200, 3600),
@@ -16783,10 +16881,8 @@ def _v4896_validation_interval_match(block, test_seconds, mode="MAXIMAL"):
     ]
     if not matches:
         return None
-    substantial = [r for r in rows if float((r or {}).get("secs") or 0) >= target * 0.75]
-    repeated_named = bool(re.search(r"\brepeated\b", str((block or {}).get("name") or ""), re.I))
-    if str(mode or "").upper() == "MAXIMAL" and len(substantial) > 1 and target > 30 and not repeated_named:
-        return None
+    # Extra sets in the same ride do not erase an exact-duration observation.
+    # This matcher supplies evidence, NOT permission to invent a checkpoint.
     best = max(matches, key=lambda r: float(r.get("watts") or 0))
     return {"secs": int(best.get("secs") or round(target)), "watts": round(float(best.get("watts")), 1)}
 def _v4896_merge_plan_evidence(stored, new_events):
@@ -16924,53 +17020,10 @@ def _v4896_build_performance_evidence(training_direction, plan, power_achievemen
         ev.update({"tier":tier,"tier_code":code,"goal_key":goal_key,"goal_relevant":goal_relevant,"race_transfer":race_transfer,"transfer_code":transfer_range[2] if race_transfer else None,"exact_checkpoint_duration":exact_checkpoint_duration,"activity_linked":bool(matched_activity or matched_block),"quality_linked":aligned_quality,"transfer_quality_linked":bool(race_transfer and quality_relevant),"stimulus_domain":domain,"progression_signal":progression_signal,"lab_window_aligned":bool(event_day and declared_start and event_day>=declared_start),"the_lab_recognized":bool(event_day and declared_start and event_day>=declared_start and (goal_relevant or race_transfer)),"formal_validation":False})
         ev["id"] = _v4896_event_id(ev)
         new_events.append(ev)
-    explicit_formal_keys=set()
-    checkpoint_pat=re.compile(r"\b(?:test|field\s+test|checkpoint|benchmark|all[- ]?out|maximal|peak[- ]power)\b",re.I)
-    for ev in list(new_events):
-        aid=str(ev.get("activity_id") or "") or None; act=activities_by_id.get(aid) if aid else None; day=str(ev.get("date") or "")[:10]
-        if test_mode != "MAXIMAL" or not aid or not day or not ev.get("exact_checkpoint_duration") or int(ev.get("tier") or 0) < 2 or not str(ev.get("source") or "").startswith("INTERVALS_NATIVE_"):
-            continue
-        name=str((act or {}).get("name") or "")
-        if not checkpoint_pat.search(name) or not _v4895_activity_quality_truth(act).get("quality_relevant"): continue
-        comparison = _v1955_checkpoint_comparison(
-            list((stored or {}).get("events") or []) + new_events,
-            float(ev.get("watts")), int(test_secs), day, observed_event=ev,
-        )
-        formal={"kind":"VALIDATION","source":"EXPLICIT_CHECKPOINT_ACTIVITY + INTERVALS_NATIVE_ACHIEVEMENT","date":day,"secs":int(test_secs),"watts":float(ev.get("watts")),
-                "previous_watts":comparison["previous_watts"],"delta_w":comparison["delta_w"],"activity_id":aid,"activity_name":name,"tier":3,"tier_code":"FORMAL_VALIDATION",
-                "goal_key":goal_key,"goal_relevant":True,"exact_checkpoint_duration":True,"activity_linked":True,"quality_linked":True,"stimulus_domain":test_domain,
-                "progression_signal":False,"formal_validation":True,"validation_mode":test_mode,"outcome":comparison["outcome"],
-                "pb_confirmed":comparison["pb_confirmed"],"outcome_reference_source":comparison["reference_source"],"decoupling_pct":None}
-        formal["id"]=_v4896_event_id(formal); new_events.append(formal); explicit_formal_keys.add((day,aid))
-    for block in previous_blocks or []:
-        if not isinstance(block,dict): continue
-        day=str(block.get("date") or "")[:10]; name=str(block.get("name") or ""); aid=str(block.get("activity_id") or "") or None
-        if not day or day > today.isoformat() or not checkpoint_pat.search(name) or (day,aid) in explicit_formal_keys: continue
-        try: block_day=date.fromisoformat(day)
-        except Exception: continue
-        if effective_start is not None and block_day < effective_start: continue
-        effort=_v4896_validation_interval_match(block,test_secs,mode=test_mode) if test_secs else None
-        if not effort and test_mode == "SUBMAX_DURABILITY" and test_secs:
-            dur=_rhythm_num(block.get("duration_min")); avg=_rhythm_num(block.get("avg_watts")); target_min=float(test_secs)/60.0
-            if dur is not None and avg is not None and abs(dur-target_min) <= max(2.0,target_min*0.05):
-                effort={"secs":int(round(dur*60)),"watts":round(float(avg),1)}
-        if not effort: continue
-        if test_mode == "MAXIMAL" and not bool(block.get("quality_relevant")): continue
-        if test_mode == "SUBMAX_DURABILITY" and (str(block.get("family") or "") not in {"Endurance / Z2","Recovery"} or block.get("decoupling") is None): continue
-        exact_native=next((x for x in new_events if str(x.get("date") or "")==day and x.get("exact_checkpoint_duration") and (not aid or str(x.get("activity_id") or "")==aid)),None)
-        result_w=float(effort.get("watts"))
-        comparison = _v1955_checkpoint_comparison(
-            list((stored or {}).get("events") or []) + new_events,
-            result_w, int(test_secs), day, observed_event=exact_native, mode=test_mode,
-        )
-        formal={"kind":"VALIDATION","source":"EXPLICIT_CHECKPOINT_ACTIVITY + INTERVALS_WORK_INTERVAL","date":day,"secs":int(test_secs),"watts":round(result_w,1),
-                "previous_watts":comparison["previous_watts"],"delta_w":comparison["delta_w"],"activity_id":aid,"activity_name":name,
-                "tier":3,"tier_code":"FORMAL_VALIDATION","goal_key":goal_key,"goal_relevant":True,"exact_checkpoint_duration":True,
-                "activity_linked":True,"quality_linked":test_mode=="MAXIMAL","stimulus_domain":test_domain,"progression_signal":False,"formal_validation":True,
-                "validation_mode":test_mode,"outcome":comparison["outcome"],"pb_confirmed":comparison["pb_confirmed"],
-                "outcome_reference_source":comparison["reference_source"],
-                "decoupling_pct":block.get("decoupling") if test_mode=="SUBMAX_DURABILITY" else None}
-        formal["id"]=_v4896_event_id(formal); new_events.append(formal); explicit_formal_keys.add((day,aid))
+    # R196.9.82 / INC-029: a workout title ("test", "all-out", etc.) cannot
+    # close the roadmap. Unplanned exact-duration records remain PB evidence.
+    # The prescribed fulfillment / planned-validation paths below retain authority.
+    explicit_formal_keys = set()
     planned_validation = [
         x for x in ((microcycle_ledger or {}).get("planned_sessions") or [])
         if isinstance(x, dict) and (
@@ -17064,6 +17117,7 @@ def _v4896_build_performance_evidence(training_direction, plan, power_achievemen
     else:
         summary = None
     merged.update({
+        "observed_efforts": list((power_achievements or {}).get("observed_efforts") or []),
         "available":bool(events),"goal_key":goal_key,
         "effective_cycle_start":effective_start.isoformat() if effective_start else None,
         "current_cycle_events":cycle_events,"strongest_current":strongest,
@@ -17073,6 +17127,7 @@ def _v4896_build_performance_evidence(training_direction, plan, power_achievemen
         "method_note":"Direct PB, race transfer, quality PB and formal checkpoint remain distinct; transfer never proves causation or validation.",
     })
     return merged
+# INC-029: formal validation remains a separate deterministic contract.
 def performance_evidence_text(evidence):
     e = evidence or {}
     if not e.get("available"):
@@ -28626,7 +28681,7 @@ def analyze():
         training_state = build_training_state(season_activities, season_wellness, planning_context, metrics, feeling_trend_live)
         training_direction = build_training_direction(cycling_season_activities, planning_context=planning_context, plan=strategy_plan)
         session_progression = _v491_session_progression(progression_training_blocks)
-        podium = _v491_power_podium_badges(training_direction.get("primary_goal"),cycle_start=training_direction.get("started_on")); power_achievements["badges"]=podium.get("badges") or []; power_achievements["recent_badges"]=podium.get("recent_badges") or []; power_achievements["available"]=bool(power_achievements.get("events") or power_achievements.get("badges")); power_achievements["podium_method_note"]=podium.get("method_note"); power_achievements["podium_api_note"]=podium.get("api_note")
+        podium = _v491_power_podium_badges(training_direction.get("primary_goal"),cycle_start=training_direction.get("started_on")); power_achievements["badges"]=podium.get("badges") or []; power_achievements["recent_badges"]=podium.get("recent_badges") or []; power_achievements["observed_efforts"]=podium.get("observed_efforts") or []; power_achievements["featured_efforts"]=podium.get("featured_efforts") or []; power_achievements["auto_method_note"]=podium.get("auto_method_note"); power_achievements["available"]=bool(power_achievements.get("events") or power_achievements.get("badges") or power_achievements.get("featured_efforts")); power_achievements["podium_method_note"]=podium.get("method_note"); power_achievements["podium_api_note"]=podium.get("api_note")
         power_achievements = _v4873_prioritize_power_achievements(power_achievements, training_direction.get("primary_goal"))
         performance_breakthrough = _v4873_reconcile_native_breakthrough(performance_breakthrough, power_achievements)
         coaching_contract = _v4840_owner_coaching_contract(user["id"])
@@ -36095,6 +36150,20 @@ def _v149_exact_checkpoint_observation(evidence, previous_blocks, activity_id, a
             "pb_confirmed": bool((_rhythm_num(ev.get("delta_w")) or 0) > 0 or str(ev.get("kind") or "").upper() == "PB"),
             "source_event": ev,
         }
+    # A rolling 5-minute effort exists even inside a continuous 7-minute climb;
+    # its presence alone never creates a validation. This lookup is called only
+    # after an actual planned-validation fulfillment has been reconciled.
+    observed = [r for r in ((evidence or {}).get("observed_efforts") or [])
+                if isinstance(r, dict)
+                and r.get("source") == "INTERVALS_ACTIVITY_POWER_CURVE"
+                and str(r.get("activity_id") or "") == str(activity_id or "")
+                and str(r.get("date") or "")[:10] == str(actual_date or "")[:10]
+                and int(r.get("secs") or 0) == int(target_secs)]
+    if observed:
+        best = max(observed, key=lambda r: float(r.get("watts") or 0))
+        return {"secs": int(target_secs), "watts": round(float(best["watts"]), 1),
+                "previous_watts": None, "delta_w": None, "pb_confirmed": False,
+                "source_event": None, "observation_source": "INTERVALS_ACTIVITY_POWER_CURVE"}
     block = next((b for b in (previous_blocks or []) if isinstance(b, dict) and str(b.get("activity_id") or "") == str(activity_id or "") and str(b.get("date") or "")[:10] == str(actual_date or "")[:10]), None)
     if not block or not bool(block.get("quality_relevant")):
         return None
@@ -59576,7 +59645,7 @@ for _old_card3_text,_new_card3_text in _R196981_CARD3_COPY:
     assert HOME_PAGE.count(_old_card3_text)==1, 'R196981_CARD3_COPY_TEMPLATE_DRIFT'
     HOME_PAGE=HOME_PAGE.replace(_old_card3_text,_new_card3_text,1)
 
-APP_VERSION = ('THE LAB · PRODUCT V4.9.181 R196.9.81 · REFINED READINESS UI '
+APP_VERSION = ('THE LAB · PRODUCT V4.9.182 R196.9.82 · LAP-FREE POWER WINDOWS '
                '+ CONDITIONAL CARD-3 FUEL · R196.9.78 SCIENCE UNCHANGED')
 
 if __name__ == "__main__":
