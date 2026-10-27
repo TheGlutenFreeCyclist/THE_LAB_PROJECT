@@ -59163,117 +59163,245 @@ APP_VERSION = ('THE LAB · PRODUCT V4.9.178 R196.9.78 · PLAIN-LANGUAGE '
 # R196.9.79 / DTM-1.0.13 — athlete-facing quality-day advisor.
 # READ-ONLY UI projection. Never used by canonical decision, offer, ledger,
 # Calendar, nutrition planning, or persisted Snapshot construction.
-R196979_QUALITY_ADVISOR_SCHEMA = 'NOVA-R196.9.79-QUALITY-DAY-READONLY-1'
+R196979_QUALITY_ADVISOR_SCHEMA = 'NOVA-R196.9.80-PHYSIOLOGICAL-READINESS-1'
 
 
 def _nova_r196979_quality_day_advisor(data):
-    """Explain today's quality opportunity, without prescribing or vetoing it.
+    """Read-only assessment of independent physiological systems, not permission.
 
-    Event count is context, never a fatigue/safety gate. HEAT identity and its
-    longitudinal association are not clearance gates; only the physiological
-    signals observed for the athlete and the existing canonical authority are.
+    Conservative heuristic, NOT a clinically validated score. Explicit baseline
+    state outranks naked values; two measurements of autonomic balance count as
+    one system. No decision, workout, or prescription field is ever written.
     """
     d = data if isinstance(data, dict) else {}
     decision = d.get('nova_decision') or {}
     pres = d.get('nova_prescription') or {}
-    offer = (d.get('next_quality_offer') or {}).get('workout') or {}
+    offer_wrapper = d.get('next_quality_offer') or {}
+    offer = (offer_wrapper.get('workout') or {}) if isinstance(offer_wrapper, dict) else {}
+    if not isinstance(offer, dict):
+        offer = {}
+    direction = d.get('next_quality_direction') or {}
     clock = d.get('coach_clock') or {}
-    rhythm = (clock.get('rhythm') or d.get('training_rhythm') or {})
+    rhythm = clock.get('rhythm') or d.get('training_rhythm') or {}
     recent = rhythm.get('recent') or {}
     health = d.get('health_observatory') or {}
     signals = health.get('signals') or {}
-    systems = (d.get('physiological_state') or {}).get('systems') or []
-    count = d.get('energy_today_sessions')
-    if count is None:
-        count = clock.get('today_activity_count')
+    system_list = (d.get('physiological_state') or {}).get('systems') or []
+    by_label = {str(x.get('label') or '').upper(): x for x in system_list if isinstance(x, dict)}
+
+    def number(x):
+        try:
+            n = float(x)
+            return n if n == n and abs(n) != float('inf') else None
+        except (ValueError, TypeError):
+            return None
+
+    count_raw = d.get('energy_today_sessions')
+    if count_raw is None:
+        count_raw = clock.get('today_activity_count')
     try:
-        count = max(0, int(count or 0))
+        count = max(0, int(count_raw or 0))
     except (ValueError, TypeError):
         count = 0
-    double_rate = recent.get('double_day_pct')
-    training_days = recent.get('training_days')
-    try:
-        double_habit = (float(double_rate) >= .65 and int(training_days or 0) >= 10)
-    except (ValueError, TypeError):
-        double_habit = False
-    # No number-of-sessions penalty. Completion is inferred only with strong
-    # athlete-specific evidence of a stable two-session routine.
-    ratio = d.get('energy_today_load_ratio')
-    try:
-        ratio = float(ratio) if ratio is not None else None
-    except (TypeError, ValueError):
-        ratio = None
-    duration_ratio = d.get('energy_today_duration_ratio')
-    try:
-        duration_ratio = float(duration_ratio) if duration_ratio is not None else None
-    except (ValueError, TypeError):
-        duration_ratio = None
-    # Two micro-sessions do not automatically complete a normal two-a-day:
-    # compare cumulative duration/load with the athlete's own normal day.
+    pct = number(recent.get('double_day_pct'))
+    double_habit = pct is not None and pct >= .65 and (number(recent.get('training_days')) or 0) >= 10
+    ratio = number(d.get('energy_today_load_ratio'))
+    duration_ratio = number(d.get('energy_today_duration_ratio'))
+    # A count alone (including two micro sessions) never proves completion.
     workload_context = [x for x in (ratio, duration_ratio) if x is not None]
-    day_complete = bool(double_habit and count >= 2 and
-                        (not workload_context or max(workload_context) >= .65))
-    personal_context = ('Prima di due sedute abituali' if double_habit and count == 1
-                        else 'Giornata abituale completata' if day_complete
-                        else f'{count} sedut' + ('a' if count == 1 else 'e') + ' completate')
-    activities = str(clock.get('today_activities_text') or '')
-    # Classification label HEAT is NOT a negative input.
-    heat_today = 'HEAT' in activities.upper()
-    checks = []
-    by_label = {str(s.get('label') or '').upper(): s for s in systems if isinstance(s, dict)}
-    for label, display in (('AUTONOMIC', 'Recupero autonomico'), ('RECOVERY', 'Sonno e recupero'),
-                           ('TRAINING LOAD', 'Carico recente')):
-        system = by_label.get(label) or {}
-        if system:
-            checks.append({'label': display, 'value': str(system.get('status') or 'Osservato'),
-                           'tone': 'warn' if str(system.get('status_class')).lower() in ('orange','red') else 'ok'})
-    checks.append({'label': 'Ritmo personale', 'value': personal_context, 'tone': 'ok'})
-    for key, label in (('hrv','HRV'), ('restingHR','FC a riposo'), ('sleepSecs','Sonno')):
+    day_complete = bool(double_habit and count >= 2 and workload_context
+                        and max(workload_context) >= .65)
+    heat_today = 'HEAT' in str(clock.get('today_activities_text') or '').upper()
+
+    # Signal states are already assessed against this athlete's baseline by
+    # the upstream observatory. No uncalibrated universal numeric thresholds.
+    adverse_states = {'LOW', 'BELOW_USUAL', 'BELOW_BASELINE', 'ADVERSE',
+                      'DEVIATION', 'OUTSIDE_RANGE', 'ABNORMAL', 'WORSE'}
+    favorable_states = {'IMPROVED', 'FAVORABLE', 'BETTER_THAN_USUAL'}
+    usual_states = {'USUAL', 'BASELINE', 'NORMAL', 'WITHIN_BASELINE', 'STABLE'}
+
+    def signal_state(key):
+        x = signals.get(key) or {}
+        if not isinstance(x, dict) or x.get('available') is not True or x.get('stale') is True:
+            return 'missing'
+        state = str(x.get('state') or '').upper()
+        if state in usual_states:
+            return 'baseline'
+        if state in adverse_states or (key == 'restingHR' and state in {'HIGH', 'ABOVE_USUAL'}):
+            return 'adverse'
+        # Improvement requires explicit trustworthy upstream evidence, not
+        # "HRV higher" or a guessed comparison of raw numeric values.
+        if state in favorable_states and x.get('favorable_confirmed') is True:
+            return 'favorable'
+        return 'unknown'
+
+    def system_state(name):
+        item = by_label.get(name) or {}
+        if not item:
+            return 'missing'
+        status = str(item.get('status') or '').upper()
+        color = str(item.get('status_class') or '').lower()
+        if color == 'red':
+            return 'adverse'
+        if color == 'purple' and item.get('favorable_confirmed') is True and \
+                str(item.get('confidence') or '').upper() in ('HIGH', 'VERIFIED'):
+            return 'favorable'
+        if color in ('green', 'cyan') or status in ('BALANCED', 'CONTROLLED', 'BASELINE'):
+            return 'baseline'
+        # Orange WATCH is a caution flag, not by itself a measured adverse
+        # physiological deviation. Avoid recoding mild sleep debt as RED.
+        if color == 'orange' or status == 'WATCH':
+            return 'watch'
+        return 'missing'
+
+    hrv = signal_state('hrv')
+    rhr = signal_state('restingHR')
+    sleep = signal_state('sleepSecs')
+    autonomic = system_state('AUTONOMIC')
+    recovery = system_state('RECOVERY')
+    load = system_state('TRAINING LOAD')
+
+    def consolidate(system, measurements):
+        if system == 'adverse' or 'adverse' in measurements:
+            return 'adverse'
+        known = [v for v in measurements if v in ('baseline', 'favorable')]
+        if system == 'favorable':
+            return 'favorable' if not measurements or known else 'baseline'
+        if system == 'baseline' or known:
+            # A red system has already been handled; orange WATCH with actual
+            # usual measurements is context, not an extra adverse vote.
+            return 'favorable' if system == 'missing' and len(known) >= 2 and all(
+                v == 'favorable' for v in known) else 'baseline'
+        return 'missing' if system == 'missing' else 'watch'
+
+    autonomic = consolidate(autonomic, [hrv, rhr])
+    recovery = consolidate(recovery, [sleep])
+    # A quantified genuinely excessive same-day load is relevant even if
+    # the old broad system label still says CONTROLLED.
+    if count > 0 and ratio is not None and ratio > 1.35:
+        load = 'adverse'
+    elif load == 'watch' and ratio is not None and ratio <= 1.0:
+        load = 'baseline'
+    elif load == 'missing' and ratio is not None and 0 <= ratio <= 1.0:
+        load = 'baseline'
+
+    heat = d.get('heat_response') or {}
+    # Only a documented acute physiological response; historical HEAT
+    # association/HEAT activity names never serve as a veto.
+    if (isinstance(heat, dict) and heat.get('measured_adverse_response') is True
+            and str(heat.get('confidence') or '').upper() in ('HIGH', 'VERIFIED')):
+        load = 'adverse'
+
+    # Optional vital signs are a fourth independent domain ONLY when the
+    # observatory explicitly supplies a fresh, reliable athlete-specific state.
+    # Do not turn old SpO2/temperature or missing confidence into a veto.
+    vitals = []
+    for key in ('spO2', 'respirationRate', 'skinTemp', 'temperature'):
         item = signals.get(key) or {}
-        if item.get('available') is True:
-            checks.append({'label':label, 'value':'Nella norma personale' if item.get('state')=='USUAL' else 'Da osservare',
-                           'tone':'ok' if item.get('state')=='USUAL' else 'warn'})
-    concerns = [s for key in ('AUTONOMIC','RECOVERY')
-                for s in [by_label.get(key) or {}]
-                if str(s.get('status_class') or '').lower() == 'red']
-    source_day = str(clock.get('iso') or '')[:10]
-    offer_day = str(offer.get('date') or offer.get('planned_date') or '')[:10]
-    offer_on_day = not (source_day and offer_day and offer_day != source_day)
-    eligible = (str(decision.get('action') or '').upper() == 'TRAIN'
-                and str(pres.get('status') or '').upper() == 'PRESCRIBED'
-                and decision.get('hard_session_allowed') is not False
-                and decision.get('quality_window_eligible') is not False
-                and offer_on_day and bool(offer)
-                and offer.get('provisional_quality') is not True)
-    if day_complete:
-        code, title, message, tone = ('DAY_COMPLETE', 'Per oggi hai completato gli allenamenti',
-            'Il tuo ritmo abituale comprende due sedute e le hai già completate. Non aggiungere una nuova quality oggi; la prossima rimane visibile nella terza scheda.', 'neutral')
-    elif str(decision.get('action') or '').upper() == 'HOLD':
-        code, title, message, tone = ('CORE_RECOVERY', 'Oggi dai priorità al recupero',
-            'Nova mantiene una restrizione di recupero. La prossima quality resta il tuo obiettivo, non una seduta da aggiungere oggi.', 'warn')
-    elif not eligible:
-        code, title, message, tone = ('FOLLOW_CANONICAL', 'Oggi mantieni il lavoro indicato da Nova',
-            'La prossima quality resta visibile nella terza scheda. Il motore non ha emesso una quality eseguibile per questa giornata: segui il lavoro già indicato, senza aggiungere intensità.', 'neutral')
-    elif concerns or health.get('state') == 'WATCH':
-        code, title, message, tone = ('RECOVERY_ALERT', 'Oggi meglio evitare una quality aggiuntiva',
-            'I segnali di recupero osservati richiedono attenzione. Controlla le condizioni prima di qualsiasi lavoro intenso; la quality prevista rimane visibile.', 'warn')
-    elif ratio is not None and ratio > 1.35 and count > 0:
-        code, title, message, tone = ('ABOVE_NORMAL_DAY', 'Oggi non aggiungere ulteriore intensità',
-            'Il carico gia completato supera nettamente la tua giornata abituale. Evita di aggiungere una quality fuori dal lavoro gia definito.', 'warn')
+        if not isinstance(item, dict) or item.get('available') is not True:
+            continue
+        age = number(item.get('age_days'))
+        fresh = item.get('fresh') is True or (age is not None and 0 <= age <= 3)
+        trusted = str(item.get('confidence') or '').upper() in ('HIGH', 'VERIFIED')
+        if not (fresh and trusted):
+            continue
+        state = str(item.get('state') or '').upper()
+        if state in adverse_states or (key != 'spO2' and state in ('HIGH', 'ABOVE_USUAL')):
+            vitals.append('adverse')
+        elif state in usual_states:
+            vitals.append('baseline')
+    vitals_state = ('adverse' if 'adverse' in vitals else
+                    'baseline' if 'baseline' in vitals else 'missing')
+
+    safety = (health.get('acute_red_flag') is True or
+              health.get('safety_restriction') is True or
+              health.get('verified_critical_deviation') is True)
+    groups = {'autonomic': autonomic, 'recovery': recovery, 'load': load}
+    if vitals_state != 'missing':
+        groups['vitals'] = vitals_state
+    adverse = sum(v == 'adverse' for v in groups.values())
+    stable = sum(v in ('baseline', 'favorable') for v in groups.values())
+    observed = sum(v != 'missing' for v in groups.values())
+    favorable = sum(v == 'favorable' for v in groups.values())
+
+    if safety or adverse >= 2:
+        tier = 4
+    elif adverse or stable < 2 or observed < 2:
+        tier = 3
+    elif favorable and adverse == 0 and all(v in ('baseline', 'favorable') for v in groups.values()):
+        tier = 1
     else:
-        code, title, message, tone = ('QUALITY_COMPATIBLE', 'Quality compatibile con la giornata',
-            'Il lavoro gia svolto non è un veto automatico. Le condizioni osservate e la direzione canonica sono compatibili con una quality già emessa da Nova; considera il tuo stato prima di eseguirla.', 'ok')
-    context = ('Una prima seduta HEAT non blocca la quality in automatico: contano le risposte individuali osservate.'
-               if heat_today and not day_complete else
-               'Il numero di allenamenti svolti non è un indicatore autonomo di affaticamento.')
-    if double_habit and count == 1:
-        context = ('Hai completato la prima di due sedute abituali. ' + context)
-    return {'schema':R196979_QUALITY_ADVISOR_SCHEMA, 'code':code, 'tone':tone,
-            'title':title, 'message':message, 'context':context,
-            'checks':checks[:7], 'sessions_today':count,
-            'double_habit':double_habit,'day_complete':day_complete,
-            'heat_today':heat_today,'session_count_is_never_a_veto':True,
-            'read_only':True,'changes_decision':False,'changes_prescription':False}
+        tier = 2
+    tiers = {
+        1: ('PRIMED', 'Primed to do quality/racing', 'purple', '⚡',
+            'Recovery systems are on baseline, with a confirmed positive shift.'),
+        2: ('READY', 'Ready for quality', 'green', '✓',
+            'Your main recovery markers are holding their personal range.'),
+        3: ('MIXED', 'Mixed signals, quality may be allowed', 'amber', '↔',
+            'A few markers need attention before considering intensity.'),
+        4: ('NOT_SUGGESTED', 'Quality is not suggested', 'red', '!',
+            'Independent warning signs call for a recovery-first approach.'),
+    }
+    code, title, tone, icon, message = tiers[tier]
+    if tier == 4 and safety:
+        message = 'An observed safety alert takes priority over otherwise normal markers.'
+    if tier == 3 and not adverse and observed < 2:
+        message = 'Only a limited set of fresh recovery signals is available.'
+    elif tier == 3 and not adverse:
+        message = 'Some recovery signals are still worth monitoring.'
+
+    # Separate current authority from physiology; do not infer authorization
+    # from the color of this card or an unscheduled roadmap direction.
+    today = str(clock.get('iso') or '')[:10]
+    offer_date = str(offer.get('date') or offer.get('planned_date') or '')[:10]
+    is_today = bool(offer) and (not today or not offer_date or today == offer_date)
+    canonical_today = (str(decision.get('action') or '').upper() == 'TRAIN'
+                       and str(pres.get('status') or '').upper() == 'PRESCRIBED'
+                       and decision.get('hard_session_allowed') is not False
+                       and decision.get('quality_window_eligible') is not False
+                       and is_today and offer.get('provisional_quality') is not True)
+    name = str(direction.get('athlete_title') or direction.get('title') or '').strip()
+    # Direction title is source data displayed escaped in the Jinja template.
+    next_quality = ('Next quality: ' + name + ' · Not scheduled') if name else 'Next quality: Awaiting roadmap direction'
+    permission = ('A quality session is issued for today — follow the official workout.'
+                  if canonical_today else 'No quality session prescribed for today.')
+    if day_complete:
+        context = 'Training day complete · Follow your planned recovery.'
+    elif double_habit and count == 1:
+        context = 'First of your usual two sessions · The day is still in progress.'
+    elif count == 0:
+        context = 'No sessions logged today.'
+    else:
+        context = f'{count} session' + ('' if count == 1 else 's') + ' logged today.'
+    # These are context-only variables, never votes in the model.
+    def chip(label, icon, state, value):
+        color = {'baseline':'green', 'favorable':'purple', 'adverse':'red',
+                 'watch':'grey', 'unknown':'grey', 'missing':'grey'}[state]
+        display = {'baseline':'On baseline', 'favorable':'Above baseline',
+                   'adverse':'Off baseline', 'watch':'Needs context',
+                   'unknown':'Unclassified', 'missing':'Unavailable'}[state]
+        return {'label':label,'icon':icon,'value':value or display,'tone':color,
+                'state':state}
+    checks = [chip('Autonomic', '♥', autonomic, ''),
+              chip('Sleep & recovery', '☾', recovery, ''),
+              chip('Training load', '↗', load, ''),
+              chip('HRV', '∿', hrv, ''),
+              chip('Resting HR', '♥', rhr, ''),
+              chip('Sleep', '☾', sleep, '')]
+    if vitals_state != 'missing':
+        checks.append(chip('Vital signs', '✧', vitals_state, ''))
+    if safety:
+        checks.insert(0,chip('Health alert','!', 'adverse', 'Observed safety flag'))
+    return {'schema':R196979_QUALITY_ADVISOR_SCHEMA,
+            'code':code,'tier':tier,'tone':tone,'icon':icon,
+            'title':title,'message':message,'context':context,
+            'next_quality':next_quality,'permission':permission,
+            'checks':checks,'systems':groups,'evidence_coverage':observed,
+            'canonical_quality_today':canonical_today,
+            'sessions_today':count,'double_habit':double_habit,
+            'day_complete':day_complete,'heat_today':heat_today,
+            'session_count_is_never_a_veto':True,'read_only':True,
+            'changes_decision':False,'changes_prescription':False}
 
 
 def _nova_r196979_quality_direction_fuel(data):
@@ -59324,21 +59452,67 @@ _R196979_OLD_READINESS = '''<div class="v4860-readiness-inline" aria-label="Dail
 <div class="v4860-readiness-copy"><div class="v4861-readiness-kicker">DAILY READINESS</div><div class="v4861-readiness-state">{{ data.race_readiness_label }}</div><p class="v4861-readiness-reason">{{ data.race_readiness_reason }}</p>{% if data.health_observatory and data.health_observatory.readiness_line %}<p class="r196962-readiness-context">{{ data.health_observatory.readiness_line }}</p>{% endif %}</div>
 </div>'''
 _R196979_NEW_ADVISOR = '''{% set advisor = data.quality_day_advisor or {} %}
-<div class="v4860-readiness-inline r196979-quality-day" aria-label="Quality today advisory" data-advisor="{{ advisor.code|e }}">
-<div class="r196979-guide {{ advisor.tone|e }}">
-<div class="v4861-readiness-kicker">QUALITY OGGI? · LETTURA DELLO SNAPSHOT</div>
-<strong class="r196979-guide-title">{{ advisor.title|e }}</strong>
-<p>{{ advisor.message|e }}</p><p class="r196979-context">{{ advisor.context|e }}</p>
-<div class="r196979-signals">{% for check in advisor.checks or [] %}<span class="r196979-signal {{ check.tone|e }}"><b>{{ check.label|e }}</b> · {{ check.value|e }}</span>{% endfor %}</div>
-<small>Guida informativa: non modifica il motore, non autorizza o programma sedute.</small>
-</div></div>
+<div class="v4860-readiness-inline r196979-quality-day" aria-label="Quality readiness assessment" data-advisor="{{ advisor.code|e }}" data-tier="{{ advisor.tier|e }}">
+  <section class="r196979-guide {{ advisor.tone|e }}" aria-label="Today's physiological readiness">
+    <div class="r196979-head">
+      <div class="r196979-status-icon" aria-hidden="true">{{ advisor.icon|e }}</div>
+      <div class="r196979-head-text">
+        <div class="v4861-readiness-kicker r196979-kicker">NOVA // QUALITY READINESS</div>
+        <strong class="r196979-guide-title">{{ advisor.title|e }}</strong>
+      </div>
+    </div>
+    <p class="r196979-summary">{{ advisor.message|e }}</p>
+    <div class="r196979-signal-heading"><span>YOUR PERFORMANCE SIGNALS</span><span class="r196979-signal-sub">VS PERSONAL BASELINE</span></div>
+    <div class="r196979-signals" aria-label="Individual recovery signals">
+      {% for check in advisor.checks or [] %}
+      <div class="r196979-signal {{ check.tone|e }}" aria-label="{{ check.label|e }}: {{ check.value|e }}">
+        <span class="r196979-chip-icon" aria-hidden="true">{{ check.icon|e }}</span>
+        <span class="r196979-chip-label">{{ check.label|e }}<small>{{ check.value|e }}</small></span>
+        <span class="r196979-chip-dot" aria-hidden="true"></span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="r196979-session-context"><span aria-hidden="true">◷</span> {{ advisor.context|e }}</div>
+    <div class="r196979-direction">
+      <span class="r196979-direction-icon" aria-hidden="true">⚑</span>
+      <div><div class="r196979-direction-kicker">THE COACH'S CALL · SEPARATE FROM READINESS</div>
+        <strong>{{ advisor.next_quality|e }}</strong>
+        <small>{{ advisor.permission|e }}</small>
+      </div>
+    </div>
+  </section>
+</div>
 <style>
-.r196979-quality-day{display:block!important}.r196979-guide{padding:16px 19px;display:block;width:100%;border-left:3px solid #b8aec3;background:rgba(150,150,160,.055);border-radius:7px}
-.r196979-guide.ok{border-left-color:#56a27d}.r196979-guide.warn{border-left-color:#cba96e}
-.r196979-guide-title{font-size:17px;font-weight:750;display:block;margin:5px 0 7px}.r196979-guide p{font-size:13px;line-height:1.52;margin:7px 0}
-.r196979-guide .r196979-context{opacity:.85}.r196979-signals{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
-.r196979-signal{border:1px solid rgba(128,128,128,.3);padding:5px 8px;border-radius:6px;font-size:11px}.r196979-signal b{font-weight:700}
-.r196979-guide small{display:block;margin-top:8px;opacity:.76;font-size:10px}
+/* Uses NOVA's existing --purple/green/orange/red/cyan and Arial font tokens. */
+.r196979-quality-day{display:block!important;min-width:0!important;width:100%!important;padding:0!important;border:0!important;background:transparent!important}
+.r196979-guide{--status:var(--cyan);--glow:rgba(23,201,242,.10);position:relative;min-width:0;width:100%;padding:17px 17px 15px;overflow:hidden;border:1px solid rgba(255,255,255,.11);border-radius:17px;background:radial-gradient(ellipse at 95% 0,var(--glow),transparent 62%),linear-gradient(160deg,rgba(255,255,255,.045),rgba(255,255,255,.012)),#101821;box-shadow:inset 0 1px 0 rgba(255,255,255,.065);font-family:var(--font)}
+.r196979-guide:before{content:"";position:absolute;top:0;left:17px;right:17px;height:2px;background:linear-gradient(90deg,var(--status),transparent 75%);opacity:.9}
+.r196979-guide.purple{--status:var(--purple);--glow:rgba(155,114,255,.14)}
+.r196979-guide.green{--status:var(--green);--glow:rgba(18,216,159,.10)}
+.r196979-guide.amber{--status:var(--orange);--glow:rgba(255,177,44,.10)}
+.r196979-guide.red{--status:var(--red);--glow:rgba(255,88,113,.11)}
+.r196979-head{display:flex;align-items:center;gap:12px;min-width:0;padding-top:2px}
+.r196979-status-icon{flex:0 0 45px;width:45px;height:45px;display:grid;place-items:center;border:1px solid color-mix(in srgb,var(--status) 44%,transparent);border-radius:13px;background:color-mix(in srgb,var(--status) 11%,transparent);color:var(--status);font-family:var(--font);font-size:24px;font-weight:800;box-shadow:0 0 20px color-mix(in srgb,var(--status) 8%,transparent)}
+.r196979-head-text{min-width:0}.r196979-kicker{color:var(--cyan)!important;font-size:9px!important;letter-spacing:.15em!important;margin-bottom:4px}
+.r196979-guide-title{display:block;color:#f5f7fa;font-family:var(--display);font-size:clamp(17px,2.4vw,22px);font-weight:800;line-height:1.13;letter-spacing:-.012em;overflow-wrap:break-word}
+.r196979-summary{margin:10px 0 13px;color:#c2cfdb;font-size:12px;line-height:1.5}
+.r196979-signal-heading{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:5px;margin:12px 0 8px;color:#d7e3ed;font-size:9px;font-weight:850;letter-spacing:.12em}
+.r196979-signal-heading .r196979-signal-sub{color:#8595a4;font-size:8px;letter-spacing:.07em}
+.r196979-signals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.r196979-signal{--chip:var(--grey);display:flex;align-items:center;gap:8px;min-width:0;min-height:43px;border:1px solid color-mix(in srgb,var(--chip) 31%,transparent);border-radius:11px;background:color-mix(in srgb,var(--chip) 7%,transparent);padding:7px 8px;color:#e2eaf2}
+.r196979-signal.green{--chip:var(--green)}.r196979-signal.purple{--chip:var(--purple)}.r196979-signal.red{--chip:var(--red)}.r196979-signal.grey{--chip:var(--grey)}
+.r196979-chip-icon{display:grid;place-items:center;flex:0 0 25px;width:25px;height:25px;border-radius:8px;background:color-mix(in srgb,var(--chip) 15%,transparent);color:var(--chip);font-size:18px;font-weight:800;line-height:1}
+.r196979-chip-label{display:block;flex:1;min-width:0;font-weight:750;font-size:11px;line-height:1.13;overflow-wrap:break-word}.r196979-chip-label small{display:block;margin-top:4px;font-size:10px;font-weight:550;color:#bac8d3}
+.r196979-chip-dot{flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:var(--chip)}
+.r196979-session-context{display:flex;align-items:baseline;gap:6px;color:#9cb0be;font-size:10px;line-height:1.5;margin:12px 0}
+.r196979-session-context span{font-size:15px;color:var(--cyan)}
+.r196979-direction{display:flex;gap:9px;align-items:flex-start;border-top:1px solid rgba(255,255,255,.09);padding:12px 0 0;min-width:0}
+.r196979-direction-icon{flex:0 0 27px;width:27px;height:27px;display:grid;place-items:center;border:1px solid rgba(23,201,242,.2);border-radius:9px;color:var(--cyan);font-size:16px;background:rgba(23,201,242,.07)}
+.r196979-direction>div{min-width:0}.r196979-direction-kicker{color:var(--cyan);font-size:8px;font-weight:850;letter-spacing:.095em;margin-bottom:3px}
+.r196979-direction strong{display:block;color:#e6edf4;font-size:11px;line-height:1.35;overflow-wrap:break-word}.r196979-direction small{display:block;color:#a4b2c0;margin-top:4px;line-height:1.4;font-size:10px}
+@media(max-width:390px){.r196979-guide{padding:14px 12px}.r196979-head{gap:9px}.r196979-status-icon{flex-basis:39px;width:39px;height:39px;font-size:21px}.r196979-guide-title{font-size:17px}.r196979-signals{gap:6px}.r196979-signal{gap:5px;padding:6px;min-height:46px}.r196979-chip-icon{width:20px;flex-basis:20px;height:22px;font-size:15px}.r196979-chip-label{font-size:10px}.r196979-chip-label small{font-size:9px}.r196979-chip-dot{display:none}}
+@media(min-width:850px){.r196979-signals{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(prefers-reduced-motion:reduce){.r196979-guide,.r196979-signal{transition:none!important}}
 </style>'''
 assert HOME_PAGE.count(_R196979_OLD_READINESS)==1, 'R196979_READINESS_TEMPLATE_DRIFT'
 HOME_PAGE=HOME_PAGE.replace(_R196979_OLD_READINESS,_R196979_NEW_ADVISOR,1)
@@ -59365,8 +59539,8 @@ def _v4891_prepare_snapshot_for_ui(data):
     out['quality_direction_fuel'] = _nova_r196979_quality_direction_fuel(ui)
     return out
 
-APP_VERSION = ('THE LAB · PRODUCT V4.9.179 R196.9.79 · READ-ONLY QUALITY DAY '
-               'ADVISOR + CONDITIONAL CARD-3 FUEL · R196.9.78 SCIENCE UNCHANGED')
+APP_VERSION = ('THE LAB · PRODUCT V4.9.180 R196.9.80 · FOUR-TIER QUALITY READINESS '
+               '+ CONDITIONAL CARD-3 FUEL · R196.9.78 SCIENCE UNCHANGED')
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
