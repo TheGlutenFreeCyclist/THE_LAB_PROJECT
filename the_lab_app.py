@@ -17077,6 +17077,16 @@ def _v4896_build_performance_evidence(training_direction, plan, power_achievemen
             formal["id"] = _v4896_event_id(formal)
             new_events.append(formal)
             break
+    # INC-032: ONE owner for checkpoint truth. Verified spontaneous efforts enter
+    # the SAME event stream as prescribed completions, before the canonical merge.
+    # No second validation authority, later promotion pass or shadow state.
+    spontaneous = _v4896_verified_unplanned_checkpoint(
+        goal_key, td, plan, test_cfg, previous_blocks,
+        (power_achievements or {}).get("observed_efforts") or [],
+        stored, new_events, today,
+    )
+    if spontaneous is not None:
+        new_events.append(spontaneous)
     merged = _v4896_merge_plan_evidence(stored, new_events)
     events = list(merged.get("events") or [])
     formal_events = [x for x in events if x.get("formal_validation")]
@@ -59648,6 +59658,431 @@ for _old_card3_text,_new_card3_text in _R196981_CARD3_COPY:
 APP_VERSION = ('THE LAB · PRODUCT V4.9.182 R196.9.82 · LAP-FREE POWER WINDOWS '
                '+ CONDITIONAL CARD-3 FUEL · R196.9.78 SCIENCE UNCHANGED')
 
+
+# INC-030 / R196.9.83: checkpoint attempt != PR != prescription.
+# Fixes the real Oct 27 content-audit mismatch in a presentation/observation
+# sidecar ONLY; the R149 formal validator, roadmap and power science are untouched.
+R196983_ATTEMPT_SCHEMA = 'NOVA-R196.9.83-OBSERVED-CHECKPOINT-ATTEMPT-1'
+
+
+def _nova_r196983_checkpoint_attempt(data):
+    """Recognize an explicitly identified maximal test with exact native curve.
+
+    A 300-second rolling peak alone is NOT evidence of maximal intent: every
+    ordinary ride has one. The matching hard activity AND explicit test intent
+    are needed. This cannot assert PR, formal fulfillment, stage advancement,
+    or an authorized training session.
+    """
+    d = data if isinstance(data, dict) else {}
+    road = d.get('adaptive_roadmap') or {}
+    clock = d.get('coach_clock') or {}
+    goal = str(road.get('goal_key') or (d.get('training_direction') or {}).get('primary_goal') or '').upper()
+    cfg = (_V4873_ROADMAP_GOALS.get(goal) or {}).get('field_test') or {}
+    if goal != 'POWER_5' or str(cfg.get('mode') or '').upper() != 'MAXIMAL':
+        return None
+    try:
+        seconds = int(cfg.get('seconds') or 0)
+    except (ValueError, TypeError):
+        return None
+    if seconds != 300:
+        return None
+    today = str(clock.get('iso') or '')[:10]
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', today):
+        return None
+    try:
+        cutoff = date.fromisoformat(today) - timedelta(days=14)
+    except (TypeError, ValueError):
+        return None
+    observed = {(str(o.get('activity_id') or ''), str(o.get('date') or '')[:10]): o
+        for o in ((d.get('performance_evidence') or {}).get('observed_efforts') or [])
+        if isinstance(o, dict) and o.get('source') == 'INTERVALS_ACTIVITY_POWER_CURVE'
+        and o.get('rolling_window') is True and o.get('secs') == seconds
+        and isinstance(o.get('watts'), (int, float)) and 20 <= o['watts'] <= 2500
+        and math.isfinite(float(o['watts']))}
+    candidates = []
+    for b in d.get('previous_training_blocks') or []:
+        if not isinstance(b, dict) or b.get('quality_relevant') is not True:
+            continue
+        if str(b.get('quality_basis') or '') != 'EXPLICIT_MAXIMAL_TEST':
+            continue
+        aid, day = str(b.get('activity_id') or ''), str(b.get('date') or '')[:10]
+        try:
+            if not cutoff <= date.fromisoformat(day) <= date.fromisoformat(today):
+                continue
+        except ValueError:
+            continue
+        name = str(b.get('name') or '').lower()
+        # Athlete explicitly designates both test/maximal purpose and duration.
+        if not (('test' in name or 'checkpoint' in name) and
+                ('maximal' in name or 'all-out' in name or 'all out' in name) and
+                re.search(r'(?:\b5[ -]?(?:min(?:ute)?s?|m)\b|\bfive[ -]min)', name)):
+            continue
+        point = observed.get((aid, day))
+        if not point:
+            continue
+        candidates.append((day, aid, b, point))
+    if not candidates:
+        return None
+    day, aid, block, point = max(candidates, key=lambda row: (row[0], row[1]))
+    return {'schema': R196983_ATTEMPT_SCHEMA, 'state': 'MAXIMAL_ATTEMPT_RECORDED',
+            'goal_key': goal, 'activity_id': aid, 'date': day,
+            'activity_name': str(block.get('name') or ''),
+            'seconds': seconds, 'watts': round(float(point['watts'])),
+            'source': 'EXPLICIT_MAXIMAL_TEST_AND_NATIVE_ROLLING_POWER',
+            'effort_recorded': True, 'pb_confirmed': False,
+            'formal_validation': False, 'roadmap_advanced': False,
+            'not_an_issued_workout': True,
+            'review_required': True,
+            'athlete_message': 'Maximal 5-minute attempt recorded; a new PR is not required.'}
+
+
+def _nova_r196983_hard_today(data):
+    """Hard-work proof, not number of sessions, determines same-day recovery."""
+    d = data if isinstance(data, dict) else {}
+    today = str((d.get('coach_clock') or {}).get('iso') or '')[:10]
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', today):
+        return None
+    hard_rows = [r for r in ((d.get('week_memory') or {}).get('activities') or [])
+                 if isinstance(r, dict) and str(r.get('date') or '')[:10] == today
+                 and r.get('hard') is True]
+    blocks = [b for b in d.get('previous_training_blocks') or []
+              if isinstance(b, dict) and str(b.get('date') or '')[:10] == today
+              and b.get('quality_relevant') is True]
+    for r in hard_rows:
+        # Match on date + activity name, since weekly memory has no activity_id.
+        name = str(r.get('name') or '').strip().lower()
+        for b in blocks:
+            if name and name == str(b.get('name') or '').strip().lower():
+                return {'state':'HARD_QUALITY_COMPLETED_TODAY',
+                        'activity_id':b.get('activity_id'), 'date':today,
+                        'reason':b.get('quality_basis') or 'CANONICAL_HARD_ACTIVITY'}
+    return None
+
+
+_r196983_preparer_before = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui = _r196983_preparer_before(data)
+    if not isinstance(ui, dict):
+        return ui
+    out = dict(ui)
+    attempt = _nova_r196983_checkpoint_attempt(out)
+    out['checkpoint_attempt_review'] = attempt
+    direction = out.get('next_quality_direction') or {}
+    if (attempt and isinstance(direction, dict) and
+            direction.get('source') == 'ROADMAP_FORMAL_VALIDATION_STEP' and
+            direction.get('goal_key') == 'POWER_5'):
+        q = dict(direction)
+        q.update({'athlete_title': '5-minute test · Effort recorded',
+                  'athlete_explanation':
+                    f"Your maximal 5-minute attempt on {attempt['date']} was recorded at {attempt['watts']} W. "
+                    'A personal record is not required for an attempt to count. '
+                    'NOVA is reviewing the checkpoint evidence, rather than requesting another test.',
+                  'athlete_status':
+                    'Checkpoint attempt observed · Formal validation pending. '
+                    'No repeat test is suggested while this attempt is under review.',
+                  'pending_attempt_review': True,
+                  'attempt_activity_id': attempt['activity_id']})
+        out['next_quality_direction'] = q
+    advisor = out.get('quality_day_advisor')
+    hard = _nova_r196983_hard_today(out)
+    if isinstance(advisor, dict) and hard:
+        a = dict(advisor)
+        a.update({'code': 'NOT_SUGGESTED', 'tier': 4, 'tone': 'red', 'icon': '!',
+                  'title': 'Quality is not suggested',
+                  'message': 'A hard effort is already complete today. Further intensity is not suggested; prioritize recovery.',
+                  'context': f"{int(out.get('energy_today_sessions') or 1)} sessions today · Hard effort completed · Recovery first.",
+                  'same_day_quality_gate': hard['state'],
+                  'underlying_marker_assessment': advisor.get('code'),
+                  'not_a_physiological_deviation': True})
+        out['quality_day_advisor'] = a
+    return out
+
+
+
+def _nova_r196983_review_current(data, attempt):
+    """Owner-stored pending attempt remains visible until true reconciliation.
+
+    Never treat a cached observation as an R149 formal validation. The 28-day
+    bounded review lifetime prevents an old, unresolved try hiding new training
+    directions indefinitely; the attempt remains historical in the old report.
+    """
+    d = data if isinstance(data, dict) else {}
+    a = attempt if isinstance(attempt, dict) else None
+    if not a or a.get('schema') != R196983_ATTEMPT_SCHEMA or a.get('state') != 'MAXIMAL_ATTEMPT_RECORDED':
+        return None
+    goal = str((d.get('adaptive_roadmap') or {}).get('goal_key') or '').upper()
+    if goal != str(a.get('goal_key') or '').upper():
+        return None
+    try:
+        today = date.fromisoformat(str((d.get('coach_clock') or {}).get('iso') or '')[:10])
+        when = date.fromisoformat(str(a.get('date') or '')[:10])
+        age = (today - when).days
+    except ValueError:
+        return None
+    if age < 0 or age > 28:
+        return None
+    formal = ((d.get('performance_evidence') or {}).get('latest_formal_validation') or {})
+    try:
+        validated = str(formal.get('activity_id') or '') == str(a.get('activity_id') or '') and bool(formal.get('formal_validation'))
+    except (TypeError, AttributeError):
+        validated = False
+    if validated:
+        return None
+    return dict(a, review_age_days=age)
+
+# Preserve attempt evidence across consecutive owner-isolated persisted
+# Snapshots; recent activity slices can drop a test within a day or two.
+_r196983_save_before = save_latest_report
+
+def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None):
+    if not isinstance(data, dict):
+        return _r196983_save_before(data, now=now, owner_user_id=owner_user_id,
+                                   qa_replay_bundle=qa_replay_bundle)
+    owner_id = _data_owner_user_id(owner_user_id)
+    current = _nova_r196983_checkpoint_attempt(data)
+    if current is None:
+        previous = load_latest_report(include_payload=True, owner_user_id=owner_id)
+        old = (previous.get('data') or {}).get('checkpoint_attempt_review') if isinstance(previous,dict) else None
+        current = _nova_r196983_review_current(data, old)
+    data['checkpoint_attempt_review'] = current
+    return _r196983_save_before(data, now=now, owner_user_id=owner_id,
+                               qa_replay_bundle=qa_replay_bundle)
+
+# Redefine UI only to consume the owner-persisted review if the live recent
+# activity slice no longer includes the original test. This wrapper executes
+# before the presentation adapter immediately below.
+_r196983_prepare_fresh = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui = _r196983_prepare_fresh(data)
+    if not isinstance(ui, dict):
+        return ui
+    if ui.get('checkpoint_attempt_review'):
+        return ui
+    old = _nova_r196983_review_current(ui, (data or {}).get('checkpoint_attempt_review'))
+    if old is None:
+        return ui
+    out = dict(ui)
+    out['checkpoint_attempt_review'] = old
+    direction = out.get('next_quality_direction') or {}
+    if isinstance(direction,dict) and direction.get('source') == 'ROADMAP_FORMAL_VALIDATION_STEP' and direction.get('goal_key') == 'POWER_5':
+        q = dict(direction)
+        q.update({'athlete_title': '5-minute test · Effort recorded',
+                  'athlete_explanation':
+                    f"Your maximal 5-minute attempt on {old['date']} was recorded at {old['watts']} W. "
+                    'A new PR is not necessary for an attempt to count. '
+                    'NOVA is reviewing the recorded checkpoint instead of asking for another test.',
+                  'athlete_status':
+                    'Attempt recorded · Formal validation pending. No repeat is suggested while under review.',
+                  'pending_attempt_review':True,'attempt_activity_id':old['activity_id']})
+        out['next_quality_direction'] = q
+    return out
+
+# The earlier UI patch hardcoded a fallback warning; restore dynamic, escaped
+# athlete copy so an observed checkpoint replaces the redundant instruction.
+_R196983_OLD_STATUS = ('<div class="v4-session-why">Checkpoint direction, not an '
+                        'instruction to test today. If you attempt it independently, '
+                        'NOVA can assess the recorded effort at a later Snapshot.</div>')
+assert HOME_PAGE.count(_R196983_OLD_STATUS) == 1, 'R196983_STATUS_TEMPLATE_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_R196983_OLD_STATUS,
+    '<div class="v4-session-why">{{ qd.athlete_status|e }}</div>', 1)
+
+# A recorded attempt is a review state, not another unscheduled workout. The
+# third card must not invite a repeat or attach the example fueling of a new test.
+_R196983_HEADER = '<span class="v1962-quality-eyebrow">NEXT QUALITY · DIRECTION</span>'
+_R196983_PILL = '<span class="v4-session-pill">YOU CHOOSE WHEN</span>'
+_R196983_FUEL_SLOT = '{% if not is_quality_slot or n or (data.quality_direction_fuel and not quality_already_shown) %}'
+for _old in (_R196983_HEADER, _R196983_PILL, _R196983_FUEL_SLOT):
+    assert HOME_PAGE.count(_old) == 1, 'R196983_CARD3_TEMPLATE_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_R196983_HEADER,
+    '<span class="v1962-quality-eyebrow">{{ "CHECKPOINT REVIEW · EFFORT RECORDED" if data.next_quality_direction and data.next_quality_direction.pending_attempt_review else "NEXT QUALITY · DIRECTION" }}</span>', 1)
+HOME_PAGE = HOME_PAGE.replace(_R196983_PILL,
+    '<span class="v4-session-pill">{{ "EFFORT LOGGED" if data.next_quality_direction and data.next_quality_direction.pending_attempt_review else "YOU CHOOSE WHEN" }}</span>', 1)
+HOME_PAGE = HOME_PAGE.replace(_R196983_FUEL_SLOT,
+    '{% if not is_quality_slot or (not (data.next_quality_direction and data.next_quality_direction.pending_attempt_review) and (n or (data.quality_direction_fuel and not quality_already_shown))) %}', 1)
+
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.183 R196.9.83 · MAXIMAL ATTEMPT RECOGNITION '
+               '+ HARD-DAY READINESS GUARD · CANONICAL SCIENCE UNCHANGED')
+
+# INC-032 / R196.9.85 — one canonical evidence owner, one future QUALITY card.
+# This helper supplies a verified event to the EXISTING _v4896 evidence builder.
+# It is not a second state machine or a new validation authority.
+R196985_SCHEMA = 'NOVA-R196.9.85-SINGLE-CANONICAL-CHECKPOINT-1'
+
+def _v4896_verified_unplanned_checkpoint(goal_key, direction, plan, test_cfg,
+                                        previous_blocks, observed_efforts,
+                                        stored_evidence, pending_events, today):
+    """An athlete-run maximal 5-minute test is a real checkpoint without a PB.
+
+    Return ONE ordinary FORMAL_VALIDATION event, or None. Only the existing
+    _v4896_build_performance_evidence owns event merging/persistence/roadmap.
+    """
+    goal = str(goal_key or '').upper()
+    cfg = test_cfg if isinstance(test_cfg,dict) else {}
+    if goal != 'POWER_5' or (direction or {}).get('active') is False:
+        return None
+    if str(cfg.get('mode') or '').upper() != 'MAXIMAL' or int(cfg.get('seconds') or 0) != 300:
+        return None
+    if not isinstance(today,date):
+        return None
+    reference = {'adaptive_roadmap':{'goal_key':goal},
+                 'coach_clock':{'iso':today.isoformat()},
+                 'previous_training_blocks':previous_blocks or [],
+                 'performance_evidence':{'observed_efforts':observed_efforts or []}}
+    attempt = _nova_r196983_checkpoint_attempt(reference)
+    if not isinstance(attempt,dict):
+        return None
+    aid, day = str(attempt.get('activity_id') or ''), str(attempt.get('date') or '')[:10]
+    if not aid:
+        return None
+    try:
+        when = date.fromisoformat(day)
+    except ValueError:
+        return None
+    cycle_start = str((direction or {}).get('started_on') or (plan or {}).get('started_on') or '')[:10]
+    if cycle_start:
+        try:
+            if when < date.fromisoformat(cycle_start):
+                return None
+        except ValueError:
+            return None
+    base = stored_evidence if isinstance(stored_evidence,dict) else {}
+    history = list(base.get('events') or []) + list(pending_events or [])
+    for k in ('last_validation','latest_formal_validation'):
+        if isinstance(base.get(k),dict):
+            history.append(base[k])
+    for old in history:
+        if not isinstance(old,dict) or old.get('formal_validation') is not True:
+            continue
+        if str(old.get('goal_key') or goal).upper()!=goal or int(old.get('secs') or 0)!=300:
+            continue
+        try:
+            prior = date.fromisoformat(str(old.get('date') or '')[:10])
+        except ValueError:
+            continue
+        if (str(old.get('activity_id') or '')==aid and prior==when) or prior>=when or (when-prior).days<=21:
+            return None
+    point = next((o for o in (observed_efforts or []) if isinstance(o,dict)
+                  and o.get('source')=='INTERVALS_ACTIVITY_POWER_CURVE'
+                  and o.get('rolling_window') is True and o.get('secs')==300
+                  and str(o.get('activity_id') or '')==aid
+                  and str(o.get('date') or '')[:10]==day
+                  and isinstance(o.get('watts'),(int,float))
+                  and math.isfinite(float(o['watts'])) and 20<=o['watts']<=2500),None)
+    if point is None:
+        return None
+    comparison=_v1955_checkpoint_comparison(history,float(point['watts']),300,day,
+                                              observed_event=None,mode='MAXIMAL')
+    event={
+        'kind':'VALIDATION',
+        'source':'EXPLICIT_MAXIMAL_TEST + INTERVALS_ACTIVITY_POWER_CURVE',
+        'date':day,'secs':300,'watts':round(float(point['watts']),1),
+        'activity_id':aid,'activity_name':attempt.get('activity_name'),
+        'previous_watts':comparison['previous_watts'],'delta_w':comparison['delta_w'],
+        'outcome_reference_source':comparison['reference_source'],
+        'outcome':comparison['outcome'],'pb_confirmed':comparison['pb_confirmed'],
+        'tier':3,'tier_code':'FORMAL_VALIDATION','goal_key':goal,'goal_relevant':True,
+        'exact_checkpoint_duration':True,'activity_linked':True,'quality_linked':True,
+        'stimulus_domain':str(cfg.get('stimulus_domain') or _v4896_duration_domain(300)).upper(),
+        'progression_signal':False,'formal_validation':True,'validation_mode':'MAXIMAL',
+        'native_curve_source':'INTERVALS_ACTIVITY_POWER_CURVE',
+        'activity_truth_basis':'EXPLICIT_MAXIMAL_TEST',
+        'prescription_issued':False,
+    }
+    event['id']=_v4896_event_id(event)
+    return event
+
+# Reuse precisely the existing copy-button markup, CSS class and click handler.
+# All three card title rows use v150-copy-workout/data-copy-workout.
+_R196985_UNCOPIED = '''<h3>{{ (qd.athlete_title if qd.athlete_title else qd.title if qd.title else 'Next quality')|e }}</h3>'''
+_R196985_COPIED = '''<div class="v150-workout-title-row"><h3>{{ (qd.athlete_title if qd.athlete_title else qd.title if qd.title else 'Next quality')|e }}</h3><button class="v150-copy-workout" type="button" data-copy-workout="{{ (qd.athlete_title if qd.athlete_title else qd.title if qd.title else 'Next quality')|e }}" aria-label="Copy workout name" title="Copy workout name">⧉<span>Copy</span></button></div>'''
+assert HOME_PAGE.count(_R196985_UNCOPIED)==1,'INC032_CARD3_COPY_ANCHOR_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196985_UNCOPIED,_R196985_COPIED,1)
+
+# An observed/completed checkpoint belongs to the evidence log; NEVER replace
+# the actual next-quality title with a completed/pending test status.
+_R196985_CARD3_LABEL='''<span class="v1962-quality-eyebrow">{{ "CHECKPOINT REVIEW · EFFORT RECORDED" if data.next_quality_direction and data.next_quality_direction.pending_attempt_review else "NEXT QUALITY · DIRECTION" }}</span>'''
+assert HOME_PAGE.count(_R196985_CARD3_LABEL)==1,'INC032_CARD3_EYEBROW_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196985_CARD3_LABEL,
+    '<span class="v1962-quality-eyebrow">NEXT QUALITY · DIRECTION</span>',1)
+_R196985_CARD3_PILL='''<span class="v4-session-pill">{{ "EFFORT LOGGED" if data.next_quality_direction and data.next_quality_direction.pending_attempt_review else "YOU CHOOSE WHEN" }}</span>'''
+assert HOME_PAGE.count(_R196985_CARD3_PILL)==1,'INC032_CARD3_PILL_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196985_CARD3_PILL,'<span class="v4-session-pill">YOU CHOOSE WHEN</span>',1)
+_R196985_FUEL_HIDE='''not (data.next_quality_direction and data.next_quality_direction.pending_attempt_review) and '''
+assert HOME_PAGE.count(_R196985_FUEL_HIDE)==1,'INC032_FUEL_HIDE_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196985_FUEL_HIDE,'',1)
+
+_r196985_ui_before=_v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    """Read-only projection: Card 3 ALWAYS names a future QUALITY.
+
+    Does not decide readiness, completion or session timing. The single
+    _v4896 canonical performance evidence remains the sole checkpoint truth.
+    """
+    ui=_r196985_ui_before(data)
+    if not isinstance(ui,dict):
+        return ui
+    direction=ui.get('next_quality_direction') or {}
+    if not isinstance(direction,dict):
+        direction={}
+    formal=((ui.get('performance_evidence') or {}).get('latest_formal_validation') or {})
+    goal=str((ui.get('adaptive_roadmap') or {}).get('goal_key') or direction.get('goal_key') or '').upper()
+    completed=False
+    if (isinstance(formal,dict) and formal.get('formal_validation') is True
+        and str(formal.get('goal_key') or '').upper()==goal and goal=='POWER_5'
+        and int(formal.get('secs') or 0)==300):
+        try:
+            nowday=date.fromisoformat(str((ui.get('coach_clock') or {}).get('iso') or '')[:10])
+            prior=date.fromisoformat(str(formal.get('date') or '')[:10])
+            completed=0<=(nowday-prior).days<=21
+        except ValueError:
+            completed=False
+    pending=bool(ui.get('checkpoint_attempt_review') or direction.get('pending_attempt_review'))
+    stale=(str(direction.get('source') or '')=='ROADMAP_FORMAL_VALIDATION_STEP'
+           or 'effort recorded' in str(direction.get('athlete_title') or '').lower()
+           or 'checkpoint · completed' in str(direction.get('athlete_title') or '').lower())
+    if not ((completed or pending) and stale):
+        return ui
+    dimension=str(direction.get('roadmap_dimension_observed') or
+                  ((ui.get('adaptive_roadmap') or {}).get('scientific_progression') or {}).get('dimension') or '').upper()
+    templates=[x for x in _NOVA_WORKOUT_LIBRARY
+               if str(x.get('goal') or '').upper()==goal and x.get('title')
+               and not x.get('adaptive_only')]
+    filtered=[t for t in templates if dimension in (t.get('dimensions') or ())]
+    ranked=sorted(filtered or templates,key=lambda t:(-float(t.get('priority') or 0),str(t.get('id') or '')))
+    chosen=ranked[0] if ranked else None
+    out=dict(ui)
+    q=dict(direction)
+    if chosen:
+        q['title']=str(chosen['title'])
+        q['athlete_title']=str(chosen['title'])
+        q['referenced_canonical_template_id']=chosen.get('id')
+        q['source']='CANONICAL_LIBRARY_DIRECTION_ONLY_NOT_COMPILED'
+    else:
+        q['title']='Next quality · '+str(_R196975_GOAL_LABELS.get(goal,'specific development'))
+        q['athlete_title']=q['title']
+        q['referenced_canonical_template_id']=None
+        q['source']='GOAL_DIRECTION_NO_WORKOUT_CLAIM'
+    q.update({'direction_only':True,'is_a_prescription':False,'is_scheduled':False,
+              'suggested_date':None,'suggested_time':None,'adds_workout_to_ledger':False,
+              'adds_calendar_event':False,'execution_authorized_by_preview':False,
+              'pending_attempt_review':False,'checkpoint_completed':False,
+              'athlete_explanation':
+                'Your next future-quality focus stays visible. This is a training direction, not a session scheduled for today.',
+              'athlete_status':
+                ('A hard effort is already completed today. Recover before considering another quality session.'
+                 if (out.get('quality_day_advisor') or {}).get('same_day_quality_gate')
+                 else 'The timing and final session dose depend on your next readiness assessment.')})
+    q.pop('attempt_activity_id',None)  # Historical test identity stays only in evidence.
+    out['next_quality_direction']=q
+    out['quality_direction_fuel']=_nova_r196979_quality_direction_fuel(out)
+    return out
+
+APP_VERSION=('THE LAB · PRODUCT V4.9.185 R196.9.85 · SINGLE CANONICAL CHECKPOINT '
+             '+ ALWAYS-VISIBLE QUALITY CARD 3 + COPY · SCIENCE FORMULAS UNCHANGED')
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
 
