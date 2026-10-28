@@ -60246,6 +60246,149 @@ HOME_PAGE=HOME_PAGE.replace('.r196979-signal.green{--chip:var(--green)}',
 
 APP_VERSION=('THE LAB · PRODUCT V4.9.188 R196.9.88 · INC-035 PREVIOUS-DAY QUALITY READINESS CAUTION '+
              '+ INC-034 WINDOW COPY PRESERVED · SCIENCE FORMULAS UNCHANGED')
+# INC-036 / R196.9.89 / DTM 1.0.24: Card 3's workout-detail fidelity
+# must not depend on having a time slot. Read-only projection ONLY; source
+# contracts, scientific authority, hard spacing and Calendar untouched.
+R196989_CARD_DETAIL_SCHEMA = 'NOVA-R196.9.89-DATE-INDEPENDENT-QUALITY-DETAIL-1'
+
+
+def _nova_r196989_card3_detail(data):
+    '''Show real canonical mechanics whenever they exist, regardless of date.
+
+    A historical, identity-matched canonical offer is a *future reference*
+    during EASY_ONLY, never a new hard prescription or execution permission.
+    Library-only directions can show verified template structure, never watts,
+    total duration, or a fabricated completed prescription.
+    '''
+    d = data if isinstance(data, dict) else {}
+    q = d.get('next_quality_direction') or {}
+    if not isinstance(q, dict) or q.get('direction_only') is not True:
+        return None
+    identity = str(q.get('referenced_canonical_template_id') or '')
+    source = str(q.get('source') or '')
+    pres = d.get('nova_prescription') or {}
+    easy_only = isinstance(pres, dict) and pres.get('status') == 'EASY_ONLY'
+    offer = d.get('next_quality_offer') or {}
+    integrity = d.get('quality_offer_integrity') or {}
+    workout = offer.get('workout') or {} if isinstance(offer,dict) else {}
+    if (source in {'EXISTING_CANONICAL_QUALITY_OFFER', 'CURRENT_VERIFIED_R131_QUALITY_DIRECTION'}
+        and isinstance(workout,dict) and isinstance(integrity,dict)
+        and integrity.get('state') == 'PASS'
+        and integrity.get('mechanics_complete') is True
+        and integrity.get('science_provenance') is True
+        and str(offer.get('offer_id') or '') == str(integrity.get('offer_id') or '')
+        and str(offer.get('workout_id') or '') == str(workout.get('nova_workout_id') or '')
+        and identity == str(offer.get('workout_id') or '')
+        and str(workout.get('main_set') or '').strip()
+        and str(workout.get('why') or '').strip()):
+        return {
+            'schema':R196989_CARD_DETAIL_SCHEMA,'level':'VERIFIED_CANONICAL_REFERENCE',
+            'title':str(workout.get('title') or ''),
+            'duration':str(workout.get('duration') or ''),
+            'intensity':str(workout.get('intensity') or ''),
+            'environment':str(workout.get('environment') or ''),
+            'main_set':str(workout.get('main_set')),
+            'why':str(workout.get('why')),
+            'clearance_note':('Recovery first: this previously issued workout is shown for reference only. '
+                              'No quality is cleared now; the next Snapshot must reassess.'
+                              if easy_only else
+                              'Workout details are from the verified canonical offer. '
+                              'No date is booked; check current recovery and Nova clearance before execution.'),
+            'historical_reference_only':easy_only,
+            'is_prescription':False,'is_scheduled':False,'execution_authorized':False,
+            'workout_id':identity,'source':'VERIFIED_EXISTING_CANONICAL_OFFER',
+        }
+    # A formal checkpoint without a compiled/verified protocol is only a
+    # roadmap direction. Never mislabel it as a verified canonical workout.
+    if source not in {'CANONICAL_LIBRARY_DIRECTION_ONLY_NOT_COMPILED'} or not identity:
+        return None
+    goal=str(q.get('goal_key') or '').upper()
+    templ=next((x for x in _NOVA_WORKOUT_LIBRARY
+                if x.get('id')==identity and str(x.get('goal') or '').upper()==goal),None)
+    if not isinstance(templ,dict):
+        return None
+    pattern=str(templ.get('pattern') or '').upper()
+    structure=None
+    if pattern in {'STANDARD','SHORT_POWER','SPRINT','SUSTAINED','OVER_UNDER'}:
+        reps=int(templ.get('reps') or 0)
+        secs=int(templ.get('work_s') or 0)
+        recovery=int(templ.get('recovery_s') or 0)
+        if reps>0 and secs>0 and recovery>=0:
+            def duration_label(s):
+                return f'{s//60} min' if s%60==0 else f'{s} s'
+            structure=f'{reps} × {duration_label(secs)} work; {duration_label(recovery)} recovery between intervals.'
+    elif pattern in {'MICRO_30_15','SPRINT_CLUSTER'}:
+        sets=int(templ.get('sets') or 0)
+        reps=int(templ.get('reps_per_set') or 0)
+        work=int(templ.get('work_s') or 0)
+        float_s=int(templ.get('float_s') or 0)
+        between=int(templ.get('set_recovery_s') or 0)
+        if sets>0 and reps>0 and work>0:
+            structure=f'{sets} sets × {reps} repeats of {work} s work / {float_s} s float; {between//60:g} min between sets.' if between%60==0 else f'{sets} sets × {reps} repeats of {work} s work / {float_s} s float; {between} s between sets.'
+    if not structure:
+        structure='Quality focus: '+str(templ.get('title') or q.get('title') or 'goal-specific development')+'.'
+    dimension=str(q.get('roadmap_dimension_observed') or '').replace('_',' ').strip().lower()
+    why=('Focus: '+dimension+'. This is a library architecture, not a validated '
+         'individualized workout dose.' if dimension else
+         'This is a library architecture, not a validated individualized workout dose.')
+    return {
+        'schema':R196989_CARD_DETAIL_SCHEMA,'level':'LIBRARY_STRUCTURE_ONLY',
+        'title':str(templ.get('title') or ''),'main_set':structure,'why':why,
+        'clearance_note':('Recovery first. No quality is cleared now; targets, total duration '
+                          'and scheduling require a new canonical prescription.' if easy_only else
+                          'Architecture only: exact watts, duration and execution permission '
+                          'require a canonical prescription and current recovery checks.'),
+        'is_prescription':False,'is_scheduled':False,'execution_authorized':False,
+        'workout_id':identity,'source':'EXISTING_LIBRARY_TEMPLATE_ONLY',
+    }
+
+
+_r196989_ui_before = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui=_r196989_ui_before(data)
+    if not isinstance(ui,dict): return ui
+    out=dict(ui)
+    out['quality_card3_detail']=_nova_r196989_card3_detail(ui)
+    return out
+
+# Keep the same visual primitives as the scheduled quality: duration/intensity
+# pills, full main set and 'Why'. No date, booked slot, POST form or permission.
+_R196989_PENDING_ANCHOR = '''<div class="v4-session-meta"><span class="v4-session-pill">{{ 'NO QUALITY CLEARED NOW' if data.nova_prescription and data.nova_prescription.status == 'EASY_ONLY' else 'YOU CHOOSE WHEN · NOT BOOKED' }}</span></div>'''
+assert HOME_PAGE.count(_R196989_PENDING_ANCHOR)==1, 'INC036_PENDING_ANCHOR_DRIFT'
+_R196989_PENDING_ADDITION = '''
+{% set qdetail = data.quality_card3_detail if not quality_already_shown else none %}
+{% if qdetail %}
+<div class="v4-session-meta v196989-detail-meta">
+  {% if qdetail.duration %}<span class="v4-session-pill v177-duration-pill">{{ qdetail.duration|e }}</span>{% endif %}
+  {% if qdetail.intensity %}<span class="v4-session-pill">{{ qdetail.intensity|e }}</span>{% endif %}
+  {% if qdetail.environment %}<span class="v4-session-pill">{{ qdetail.environment|e }}</span>{% endif %}
+  {% if qdetail.level == 'LIBRARY_STRUCTURE_ONLY' %}<span class="v4-session-pill">TEMPLATE · NOT A PRESCRIPTION</span>{% endif %}
+</div>
+<div class="v4-session-main">{{ qdetail.main_set|e }}</div>
+<div class="v4-session-why"><strong>Why:</strong> {{ qdetail.why|e }}</div>
+<div class="v196987-window-note">{{ qdetail.clearance_note|e }}</div>
+{% else %}'''
+_R196989_PENDING_CLOSE = '''{% endif %}
+{% else %}
+<div class="v4-session-slot">'''
+# Restrict replacement to the pending branch only, retaining its pre-existing
+# fallback paragraphs for directions with no verifiable structure.
+_qstart=HOME_PAGE.index('{% elif is_pending %}')
+_qend=HOME_PAGE.index('{% else %}\n<div class="v4-session-slot">',_qstart)
+_qbody=HOME_PAGE[_qstart:_qend]
+assert _qbody.count(_R196989_PENDING_ANCHOR)==1, 'INC036_PENDING_PILL_DRIFT'
+_qbody=_qbody.replace(_R196989_PENDING_ANCHOR,
+                     _R196989_PENDING_ANCHOR+_R196989_PENDING_ADDITION,1)
+# Original last {% endif %} is the outer athlete_explanation branch, close
+# the new qdetail branch immediately before the top-level pending branch ends.
+assert _qbody.endswith('{% endif %}\n'), 'INC036_PENDING_END_DRIFT'
+_qbody=_qbody+'{% endif %}\n'
+HOME_PAGE=HOME_PAGE[:_qstart]+_qbody+HOME_PAGE[_qend:]
+
+APP_VERSION=('THE LAB · PRODUCT V4.9.189 R196.9.89 · INC-036 DATE-INDEPENDENT '
+             'QUALITY CARD DETAIL · SCIENCE FORMULAS UNCHANGED')
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
 
