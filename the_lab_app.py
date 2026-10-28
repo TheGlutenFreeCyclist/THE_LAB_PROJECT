@@ -56889,15 +56889,18 @@ def _nova_r196958_install_recovery_learning_visual_only():
     if t[a:b].count('OPTIONAL AEROBIC VOLUME') != 1 or 'data.aerobic_volume_advice.recovery_hold_now' not in t[a:b]:
         raise RuntimeError('R196958_VISUAL_ONLY_VOLUME_CONTRACT_DRIFT')
     replacement = r'''<style>
-/* R196.9.58: only the athlete education panel + its in-card link. */
+/* R196.9.58 / INC-037: scoped typography must outrank R180's
+   html body .v4-shell / .v179-training-harmony rules, otherwise its
+   inherited 20px/16px size defeats the DTM 18px/--lab-support contract.
+   Presentational only: do not change plans, readiness or education text. */
 .v196958-training-insight{display:block!important;padding:16px!important;border:1px solid rgba(91,210,230,.31)!important;background:linear-gradient(115deg,rgba(17,51,70,.39),rgba(36,30,62,.23))!important;border-radius:18px!important}
 .v196958-training-insight .v196958-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:9px;margin:0 0 13px}
 .v196958-training-insight .v196958-kicker{display:flex;align-items:center;gap:9px;color:#90ebf8;font-family:var(--display);font-size:18px;font-weight:800;letter-spacing:0}
 .v196958-training-insight .v196958-kicker span[aria-hidden]{font-size:20px}
 .v196958-training-insight .v196958-tag{font-size:11px;font-weight:800;color:#a7caeb;border:1px solid rgba(150,183,235,.29);border-radius:999px;padding:6px 10px;letter-spacing:.02em}
 .v196958-training-insight .v196958-focus{display:grid;grid-template-columns:minmax(0,1fr) minmax(155px,.28fr);gap:12px;align-items:center;padding:14px 16px;border:1px solid rgba(104,213,232,.24);border-left:4px solid #64d9eb;border-radius:13px;background:rgba(33,103,132,.16)}
-.v196958-training-insight .v196958-focus h3{margin:0 0 7px!important;font-family:var(--display)!important;font-size:18px!important;line-height:1.3!important;color:#f3fbff!important;font-weight:800!important}
-.v196958-training-insight .v196958-focus p{font-family:var(--font)!important;font-size:var(--lab-support)!important;line-height:1.48!important;color:#d8e7f1!important;margin:0!important}
+html body .v196958-training-insight .v196958-focus h3{margin:0 0 7px!important;font-family:var(--display)!important;font-size:18px!important;line-height:1.3!important;color:#f3fbff!important;font-weight:850!important;text-transform:none!important;letter-spacing:0!important}
+html body .v196958-training-insight .v196958-focus p{font-family:var(--font)!important;font-size:var(--lab-support)!important;line-height:1.48!important;color:#d8e7f1!important;margin:0!important}
 .v196958-training-insight .v196958-focus p+p{margin-top:9px!important}
 .v196958-training-insight .v196958-focus p strong{color:#fff;font-weight:800}
 .v196958-training-insight .v196958-steps{align-self:stretch;display:flex;flex-direction:column;justify-content:center;gap:7px;border-left:1px solid rgba(134,199,221,.18);padding-left:16px}
@@ -56910,10 +56913,10 @@ def _nova_r196958_install_recovery_learning_visual_only():
 .v196958-training-insight .v196958-volume-title{font-family:var(--display);font-size:18px;font-weight:800;color:#9de6f4;letter-spacing:0}
 .v196958-training-insight .v196958-volume-stage{font-size:11px;color:#b5badf;line-height:1.45}
 .v196958-training-insight .v196958-volume-stage strong{color:#e1d8ff}
-.v196958-training-insight .v196958-volume p{font-family:var(--font)!important;font-size:var(--lab-support)!important;line-height:1.48!important;color:#cfdded!important;margin:0!important}
+html body .v196958-training-insight .v196958-volume p{font-family:var(--font)!important;font-size:var(--lab-support)!important;line-height:1.48!important;color:#cfdded!important;margin:0!important}
 .v196958-training-insight .v196958-volume p strong{color:#f0f7fd}
 .v196958-training-insight .v196958-volume p+p{margin-top:6px!important}
-.v196958-training-insight .v196958-volume-fine{color:#97b4c5!important;font-size:12px!important}
+html body .v196958-training-insight .v196958-volume p.v196958-volume-fine{color:#97b4c5!important;font-size:12px!important}
 .v196958-recovery-quicklink{margin:10px 0 0!important;font-size:12px!important;line-height:1.5!important}
 .v196958-recovery-quicklink a{color:#9de9f1!important;text-decoration:underline;text-decoration-color:rgba(157,233,241,.40);text-underline-offset:3px}
 .v196958-recovery-quicklink a:focus-visible{outline:2px solid #8de8ed;outline-offset:4px}
@@ -60386,7 +60389,7 @@ assert _qbody.endswith('{% endif %}\n'), 'INC036_PENDING_END_DRIFT'
 _qbody=_qbody+'{% endif %}\n'
 HOME_PAGE=HOME_PAGE[:_qstart]+_qbody+HOME_PAGE[_qend:]
 
-APP_VERSION=('THE LAB · PRODUCT V4.9.189 R196.9.89 · INC-036 DATE-INDEPENDENT '
+APP_VERSION=('THE LAB · PRODUCT V4.9.190 R196.9.90 · INC-037 TYPOGRAPHY CONSISTENCY · INC-036 DATE-INDEPENDENT '
              'QUALITY CARD DETAIL · SCIENCE FORMULAS UNCHANGED')
 
 if __name__ == "__main__":
