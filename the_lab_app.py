@@ -30103,7 +30103,7 @@ _NOVA_WORKOUT_LIBRARY += tuple({
     'priority':priority,'title':title,'complementary_only':True,
     'policy':'CONDITIONAL_SPECIFIC_DOSE_COMPLEMENT_NOT_NEW_ROADMAP_DIMENSION'
 } for wid,goal,dimensions,reps,work,rest,priority,title in _INC038_COMPLEMENTARY)
-NOVA_WORKOUT_LIBRARY_REVISION = '2026-10-28-inc038'
+NOVA_WORKOUT_LIBRARY_REVISION = '2026-10-28-inc039'
 NOVA_WORKOUT_LIBRARY_VERSION = NOVA_WORKOUT_LIBRARY_REVISION
 
 # R111 question-state wrapper: a dose question cannot close while the goal's
@@ -30251,10 +30251,33 @@ _NOVA_QUALITY_CANDIDATE_EXCLUSIONS = ContextVar('nova_quality_candidate_exclusio
 def _v111_select_workout_template(goal, dimension, evidence_ledger=None, training_definitions=None, slot=None):
     goal=str(goal or "").upper();dim=str(dimension or "").upper();slot=slot or {}; candidates=[dict(x) for x in _NOVA_WORKOUT_LIBRARY if x.get("goal")==goal and dim in set(x.get("dimensions") or ()) and not x.get("adaptive_only") and x.get("id") not in _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()]
     if not candidates:return None,{"version":NOVA_WORKOUT_LIBRARY_REVISION,"revision":NOVA_WORKOUT_LIBRARY_REVISION,"reason":"NO_LIBRARY_CANDIDATE","candidate_count":0}
-    facet=_v111_goal_facet_state(goal,evidence_ledger,None); target=(facet.get("missing") or [None])[0]; hint=_rhythm_num(slot.get("duration_hint_min")) or _parse_duration_minutes(slot.get("duration_hint_label")); events=list((((evidence_ledger or {}).get("repeatability") or {}).get("events") or [])); latest_day=None
-    for e in events:
-        try:d=date.fromisoformat(str(e.get("date") or "")[:10]); latest_day=max(latest_day,d) if latest_day else d
-        except Exception:pass
+    hint=_rhythm_num(slot.get("duration_hint_min")) or _parse_duration_minutes(slot.get("duration_hint_label"))
+    # INC-039: ranking history must have actual provenance and a date <= the
+    # target day. The roadmap is owned elsewhere and is NOT rewritten here.
+    # A historic credible facet can still be relevant to the goal's breadth,
+    # while RECENCY/novelty is strictly bounded to the 28-day candidate window.
+    raw_events=list((((evidence_ledger or {}).get("repeatability") or {}).get("events") or []))
+    latest_day=None
+    for e in raw_events:
+        if not isinstance(e,dict):continue
+        try:
+            d=date.fromisoformat(str(e.get('date') or '')[:10])
+            latest_day=max(latest_day,d) if latest_day else d
+        except (ValueError,TypeError):pass
+    try:anchor_day=date.fromisoformat(str(slot.get('date') or '')[:10])
+    except (ValueError,TypeError):anchor_day=latest_day
+    trustworthy={'DEVICE_LAPS','ICU_INTERVALS_CANONICAL','INTERVALS_NATIVE_INTERVALS'}
+    historical=[];events=[]
+    for e in raw_events:
+        if not isinstance(e,dict) or e.get('strong') is not True or not e.get('activity_id'):continue
+        if str(e.get('activity_truth_source') or e.get('source') or '').upper() not in trustworthy:continue
+        try:when=date.fromisoformat(str(e.get('date') or '')[:10])
+        except (ValueError,TypeError):continue
+        if anchor_day is not None and when>anchor_day:continue
+        historical.append(e)
+        if anchor_day is not None and 0<=(anchor_day-when).days<=28:events.append(e)
+    facet=_v111_goal_facet_state(goal,{'repeatability':{'events':historical}},None)
+    target=(facet.get('missing') or [None])[0]
     # Verified stimulus history is evaluated WITHIN this canonical ranker.
     # Existing decision, roadmap, power contract, hard spacing and calendar
     # remain its binding upstream/downstream gates. No second authority.
@@ -30282,21 +30305,44 @@ def _v111_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     tempo_recent=(exposure.get('families') or {}).get('TEMPO_Z3') or {}
     tempo_done=bool(int(tempo_recent.get('count_21d') or 0)>=1
                     and int(tempo_recent.get('last_age_days') or 99)<=14)
+    micro_recent=(exposure.get('families') or {}).get('MICRO_30_15') or {}
+    micro_done=bool(int(micro_recent.get('count_21d') or 0)>=1
+                    and int(micro_recent.get('last_age_days') or 99)<=14)
+    # Read-only R149 execution history can also identify a truly FULFILLED
+    # exact template, including ENDURANCE/other designs without native LAPs.
+    # An offer, a calendar reservation, or an unmatched activity is never a
+    # completion. This provides canonical-memory novelty, not authorization.
+    executed_ages={}
+    for r in (ledger or {}).get('prescription_history') or []:
+        if not isinstance(r,dict) or str(r.get('prescription_status') or '').upper()!='FULFILLED':continue
+        if not r.get('executed_activity_id'):continue
+        wid=str(r.get('nova_workout_id') or '')
+        if wid not in {str(x.get('id')) for x in candidates}:continue
+        try:worked=date.fromisoformat(str(r.get('actual_date') or '')[:10])
+        except (TypeError,ValueError):continue
+        age=(anchor_day-worked).days if anchor_day else 999
+        if 1<=age<=28:executed_ages[wid]=min(age,executed_ages.get(wid,999))
     scored=[]
     for t in candidates:
         score=float(t.get("priority") or 50); why=[]; sig=_v109_template_signature(t); quality_min=_v109_template_total_quality_min(t); est=_v109_template_estimated_session_min(t,dim); band=_v111_band_for_seconds(goal,t.get("work_s"))
         family=_nova_inc038_stimulus_family(t)
         if t.get('complementary_only') is True:
-            # Complement is not automatic, and never a missing-facet shortcut.
-            # It becomes competitive only after a verified recent specific dose.
-            if not tempo_ftp_valid:score-=180;why.append('tempo_valid_ftp_absent-180')
-            elif not saturated:score-=95;why.append('tempo_requires_verified_specific_context-95')
-            elif tempo_done:score-=75;why.append('recent_verified_tempo_no_repeat-75')
+            # A Tempo session without trusted FTP is not an issuable candidate.
+            # Exclude it from ranking rather than relying on an arbitrary low
+            # score to outrank every other poor-fit choice.
+            if not tempo_ftp_valid:continue
+            if not saturated:score-=95;why.append('tempo_requires_verified_specific_context-95')
+            elif tempo_done:score-=165;why.append('recent_verified_tempo_deprioritized-165')
             else:score+=30;why.append('purposeful_tempo_complement_after_verified_specific+30')
         elif saturated and family==specific:
             score-=110;why.append('verified_recent_same_stimulus_family_sufficient-110')
         elif saturated and family=='MICRO_30_15':
-            score+=25;why.append('different_attested_micro_structure+25')
+            if micro_done:score-=85;why.append('recent_verified_micro_family_deprioritized-85')
+            else:score+=25;why.append('different_attested_micro_structure+25')
+        age=executed_ages.get(str(t.get('id') or ''))
+        if age is not None:
+            pen=120 if age<=7 else (75 if age<=14 else 25)
+            score-=pen;why.append(f'fulfilled_identical_template_{age}d-{pen}')
 
         if hint is not None and est>float(hint)+15: score-=45;why.append(f"slot_fit-{round(est-float(hint),1)}")
         if target:
@@ -30305,10 +30351,10 @@ def _v111_select_workout_template(goal, dimension, evidence_ledger=None, trainin
             elif str(t.get("pattern") or "").upper().startswith("MICRO"):score-=18;why.append("micro_before_breadth_complete-18")
         tw=_rhythm_num(t.get("work_s"));recent_same_duration=0
         for e in events:
-            days=999
-            if latest_day:
-                try:days=max(0,(latest_day-date.fromisoformat(str(e.get("date") or "")[:10])).days)
-                except Exception:pass
+            # Real slot-relative days, never latest-event-relative days; no
+            # interpolation, future activity or 90-day-old interval may
+            # suppress a candidate by pretending to be a recent repeat.
+            days=(anchor_day-date.fromisoformat(str(e['date'])[:10])).days if anchor_day else 999
             esig=_v109_event_signature(e)
             if esig and esig==sig:
                 pen=90 if days<=7 else (60 if days<=14 else (30 if days<=28 else 8));score-=pen;why.append(f"exact_recent_{days}d-{pen}")
@@ -30324,6 +30370,7 @@ def _v111_select_workout_template(goal, dimension, evidence_ledger=None, trainin
         "stimulus_selection_policy":{"schema":R196991_STIMULUS_SCHEMA,"specific_family":specific,
             "sufficient_recent_exposure_for_complement":saturated,"verified_specific_exposures":n,
             "verified_specific_minutes_21d":dose,"recent_tempo_present":tempo_done,
+            "recent_micro_present":micro_done,"fulfilled_exact_workout_count_28d":len(executed_ages),
             "valid_ftp_reference_for_tempo":tempo_ftp_valid,
             "not_an_execution_clearance":True,"no_change_to_roadmap_state":True},
         "top_candidates":[{k:r.get(k) for k in ("id","score","signature","facet","estimated_session_min","quality_min","reasons")} for r in scored[:6]]}
@@ -60627,6 +60674,7 @@ if __name__ == "__main__":
 
 # INC-028 (R196.9.81): clarified Card 3 ownership and refined readiness visuals.
 
-# INC-038: functional stimulus exposure scoring + conditional canonical Tempo vocabulary.
-APP_VERSION = ('THE LAB · PRODUCT V4.9.191 R196.9.91 · INC-038 STIMULUS-AWARE CANONICAL WORKOUT SELECTION · '
-               'INC-037 TYPOGRAPHY PRESERVED · OFFLINE COMMIT CANDIDATE')
+# INC-039: longitudinal replay led to bounded complementary-family and
+# completed-template novelty in the same R111 canonical ranking function.
+APP_VERSION = ('THE LAB · PRODUCT V4.9.192 R196.9.92 · INC-039 LONGITUDINAL STIMULUS MEMORY · '
+               'INC-038 COMPLEMENTARY TEMPO PRESERVED · OFFLINE COMMIT CANDIDATE')
