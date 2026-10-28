@@ -56890,34 +56890,34 @@ def _nova_r196958_install_recovery_learning_visual_only():
         raise RuntimeError('R196958_VISUAL_ONLY_VOLUME_CONTRACT_DRIFT')
     replacement = r'''<style>
 /* R196.9.58: only the athlete education panel + its in-card link. */
-.v196958-training-insight{display:block!important;padding:clamp(18px,2vw,26px)!important;border:1px solid rgba(91,210,230,.31)!important;background:linear-gradient(115deg,rgba(17,51,70,.39),rgba(36,30,62,.23))!important;border-radius:18px!important}
+.v196958-training-insight{display:block!important;padding:16px!important;border:1px solid rgba(91,210,230,.31)!important;background:linear-gradient(115deg,rgba(17,51,70,.39),rgba(36,30,62,.23))!important;border-radius:18px!important}
 .v196958-training-insight .v196958-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:9px;margin:0 0 13px}
-.v196958-training-insight .v196958-kicker{display:flex;align-items:center;gap:9px;color:#90ebf8;font-size:13px;font-weight:900;letter-spacing:.065em}
+.v196958-training-insight .v196958-kicker{display:flex;align-items:center;gap:9px;color:#90ebf8;font-family:var(--display);font-size:18px;font-weight:800;letter-spacing:0}
 .v196958-training-insight .v196958-kicker span[aria-hidden]{font-size:20px}
 .v196958-training-insight .v196958-tag{font-size:11px;font-weight:800;color:#a7caeb;border:1px solid rgba(150,183,235,.29);border-radius:999px;padding:6px 10px;letter-spacing:.02em}
-.v196958-training-insight .v196958-focus{display:grid;grid-template-columns:minmax(0,1fr) minmax(155px,.28fr);gap:16px;align-items:center;padding:18px 20px;border:1px solid rgba(104,213,232,.24);border-left:4px solid #64d9eb;border-radius:13px;background:rgba(33,103,132,.16)}
-.v196958-training-insight .v196958-focus h3{margin:0 0 9px!important;font-size:clamp(20px,1.7vw,26px)!important;line-height:1.23!important;color:#f3fbff!important;font-weight:860!important}
-.v196958-training-insight .v196958-focus p{font-size:15px!important;line-height:1.55!important;color:#d8e7f1!important;margin:0!important}
+.v196958-training-insight .v196958-focus{display:grid;grid-template-columns:minmax(0,1fr) minmax(155px,.28fr);gap:12px;align-items:center;padding:14px 16px;border:1px solid rgba(104,213,232,.24);border-left:4px solid #64d9eb;border-radius:13px;background:rgba(33,103,132,.16)}
+.v196958-training-insight .v196958-focus h3{margin:0 0 7px!important;font-family:var(--display)!important;font-size:18px!important;line-height:1.3!important;color:#f3fbff!important;font-weight:800!important}
+.v196958-training-insight .v196958-focus p{font-family:var(--font)!important;font-size:var(--lab-support)!important;line-height:1.48!important;color:#d8e7f1!important;margin:0!important}
 .v196958-training-insight .v196958-focus p+p{margin-top:9px!important}
 .v196958-training-insight .v196958-focus p strong{color:#fff;font-weight:800}
 .v196958-training-insight .v196958-steps{align-self:stretch;display:flex;flex-direction:column;justify-content:center;gap:7px;border-left:1px solid rgba(134,199,221,.18);padding-left:16px}
-.v196958-training-insight .v196958-steps b{font-size:14px;color:#94e9f1;line-height:1.4;letter-spacing:.025em}
-.v196958-training-insight .v196958-steps span{font-size:12px;color:#bbd0e0;line-height:1.5}
-.v196958-training-insight .v196958-assurance{display:flex;align-items:flex-start;gap:8px;margin-top:13px;padding:10px 12px;border-radius:9px;background:rgba(30,120,119,.13);color:#c9f1e9;font-size:13px;line-height:1.55}
+.v196958-training-insight .v196958-steps b{font-family:var(--font);font-size:var(--lab-support);color:#94e9f1;line-height:1.48;letter-spacing:.025em}
+.v196958-training-insight .v196958-steps span{font-family:var(--font);font-size:var(--lab-support);color:#bbd0e0;line-height:1.48}
+.v196958-training-insight .v196958-assurance{display:flex;align-items:flex-start;gap:8px;margin-top:10px;padding:8px 10px;border-radius:9px;background:rgba(30,120,119,.13);color:#c9f1e9;font-family:var(--font);font-size:var(--lab-support);line-height:1.48}
 .v196958-training-insight .v196958-assurance b{font-size:16px;line-height:1.2;color:#8fe6ce}
 .v196958-training-insight .v196958-volume{margin-top:13px;padding-top:13px;border-top:1px solid rgba(135,181,203,.16)}
 .v196958-training-insight .v196958-volume-header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px}
-.v196958-training-insight .v196958-volume-title{font-size:13px;font-weight:900;color:#9de6f4;letter-spacing:.05em}
+.v196958-training-insight .v196958-volume-title{font-family:var(--display);font-size:18px;font-weight:800;color:#9de6f4;letter-spacing:0}
 .v196958-training-insight .v196958-volume-stage{font-size:11px;color:#b5badf;line-height:1.45}
 .v196958-training-insight .v196958-volume-stage strong{color:#e1d8ff}
-.v196958-training-insight .v196958-volume p{font-size:14px!important;line-height:1.55!important;color:#cfdded!important;margin:0!important}
+.v196958-training-insight .v196958-volume p{font-family:var(--font)!important;font-size:var(--lab-support)!important;line-height:1.48!important;color:#cfdded!important;margin:0!important}
 .v196958-training-insight .v196958-volume p strong{color:#f0f7fd}
 .v196958-training-insight .v196958-volume p+p{margin-top:6px!important}
 .v196958-training-insight .v196958-volume-fine{color:#97b4c5!important;font-size:12px!important}
 .v196958-recovery-quicklink{margin:10px 0 0!important;font-size:12px!important;line-height:1.5!important}
 .v196958-recovery-quicklink a{color:#9de9f1!important;text-decoration:underline;text-decoration-color:rgba(157,233,241,.40);text-underline-offset:3px}
 .v196958-recovery-quicklink a:focus-visible{outline:2px solid #8de8ed;outline-offset:4px}
-@media(max-width:700px){.v196958-training-insight .v196958-focus{grid-template-columns:1fr;padding:15px}.v196958-training-insight .v196958-steps{border-left:0;border-top:1px solid rgba(134,199,221,.18);padding:10px 0 0}.v196958-training-insight .v196958-focus p{font-size:14px!important}}
+@media(max-width:700px){.v196958-training-insight .v196958-focus{grid-template-columns:1fr;padding:12px}.v196958-training-insight .v196958-steps{border-left:0;border-top:1px solid rgba(134,199,221,.18);padding:10px 0 0}.v196958-training-insight .v196958-focus p{font-size:var(--lab-support)!important}}
 @media print{.v196958-training-insight .v196958-focus,.v196958-training-insight .v196958-volume{break-inside:avoid}.v196958-training-insight .v196958-focus h3,.v196958-training-insight .v196958-focus p,.v196958-training-insight .v196958-volume p{color:#111!important}}
 </style>
 <section id="nova-adaptive-learning" class="v4882-strength-nudge v178-volume-advice v196958-training-insight" role="note" aria-label="Nova adaptive recovery learning and optional aerobic volume">
@@ -60106,8 +60106,146 @@ def _v4891_prepare_snapshot_for_ui(data):
     out['quality_direction_fuel']=_nova_r196979_quality_direction_fuel(out)
     return out
 
-APP_VERSION=('THE LAB · PRODUCT V4.9.186 R196.9.86 · INC-033 EXACT CHECKPOINT MATCH '
-             '+ ALL-GOAL CANONICAL QUALITY DIRECTION · SCIENCE FORMULAS UNCHANGED')
+# INC-034 / R196.9.87 · UI-ONLY athlete-facing semantic alignment.
+# NOVA remains the sole owner of the workout, its planned intensity, its
+# suggested window and the coach decision. The label explains the distinction
+# between a learned, unconfirmed rhythm slot and an athlete-owned booking.
+# EASY_ONLY is a future-direction-only quality, not hard-work clearance.
+def _nova_r196987_install_quality_window_copy():
+    global HOME_PAGE
+    t = HOME_PAGE
+    old = '<span class="v1962-quality-eyebrow">NEXT QUALITY · YOUR CALL</span>'
+    assert t.count(old)==1, 'INC034_QUALITY_LABEL_DRIFT'
+    new = ('''<span class="v1962-quality-eyebrow">{{ 'FUTURE QUALITY · NOT CLEARED' if s.provisional_quality else 'NEXT QUALITY · SUGGESTED WINDOW' if s.source == 'RHYTHM' else 'NEXT QUALITY · YOUR BOOKING' if s.source == 'CALENDAR' else 'NEXT QUALITY · PROPOSED' }}</span>{% if s.date %}{{ s.date[8:10] }}/{{ s.date[5:7] }}/{{ s.date[:4] }} · {% endif %}{{ s.slot }}''')
+    t = t.replace(old,new,1)
+    old = "{{ s.slot }}{% endif %}</div>\n<div class=\"v150-workout-title-row\">"
+    assert t.count(old)==1, 'INC034_SLOT_COPY_DRIFT'
+    new = ("{{ s.slot }}{% endif %}</div>\n"
+           "{% if is_quality_slot and s.source == 'RHYTHM' and not s.provisional_quality %}\n"
+           "<div class=\"v196987-window-note\">Nova suggests this window from your training rhythm; it is not booked. You can choose another time after checking your recovery.</div>\n"
+           "{% endif %}\n<div class=\"v150-workout-title-row\">")
+    t = t.replace(old,new,1)
+    old = '<span class="v1962-quality-eyebrow">NEXT QUALITY · DIRECTION</span>'
+    assert t.count(old)==1, 'INC034_DIRECTION_LABEL_DRIFT'
+    new = '''<span class="v1962-quality-eyebrow">{{ 'FUTURE QUALITY · RECOVERY FIRST' if data.nova_prescription and data.nova_prescription.status == 'EASY_ONLY' else 'NEXT QUALITY · DIRECTION' }}</span>'''
+    t = t.replace(old,new,1)
+    old = '<span class="v4-session-pill">YOU CHOOSE WHEN</span>'
+    assert t.count(old)==1, 'INC034_DIRECTION_PILL_DRIFT'
+    new = '''<span class="v4-session-pill">{{ 'NO QUALITY CLEARED NOW' if data.nova_prescription and data.nova_prescription.status == 'EASY_ONLY' else 'YOU CHOOSE WHEN · NOT BOOKED' }}</span>'''
+    t = t.replace(old,new,1)
+    old = '{% if qd.athlete_explanation %}\n<div class="v4-session-main">'
+    assert t.count(old)==1, 'INC034_DIRECTION_EXPLANATION_DRIFT'
+    new = ("{% if data.nova_prescription and data.nova_prescription.status == 'EASY_ONLY' %}\n"
+           "<div class=\"v196987-window-note\">Nova recommends easy or recovery sessions for the available slots. This future quality direction is not clearance to train hard now.</div>\n"
+           "{% endif %}\n" + old)
+    t = t.replace(old,new,1)
+    # Scoped to the quality card; match the existing support-copy typography.
+    style = ('''<style>
+.v196987-window-note{font-family:var(--font);font-size:var(--lab-support);line-height:1.48;color:var(--muted);margin:4px 0 9px}
+</style>
+''')
+    boundary = '<section id="nova-adaptive-learning"'
+    assert t.count(boundary)==1, 'INC034_STYLE_INSERT_DRIFT'
+    t = t.replace(boundary,style + boundary,1)
+    HOME_PAGE = t
+
+_nova_r196987_install_quality_window_copy()
+
+# INC-035 / R196.9.88 / DTM 1.0.23: Read-only prior-day quality load
+# contextualises *today's* Quality Readiness light, not NOVA's canonical
+# workout, readiness metrics, scheduling gate, nutrition, or Calendar.
+# Reuses the exact, already displayed HIGH-INTENSITY DEMAND from Previous
+# Training Blocks; requires verified quality relevance too. An intense ride
+# is not a diagnosis, and yesterday's strain is not a permanent veto.
+R196988_PRIOR_DAY_SCHEMA = 'NOVA-R196.9.88-PRIOR-DAY-QUALITY-CAUTION-1'
+
+
+def _nova_r196988_prior_day_quality(data):
+    d = data if isinstance(data, dict) else {}
+    iso = str((d.get('coach_clock') or {}).get('iso') or '')
+    try:
+        today = date.fromisoformat(iso[:10])
+    except (ValueError, TypeError):
+        return None
+    yesterday = (today - timedelta(days=1)).isoformat()
+    found = []
+    # Multiple sessions yesterday: each candidate must carry its own intensity
+    # and quality proof. A low-intensity second ride does not erase the hard one.
+    for b in d.get('previous_training_blocks') or []:
+        if not isinstance(b, dict) or str(b.get('date') or '')[:10] != yesterday:
+            continue
+        profile = b.get('metabolic_profile') or {}
+        if not isinstance(profile, dict) or profile.get('available') is not True:
+            continue
+        label = str(profile.get('high_intensity_label') or '').strip().upper().replace('_',' ')
+        if label not in ('HIGH', 'VERY HIGH') or b.get('quality_relevant') is not True:
+            continue
+        found.append({'date':yesterday, 'activity_id':str(b.get('activity_id') or ''),
+                      'activity_name':str(b.get('name') or 'Quality session'),
+                      'high_intensity_demand':label,
+                      'quality_basis':str(b.get('quality_basis') or 'VERIFIED_QUALITY'),
+                      'high_intensity_min':profile.get('high_intensity_min'),
+                      'metabolic_source':str(profile.get('source') or '')})
+    if not found:
+        return None  # Unknown is not an adverse signal; no invented hard session.
+    found.sort(key=lambda r:(r['high_intensity_demand']=='VERY HIGH',r['activity_id']),reverse=True)
+    primary=found[0]
+    return {'schema':R196988_PRIOR_DAY_SCHEMA,'state':'CAUTION','date':yesterday,
+            'highest_demand':primary['high_intensity_demand'],
+            'primary_activity':primary['activity_name'],
+            'evidence':found,'quality_count':len({(r['activity_id'] or r['activity_name']) for r in found}),
+            'source':'PREVIOUS_TRAINING_BLOCKS_METABOLIC_PROFILE_AND_QUALITY_TRUTH',
+            'clinical_diagnosis':False,'read_only':True}
+
+
+_r196988_ui_before = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui=_r196988_ui_before(data)
+    if not isinstance(ui,dict): return ui
+    exposure=_nova_r196988_prior_day_quality(ui)
+    if not exposure: return ui
+    old=ui.get('quality_day_advisor')
+    if not isinstance(old,dict) or not old: return ui
+    a=dict(old)
+    old_tier=int(a.get('tier') or 0)
+    label=exposure['highest_demand']
+    a['prior_day_quality']=exposure
+    a['prior_day_quality_caution']=True
+    a['prior_day_quality_does_not_change_authority']=True
+    a['underlying_marker_assessment']=old.get('code')
+    a['context']=(str(old.get('context') or '').rstrip(' .') +
+                  f' · Yesterday: {label} quality load.').lstrip(' ·')
+    if old_tier in (1,2,3):
+        # Amber is a caution below green; never turn an existing red into amber.
+        a.update({'code':'MIXED','tier':3,'tone':'amber','icon':'↔',
+                  'title':'Recent quality load · reassess',
+                  'message':('A verified '+label.lower()+'-intensity quality session was completed yesterday. '
+                             'Normal HRV, resting HR or sleep alone do not establish full recovery. '
+                             'Review fatigue and the current coaching decision before another hard effort.')})
+        checks=[]
+        for item in old.get('checks') or []:
+            if isinstance(item,dict) and item.get('label')=='Training load':
+                updated=dict(item)
+                updated['tone']='amber'
+                updated['value']='Yesterday · '+label.title()
+                updated['context_only']=True
+                checks.append(updated)
+            else:
+                checks.append(item)
+        a['checks']=checks
+    out=dict(ui)
+    out['quality_day_advisor']=a
+    return out
+
+# The prior-day Training load chip is contextual; it is not a physiological
+# baseline change. All other system measurements retain their original tone.
+assert HOME_PAGE.count('.r196979-signal.green{--chip:var(--green)}')==1, 'INC035_ADVISOR_CHIP_STYLE_DRIFT'
+HOME_PAGE=HOME_PAGE.replace('.r196979-signal.green{--chip:var(--green)}',
+    '.r196979-signal.green{--chip:var(--green)}.r196979-signal.amber{--chip:var(--orange)}',1)
+
+APP_VERSION=('THE LAB · PRODUCT V4.9.188 R196.9.88 · INC-035 PREVIOUS-DAY QUALITY READINESS CAUTION '+
+             '+ INC-034 WINDOW COPY PRESERVED · SCIENCE FORMULAS UNCHANGED')
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
 
