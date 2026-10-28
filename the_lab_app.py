@@ -14735,7 +14735,10 @@ _NOVA_WORKOUT_LIBRARY = (
 def _v109_template_signature(t):
     t=t or {};pat=str(t.get("pattern") or "").upper()
     if pat in {"STANDARD","SHORT_POWER","SPRINT","SUSTAINED","OVER_UNDER"}:
-        return f"{int(t.get('reps') or 0)}x{int(round(float(t.get('work_s') or 0)))}r{int(round(float(t.get('recovery_s') or 0)))}"
+        structure=f"{int(t.get('reps') or 0)}x{int(round(float(t.get('work_s') or 0)))}r{int(round(float(t.get('recovery_s') or 0)))}"
+        # A Tempo block with identical clock intervals is NOT a threshold or
+        # VO₂ repetition. Preserve legacy signatures for every old template.
+        return ('TEMPO_Z3:'+structure) if str(t.get('work_domain') or '').upper()=='TEMPO_Z3' else structure
     if pat in {"MICRO_30_15","SPRINT_CLUSTER"}:
         return f"{int(t.get('sets') or 0)}s{int(t.get('reps_per_set') or 0)}x{int(t.get('work_s') or 0)}/{int(t.get('float_s') or 0)}r{int(t.get('set_recovery_s') or 0)}"
     return str(t.get("id") or pat)
@@ -14859,6 +14862,16 @@ def _v109_render_library_workout(template, goal, dimension, power_model=None, ft
         elif pat=="SHORT_POWER":
             main=f"{reps}×{work} hard, repeatable short-power efforts in free/resistance mode with {rec} very easy recovery. Use the first effort to establish today's sustainable quality output, then protect execution across the set instead of turning rep 1 into an all-out test."
             intensity="HARD · ANAEROBIC"
+        elif pat=="SUSTAINED" and str(t.get('work_domain') or '').upper()=='TEMPO_Z3':
+            # Cycling seven-zone Z3 Tempo; moderate is NOT a recovery ride.
+            # Exact watt range is supplied only by the existing R194.3 band
+            # when a valid FTP prescription anchor is actually present.
+            main=(f"{reps}×{work} sustained cycling Tempo/Z3 (approximately 80–88% "
+                  f"of a currently valid FTP reference) with {rec} genuinely easy Z1 "
+                  "between blocks. Keep work even and controlled, never turn the "
+                  "final block into threshold or VO₂ work. Do not add a second "
+                  "quality session; shorten or stop if unusually fatigued.")
+            intensity="HARD · TEMPO"
         elif pat=="SUSTAINED":
             ref=_v85_reference_context(power_model,ws/60.0,ftp_anchor)
             main=f"{reps}×{work} steady sustained work in free/resistance mode with {rec} easy Z1 recovery. Establish a repeatable sustainable power in the first block and keep pacing stable across the set. {ref} Do not turn the final block into a test."
@@ -14890,7 +14903,13 @@ def _v109_render_library_workout(template, goal, dimension, power_model=None, ft
         "DURABILITY":context_why,
         "RACE_TRANSFER":context_why,
     }
-    out=_v85_raw(title,intensity,main,why_map.get(dim) or "Nova selected this structure from the canonical workout library for the current adaptation question.",dim,str(t.get("id") or "LIBRARY_UNKNOWN"),source_ref="NOVA_WORKOUT_LIBRARY")
+    reason=("A recent verified dose of the goal-specific interval family makes a complementary "
+            "aerobic Tempo exposure worth considering. This changes the stimulus, NOT the "
+            "primary goal, roadmap checkpoint, or clearance rules. Only perform this "
+            "structure when the current canonical decision and timing authorize quality."
+            if str(t.get('work_domain') or '').upper()=='TEMPO_Z3'
+            else why_map.get(dim) or "Nova selected this structure from the canonical workout library for the current adaptation question.")
+    out=_v85_raw(title,intensity,main,reason,dim,str(t.get("id") or "LIBRARY_UNKNOWN"),source_ref="NOVA_WORKOUT_LIBRARY")
     out["_tl_nova_workout_id"]=t.get("id");out["_tl_nova_workout_library_version"]=NOVA_WORKOUT_LIBRARY_VERSION;out["_tl_nova_template_signature"]=_v109_template_signature(t)
     return out
 
@@ -30063,6 +30082,30 @@ _v111_lib={str(x.get("id")):dict(x) for x in _NOVA_WORKOUT_LIBRARY}
 for _row in _V111_EXTRA:_v111_lib.setdefault(str(_row.get("id")),dict(_row))
 _NOVA_WORKOUT_LIBRARY=tuple(_v111_lib[k] for k in sorted(_v111_lib))
 
+# INC-038 / R196.9.91: curated COMPLEMENTARY Tempo/Z3 choices in the SAME
+# canonical workout library. A different goal never inherits sprint workouts.
+# Work domain is immutable library metadata; the normal prescriber/FTP band,
+# safety gates, slot feasibility, and compiler still own the only prescription.
+# This is Coggan-style cycling Z3 (Tempo), NOT zone 3 of the 3-zone model.
+_INC038_COMPLEMENTARY = (
+    ('P5_TEMPO_2X12', 'POWER_5', ('SPECIFIC_DOSE','REPEATABILITY','DURABILITY','RACE_TRANSFER'), 2,720,300,70, '5-min support · Tempo 2×12 min'),
+    ('P5_TEMPO_2X15', 'POWER_5', ('SPECIFIC_DOSE','REPEATABILITY','DURABILITY','RACE_TRANSFER'), 2,900,300,68, '5-min support · Tempo 2×15 min'),
+    ('V2_TEMPO_2X15', 'VO2MAX', ('SPECIFIC_DOSE','REPEATABILITY','DURABILITY','RACE_TRANSFER'), 2,900,300,68, 'VO₂max support · Tempo 2×15 min'),
+    ('P20_TEMPO_3X10', 'POWER_20', ('TIME_AT_PRESSURE','DURABILITY','RACE_TRANSFER'), 3,600,240,72, '20-min support · Tempo 3×10 min'),
+    ('P20_TEMPO_2X20', 'POWER_20', ('TIME_AT_PRESSURE','DURABILITY','RACE_TRANSFER'), 2,1200,300,68, '20-min support · Tempo 2×20 min'),
+    ('TT_TEMPO_3X10', 'TIME_TRIAL', ('TIME_AT_PRESSURE','DURABILITY','RACE_TRANSFER'), 3,600,240,72, 'TT support · Tempo 3×10 min'),
+    ('TT_TEMPO_2X20', 'TIME_TRIAL', ('TIME_AT_PRESSURE','DURABILITY','RACE_TRANSFER'), 2,1200,300,68, 'TT support · Tempo 2×20 min'),
+)
+assert not {r[0] for r in _INC038_COMPLEMENTARY} & {str(t.get('id')) for t in _NOVA_WORKOUT_LIBRARY}
+_NOVA_WORKOUT_LIBRARY += tuple({
+    'id':wid,'goal':goal,'dimensions':dimensions,'pattern':'SUSTAINED',
+    'work_domain':'TEMPO_Z3','reps':reps,'work_s':work,'recovery_s':rest,
+    'priority':priority,'title':title,'complementary_only':True,
+    'policy':'CONDITIONAL_SPECIFIC_DOSE_COMPLEMENT_NOT_NEW_ROADMAP_DIMENSION'
+} for wid,goal,dimensions,reps,work,rest,priority,title in _INC038_COMPLEMENTARY)
+NOVA_WORKOUT_LIBRARY_REVISION = '2026-10-28-inc038'
+NOVA_WORKOUT_LIBRARY_VERSION = NOVA_WORKOUT_LIBRARY_REVISION
+
 # R111 question-state wrapper: a dose question cannot close while the goal's
 # duration breadth is still represented by only one narrow band.
 _build_question_state_r110=build_question_state
@@ -30111,6 +30154,95 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
     else: out["breadth_override"]={"applied":False,"target_facet":None}
     return out
 
+# INC-038: evidence-derived input to the ONE already-existing R111 canonical
+# library scorer. This function does NOT select, authorize or persist workouts.
+# An event without real ID, reliable interval source, strong flag, actual date,
+# finite duration/repetitions/watts is UNKNOWN, never inferred from its title.
+R196991_STIMULUS_SCHEMA = 'R196.9.91-INC038-VERIFIED-STIMULUS-EXPOSURES-1'
+
+def _nova_inc038_stimulus_family(template):
+    t=template if isinstance(template,dict) else {}
+    goal=str(t.get('goal') or '').upper()
+    pattern=str(t.get('pattern') or '').upper()
+    if str(t.get('work_domain') or '').upper()=='TEMPO_Z3':return 'TEMPO_Z3'
+    if pattern=='MICRO_30_15':return 'MICRO_30_15'
+    if goal in {'POWER_5','VO2MAX'} and pattern in {'STANDARD','SUSTAINED'}:
+        return 'MULTIMINUTE_SPECIFIC'
+    if goal in {'POWER_20','TIME_TRIAL'} and pattern in {'SUSTAINED','STANDARD'}:
+        return 'SUSTAINED_SPECIFIC'
+    return None
+
+def _nova_inc038_verified_stimulus_exposures(goal, evidence, slot, ledger=None):
+    goal=str(goal or '').upper()
+    day=str((slot or {}).get('date') or '')[:10]
+    try: anchor=date.fromisoformat(day)
+    except (ValueError,TypeError):return {'schema':R196991_STIMULUS_SCHEMA,
+        'known':False,'reason':'NO_EXPLICIT_TARGET_DATE','families':{},'verified_activity_count':0}
+    by_family={}
+    def add(family, ident, performed, minutes, src):
+        if family is None:return
+        try: age=(anchor-date.fromisoformat(str(performed)[:10])).days
+        except (TypeError,ValueError):return
+        if not 1<=age<=28 or not ident:return
+        try: dose=float(minutes)
+        except (TypeError,ValueError,OverflowError):return
+        if not math.isfinite(dose) or not .2<=dose<=180:return
+        key=(str(ident),str(performed)[:10])
+        previous=by_family.setdefault(family,{}).get(key)
+        record={'activity_id':str(ident),'date':str(performed)[:10],
+                'age_days':age,'dose_min':round(dose,2),'source':src}
+        # Same activity represented by multiple events is ONE exposure.
+        if previous is None or dose>previous['dose_min']:
+            by_family[family][key]=record
+    ev=((evidence or {}).get('repeatability') or {}).get('events') or []
+    for e in ev:
+        if not isinstance(e,dict) or e.get('strong') is not True:continue
+        source=str(e.get('activity_truth_source') or e.get('source') or '').upper()
+        if source not in {'DEVICE_LAPS','ICU_INTERVALS_CANONICAL','INTERVALS_NATIVE_INTERVALS'}:continue
+        secs=_rhythm_num(e.get('interval_secs'))
+        reps=_rhythm_num(e.get('reps'))
+        watts=_rhythm_num(e.get('avg_watts'))
+        if not (secs and reps and watts and math.isfinite(float(watts))
+                and 60<=float(watts)<=2500 and float(reps).is_integer()
+                and 1<=reps<=40 and 15<=secs<=3600):continue
+        pat=str(e.get('pattern') or '').upper()
+        if pat=='MICRO_30_15' and secs<=35:
+            family='MICRO_30_15'
+        elif goal in {'POWER_5','VO2MAX'} and 150<=secs<=600:
+            family='MULTIMINUTE_SPECIFIC'
+        elif goal in {'POWER_20','TIME_TRIAL'} and 480<=secs<=1800:
+            family='SUSTAINED_SPECIFIC'
+        else:family=None
+        if family:
+            add(family,e.get('activity_id'),e.get('date'),secs*reps/60.0,
+                'VERIFIED_NATIVE_REPEATED_INTERVALS')
+    # Completed canonical Tempo exposure can be counted without pretending
+    # that its prior title or issuing alone proves successful training.
+    # FULFILLED and executed_activity_id are already reconciled by R149.
+    idx={str(t.get('id')):t for t in _NOVA_WORKOUT_LIBRARY}
+    for e in (ledger or {}).get('prescription_history') or []:
+        if not isinstance(e,dict) or str(e.get('prescription_status') or '').upper()!='FULFILLED':continue
+        workout=idx.get(str(e.get('nova_workout_id') or e.get('nova_contract_id') or ''))
+        if (not isinstance(workout,dict) or workout.get('goal')!=goal
+                or _nova_inc038_stimulus_family(workout)!='TEMPO_Z3'):continue
+        aid=e.get('executed_activity_id')
+        when=e.get('actual_date')
+        if not aid or not when:continue
+        dose=_v109_template_total_quality_min(workout)
+        add('TEMPO_Z3',aid,when,dose,'R149_FULFILLED_EXECUTED_CANONICAL_TEMPO')
+    families={}
+    for family,group in sorted(by_family.items()):
+        records=sorted(group.values(),key=lambda x:(x['age_days'],x['activity_id']))
+        recent=[x for x in records if x['age_days']<=21]
+        families[family]={'count_28d':len(records),'count_21d':len(recent),
+            'minutes_21d':round(sum(x['dose_min'] for x in recent),1),
+            'last_age_days':records[0]['age_days'] if records else None,
+            'evidence':records[:12]}
+    return {'schema':R196991_STIMULUS_SCHEMA,'known':True,
+            'source':'EXISTING_REPEATABILITY_AND_R149_RECONCILED_EXECUTION',
+            'families':families,'verified_activity_count':len({e['activity_id'] for group in by_family.values() for e in group.values()}),
+            'no_diagnosis_or_training_clearance':True}
+
 # Deep-library selector: use the same facet model as the Roadmap. Novelty remains
 # secondary to purpose; when a facet is missing, a candidate in that band receives
 # a decisive information-value bonus and out-of-band repeats are penalized.
@@ -30123,9 +30255,49 @@ def _v111_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     for e in events:
         try:d=date.fromisoformat(str(e.get("date") or "")[:10]); latest_day=max(latest_day,d) if latest_day else d
         except Exception:pass
+    # Verified stimulus history is evaluated WITHIN this canonical ranker.
+    # Existing decision, roadmap, power contract, hard spacing and calendar
+    # remain its binding upstream/downstream gates. No second authority.
+    context=_r1962_power_scope.get() if '_r1962_power_scope' in globals() else {}
+    ledger=(context or {}).get('ledger') if isinstance(context,dict) else None
+    ftp=(context or {}).get('ftp_anchor') if isinstance(context,dict) else None
+    ftp=ftp if isinstance(ftp,dict) else {}
+    # Same facts required downstream by the canonical Tempo power band.
+    # Rank other feasible qualities first when this reference is missing;
+    # never consume the entire eligible slot trying an unissuable Tempo.
+    tempo_ftp_valid=(ftp.get('available') is True
+        and str(ftp.get('status') or '').upper() in {'VALID','TEST SUPPORTED'}
+        and _v1943_finite(ftp.get('prescription_watts'),80,600) is not None)
+    exposure=_nova_inc038_verified_stimulus_exposures(goal,evidence_ledger,slot,ledger)
+    specific=('MULTIMINUTE_SPECIFIC' if goal in {'POWER_5','VO2MAX'} else
+              'SUSTAINED_SPECIFIC' if goal in {'POWER_20','TIME_TRIAL'} else None)
+    reference=(exposure.get('families') or {}).get(specific) or {}
+    n=int(reference.get('count_21d') or 0)
+    dose=float(reference.get('minutes_21d') or 0)
+    # This is a bounded DIVERSITY PRIORITY, not a physiological claim of
+    # saturation or proof of readiness. Repeated specific dose is weighted
+    # only when verified, recent and independent across activities/days.
+    saturated=bool(specific and n>=3 and dose>=25
+       and int(reference.get('last_age_days') or 99)<=14)
+    tempo_recent=(exposure.get('families') or {}).get('TEMPO_Z3') or {}
+    tempo_done=bool(int(tempo_recent.get('count_21d') or 0)>=1
+                    and int(tempo_recent.get('last_age_days') or 99)<=14)
     scored=[]
     for t in candidates:
         score=float(t.get("priority") or 50); why=[]; sig=_v109_template_signature(t); quality_min=_v109_template_total_quality_min(t); est=_v109_template_estimated_session_min(t,dim); band=_v111_band_for_seconds(goal,t.get("work_s"))
+        family=_nova_inc038_stimulus_family(t)
+        if t.get('complementary_only') is True:
+            # Complement is not automatic, and never a missing-facet shortcut.
+            # It becomes competitive only after a verified recent specific dose.
+            if not tempo_ftp_valid:score-=180;why.append('tempo_valid_ftp_absent-180')
+            elif not saturated:score-=95;why.append('tempo_requires_verified_specific_context-95')
+            elif tempo_done:score-=75;why.append('recent_verified_tempo_no_repeat-75')
+            else:score+=30;why.append('purposeful_tempo_complement_after_verified_specific+30')
+        elif saturated and family==specific:
+            score-=110;why.append('verified_recent_same_stimulus_family_sufficient-110')
+        elif saturated and family=='MICRO_30_15':
+            score+=25;why.append('different_attested_micro_structure+25')
+
         if hint is not None and est>float(hint)+15: score-=45;why.append(f"slot_fit-{round(est-float(hint),1)}")
         if target:
             if band==target:score+=42;why.append(f"roadmap_missing_facet_{target}+42")
@@ -30148,7 +30320,13 @@ def _v111_select_workout_template(goal, dimension, evidence_ledger=None, trainin
         scored.append({"id":t.get("id"),"score":round(score,2),"signature":sig,"facet":band,"estimated_session_min":est,"quality_min":quality_min,"reasons":why,"template":t})
     scored.sort(key=lambda x:(-x["score"],-float((x["template"] or {}).get("priority") or 0),str(x.get("id") or "")))
     best=scored[0]
-    return dict(best.get("template") or {}),{"version":NOVA_WORKOUT_LIBRARY_REVISION,"revision":NOVA_WORKOUT_LIBRARY_REVISION,"reason":"ROADMAP_PURPOSE_BREADTH_FEASIBILITY_NOVELTY_RANK","candidate_count":len(scored),"selected_id":best.get("id"),"selected_score":best.get("score"),"selected_signature":best.get("signature"),"selected_facet":best.get("facet"),"target_missing_facet":target,"top_candidates":[{k:r.get(k) for k in ("id","score","signature","facet","estimated_session_min","quality_min","reasons")} for r in scored[:6]]}
+    return dict(best.get("template") or {}),{"version":NOVA_WORKOUT_LIBRARY_REVISION,"revision":NOVA_WORKOUT_LIBRARY_REVISION,"reason":"ROADMAP_PURPOSE_BREADTH_FEASIBILITY_NOVELTY_RANK","candidate_count":len(scored),"selected_id":best.get("id"),"selected_score":best.get("score"),"selected_signature":best.get("signature"),"selected_facet":best.get("facet"),"target_missing_facet":target,"stimulus_exposure":exposure,
+        "stimulus_selection_policy":{"schema":R196991_STIMULUS_SCHEMA,"specific_family":specific,
+            "sufficient_recent_exposure_for_complement":saturated,"verified_specific_exposures":n,
+            "verified_specific_minutes_21d":dose,"recent_tempo_present":tempo_done,
+            "valid_ftp_reference_for_tempo":tempo_ftp_valid,
+            "not_an_execution_clearance":True,"no_change_to_roadmap_state":True},
+        "top_candidates":[{k:r.get(k) for k in ("id","score","signature","facet","estimated_session_min","quality_min","reasons")} for r in scored[:6]]}
 
 _v109_select_workout_template=_v111_select_workout_template
 
@@ -45772,6 +45950,11 @@ def _v1962_repeat_guard(template, band, evidence_ledger, slot):
     """
     t = template if isinstance(template,dict) else {}
     pat = str(t.get('pattern') or '').upper()
+    if str(t.get('work_domain') or '').upper()=='TEMPO_Z3':
+        # Do not reject Tempo because a physically different threshold block
+        # has the same number of repetitions/duration. Reconciled completed
+        # Tempo itself remains eligible for the ordinary duplicate guards.
+        return None
     if pat not in {'STANDARD','SUSTAINED','SHORT_POWER','SPRINT'}:
         return None
     rows=[]
@@ -48529,12 +48712,21 @@ def _v19696_execution_contract(session):
         hi=_v1943_finite(band.get('high_watts'),1,1500)
         slo=_v1943_finite(s.get('prescribed_power_low'),1,1500)
         shi=_v1943_finite(s.get('prescribed_power_high'),1,1500)
-        trusted_source = str(band.get('source') or '') in {
+        trusted_source = (str(band.get('source') or '') in {
             'COMPARABLE_VERIFIED_REPEATED_WORK',
             'VALID_FTP_STARTER_POLICY_NOT_OBSERVED_REPEATABILITY',
             'OBSERVED_COUPLED_RECOVERY_DOSE',
             'INTERVALS_DATED_FTP_EXPLORATORY',
-        } or (callable(globals().get('_v196913_attested_exploration'))
+        } or (str(t.get('work_domain') or '').upper()=='TEMPO_Z3'
+            and str(band.get('work_domain') or '').upper()=='TEMPO_Z3'
+            and band.get('source')=='VALID_FTP_TEMPO_STARTER_POLICY_NOT_REPEATABILITY'
+            and band.get('observed_repeated_work_is_direct_evidence') is False
+            and _v1943_finite(band.get('ftp_watts'),80,600) is not None
+            and .76*float(band['ftp_watts']) <= lo <= hi <= .9*float(band['ftp_watts'])+2.5
+            and str(band.get('reps') or '')==str(t.get('reps') or '')
+            and str(band.get('work_seconds') or '')==str(t.get('work_s') or '')
+            and str(band.get('recovery_seconds') or '')==str(t.get('recovery_s') or ''))
+        ) or (callable(globals().get('_v196913_attested_exploration'))
               and _v196913_attested_exploration(s, t, band))
         if mode!='PRESCRIBED' or lo is None or hi is None or lo>hi:
             issues.append('MISSING_DEFENSIBLE_WORK_POWER_BAND')
@@ -49255,6 +49447,8 @@ def _v19699_structure_step(original, proposed):
     """A single monotonic, bounded progression lever; never change rest/pattern."""
     a, b = original or {}, proposed or {}
     if a.get('goal') != b.get('goal') or a.get('pattern') != b.get('pattern'):
+        return False
+    if str(a.get('work_domain') or 'GOAL_SPECIFIC').upper()!=str(b.get('work_domain') or 'GOAL_SPECIFIC').upper():
         return False
     pattern = str(a.get('pattern') or '').upper()
     if pattern.startswith('ENDURANCE'):
@@ -55939,9 +56133,44 @@ def _nova_activate_power_retest(road,decision,plan):
 _r196936_measured_band_before = _v1943_band
 
 def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None, dimension=None):
+    t = template if isinstance(template,dict) else {}
+    if str(t.get('work_domain') or '').upper()=='TEMPO_Z3':
+        # Existing canonical power-contract owner; Z3 cannot borrow the
+        # goal-specific VO₂/threshold band or claim repeatability evidence.
+        # Only real library identities and the SAME active scientific
+        # dimension are eligible. A stale/model FTP must fail closed.
+        indexed=next((x for x in _NOVA_WORKOUT_LIBRARY if x.get('id')==t.get('id')),{})
+        ftp=ftp_anchor if isinstance(ftp_anchor,dict) else {}
+        watts=_v1943_finite(ftp.get('prescription_watts'),80,600)
+        trusted=(ftp.get('available') is True and
+                 str(ftp.get('status') or '').upper() in {'VALID','TEST SUPPORTED'} and
+                 watts is not None)
+        try: reps=int(t.get('reps'));secs=int(t.get('work_s'));rest=int(t.get('recovery_s'))
+        except (ValueError,TypeError,OverflowError):reps=secs=rest=0
+        if not (indexed==t and str(t.get('pattern') or '').upper()=='SUSTAINED'
+            and t.get('goal') in {'POWER_5','VO2MAX','POWER_20','TIME_TRIAL'}
+            and str(dimension or '').upper() in set(t.get('dimensions') or ())
+            and 2<=reps<=3 and 600<=secs<=1200 and 180<=rest<=600 and trusted):
+            return {'schema':R1943_SCHEMA,'state':'NO_DEFENSIBLE_POWER_TARGET',
+                    'reason':'TEMPO_REQUIRES_VALID_FTP_AND_CANONICAL_MECHANICS',
+                    'work_domain':'TEMPO_Z3','permission_granted':False}
+        low=int(round(watts*.80/5)*5);high=int(round(watts*.88/5)*5)
+        if not (70<=low<high<=600 and high<=watts*.90+2.5):
+            return {'schema':R1943_SCHEMA,'state':'NO_DEFENSIBLE_POWER_TARGET',
+                    'reason':'INVALID_TEMPO_WATT_RANGE','permission_granted':False}
+        return {'schema':R1943_SCHEMA,'state':'PRESCRIBED',
+            'source':'VALID_FTP_TEMPO_STARTER_POLICY_NOT_REPEATABILITY',
+            'confidence':'PROVISIONAL','target_watts':None,
+            'exploratory':True,'non_punitive':True,
+            'power_target_mode':'EXPLORATORY_RANGE',
+            'scoring_policy':'STRUCTURE_ONLY_POWER_DESCRIPTIVE',
+            'low_watts':low,'high_watts':high,'reps':reps,'work_seconds':secs,
+            'recovery_seconds':rest,'ftp_watts':watts,
+            'work_domain':'TEMPO_Z3','observed_repeated_work_is_direct_evidence':False,
+            'not_a_pb_or_formal_validation':True,
+            'rule':'Cycling Z3 Tempo starter range; current validated FTP required; exact interval mechanics and downstream safety gates unchanged.'}
     band = _r196936_measured_band_before(template, evidence_ledger=evidence_ledger,
         ftp_anchor=ftp_anchor, as_of_date=as_of_date, dimension=dimension)
-    t = template if isinstance(template,dict) else {}
     # Only the exact NO-REFERENCE outcome is eligible. We never override
     # failed recovery comparability, unsupported structures or an upstream HOLD.
     if (isinstance(band,dict) and band.get('state')=='NO_DEFENSIBLE_POWER_TARGET'
@@ -57291,7 +57520,8 @@ def _nova_r196960_structure(workout):
     if pattern in {'SPRINT', 'OVER_UNDER'}:
         return (pattern, int(reps), float(sec), float(rest or 0))
     if pattern in _R19696_NUMERIC_PATTERNS | _R19696_EFFORT_PATTERNS:
-        return ('REPEATED', int(reps), float(sec), float(rest or 0))
+        domain='REPEATED_TEMPO_Z3' if str(template.get('work_domain') or '').upper()=='TEMPO_Z3' else 'REPEATED'
+        return (domain, int(reps), float(sec), float(rest or 0))
     return None
 
 
@@ -57304,7 +57534,7 @@ def _nova_r196960_structure_equivalent(a, b):
     """
     if not isinstance(a, tuple) or not isinstance(b, tuple) or a[0] != b[0] or len(a) != len(b):
         return False
-    if a[0] in {'REPEATED', 'SPRINT', 'OVER_UNDER'}:
+    if a[0] in {'REPEATED', 'REPEATED_TEMPO_Z3', 'SPRINT', 'OVER_UNDER'}:
         if a[1] != b[1]:
             return False
         aw, bw, ar, br = a[2], b[2], a[3], b[3]
@@ -60396,3 +60626,7 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
 
 # INC-028 (R196.9.81): clarified Card 3 ownership and refined readiness visuals.
+
+# INC-038: functional stimulus exposure scoring + conditional canonical Tempo vocabulary.
+APP_VERSION = ('THE LAB · PRODUCT V4.9.191 R196.9.91 · INC-038 STIMULUS-AWARE CANONICAL WORKOUT SELECTION · '
+               'INC-037 TYPOGRAPHY PRESERVED · OFFLINE COMMIT CANDIDATE')
