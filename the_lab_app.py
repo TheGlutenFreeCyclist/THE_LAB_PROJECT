@@ -59134,6 +59134,39 @@ _R196975_GOAL_LABELS = {
     'ENDURANCE_BASE':'resistenza',
 }
 
+def _nova_r196975_cross_goal_display_offer(view):
+    """Read-only display filter: reject demonstrably foreign-goal prior offers.
+
+    The current decision/roadmap remains authoritative; known catalogue
+    identities and explicit goal tags are only consistency evidence. Missing
+    provenance is NOT converted to a new execution authorization. Never
+    mutate stored offers, scheduling, clearance or historical audit.
+    """
+    d = view if isinstance(view, dict) else {}
+    offer = d.get('next_quality_offer') or {}
+    if not isinstance(offer, dict):
+        return None
+    workout = offer.get('workout') or {}
+    if not isinstance(workout, dict):
+        return None
+    decision = d.get('nova_decision') or {}
+    roadmap = d.get('adaptive_roadmap') or {}
+    current_goal = str((decision if isinstance(decision, dict) else {}).get('goal_key')
+                       or (roadmap if isinstance(roadmap, dict) else {}).get('goal_key') or '').upper()
+    if not current_goal:
+        return offer  # unknown goal does not justify rewriting a historic offer
+    explicit_goals = [str(g).upper() for g in (
+        offer.get('goal_key'), workout.get('goal_key'), workout.get('goal')) if g]
+    if any(g != current_goal for g in explicit_goals):
+        return None
+    identity = str(offer.get('workout_id') or workout.get('nova_workout_id') or '')
+    catalog_goals = {str(t.get('goal') or '').upper() for t in _NOVA_WORKOUT_LIBRARY
+                     if t.get('id') == identity and t.get('goal')}
+    if catalog_goals and current_goal not in catalog_goals:
+        return None
+    return offer
+
+
 def _nova_r196975_quality_direction(decision, road, offer=None):
     """Read-only next-QUALITY communication; never use it as training clearance.
 
@@ -59150,7 +59183,8 @@ def _nova_r196975_quality_direction(decision, road, offer=None):
     if not isinstance(science, dict):
         science = {}
     dimension = str(science.get('dimension') or d.get('dimension') or '').upper()
-    current_offer = offer if isinstance(offer, dict) else {}
+    current_offer = _nova_r196975_cross_goal_display_offer({
+        'nova_decision':d,'adaptive_roadmap':r,'next_quality_offer':offer}) or {}
     existing = current_offer.get('workout') or {}
     title = None
     source = None
@@ -59215,10 +59249,14 @@ def _v4891_prepare_snapshot_for_ui(data):
     ui = _r196975_prepare_ui_before(data)
     if not isinstance(ui, dict):
         return ui
-    ui['next_quality_direction'] = _nova_r196975_quality_direction(
-        ui.get('nova_decision'),ui.get('adaptive_roadmap'),
-        ui.get('next_quality_offer'))
-    return ui
+    # Display-only copy. A prior offer from another goal is not Card 3's
+    # current workout; do NOT mutate the canonical offer or its DB history.
+    view = dict(ui)
+    view['next_quality_offer'] = _nova_r196975_cross_goal_display_offer(ui)
+    view['next_quality_direction'] = _nova_r196975_quality_direction(
+        view.get('nova_decision'),view.get('adaptive_roadmap'),
+        view.get('next_quality_offer'))
+    return view
 
 # Replace the pre-existing withheld-status body rather than stacking another
 # warning. A third card always names the next quality direction. Dates and
@@ -60669,8 +60707,7 @@ HOME_PAGE=HOME_PAGE[:_qstart]+_qbody+HOME_PAGE[_qend:]
 APP_VERSION=('THE LAB · PRODUCT V4.9.190 R196.9.90 · INC-037 TYPOGRAPHY CONSISTENCY · INC-036 DATE-INDEPENDENT '
              'QUALITY CARD DETAIL · SCIENCE FORMULAS UNCHANGED')
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+# INC-040: Flask entrypoint relocated below all runtime installers.
 
 # INC-028 (R196.9.81): clarified Card 3 ownership and refined readiness visuals.
 
@@ -60678,3 +60715,176 @@ if __name__ == "__main__":
 # completed-template novelty in the same R111 canonical ranking function.
 APP_VERSION = ('THE LAB · PRODUCT V4.9.192 R196.9.92 · INC-039 LONGITUDINAL STIMULUS MEMORY · '
                'INC-038 COMPLEMENTARY TEMPO PRESERVED · OFFLINE COMMIT CANDIDATE')
+
+
+# INC-040 / R196.9.93 — coherent canonical copy and no autonomous date in Card 3.
+# This section is intentionally installed AFTER the historical Jinja transforms.
+# It never changes validated durations, watt targets, event identity, Calendar,
+# roadmap/checkpoint completion, or training authorization.
+R196993_SCHEMA = 'V4.9.193-R196.9.93-CROSS-SURFACE-COHERENCE-1'
+
+
+def _nova_r196993_card3_duplicate_index(data):
+    """Strict read-only match to an actually displayed chronological quality.
+
+    A title alone is insufficient: the immutable workout identity, date and
+    work structure have to agree. A historical offer that merely shares a
+    template does not become a duplicate of a newly compiled prescription.
+    """
+    d=data if isinstance(data,dict) else {}
+    offer=d.get('next_quality_offer') or {}
+    workout=offer.get('workout') if isinstance(offer,dict) else None
+    rows=d.get('next_sessions') or []
+    if not isinstance(workout,dict) or not isinstance(rows,list):return None
+    wid=str(offer.get('workout_id') or '')
+    if not wid or str(workout.get('nova_workout_id') or '')!=wid:return None
+    for i,row in enumerate(rows[:2]):
+        if (isinstance(row,dict) and str(row.get('nova_workout_id') or '')==wid
+            and str(row.get('date') or '')==str(workout.get('date') or '')
+            and str(row.get('title') or '')==str(workout.get('title') or '')
+            and str(row.get('main_set') or '')==str(workout.get('main_set') or '')):
+            return i
+    return None
+
+
+app.jinja_env.globals['nova_quality_card3_duplicate_index'] = _nova_r196993_card3_duplicate_index
+
+# The third surface is *never* the owner of a Calendar/date; the first two
+# chronological surfaces continue to show their proper learned/athlete slots.
+_R196993_CONTEXT='{% set quality_already_shown=false %}'
+assert HOME_PAGE.count(_R196993_CONTEXT)==1, 'INC040_DUPLICATE_CONTEXT_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196993_CONTEXT, """{% if is_quality_slot %}{% set upcoming.quality_index = nova_quality_card3_duplicate_index(data) %}{% endif %}
+{% set quality_already_shown=is_quality_slot and upcoming.quality_index is not none and upcoming.quality_index < 2 %}""",1)
+
+_R196993_PENDING='{% elif is_pending %}'
+assert HOME_PAGE.count(_R196993_PENDING)==1,'INC040_REFERENCE_CARD_ANCHOR_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196993_PENDING,"""{% elif is_quality_slot and quality_already_shown %}
+{% set linked = data.next_sessions[upcoming.quality_index] %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · ALREADY IN YOUR PLAN</span></div>
+<div class="v150-workout-title-row"><h3>{{ linked.title|e }}</h3><button class="v150-copy-workout" type="button" data-copy-workout="{{ linked.title|e }}" aria-label="Copy workout name" title="Copy workout name">⧉<span>Copy</span></button></div>
+<div class="v4-session-meta"><span class="v4-session-pill">SEE CARD {{ upcoming.quality_index + 1 }}</span></div>
+<div class="v4-session-main">This quality is already displayed in card {{ upcoming.quality_index + 1 }}. Its timing, workout details and fueling are shown there; no second session is added here.</div>
+{% elif is_pending %}""",1)
+
+_R196993_QUALITY_SLOT_START='<div class="v4-session-slot">{% if is_quality_slot %}'
+_R196993_QUALITY_SLOT_END='{% elif not is_quality_slot and s.source == \'CALENDAR\' and data.r196966_calendar_conflicts %}'
+assert HOME_PAGE.count(_R196993_QUALITY_SLOT_START)==1 and HOME_PAGE.count(_R196993_QUALITY_SLOT_END)==1,'INC040_SLOT_COPY_DRIFT'
+a=HOME_PAGE.index(_R196993_QUALITY_SLOT_START)
+b=HOME_PAGE.index(_R196993_QUALITY_SLOT_END,a)
+HOME_PAGE=HOME_PAGE[:a]+"""<div class="v4-session-slot">{% if is_quality_slot %}<span class="v1962-quality-eyebrow">{{ 'FUTURE QUALITY · NOT CLEARED' if s.provisional_quality else 'NEXT QUALITY · DIRECTION' }}</span>"""+HOME_PAGE[b:]
+
+# Remove any obsolete rhythm-window explanatory note from Card 3 only.
+_R196993_WINDOW_NOTE="{% if is_quality_slot and s.source == 'RHYTHM' and not s.provisional_quality %}"
+assert HOME_PAGE.count(_R196993_WINDOW_NOTE)==1,'INC040_WINDOW_NOTE_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196993_WINDOW_NOTE,
+    "{% if is_quality_slot and false %}",1)
+# The historic safety note must not be duplicated when quality appears above.
+_R196993_SAFETY='{% if is_quality_slot and next_quality_offer %}'
+assert HOME_PAGE.count(_R196993_SAFETY)==1,'INC040_SAFETY_NOTE_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196993_SAFETY,
+    '{% if is_quality_slot and next_quality_offer and not quality_already_shown %}',1)
+
+# Protect old persisted snapshots too: public copy must match the currently
+# displayed title, never a stale easy/recovery label from an earlier compiler.
+_r196993_public_title_before = _nova_public_workout_title
+
+def _nova_public_workout_title(session):
+    s=session if isinstance(session,dict) else {}
+    actual=str(s.get('title') or '').strip()
+    previous=_r196993_public_title_before(s)
+    if actual and previous and str(previous).strip()!=actual:
+        return actual
+    return actual or previous
+
+app.jinja_env.globals['nova_public_workout_title'] = _nova_public_workout_title
+
+# This runs within the EXISTING final attestation / canonical session flow,
+# before the snapshot's finalized sessions are persisted. It makes no new
+# training decision and never changes the signed dose or its workout ID.
+_r196993_attest_before = _v196926_final_attestation
+
+def _v196926_final_attestation(sessions,prescription):
+    rows=_r196993_attest_before(sessions,prescription)
+    for row in rows or []:
+        if not isinstance(row,dict):continue
+        title=str(row.get('title') or '').strip()
+        if not title:continue
+        previous=str(row.get('copy_workout_name') or '').strip()
+        # An athlete-facing copy name is required to agree with the title
+        # displayed in the canonical chronological card.
+        if previous!=title:
+            row['copy_workout_name']=title
+            row['copy_workout_name_schema']=R196938_TITLE_SCHEMA
+        wid=str(row.get('nova_workout_id') or row.get('nova_contract_id') or '').strip()
+        canonical='THE LAB · '+(wid+' · ' if wid else '')+title
+        if str(row.get('canonical_workout_name') or '').strip()!=canonical:
+            row['canonical_workout_name']=canonical
+            row['workout_name_schema']=R152_SCHEMA
+    return rows
+
+# A hard/loaded-recovery *consolidation* must never be described as a verified
+# upward step if the entire target recovery band falls below the observed
+# comparable recovery average. Keep source science and all wattages unchanged.
+_r196993_dose_before = _v503_scientific_hard_repair
+
+def _v503_scientific_hard_repair(ledger,road,power_model,ftp_anchor=None):
+    result=_r196993_dose_before(ledger,road,power_model,ftp_anchor=ftp_anchor)
+    if not result:return result
+    dose=(((road or {}).get('scientific_progression') or {}).get('dose_contract') or {})
+    reference=dose.get('reference') or {}; prescribed=dose.get('prescription') or {}
+    try:
+        observed=float(reference['recovery_avg_watts'])
+        upper=float(prescribed['recovery_watts_high'])
+        if not (math.isfinite(observed) and math.isfinite(upper)):
+            return result
+    except (KeyError,ValueError,TypeError):return result
+    if upper>observed:return result
+    title,intensity,main,why,arch=result
+    main=str(main).replace('progress recovery load only',
+        'keep the prescribed recovery load controlled; this is not an upward recovery-watt step')
+    main=main.replace('progressive recovery load','measured recovery consolidation')
+    why=('The verified comparable recovery reference is '+str(round(observed,1))+' W, '
+         'while the current prescribed recovery band ends at '+str(round(upper,1))+' W. '
+         'This is a controlled repeatability/consolidation session, NOT evidence of '
+         'an increase in recovery power. Reassess from the observed completed work.')
+    info=dict(arch or {},recovery_load_comparison='CONSOLIDATION_NOT_UPWARD_PROGRESS',
+        recovery_reference_watts=observed,recovery_target_high_watts=upper)
+    return (title,'Hard · measured recovery consolidation',main,why,info)
+
+# An optional aerobic-duration increase is not coherent if the athlete's
+# learned horizon already contains a *second* opportunity on the same day.
+# Never assume the second will be executed, nor assume it will be skipped.
+# Without a whole-day load check, withhold the numeric optional extension;
+# preserve the actual two chronological session recommendations untouched.
+_r196993_volume_before = _v176_progressive_volume_advice
+
+def _v176_progressive_volume_advice(sessions,coach_clock,execution_model,
+                                     nova_decision,cycling_history_activities=None,
+                                     snapshot_day=None):
+    advice=_r196993_volume_before(sessions,coach_clock,execution_model,nova_decision,
+                    cycling_history_activities,snapshot_day=snapshot_day)
+    if not isinstance(advice,dict) or not advice.get('suggested_minutes'):
+        return advice
+    selected_day=str(advice.get('date') or '')[:10]
+    if not selected_day:return advice
+    same_day=[s for s in (sessions or []) if isinstance(s,dict)
+        and str(s.get('date') or '')[:10]==selected_day]
+    if len(same_day)<2:return advice
+    out=dict(advice)
+    out.update(stage='WHOLE_DAY_LOAD_REVIEW',stage_label='RECHECK TOTAL DAILY VOLUME',
+        suggested_minutes=None,extension_withheld_for_day_plan=True,
+        observed_same_day_opportunities=len(same_day),
+        headline=('Two training opportunities already appear on this day. '
+          'NOVA cannot independently recommend increasing either duration without '
+          'reconciling the potential whole-day load. Keep the original easy '
+          'recommendations; any longer ride requires a fresh full-plan review.'),
+        guidance=('Learned slots are not athlete bookings. Neither opportunity '
+          'is added, removed, shortened or confirmed by this advisory.'))
+    return out
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.194 R196.9.94 · INC-042 CROSS-GOAL DISPLAY ' 
+               'COHERENCE AND DATELESS CARD 3 · INC-042 CROSS-GOAL DISPLAY GUARD · OFFLINE CANDIDATE')
+
+# INC-040: Install all adapters and Jinja before starting direct Flask server.
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
