@@ -13261,9 +13261,13 @@ def fetch_intervals_data():
         f"?oldest={history_oldest}&newest={newest}&fields={activities_fields}"
     )
     wellness_fields = "id,restingHR,tempRestingHR,hrv,hrvSDNN,sleepSecs,sleepScore,sleepQuality,avgSleepingHR,weight,tempWeight,steps,ctl,atl,rampRate,comments,readiness,spO2,vo2max,respiration,baevskySI,systolic,diastolic,sportInfo"
+    # NOVA Health U: fetch more historical ordinal Q in the same provider call,
+    # while the 90-day wellness slice used by every legacy training engine remains
+    # unchanged. This is a read-only historical extension, never a new gate.
+    nova_health_oldest = (today_local - timedelta(days=364)).isoformat()
     wellness_url = (
         f"https://intervals.icu/api/v1/athlete/{runtime['athlete_id']}/wellness"
-        f"?oldest={season_oldest}&newest={newest}&fields={wellness_fields}"
+        f"?oldest={nova_health_oldest}&newest={newest}&fields={wellness_fields}"
     )
     act_resp = requests.get(activities_url, headers=headers, timeout=30)
     act_resp.raise_for_status()
@@ -13279,9 +13283,16 @@ def fetch_intervals_data():
     recent_activities = [
         a for a in season_activities if a.get("start_date_local", "")[:10] >= recent_oldest
     ]
-    season_wellness = wel_resp.json()
+    # Flask request-local; never stored in user session, globals, or another owner.
+    full_wellness = wel_resp.json()
+    if has_request_context():
+        g.nova_health_native_wellness = [
+            w for w in full_wellness if isinstance(w, dict)
+            and nova_health_oldest <= str(w.get('id') or '')[:10] <= newest
+        ]
     season_wellness = [
-        w for w in season_wellness if w.get("id", "") >= season_oldest
+        w for w in full_wellness if isinstance(w, dict)
+        and str(w.get("id", "")) >= season_oldest
     ]
     recent_wellness = [w for w in season_wellness if w.get("id", "") >= recent_oldest]
     return recent_activities, season_activities, recent_wellness, season_wellness, history_activities
@@ -29283,6 +29294,16 @@ def analyze():
         # R196.9.62: strictly AFTER the sealed training decision and workout.
         # This observational sidecar cannot feed the scientific compiler.
         _r196962_attach_health_observatory(data, season_wellness)
+        # NOVA Health observational sidecar, AFTER the authoritative training
+        # output is sealed. Failure is isolated and cannot veto the Snapshot.
+        try:
+            _nova_health_attach_v06(
+                data, getattr(g, 'nova_health_native_wellness', season_wellness),
+                history_activities, load_daily_logs(limit=720, owner_user_id=user['id']))
+        except Exception as _nova_health_error:
+            data['nova_health'] = _nova_health_unavailable_v06(
+                'Observational input could not be read. Quality Readiness is unchanged.',
+                type(_nova_health_error).__name__)
         snapshot_fault_stage = "AUTHORITY_VALIDATION"
         # Trace the exact code path selected for this Snapshot (billing is verified
         # independently in the admin usage table; no zero-cost DB event is invented).
@@ -60884,6 +60905,779 @@ def _v176_progressive_volume_advice(sessions,coach_clock,execution_model,
 
 APP_VERSION = ('THE LAB · PRODUCT V4.9.194 R196.9.94 · INC-042 CROSS-GOAL DISPLAY ' 
                'COHERENCE AND DATELESS CARD 3 · INC-042 CROSS-GOAL DISPLAY GUARD · OFFLINE CANDIDATE')
+
+
+# ===== NOVA HEALTH / U v0.6: isolated longitudinal, advisory-only engine =====
+# All v0.5 research engine internals are scoped in this factory to avoid
+# overriding canonical app globals (such as _day or _q). No exec/import needed.
+def _nova_health_make_engine_v06():
+    """NOVA Health temporal interpretation engine v0.5 — ISOLATED RESEARCH.
+
+    No Flask, calendar, database or Training integration. Experimental thresholds, not
+    calibrated for clinical or coaching dosage. Explicitly observational and read-only.
+
+    Contract: snapshot: {athlete_id, as_of, plan_started_on, sleep_q[], activities[],
+     session_feedback[], daily_feeling[], health_events[], current_wellness{},
+     training_context{}, quality_readiness_display_only}.
+
+    Q: Intervals Q1 Excellent, Q2 Good, Q3 Average, Q4 Poor.
+    """
+    from collections import Counter
+    from copy import deepcopy
+    from datetime import date, datetime, timedelta
+    from statistics import median
+    from typing import Any
+    import json
+
+    VERSION='NOVA_HEALTH_RESEARCH_v0.5'
+    # Provisional engineering sensitivities; these MUST be prospectively calibrated.
+    CONFIG={
+      'recent_days':14,'reference_days':28,
+      'q_recent_min':10, 'q_reference_min':20, 'week_min':5,
+      'q_poor_shift':.25, 'q_persistent_week_min':3,
+      'q_burden_poor_fraction':.65,
+      'after_min_per_period':3, 'after_decline':2,
+      'feeling_min_per_period':5, 'feeling_decline':1.5,
+      'matched_load_ratio_low':.65, 'matched_load_ratio_high':1.5,
+      'matched_duration_ratio_low':.65, 'matched_duration_ratio_high':1.5,
+    }
+    CARDS={
+     'RECOVERY_STABLE_WITH_HEADROOM':{'title':'Stable Recovery, Room to Grow','icon':'sparkles','color':'#65c9ef',
+       'description':'Recovery has not clearly worsened, but there is a realistic opportunity to improve your sleep or recovery margin.',
+       'action':'Look for a feasible improvement in sleep opportunity or recovery rhythm, without treating normal life constraints as failure.'},
+     'RECOVERY_REBOUND':{'title':'Recovery Rebuilding','icon':'trending-up','color':'#87e26c',
+       'description':'Sleep and comparable post-session recovery have improved following an athlete-confirmed adjustment.',
+       'action':'Watch whether the improvement persists; an observed association does not establish cause.'},
+     'LOAD_WELL_ABSORBED':{'title':'Load Well Absorbed','icon':'shield-check','color':'#14d6ab',
+       'description':'Your recent training is supported by a consistent personal recovery pattern.',
+       'action':'Maintain your current approach and keep recording recovery feedback.'},
+     'RECOVERY_DRIFT':{'title':'Early Recovery Drift','icon':'activity','color':'#ffbb43',
+       'description':'A repeated change in your recovery pattern deserves closer attention.',
+       'action':'Protect sleep opportunity and review the density of upcoming training.'},
+     'SLEEP_PATTERN_CONCERN':{'title':'Persistent Sleep Strain','icon':'moon-star','color':'#ad92ff',
+       'description':'Lower sleep-quality categories recur across recent weeks, regardless of the daily readiness reading.',
+       'action':'Review sleep opportunity and contributing factors; monitor the next complete weeks.'},
+     'RECOVERY_MISMATCH':{'title':'Recovery Mismatch','icon':'triangle-alert','color':'#ff6378',
+       'description':'Sleep quality and comparable post-session recovery have both deteriorated.',
+       'action':'Consider an athlete-chosen recovery day or lighter training window; a specific number of days has not been validated.'},
+     'EVIDENCE_BUILDING':{'title':'Recovery Evidence Building','icon':'scan-search','color':'#56b8ff',
+       'description':'Training context is available, but longitudinal recovery evidence is not yet sufficient for a confident verdict.',
+       'action':'Collect comparable sleep-quality history and post-session feedback before drawing a conclusion.'},
+     'HEALTH_FOLLOWUP':{'title':'Health Follow-up Advised','icon':'heart-pulse','color':'#ff8d99',
+       'description':'Reported symptoms warrant attention independent of training readiness.',
+       'action':'Seek appropriate medical advice about the reported symptoms.'}
+    }
+
+    def _day(value):
+        if not isinstance(value,str):return None
+        try:return date.fromisoformat(value[:10])
+        except ValueError:return None
+
+    def _timestamp(value):
+        if not isinstance(value,str):return None
+        try:return datetime.fromisoformat(value.replace('Z','+00:00'))
+        except ValueError:return None
+
+    def _q(v):
+        if type(v) is int and v in (1,2,3,4):return v
+        if isinstance(v,str) and v.upper() in ('Q1','Q2','Q3','Q4'):return int(v[1])
+        return None
+
+    def _owned(observation,owner):
+        # Reject explicitly cross-owner records, accept dedicated single-owner fixtures.
+        return observation.get('athlete_id')==owner
+
+    def _clean_q(rows,owner,asof):
+        """Keep one unique Q per day; contradictory duplicates invalidate that day.
+        Provider mappings must be verified for a valid comparison.
+        """
+        byday={}; bad_mapping=False; conflicting=set(); invalid=0; future=0
+        for x in rows or []:
+            if not isinstance(x,dict) or not _owned(x,owner):continue
+            dt=_day(x.get('date') or x.get('day'))
+            if dt is None:invalid+=1;continue
+            if dt>asof:future+=1;continue
+            q=_q(x.get('q')); source=x.get('provider','Intervals.icu')
+            if q is None:invalid+=1;continue
+            if x.get('mapping_verified') is not True:bad_mapping=True;continue
+            v=(q,source,x.get('mapping_version',''))
+            if dt in byday and byday[dt]!=v:conflicting.add(dt)
+            else:byday[dt]=v
+        for day in conflicting:byday.pop(day,None)
+        return byday,{'invalid_q_count':invalid,'future_q_excluded':future,
+                      'conflicting_dates':sorted(str(d) for d in conflicting),
+                      'unverified_mapping':bad_mapping}
+
+    def _qperiod(qmap,start,end):
+        found={d:qmap[d][0] for d in qmap if start<=d<=end}
+        return found
+
+    def _q_distribution(qs):
+        c=Counter(qs.values()); n=len(qs)
+        return {'n':n,'Q1':c[1],'Q2':c[2],'Q3':c[3],'Q4':c[4],
+                'poor_tail_fraction':round((c[3]+c[4])/n,3) if n else None}
+
+    def _qtrend(qmap,asof,plan_start,issues):
+        cfg=CONFIG
+        recent_start=asof-timedelta(days=cfg['recent_days']-1)
+        recent=_qperiod(qmap,recent_start,asof)
+        candidate_pre_end=plan_start-timedelta(days=1) if plan_start else None
+        pre=None
+        # Anchor historical pre-plan window when present; must have coverage.
+        if candidate_pre_end and candidate_pre_end < recent_start:
+            pre=_qperiod(qmap,candidate_pre_end-timedelta(days=cfg['reference_days']-1),candidate_pre_end)
+        if pre and len(pre)>=cfg['q_reference_min']:
+            reference=pre;reference_kind='PRE_NOVA_ANCHOR';reference_end=candidate_pre_end
+        else:
+            # Search up to a year back for the EARLIEST sufficiently covered anchor,
+            # rather than constantly moving a degraded baseline forward.
+            reference_end=recent_start-timedelta(days=1)
+            reference=_qperiod(qmap,reference_end-timedelta(days=cfg['reference_days']-1),reference_end)
+            reference_kind='HISTORICAL_ANCHOR' if len(reference)>=cfg['q_reference_min'] else 'INSUFFICIENT'
+            start_search=max(min(qmap, default=recent_start),asof-timedelta(days=364))
+            scan_end=recent_start-timedelta(days=cfg['reference_days'])
+            cursor=start_search
+            while cursor<=scan_end:
+                candidate=_qperiod(qmap,cursor,cursor+timedelta(days=27))
+                if len(candidate)>=cfg['q_reference_min']:
+                    reference=candidate;reference_end=cursor+timedelta(days=27)
+                    reference_kind='EARLIEST_QUALIFIED_ANCHOR'
+                    break
+                cursor+=timedelta(days=1)
+        rq=_q_distribution(reference);cq=_q_distribution(recent)
+        wk1={d:q for d,q in recent.items() if d<recent_start+timedelta(days=7)}
+        wk2={d:q for d,q in recent.items() if d>=recent_start+timedelta(days=7)}
+        compatible=len({qmap[d][1:] for d in set(reference)|set(recent)})<=1
+        enough=len(reference)>=cfg['q_reference_min'] and len(recent)>=cfg['q_recent_min'] and compatible and not issues['unverified_mapping']
+        persistence=(len(wk1)>=cfg['week_min'] and len(wk2)>=cfg['week_min'] and
+                     sum(q>=3 for q in wk1.values())>=cfg['q_persistent_week_min'] and
+                     sum(q>=3 for q in wk2.values())>=cfg['q_persistent_week_min'])
+        poor_shift=(cq['poor_tail_fraction']-rq['poor_tail_fraction']) if enough else None
+        # Persistent small erosion: detect loss of excellent nights + repeated Q3,
+        # even when the full poor-tail threshold has not been reached.
+        softer_persistence=(len(wk1)>=cfg['week_min'] and len(wk2)>=cfg['week_min'] and
+                           sum(q>=3 for q in wk1.values())>=2 and
+                           sum(q>=3 for q in wk2.values())>=2)
+        subtle=bool(enough and softer_persistence and poor_shift>=.12 and
+                    (rq['Q1']/rq['n']-cq['Q1']/cq['n'])>=.20)
+        decline=bool(enough and ((persistence and poor_shift>=cfg['q_poor_shift'] and
+                     cq['Q1']/cq['n']<rq['Q1']/rq['n']) or subtle))
+        # Persistent poor quality should not be redefined as a healthy baseline.
+        burden=bool(len(recent)>=cfg['q_recent_min'] and persistence and
+                    cq['poor_tail_fraction']>=cfg['q_burden_poor_fraction'] and compatible and not issues['unverified_mapping'])
+        return {'comparable':enough,'reference_kind':reference_kind,
+                'reference_window':{'start':str(reference_end-timedelta(days=27)),'end':str(reference_end)},
+                'recent_window':{'start':str(recent_start),'end':str(asof)},
+                'reference':rq,'recent':cq,'recent_week_samples':[len(wk1),len(wk2)],
+                'persistent_poor_both_weeks':persistence,'poor_tail_change':round(poor_shift,3) if poor_shift is not None else None,
+                'declining':decline,'subtle_erosion_detected':subtle,'persistent_burden':burden,
+                'reference_pre_nova':reference_kind=='PRE_NOVA_ANCHOR',
+                'source_compatible':compatible,'mapping_verified':not issues['unverified_mapping']}
+
+    def _longitudinal_profile(qmap,asof,plan_start):
+        """Full history is descriptive; short-horizon decisions remain auditable.
+        Do not infer a pre-plan Q history from an aggregate training history.
+        """
+        blocks=[]
+        for i in range(13):
+            end=asof-timedelta(days=i*28)
+            start=end-timedelta(days=27)
+            qs=_qperiod(qmap,start,end)
+            if not qs and (not qmap or end<min(qmap)):break
+            blocks.append({'start':str(start),'end':str(end),'coverage':len(qs),
+                           'distribution':_q_distribution(qs),'reliable':len(qs)>=CONFIG['q_reference_min']})
+        pre={d:qmap[d][0] for d in qmap if plan_start and d<plan_start}
+        post={d:qmap[d][0] for d in qmap if plan_start and d>=plan_start}
+        dates=sorted(qmap)
+        transitions=Counter()
+        for left,right in zip(dates,dates[1:]):
+            if (right-left).days!=1:continue
+            from_band='Q1_Q2' if qmap[left][0]<=2 else 'Q3_Q4'
+            to_band='Q1_Q2' if qmap[right][0]<=2 else 'Q3_Q4'
+            transitions[f'{from_band}__TO__{to_band}']+=1
+        return {'observed_days_total':len(qmap),'observed_first_date':str(min(qmap)) if qmap else None,
+                'observed_last_date':str(max(qmap)) if qmap else None,
+                'pre_nova':_q_distribution(pre),'post_nova':_q_distribution(post),
+                'pre_post_is_causal_comparison':False,
+                'last_364_days_28day_blocks_newest_first':blocks,
+                'consecutive_day_transition_counts':dict(transitions),
+                'missing_nights_are_not_imputed':True}
+
+
+    def _clean_activities(rows,owner,asof):
+        seen={}
+        for a in rows or []:
+            if not isinstance(a,dict) or not _owned(a,owner):continue
+            d=_day(a.get('date') or a.get('start_date_local'))
+            key=a.get('id') or a.get('activity_id')
+            if not d or d>asof or not key or a.get('verified_completed') is not True:continue
+            # Never duplicate load if identical activity ID appears more than once.
+            if key not in seen:seen[key]=a
+        return seen
+
+    def _feedback_trend(activities,rows,owner,asof):
+        # Compare post-session recovery on actual, completed, similarly demanding sessions.
+        # Use fixed coarse workload bins to avoid comparing a maximal test with easy Z2.
+        bins={}; feedback_by_id={}; conflicts=set()
+        # Conflicting repeated uploads cannot be chosen by list ordering.
+        for f in rows or []:
+            if not isinstance(f,dict) or not _owned(f,owner):continue
+            id_=f.get('activity_id')
+            if not id_ or id_ not in activities:continue
+            logged_at=f.get('logged_at')
+            if logged_at and _day(logged_at) and _day(logged_at)>asof:continue
+            score=f.get('after',f.get('post_session_state'))
+            if type(score) is not int or not 1<=score<=10:continue
+            if id_ in feedback_by_id and feedback_by_id[id_]!=score:conflicts.add(id_)
+            feedback_by_id[id_]=score
+        for id_,score in sorted(feedback_by_id.items()):
+            if id_ in conflicts:continue
+            a=activities[id_]
+            dt=_day(a.get('date') or a.get('start_date_local'))
+            if not dt or dt>asof:continue
+            sport=(a.get('sport') or a.get('type') or 'UNKNOWN').upper()
+            intensity=str(a.get('intensity_class') or a.get('family') or 'UNKNOWN').upper()
+            if intensity=='UNKNOWN':continue
+            duration=a.get('duration_min')
+            if duration is None:
+                seconds=a.get('moving_time')
+                duration=float(seconds)/60 if type(seconds) in (int,float) and seconds>0 else None
+            load=a.get('load',a.get('icu_training_load'))
+            if duration is None or load is None:continue
+            try:duration=float(duration);load=float(load)
+            except (TypeError,ValueError):continue
+            if duration<=0 or load<0:continue
+            # Within a class, compare relative to its own observed baseline bins.
+            key=(sport,intensity)
+            bins.setdefault(key,[]).append((dt,score,duration,load,id_))
+        candidates=[]
+        for key,values in bins.items():
+            recent_start=asof-timedelta(days=13)
+            ref_start=recent_start-timedelta(days=42)
+            recent=[v for v in values if recent_start<=v[0]<=asof]
+            reference=[v for v in values if ref_start<=v[0]<recent_start]
+            if len(reference)<CONFIG['after_min_per_period'] or len(recent)<CONFIG['after_min_per_period']:continue
+            dur_ref=median(v[2] for v in reference);load_ref=median(v[3] for v in reference)
+            def within(v):
+                d=v[2]/dur_ref; l=v[3]/load_ref if load_ref>0 else 1 if v[3]==0 else 999
+                return CONFIG['matched_duration_ratio_low']<=d<=CONFIG['matched_duration_ratio_high'] and CONFIG['matched_load_ratio_low']<=l<=CONFIG['matched_load_ratio_high']
+            reference=[v for v in reference if within(v)]
+            recent=[v for v in recent if within(v)]
+            if len(reference)<CONFIG['after_min_per_period'] or len(recent)<CONFIG['after_min_per_period']:continue
+            delta=median(v[1] for v in recent)-median(v[1] for v in reference)
+            candidates.append({'family':list(key),'reference_n':len(reference),'recent_n':len(recent),
+                               'after_median_change':round(delta,2),'declining':delta<=-CONFIG['after_decline']})
+        if not candidates:return {'comparable':False,'declining':False,'matched_groups':0,'groups':[]}
+        # Any valid declining cohort is observed; stable cohorts do not erase it.
+        return {'comparable':True,'declining':any(x['declining'] for x in candidates),
+                'matched_groups':len(candidates),'groups':candidates}
+
+    def _feeling_trend(rows,owner,asof):
+        # Daily Log is not post-session After; compare only same-session-count phases.
+        recent_start=asof-timedelta(days=13); ref_start=recent_start-timedelta(days=28)
+        perday={};conflicts=set()
+        for p in rows or []:
+            if not isinstance(p,dict) or not _owned(p,owner):continue
+            day=_day(p.get('date'));value=p.get('value',p.get('feeling'))
+            if not day or day>asof or type(value) not in (int,float) or not 1<=value<=10:continue
+            phase=(p.get('session_count') or (2 if '2 SESSIONS' in p.get('phase','') else 1 if '1 SESSION' in p.get('phase','') else None))
+            if phase not in (1,2):continue
+            # Conflicting duplicates without a canonical log version are excluded.
+            key=(day,phase)
+            if key in perday and perday[key]!=value:conflicts.add(key)
+            perday[key]=value
+        for key in conflicts:perday.pop(key,None)
+        results=[]
+        for phase in (1,2):
+            ref=[v for (day,p),v in perday.items() if p==phase and ref_start<=day<recent_start]
+            rec=[v for (day,p),v in perday.items() if p==phase and recent_start<=day<=asof]
+            if len(ref)<CONFIG['feeling_min_per_period'] or len(rec)<CONFIG['feeling_min_per_period']:continue
+            diff=median(rec)-median(ref)
+            results.append({'phase_sessions':phase,'reference_n':len(ref),'recent_n':len(rec),
+                            'median_change':round(diff,2),'declining':diff<=-CONFIG['feeling_decline']})
+        return {'comparable':bool(results),'declining':any(x['declining'] for x in results), 'groups':results}
+
+    def _safe_context(snapshot):
+        return deepcopy(snapshot.get('training_context') or {})
+
+
+
+    def _q1_compass(qtrend):
+        """Aspirational indicator, never an independent alert or automatic workout veto.
+        Q is ordinal: percentages are descriptive, not a fabricated numeric sleep score.
+        """
+        a=qtrend['reference']; b=qtrend['recent']
+        if not qtrend['comparable'] or not a['n'] or not b['n']:
+            return {'available':False,'principle':'Q1 IS AN ASPIRATION, NOT A MANDATE'}
+        before=a['Q1']/a['n']; now=b['Q1']/b['n']
+        return {'available':True,'reference_q1_fraction':round(before,3),
+                'recent_q1_fraction':round(now,3),
+                'lost_excellent_nights':before-now>=.20,
+                'q2_is_not_failure':True,
+                'principle':'Q1 is the preferred quality direction; stable Q2 is not automatically inadequate'}
+
+
+    def _verified_sleep_opportunity(data,owner,asof):
+        """Sleep duration is contextual, not a second independent recovery vote.
+        Sleep need is explicitly athlete-declared, never inferred as an 8h target.
+        """
+        prefs=data.get('sleep_opportunity_context') or {}
+        need=prefs.get('athlete_declared_sleep_need_min')
+        if type(need) not in (int,float) or not 300<=need<=720:need=None
+        flexible=prefs.get('feasible_extra_minutes_per_night')
+        if type(flexible) not in (int,float) or not 0<=flexible<=180:flexible=None
+        constraint=prefs.get('main_constraint') if prefs.get('main_constraint') in ('WORK','FAMILY','SHIFT','OTHER','NONE') else 'UNSPECIFIED'
+        values={};conflict=set()
+        for x in data.get('sleep_duration',[]) or []:
+            if not isinstance(x,dict) or not _owned(x,owner) or x.get('verified') is not True:continue
+            d=_day(x.get('date'));mins=x.get('minutes')
+            if d is None or not asof-timedelta(days=27)<=d<=asof or type(mins) not in (int,float) or not 120<=mins<=900:continue
+            if d in values and values[d]!=mins:conflict.add(d)
+            else:values[d]=mins
+        for d in conflict:values.pop(d,None)
+        recent=[v for d,v in values.items() if d>=asof-timedelta(days=13)]
+        typical=median(recent) if len(recent)>=10 else None
+        gap=max(0,need-typical) if need is not None and typical is not None else None
+        limited=gap is not None and gap>=45
+        constrained=constraint in ('WORK','FAMILY','SHIFT') and flexible is not None and flexible<30
+        return {'verified_recent_n':len(recent),'personal_need_declared_min':need,
+                'observed_recent_median_min':round(typical) if typical is not None else None,
+                'personal_opportunity_gap_min':round(gap) if gap is not None else None,
+                'limited_opportunity':limited,'constraint':constraint,'feasible_extra_minutes_per_night':flexible,
+                'low_flexibility':constrained,'is_independent_recovery_vote':False,
+                'recommendation_minutes_validated':False}
+
+
+    def _load_trajectory(snapshot):
+        """Load direction as context, not a penalty for high training volume."""
+        ctx=snapshot.get('training_context') or {}
+        recent=ctx.get('load_7d'); prior=ctx.get('load_prev_week')
+        if type(recent) not in (int,float) or type(prior) not in (int,float) or recent<0 or prior<=0:
+            return {'available':False,'does_not_set_health_card_alone':True}
+        ratio=recent/prior
+        return {'available':True,'completed_load_7d':recent,'previous_week_load':prior,
+                'relative_change_pct':round(100*(ratio-1),1),
+                'direction':'INCREASED' if ratio>1.15 else 'REDUCED' if ratio<.85 else 'SIMILAR',
+                'does_not_set_health_card_alone':True,'causality_not_established':True}
+
+
+    def _exposure_lag(qmap,activities,asof):
+        """Describe next-night Q after verified intense days vs easy-only days.
+        A day is counted once (even with 2+ sessions). Association is NOT causality.
+        """
+        by_day={}
+        for a in activities.values():
+            d=_day(a.get('date') or a.get('start_date_local'))
+            if not d or d>=asof:continue
+            intensity=str(a.get('intensity_class') or a.get('family') or 'UNKNOWN').upper()
+            if intensity not in ('HARD','QUALITY','VO2MAX','THRESHOLD','TEMPO','Z2','Z1','EASY','RECOVERY'):continue
+            item=by_day.setdefault(d,{'hard':False,'has_easy':False})
+            if intensity in ('HARD','QUALITY','VO2MAX','THRESHOLD','TEMPO'):item['hard']=True
+            else:item['has_easy']=True
+        hard=[];easy=[]
+        for d,day in by_day.items():
+            subsequent=d+timedelta(days=1)
+            if subsequent not in qmap:continue
+            if day['hard']:hard.append(qmap[subsequent][0]>=3)
+            elif day['has_easy']:easy.append(qmap[subsequent][0]>=3)
+        available=len(hard)>=5 and len(easy)>=5 and len({v[1:] for v in qmap.values()})<=1
+        return {'available':available,'intense_day_next_night_n':len(hard),
+                'easy_only_day_next_night_n':len(easy),
+                'intense_day_q3_q4_fraction':round(sum(hard)/len(hard),3) if available else None,
+                'easy_day_q3_q4_fraction':round(sum(easy)/len(easy),3) if available else None,
+                'is_causal':False,'sets_card_alone':False,'double_sessions_deduplicated':True}
+
+
+    def _confirmed_followup(data,owner,asof,qtrend,after,feeling,activities,qmap,session_feedback):
+        """Positive follow-up is an association, not an inferred rest day.
+        No activity is NOT evidence a rest day was taken.
+        """
+        actions=[]; contradictions=[]
+        active_dates={_day(a.get('date') or a.get('start_date_local')) for a in activities.values()}
+        for x in data.get('recovery_actions',[]) or []:
+            if not isinstance(x,dict) or not _owned(x,owner) or x.get('athlete_confirmed') is not True:continue
+            d=_day(x.get('date'))
+            if d is None or not asof-timedelta(days=13)<=d<=asof:continue
+            if x.get('kind') not in ('REST_DAY_TAKEN','SLEEP_OPPORTUNITY_ADDED','VOLUME_REDUCED'):continue
+            if d>asof-timedelta(days=4):
+                # Actions reported too recently have no 4-day observation period.
+                continue
+            if x['kind']=='REST_DAY_TAKEN' and d in active_dates:
+                contradictions.append({'date':str(d),'kind':x['kind'],'reason':'VERIFIED_COMPLETED_ACTIVITY_ON_CLAIMED_REST_DAY'})
+                continue
+            actions.append({'date':str(d),'kind':x['kind'],'athlete_confirmed':True})
+        q_up=qtrend['comparable'] and qtrend['poor_tail_change'] is not None and qtrend['poor_tail_change']<=-.25
+        feedback_up=any(g.get('after_median_change',0)>=2 for g in after.get('groups',[])) or any(g.get('median_change',0)>=1.5 for g in feeling.get('groups',[]))
+        valid_actions=[]
+        for a in actions:
+            dt=_day(a['date'])
+            subsequent_q=sum(dt<day<=asof for day in qmap)
+            subsequent_feedback=sum(1 for x in session_feedback or [] if isinstance(x,dict) and _owned(x,owner) and
+               x.get('activity_id') in activities and _day(activities[x['activity_id']].get('date') or activities[x['activity_id']].get('start_date_local')) and
+               dt<_day(activities[x['activity_id']].get('date') or activities[x['activity_id']].get('start_date_local'))<=asof and
+               type(x.get('after')) is int and 1<=x['after']<=10)
+            if subsequent_q>=3 and subsequent_feedback>=2:valid_actions.append(a)
+        rebound=bool(valid_actions and q_up and feedback_up)
+        return {'confirmed_actions':actions,'contradictions':contradictions,'improving_q':bool(q_up),'improving_feedback':bool(feedback_up),
+                'observed_rebound':rebound,'sufficient_followup_actions':valid_actions,'causal_effect_proven':False,'no_activity_is_not_rest':True}
+
+
+
+
+    def _effort_cost_trend(activities,rows,owner,asof):
+        """RPE and Execution agree on deterioration for similar completed sessions.
+        RPE alone, including a high score in a purposeful quality, is never penalized.
+        """
+        feedback={};conflicts=set()
+        for x in rows or []:
+            if not isinstance(x,dict) or not _owned(x,owner):continue
+            id_=x.get('activity_id')
+            if id_ not in activities:continue
+            rpe=x.get('rpe'); exe=x.get('execution',x.get('execution_score'))
+            if type(rpe) is not int or type(exe) is not int or not (1<=rpe<=10 and 1<=exe<=10):continue
+            value=(rpe,exe)
+            if id_ in feedback and feedback[id_]!=value:conflicts.add(id_)
+            feedback[id_]=value
+        rows_by_group={}
+        for id_,(rpe,exe) in feedback.items():
+            if id_ in conflicts:continue
+            a=activities[id_];d=_day(a.get('date') or a.get('start_date_local'))
+            dur=a.get('duration_min');load=a.get('load',a.get('icu_training_load'))
+            intensity=str(a.get('intensity_class') or a.get('family') or 'UNKNOWN').upper()
+            if not d or dur is None or load is None or intensity=='UNKNOWN':continue
+            try:dur=float(dur);load=float(load)
+            except (TypeError,ValueError):continue
+            if dur<=0 or load<0:continue
+            group=(str(a.get('sport') or a.get('type') or 'UNKNOWN').upper(),intensity)
+            rows_by_group.setdefault(group,[]).append((d,dur,load,rpe,exe))
+        recent_start=asof-timedelta(days=13);ref_start=recent_start-timedelta(days=42)
+        groups=[]
+        for group,allv in rows_by_group.items():
+            ref=[x for x in allv if ref_start<=x[0]<recent_start]
+            rec=[x for x in allv if recent_start<=x[0]<=asof]
+            if len(ref)<3 or len(rec)<3:continue
+            ref_dur=median(x[1] for x in ref);ref_load=median(x[2] for x in ref)
+            def similar(x):
+                ld=x[2]/ref_load if ref_load>0 else 1 if x[2]==0 else 999
+                return .65<=x[1]/ref_dur<=1.5 and .65<=ld<=1.5
+            ref=[x for x in ref if similar(x)];rec=[x for x in rec if similar(x)]
+            if len(ref)<3 or len(rec)<3:continue
+            rpe_delta=median(x[3] for x in rec)-median(x[3] for x in ref)
+            exe_delta=median(x[4] for x in rec)-median(x[4] for x in ref)
+            groups.append({'family':list(group),'reference_n':len(ref),'recent_n':len(rec),
+                           'rpe_median_change':rpe_delta,'execution_median_change':exe_delta,
+                           'cost_increasing':rpe_delta>=2 and exe_delta<=-2})
+        return {'comparable':bool(groups),'cost_increasing':any(g['cost_increasing'] for g in groups),
+                'groups':groups,'high_rpe_alone_is_not_bad':True}
+
+    def _evidence_labels(card_id,qtrend,after,feeling,sleep,load,compass):
+        signals=[]
+        if qtrend['comparable']:
+            signals.append('SLEEP Q · VERIFIED HISTORY')
+        if after['comparable']:signals.append('AFTER · MATCHED SESSIONS')
+        if feeling['comparable']:signals.append('FEELING · SAME-DAY PHASE')
+        if sleep['limited_opportunity']:signals.append('SLEEP OPPORTUNITY · PERSONAL GAP')
+        if load['available']:signals.append('COMPLETED LOAD · CONTEXT')
+        if compass.get('lost_excellent_nights'):signals.append('Q1 FREQUENCY · DECLINING')
+        return signals
+
+    def interpret(snapshot:dict[str,Any])->dict[str,Any]:
+        """Deterministic pure interpretation. No score or hidden training side effect."""
+        data=deepcopy(snapshot)
+        owner=data.get('athlete_id')
+        asof=_day(data.get('as_of'));plan=_day(data.get('plan_started_on'))
+        if not isinstance(owner,str) or not owner or not asof:raise ValueError('athlete_id and ISO as_of required')
+        qmap,issues=_clean_q(data.get('sleep_q'),owner,asof)
+        qtrend=_qtrend(qmap,asof,plan,issues)
+        history=_longitudinal_profile(qmap,asof,plan)
+        activities=_clean_activities(data.get('activities'),owner,asof)
+        after=_feedback_trend(activities,data.get('session_feedback'),owner,asof)
+        feeling=_feeling_trend(data.get('daily_feeling'),owner,asof)
+        effort_cost=_effort_cost_trend(activities,data.get('session_feedback'),owner,asof)
+        events=[e for e in data.get('health_events',[]) if isinstance(e,dict) and _owned(e,owner) and _day(e.get('date')) and asof-timedelta(days=13)<=_day(e['date'])<=asof]
+        restriction=[e['restriction'] for e in events if e.get('restriction') in ('NO_INTENSITY','NO_TRAINING')]
+        has_sickness=any(e.get('kind')=='SICKNESS' for e in events)
+        symptomatic=any(e.get('medical_followup_requested') is True for e in events)
+        feedback_declining=after['declining'] or feeling['declining']
+        compass=_q1_compass(qtrend)
+        sleep_opportunity=_verified_sleep_opportunity(data,owner,asof)
+        workload=_load_trajectory(data)
+        exposure_lag=_exposure_lag(qmap,activities,asof)
+        followup=_confirmed_followup(data,owner,asof,qtrend,after,feeling,activities,qmap,data.get('session_feedback'))
+        moderate_sleep_headroom=bool(qtrend['comparable'] and
+              qtrend['recent']['poor_tail_fraction'] is not None and
+              qtrend['recent']['poor_tail_fraction']>=.50)
+        if symptomatic:card_id='HEALTH_FOLLOWUP'
+        elif qtrend['declining'] and feedback_declining:card_id='RECOVERY_MISMATCH'
+        elif qtrend['declining'] or feedback_declining or effort_cost['cost_increasing']:card_id='RECOVERY_DRIFT'
+        elif qtrend['persistent_burden']:card_id='SLEEP_PATTERN_CONCERN'
+        elif followup['observed_rebound']:card_id='RECOVERY_REBOUND'
+        elif qtrend['comparable'] and (after['comparable'] or feeling['comparable']):
+            card_id='RECOVERY_STABLE_WITH_HEADROOM' if (moderate_sleep_headroom or sleep_opportunity['limited_opportunity'] or (not after['comparable'] and not workload['available'])) else 'LOAD_WELL_ABSORBED'
+        else:card_id='EVIDENCE_BUILDING'
+        # Consequential missingness is disclosed; no 'well absorbed' from HRV alone.
+        observations=[]
+        if qtrend['comparable']:
+            observations.append({'domain':'sleep_q','reference':qtrend['reference'], 'recent':qtrend['recent'],
+               'date_window':qtrend['recent_window'],'reference_kind':qtrend['reference_kind'],
+               'poor_tail_change':qtrend['poor_tail_change'],'persistent':qtrend['persistent_poor_both_weeks']})
+        else:observations.append({'domain':'sleep_q','unavailable':'NO_COMPARABLE_LONGITUDINAL_Q',
+               'recent_samples':qtrend['recent']['n'],'reference_samples':qtrend['reference']['n'],
+               'mapping_verified':qtrend['mapping_verified'],'source_compatible':qtrend['source_compatible']})
+        if after['comparable']:observations.append({'domain':'post_session_after','matched_groups':after['groups']})
+        if feeling['comparable']:observations.append({'domain':'daily_feeling','same_phase_groups':feeling['groups']})
+        if effort_cost['comparable']:observations.append({'domain':'rpe_execution_cost','matched_groups':effort_cost['groups']})
+        wellness=data.get('current_wellness') or {}
+        if wellness:observations.append({'domain':'current_wellness','current':deepcopy(wellness),
+            'longitudinal_inference':False})
+        if has_sickness:observations.append({'domain':'health_events','sickness_reported':True,
+          'restrictions_are_explicit_only':restriction})
+        # Missing baseline is a strong limit even when training context is abundant.
+        insufficient=[]
+        if not qtrend['comparable']:insufficient.append('Longitudinal Q history, same verified mapping, >=20 reference and >=10 recent nights')
+        if not after['comparable']:insufficient.append('Matched completed-session After feedback across independent periods')
+        if not feeling['comparable']:insufficient.append('Daily Feeling samples from comparable same-session-count phases')
+        card=deepcopy(CARDS[card_id]);card['id']=card_id
+        q_ref=qtrend['reference']; q_now=qtrend['recent']
+        if card_id=='EVIDENCE_BUILDING':
+            parts=[f"Training context is available, but this record contains {q_now['n']}/14 recent Q-rated nights and {q_ref['n']}/28 reference nights"]
+            if not after['comparable']:parts.append('comparable post-session After history is insufficient')
+            if not feeling['comparable']:parts.append('same-phase Daily Feeling history is insufficient')
+            card['explanation']='; '.join(parts)+'. Current HRV and RHR cannot replace missing longitudinal evidence.'
+        elif card_id=='RECOVERY_STABLE_WITH_HEADROOM':
+            why=[]
+            if moderate_sleep_headroom:
+                why.append(f"Q3–Q4 still account for {q_now['Q3']+q_now['Q4']}/{q_now['n']} recent rated nights")
+            if sleep_opportunity['limited_opportunity']:
+                why.append(f"observed sleep is {sleep_opportunity['personal_opportunity_gap_min']} minutes below your self-declared sleep need")
+            if not after['comparable'] and not workload['available']:
+                why.append('verified matched completed-session feedback is not available to confirm load absorption')
+            card['explanation']='; '.join(why)+'. Comparable feedback does not show a verified decline. This indicates headroom, not failure or an automatic reason to cancel training.'
+        elif card_id=='RECOVERY_REBOUND':
+            card['explanation']=(f"Q3–Q4 decreased from {q_ref['Q3']+q_ref['Q4']}/{q_ref['n']} to "
+              f"{q_now['Q3']+q_now['Q4']}/{q_now['n']} nights, with improvement in comparable subjective feedback. "
+              f"An athlete-confirmed recovery adjustment occurred during the recent window; timing alone cannot establish causation.")
+        elif card_id=='LOAD_WELL_ABSORBED':
+            card['explanation']=(f"Across the recent 14-day window, Q3–Q4 occurred "
+               f"{q_now['Q3']+q_now['Q4']}/{q_now['n']} nights compared with "
+               f"{q_ref['Q3']+q_ref['Q4']}/{q_ref['n']} in the personal reference. "
+               f"Available comparable recovery feedback shows no sustained deterioration. "
+               f"This is an observation, not permission for any specific workout.")
+        elif card_id=='RECOVERY_MISMATCH':
+            domains=[]
+            if after['declining']:domains.append('comparable post-session After declined')
+            if feeling['declining']:domains.append('same-phase Daily Feeling declined')
+            card['explanation']=(f"The share of Q3–Q4 nights rose from "
+               f"{q_ref['Q3']+q_ref['Q4']}/{q_ref['n']} to {q_now['Q3']+q_now['Q4']}/{q_now['n']}, "
+               f"with recurrence in both recent weeks; {' and '.join(domains)}. "
+               f"Normal daily HRV does not erase the observed changes; their cause remains unproven.")
+        elif card_id=='RECOVERY_DRIFT':
+            reasons=[]
+            if qtrend['declining']:
+                reasons.append(f"Q3–Q4 increased from {q_ref['Q3']+q_ref['Q4']}/{q_ref['n']} to "
+                               f"{q_now['Q3']+q_now['Q4']}/{q_now['n']} nights across the compared periods")
+            if after['declining']:reasons.append('comparable post-session After deteriorated')
+            if feeling['declining']:reasons.append('same-phase daily Feeling deteriorated')
+            if effort_cost['cost_increasing']:reasons.append('RPE increased while execution declined for matched sessions')
+            card['explanation']='; '.join(reasons)+'. The remaining domains do not yet independently confirm a recovery mismatch.'
+        elif card_id=='SLEEP_PATTERN_CONCERN':
+            card['explanation']=(f"Q3–Q4 nights remain frequent ({q_now['Q3']+q_now['Q4']}/{q_now['n']}) "
+                f"in both recent weeks. A persistently unfavorable pattern is not assumed to be "
+                f"healthy merely because it resembles the reference period.")
+        else:
+            card['explanation']='Recent reported symptoms request follow-up; a medical condition is not inferred from training data.'
+        if sleep_opportunity['low_flexibility'] and card_id in ('RECOVERY_DRIFT','RECOVERY_MISMATCH','SLEEP_PATTERN_CONCERN'):
+            card['action']='Sleep opportunity is constrained by your current schedule. Consider reducing training density or reviewing recovery flexibility before setting an unrealistic sleep target.'
+        elif sleep_opportunity['limited_opportunity'] and card_id in ('LOAD_WELL_ABSORBED','RECOVERY_STABLE_WITH_HEADROOM'):
+            card['action']='Where feasible, look for more sleep opportunity; stable training response does not make a short sleep window ideal.'
+        if compass.get('available') and compass['recent_q1_fraction']==0 and not qtrend['declining']:
+            card['sleep_compass_note']='Q1 remains the aspiration; Q2 is a good night, not a failure. No Q1 quota is imposed.'
+        card['signal_labels']=_evidence_labels(card_id,qtrend,after,feeling,sleep_opportunity,workload,compass)
+        return {'schema':VERSION,'analysis_as_of':str(asof),'card':card,
+           'provisional':True,'clinical_validation':False,'dose_validated':False,
+           'independent_evidence_policy':{'sleep_quality_provider_score_and_duration':'ONE_COMPOSITE_DOMAIN',
+              'rpe_plus_execution':'ONE_PAIRED_SESSION_COST_DOMAIN',
+              'after_and_daily_feeling':'CORRELATED_SUBJECTIVE_DOMAINS_NOT_ADDED_AS_INDEPENDENT_POINTS',
+              'workload_and_sleep_duration':'CONTEXT_NOT_AUTOMATIC_RISK_VOTES',
+              'hrv_and_rhr':'SUPPORTING_CONTEXT_NEVER_A_SINGLE_DAY_VETO',
+              'numeric_weighted_health_score':False},
+           'analysis':{'sleep_q':qtrend,'longitudinal_q':history,'post_session_after':after,'daily_feeling':feeling,'effort_cost':effort_cost,
+                       'data_quality':issues,'insufficient':insufficient,
+                       'completed_activity_count_in_fixture':len(activities),
+                       'training_context':_safe_context(data),
+                       'q1_compass':compass,'sleep_opportunity':sleep_opportunity,
+                       'completed_load_trajectory':workload,'next_night_exposure_association':exposure_lag,
+                       'athlete_confirmed_followup':followup,
+                       'pre_nova_training_context_available':bool(data.get('training_context',{}).get('pre_nova_history_days',0)),
+                       'pre_nova_sleep_comparison_available':qtrend['reference_pre_nova'],
+                       'sickness_reported':has_sickness,'explicit_restrictions':restriction},
+           'evidence':observations,'recommendation':{'kind':card_id,
+                 'text':card['action'],'days':None,'hours':None,'dose_evidence':'NOT_CALIBRATED',
+                 'athlete_discretion':True},
+           'quality_readiness_display_only':deepcopy(data.get('quality_readiness_display_only')),
+           'quality_readiness_modified':False,
+           'is_medical_clearance':False,'is_training_prescription':False,
+           'training_writes':[],'calendar_writes':[],'ledger_writes':[]}
+
+    def dump(snapshot):
+        return json.dumps(interpret(snapshot),sort_keys=True,ensure_ascii=False,indent=2)
+    return interpret
+
+_NOVA_HEALTH_INTERPRET_V06 = _nova_health_make_engine_v06()
+
+
+NOVA_HEALTH_V06_SCHEMA='NOVA-HEALTH-LONGITUDINAL-U06'
+_NH_V06_TITLE='Recovery Evidence Building'
+_NH_V06_CARD_IDS={
+ 'RECOVERY_STABLE_WITH_HEADROOM','RECOVERY_REBOUND','LOAD_WELL_ABSORBED',
+ 'RECOVERY_DRIFT','SLEEP_PATTERN_CONCERN','RECOVERY_MISMATCH','EVIDENCE_BUILDING','HEALTH_FOLLOWUP'}
+
+def _nova_health_unavailable_v06(reason, error_class=None):
+    card={'id':'EVIDENCE_BUILDING','title':_NH_V06_TITLE,'icon':'scan-search',
+      'color':'#56b8ff','description':reason,
+      'explanation':'Not enough owner-matched longitudinal recovery evidence was available for a reliable assessment.',
+      'action':'Keep recording Q1–Q4 sleep and completed-session feedback.', 'signal_labels':[]}
+    return {'schema':NOVA_HEALTH_V06_SCHEMA,'card':card,'read_only':True,
+      'provisional':True,'source_error_class':error_class,'quality_readiness_modified':False,
+      'training_writes':[],'calendar_writes':[],'ledger_writes':[]}
+
+def _nova_health_input_v06(data, historical_wellness, completed_activities, owner_logs):
+    """Owner-local projection; no generated Q, After or rest evidence."""
+    d=data if isinstance(data,dict) else {}
+    clock=d.get('coach_clock') or {}
+    as_of=str(clock.get('iso') or get_rome_now().date().isoformat())[:10]
+    direction=d.get('training_direction') or {}
+    rhythm=d.get('training_rhythm') or {}
+    state=d.get('training_state') or {}
+    metrics=d.get('metrics') or {}
+    owner='CURRENT_AUTHENTICATED_ATHLETE' # local marker, no actual user ID persisted
+    wellness=[]
+    for w in historical_wellness or []:
+        if not isinstance(w,dict):continue
+        day=str(w.get('id') or '')[:10]
+        value=w.get('sleepQuality')
+        # Intervals.icu's four-category native ordinal field. Missing/unexpected
+        # values never become Q3/Q4 and unverified data never become healthy.
+        if type(value) is int and value in (1,2,3,4) and len(day)==10 and day<=as_of:
+            wellness.append({'athlete_id':owner,'date':day,'q':value,
+                'provider':'Intervals.icu','mapping_version':'NATIVE_SLEEPQUALITY_Q1_Q4',
+                'mapping_verified':True})
+    latest_by_id={}
+    for a in completed_activities or []:
+        if not isinstance(a,dict):continue
+        act_id=str(a.get('id') or '')
+        day=str(a.get('start_date_local') or '')[:10]
+        if not act_id or len(day)!=10 or day>as_of:continue
+        # We require an actual completed source entry. No projected workouts.
+        seconds=a.get('moving_time')
+        try:mins=float(seconds)/60
+        except (ValueError,TypeError):continue
+        if mins<=0:continue
+        load=a.get('icu_training_load')
+        # Observed intensity bin for feedback matching only; never a quality gate.
+        intensity='UNKNOWN'
+        try:
+            intensity_value=float(a.get('icu_intensity'))
+            if 0<intensity_value<=250:
+                intensity='HIGH' if intensity_value>=90 else 'MODERATE' if intensity_value>=75 else 'EASY'
+        except (TypeError,ValueError):pass
+        # Match exact native type and measured dose. Do not infer a prescribed quality.
+        latest_by_id[act_id]={'athlete_id':owner,'id':act_id,'date':day,
+            'sport':str(a.get('type') or 'UNKNOWN').upper(),
+            'intensity_class':intensity,'duration_min':round(mins,2),
+            'load':load,'verified_completed':True}
+    logs=owner_logs if isinstance(owner_logs,list) else []
+    feedback=[];feelings=[];events=[]
+    for row in logs:
+        if not isinstance(row,dict):continue
+        day=str(row.get('local_date') or '')[:10]
+        if len(day)!=10 or day>as_of:continue
+        value=row.get('feeling')
+        if type(value) is int and 1<=value<=10:
+            feelings.append({'athlete_id':owner,'date':day,'value':value,
+                'phase':str(row.get('phase') or '')})
+        act_id=str(row.get('execution_activity_id') or '')
+        if act_id in latest_by_id:
+            after=row.get('post_session_state');rpe=row.get('session_rpe');exe=row.get('session_execution_score')
+            # Keep fields independent and optional; a fabricated zero is forbidden.
+            if any(type(x) is int and 1<=x<=10 for x in (after,rpe,exe)):
+                feedback.append({'athlete_id':owner,'activity_id':act_id,
+                    'after':after if type(after) is int else None,
+                    'rpe':rpe if type(rpe) is int else None,
+                    'execution':exe if type(exe) is int else None})
+        status=str(row.get('status') or '').upper()
+        restrict=str(row.get('restriction_type') or '').upper()
+        if status in ('SICK','SICKNESS','INJURED') or restrict in ('NO_TRAINING','NO_INTENSITY'):
+            events.append({'athlete_id':owner,'date':day,
+                'kind':'SICKNESS' if status in ('SICK','SICKNESS') else ('INJURY' if status=='INJURED' else 'RESTRICTION'),
+                'restriction':restrict if restrict in ('NO_TRAINING','NO_INTENSITY') else None,
+                'medical_followup_requested':False})
+    return {
+      'athlete_id':owner,'as_of':as_of,'plan_started_on':direction.get('started_on'),
+      'sleep_q':wellness,'activities':list(latest_by_id.values()),
+      'session_feedback':feedback,'daily_feeling':feelings,'health_events':events,
+      'current_wellness':{'hrv_ms':metrics.get('latest_hrv'),'rhr_bpm':metrics.get('latest_rhr'),
+            'sleep_today_q':metrics.get('sleep_quality_label')},
+      'training_context':{'ctl':metrics.get('ctl'),'atl':metrics.get('atl'),'tsb':metrics.get('tsb'),
+            'load_7d':state.get('load_7d'),'load_prev_week':state.get('prior_weekly_load'),
+            'hours_week_established':(rhythm.get('established') or {}).get('hours_per_week'),
+            'season_sessions':(rhythm.get('season') or {}).get('sessions'),
+            'season_days':(rhythm.get('season') or {}).get('days_observed'),
+            'season_double_days':(rhythm.get('season') or {}).get('double_days'),
+            'pre_nova_history_days':(direction.get('previous_window_days') or 0) if direction.get('previous_available') else 0,
+            'plan_goal':direction.get('primary_goal')},
+      'quality_readiness_display_only':d.get('quality_day_advisor'),
+    }
+
+def _nova_health_attach_v06(snapshot, native_wellness, activities, logs):
+    # Called only after the canonical training authority seal. No other key changes.
+    input_data=_nova_health_input_v06(snapshot,native_wellness,activities,logs)
+    outcome=_NOVA_HEALTH_INTERPRET_V06(input_data)
+    card=dict(outcome.get('card') or {})
+    if card.get('id') not in _NH_V06_CARD_IDS:
+        raise ValueError('NOVA_HEALTH_UNKNOWN_CARD')
+    # Deliberately compact persisted result; historical raw wellness/logs remain
+    # in their native owner-scoped providers, never added to saved report payload.
+    snapshot['nova_health']={
+       'schema':NOVA_HEALTH_V06_SCHEMA,'engine_schema':outcome.get('schema'),
+       'as_of':outcome.get('analysis_as_of'),'card':card,'read_only':True,
+       'provisional':True,'clinical_validation':False,'dose_validated':False,
+       'data_coverage':{'q_n':len(input_data['sleep_q']),
+           'completed_activities_n':len(input_data['activities']),
+           'matched_feedback_n':len(input_data['session_feedback']),
+           'daily_feeling_n':len(input_data['daily_feeling']),
+           'pre_nova_q_reference':bool((outcome.get('analysis') or {}).get('pre_nova_sleep_comparison_available'))},
+       'quality_readiness_modified':False,
+       'training_writes':[],'calendar_writes':[],'ledger_writes':[],
+    }
+    return snapshot['nova_health']
+
+
+# UI patch installed after all historic HOME_PAGE compositional layers.
+_NH_V06_OLD_HEAD = '    <div class="r196979-head">\n      <div class="r196979-status-icon" aria-hidden="true">{{ advisor.icon|e }}</div>\n      <div class="r196979-head-text">\n        <div class="v4861-readiness-kicker r196979-kicker">NOVA // QUALITY READINESS</div>\n        <strong class="r196979-guide-title">{{ advisor.title|e }}</strong>\n      </div>\n    </div>\n    <p class="r196979-summary">{{ advisor.message|e }}</p>'
+_NH_V06_NEW_HEAD = '{% set nh = data.nova_health or {} %}\n{% set nhc = nh.card or {} %}\n<div class="nh-composite-head">\n  <div class="nh-quality-focus">\n    <div class="r196979-head">\n      <div class="r196979-status-icon" aria-hidden="true">{{ advisor.icon|e }}</div>\n      <div class="r196979-head-text">\n        <div class="v4861-readiness-kicker r196979-kicker">NOVA // QUALITY READINESS</div>\n        <strong class="r196979-guide-title">{{ advisor.title|e }}</strong>\n      </div>\n    </div>\n    <p class="r196979-summary">{{ advisor.message|e }}</p>\n  </div>\n  <article class="nh-decision {{ nhc.id|e }}" aria-label="NOVA Health longitudinal interpretation" data-health-card="{{ nhc.id|e }}">\n    <div class="nh-decision-top">\n      <div class="nh-icon" aria-hidden="true">\n        <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">\n        {% if nhc.id == \'LOAD_WELL_ABSORBED\' %}\n          <path d="M24 5 38 11v11c0 11-6 17-14 21C16 39 10 33 10 22V11Z"/><path d="m16 23 6 6 11-12"/>\n        {% elif nhc.id == \'RECOVERY_STABLE_WITH_HEADROOM\' %}\n          <path d="m24 5 3.5 12 12 3.5-12 3.5L24 36l-3.5-12-12-3.5 12-3.5Z"/><path d="M37 33v10M32 38h10"/>\n        {% elif nhc.id == \'RECOVERY_DRIFT\' %}\n          <path d="M4 27h8l5-12 8 22 6-15h13"/><path d="m34 10 6 6-6 6"/>\n        {% elif nhc.id == \'RECOVERY_MISMATCH\' %}\n          <path d="M24 5 44 40H4Z"/><path d="M24 18v11"/><circle cx="24" cy="35" r="1" fill="currentColor" stroke="none"/>\n        {% elif nhc.id == \'SLEEP_PATTERN_CONCERN\' %}\n          <path d="M33 34A17 17 0 0 1 16 8a17 17 0 1 0 17 26Z"/><path d="M30 9h12l-12 12h12"/>\n        {% elif nhc.id == \'RECOVERY_REBOUND\' %}\n          <path d="m6 35 13-13 9 6 13-17"/><path d="M31 11h10v10"/><path d="M6 42h36"/>\n        {% elif nhc.id == \'HEALTH_FOLLOWUP\' %}\n          <path d="M40 16c0 10-16 21-16 21S8 26 8 16a9 9 0 0 1 16-5 9 9 0 0 1 16 5Z"/><path d="M14 22h7l3-6 4 12 3-6h5"/>\n        {% else %}\n          <circle cx="21" cy="20" r="13"/><path d="m31 30 12 12"/><path d="M14 20h14M21 13v14"/>\n        {% endif %}\n        </svg>\n      </div>\n      <div class="nh-name">\n        <div class="nh-kicker">NOVA HEALTH <span>· LONGITUDINAL ENGINE</span></div>\n        <h3>{{ nhc.title|default(\'Recovery Evidence Building\')|e }}</h3>\n      </div>\n    </div>\n    <p class="nh-description">{{ nhc.description|default(\'Historical recovery evidence is not yet available.\')|e }}</p>\n    <div class="nh-action"><span>YOUR NEXT MOVE</span><p>{{ nhc.action|default(\'Continue recording sleep and feedback.\')|e }}</p></div>\n    <details class="nh-why">\n      <summary>Why this card <span aria-hidden="true">+</span></summary>\n      <p>{{ nhc.explanation|default(\'NOVA Health remains observational.\')|e }}</p>\n      {% if nhc.signal_labels %}<div class="nh-signals">{% for s in nhc.signal_labels %}<span>{{ s|e }}</span>{% endfor %}</div>{% endif %}\n      <small>Experimental algorithm · Not medical clearance or a training restriction.</small>\n    </details>\n  </article>\n</div>'
+assert HOME_PAGE.count(_NH_V06_OLD_HEAD)==1, 'NOVA_HEALTH_V06_QUALITY_HEAD_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_NH_V06_OLD_HEAD, _NH_V06_NEW_HEAD, 1)
+_NH_V06_CSS = '\n/* U v0.6: distinct scene-driven NOVA Health within the original QR surface.\n   Retains its QR tier colors and all systems/markers, uses THE LAB\'s fonts. */\n.r196979-guide{container-type:inline-size;overflow:visible}\n.nh-composite-head{display:grid;grid-template-columns:minmax(0,1fr);gap:11px;min-width:0}\n.nh-quality-focus{display:flex;flex-direction:column;justify-content:center;min-width:0;padding:5px 0}\n.nh-quality-focus .r196979-summary{margin:12px 0 0}\n.nh-decision{--nh:#56b8ff;--nh-glow:rgba(86,184,255,.17);position:relative;min-width:0;overflow:hidden;border:1px solid color-mix(in srgb,var(--nh) 38%,transparent);background:radial-gradient(ellipse at 92% 0%,var(--nh-glow),transparent 65%),linear-gradient(135deg,#0a1924,#0d1522);border-radius:15px;padding:13px 14px 10px;box-shadow:0 8px 30px rgba(0,0,0,.19),inset 0 1px rgba(255,255,255,.07);color:#e8f5fc}\n.nh-decision::before{content:"";position:absolute;left:12px;top:0;width:65%;height:2px;background:linear-gradient(90deg,var(--nh),transparent)}\n.nh-decision.LOAD_WELL_ABSORBED{--nh:#14d6ab;--nh-glow:rgba(20,214,171,.19)}\n.nh-decision.RECOVERY_STABLE_WITH_HEADROOM{--nh:#65c9ef;--nh-glow:rgba(101,201,239,.19)}\n.nh-decision.RECOVERY_DRIFT{--nh:#ffbb43;--nh-glow:rgba(255,187,67,.18)}\n.nh-decision.RECOVERY_MISMATCH{--nh:#ff6378;--nh-glow:rgba(255,99,120,.19)}\n.nh-decision.SLEEP_PATTERN_CONCERN{--nh:#ad92ff;--nh-glow:rgba(173,146,255,.2)}\n.nh-decision.RECOVERY_REBOUND{--nh:#87e26c;--nh-glow:rgba(135,226,108,.18)}\n.nh-decision.HEALTH_FOLLOWUP{--nh:#ff8d99;--nh-glow:rgba(255,141,153,.21)}\n.nh-decision-top{display:flex;align-items:center;gap:11px;min-width:0}\n.nh-icon{flex:0 0 52px;width:52px;height:52px;border:1px solid color-mix(in srgb,var(--nh) 55%,transparent);background:color-mix(in srgb,var(--nh) 10%,#08121c);border-radius:16px;display:grid;place-items:center;color:var(--nh);transform:rotate(-4deg)}\n.nh-icon svg{width:37px;height:37px;transform:rotate(4deg)}\n.nh-name{min-width:0}.nh-kicker{font:800 9px/1.35 var(--font);letter-spacing:.12em;color:var(--nh)}\n.nh-kicker span{color:#90a4b5;font-weight:600;letter-spacing:.035em}\n.nh-name h3{margin:4px 0 0;font-family:var(--display);font-size:clamp(15px,1.75vw,20px);font-weight:850;line-height:1.15;color:#fff;overflow-wrap:anywhere}\n.nh-description{font:500 11px/1.42 var(--font);color:#bdd0df;margin:10px 0}\n.nh-action{border-top:1px solid rgba(255,255,255,.09);padding-top:7px}\n.nh-action>span{font:800 8px/1.4 var(--font);letter-spacing:.13em;color:var(--nh)}\n.nh-action p{font:600 10.5px/1.4 var(--font);color:#edf4f9;margin:3px 0 6px}\n.nh-why{border-top:1px solid rgba(255,255,255,.08);padding-top:5px;font:500 10px/1.45 var(--font);color:#bdcdda}\n.nh-why summary{cursor:pointer;color:#9cb9ca;list-style:none;font-weight:750;display:flex;justify-content:space-between;min-height:24px;align-items:center}\n.nh-why summary::-webkit-details-marker{display:none}.nh-why summary span{color:var(--nh);font-size:16px}\n.nh-why[open] summary span{transform:rotate(45deg)}\n.nh-why p{margin:8px 0 6px}.nh-why small{display:block;font-size:9px;margin:7px 0;color:#92a6b7}\n.nh-signals{display:flex;flex-wrap:wrap;gap:4px;margin:5px 0 8px}\n.nh-signals span{font:700 8px/1.3 var(--font);border:1px solid rgba(255,255,255,.12);padding:3px 6px;border-radius:5px;color:#bdd6df}\n@container (min-width:500px){.nh-composite-head{grid-template-columns:minmax(0,42fr) minmax(0,58fr);gap:14px}.nh-quality-focus{padding:9px 0 9px 1px}.nh-description{margin:8px 0}.nh-name h3{font-size:18px}}\n@container (max-width:359px){.nh-decision{padding:11px 11px 8px}.nh-icon{flex-basis:45px;width:45px;height:45px;border-radius:13px}.nh-icon svg{width:32px;height:32px}.nh-kicker{font-size:8px}.nh-name h3{font-size:16px}.nh-decision-top{gap:8px}.nh-action p{font-size:10px}}\n@media(prefers-reduced-motion:reduce){.nh-decision *{transition:none!important;animation:none!important}}\n'
+assert HOME_PAGE.count('</style>')>=1, 'NOVA_HEALTH_V06_STYLE_ANCHOR_MISSING'
+# CSS is injected in the component's local existing style tag.
+_NH_V06_STYLE_ANCHOR = '.r196981-clock{font-size:15px;color:var(--cyan);line-height:1}'
+assert HOME_PAGE.count(_NH_V06_STYLE_ANCHOR)==1, 'NOVA_HEALTH_V06_STYLE_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_NH_V06_STYLE_ANCHOR,_NH_V06_STYLE_ANCHOR+_NH_V06_CSS,1)
+
+_nh_v06_prepare_prior=_v4891_prepare_snapshot_for_ui
+def _v4891_prepare_snapshot_for_ui(data):
+    ui=_nh_v06_prepare_prior(data)
+    if not isinstance(ui,dict):return ui
+    if isinstance(ui.get('nova_health'),dict) and isinstance(ui['nova_health'].get('card'),dict):
+        return ui
+    out=dict(ui)
+    out['nova_health']=_nova_health_unavailable_v06(
+       'This saved report predates longitudinal NOVA Health evidence.')
+    return out
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.195 R196.9.95 · NOVA HEALTH U v0.6 '
+               'OBSERVATIONAL CARD + HISTORICAL Q · TRAINING AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
 
 # INC-040: Install all adapters and Jinja before starting direct Flask server.
 if __name__ == "__main__":
