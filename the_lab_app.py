@@ -60929,7 +60929,7 @@ def _nova_health_make_engine_v06():
     from typing import Any
     import json
 
-    VERSION='NOVA_HEALTH_RESEARCH_v0.5'
+    VERSION='NOVA_HEALTH_RESEARCH_v0.5.1'
     # Provisional engineering sensitivities; these MUST be prospectively calibrated.
     CONFIG={
       'recent_days':14,'reference_days':28,
@@ -61115,6 +61115,18 @@ def _nova_health_make_engine_v06():
             if key not in seen:seen[key]=a
         return seen
 
+    def _completed_session_scores(row):
+        """One validated, paired RPE/Execution/After record for one completed activity.
+
+        Daily Log fields are optional for storage, but are NOT eligible for
+        NOVA Health subjective comparisons until all three are present 1–10.
+        Boolean, floating, missing and out-of-range scores cannot pass.
+        """
+        if not isinstance(row,dict):return None
+        scores=(row.get('rpe'),row.get('execution',row.get('execution_score')),
+                row.get('after',row.get('post_session_state')))
+        return scores if all(type(v) is int and 1<=v<=10 for v in scores) else None
+
     def _feedback_trend(activities,rows,owner,asof):
         # Compare post-session recovery on actual, completed, similarly demanding sessions.
         # Use fixed coarse workload bins to avoid comparing a maximal test with easy Z2.
@@ -61126,12 +61138,15 @@ def _nova_health_make_engine_v06():
             if not id_ or id_ not in activities:continue
             logged_at=f.get('logged_at')
             if logged_at and _day(logged_at) and _day(logged_at)>asof:continue
-            score=f.get('after',f.get('post_session_state'))
-            if type(score) is not int or not 1<=score<=10:continue
-            if id_ in feedback_by_id and feedback_by_id[id_]!=score:conflicts.add(id_)
-            feedback_by_id[id_]=score
-        for id_,score in sorted(feedback_by_id.items()):
+            scores=_completed_session_scores(f)
+            if scores is None:continue
+            # A changed complete tuple for the same session is ambiguous, even
+            # when its After value happens to match. Never pick by fetch order.
+            if id_ in feedback_by_id and feedback_by_id[id_]!=scores:conflicts.add(id_)
+            feedback_by_id[id_]=scores
+        for id_,scores in sorted(feedback_by_id.items()):
             if id_ in conflicts:continue
+            score=scores[2]
             a=activities[id_]
             dt=_day(a.get('date') or a.get('start_date_local'))
             if not dt or dt>asof:continue
@@ -61262,30 +61277,54 @@ def _nova_health_make_engine_v06():
 
 
     def _exposure_lag(qmap,activities,asof):
-        """Describe next-night Q after verified intense days vs easy-only days.
-        A day is counted once (even with 2+ sessions). Association is NOT causality.
+        """Descriptive WHOLE-DAY completed exposure vs the FOLLOWING night's Q.
+
+        Group every verified activity by local day, not by Snapshot or feedback
+        row. HIGH/legacy hard is intense; an easy-only control day must have
+        exclusively EASY/legacy Z1-Z2 sessions. MODERATE or UNKNOWN days are
+        deliberately not mislabeled as easy. No direct card/veto or causal claim.
         """
+        high_classes={'HIGH','HARD','QUALITY','VO2MAX','THRESHOLD','TEMPO'}
+        easy_classes={'EASY','Z1','Z2','RECOVERY'}
         by_day={}
         for a in activities.values():
             d=_day(a.get('date') or a.get('start_date_local'))
-            if not d or d>=asof:continue
+            if not d or d>=asof:continue # No following-night observation yet.
             intensity=str(a.get('intensity_class') or a.get('family') or 'UNKNOWN').upper()
-            if intensity not in ('HARD','QUALITY','VO2MAX','THRESHOLD','TEMPO','Z2','Z1','EASY','RECOVERY'):continue
-            item=by_day.setdefault(d,{'hard':False,'has_easy':False})
-            if intensity in ('HARD','QUALITY','VO2MAX','THRESHOLD','TEMPO'):item['hard']=True
-            else:item['has_easy']=True
-        hard=[];easy=[]
+            item=by_day.setdefault(d,{'sessions':0,'hard':False,'easy':0,'uncertain':False,
+                                       'duration_min':0.0,'load':0.0,'load_n':0})
+            item['sessions']+=1
+            duration=a.get('duration_min')
+            load=a.get('load',a.get('icu_training_load'))
+            try:
+                if duration is not None and float(duration)>0:item['duration_min']+=float(duration)
+            except (TypeError,ValueError,OverflowError):pass
+            try:
+                if load is not None and 0<=float(load)<float('inf'):
+                    item['load']+=float(load);item['load_n']+=1
+            except (TypeError,ValueError,OverflowError):pass
+            if intensity in high_classes:item['hard']=True
+            elif intensity in easy_classes:item['easy']+=1
+            else:item['uncertain']=True # MODERATE and UNKNOWN aren't easy controls.
+        hard=[];easy=[];ambiguous=0
         for d,day in by_day.items():
-            subsequent=d+timedelta(days=1)
-            if subsequent not in qmap:continue
-            if day['hard']:hard.append(qmap[subsequent][0]>=3)
-            elif day['has_easy']:easy.append(qmap[subsequent][0]>=3)
-        available=len(hard)>=5 and len(easy)>=5 and len({v[1:] for v in qmap.values()})<=1
+            following=d+timedelta(days=1)
+            if following not in qmap:continue
+            if day['hard']:hard.append(qmap[following][0]>=3)
+            elif not day['uncertain'] and day['easy']==day['sessions']:
+                easy.append(qmap[following][0]>=3)
+            else:ambiguous+=1
+        available=(len(hard)>=5 and len(easy)>=5 and
+                   len({v[1:] for v in qmap.values()})<=1)
         return {'available':available,'intense_day_next_night_n':len(hard),
                 'easy_only_day_next_night_n':len(easy),
+                'unclassified_next_night_n':ambiguous,
+                'whole_days_with_completed_training_n':len(by_day),
+                'double_session_days_n':sum(x['sessions']>=2 for x in by_day.values()),
                 'intense_day_q3_q4_fraction':round(sum(hard)/len(hard),3) if available else None,
                 'easy_day_q3_q4_fraction':round(sum(easy)/len(easy),3) if available else None,
-                'is_causal':False,'sets_card_alone':False,'double_sessions_deduplicated':True}
+                'is_causal':False,'sets_card_alone':False,'double_sessions_deduplicated':True,
+                'whole_day_load_is_context_only':True}
 
 
     def _confirmed_followup(data,owner,asof,qtrend,after,feeling,activities,qmap,session_feedback):
@@ -61315,7 +61354,7 @@ def _nova_health_make_engine_v06():
             subsequent_feedback=sum(1 for x in session_feedback or [] if isinstance(x,dict) and _owned(x,owner) and
                x.get('activity_id') in activities and _day(activities[x['activity_id']].get('date') or activities[x['activity_id']].get('start_date_local')) and
                dt<_day(activities[x['activity_id']].get('date') or activities[x['activity_id']].get('start_date_local'))<=asof and
-               type(x.get('after')) is int and 1<=x['after']<=10)
+               _completed_session_scores(x) is not None)
             if subsequent_q>=3 and subsequent_feedback>=2:valid_actions.append(a)
         rebound=bool(valid_actions and q_up and feedback_up)
         return {'confirmed_actions':actions,'contradictions':contradictions,'improving_q':bool(q_up),'improving_feedback':bool(feedback_up),
@@ -61333,13 +61372,12 @@ def _nova_health_make_engine_v06():
             if not isinstance(x,dict) or not _owned(x,owner):continue
             id_=x.get('activity_id')
             if id_ not in activities:continue
-            rpe=x.get('rpe'); exe=x.get('execution',x.get('execution_score'))
-            if type(rpe) is not int or type(exe) is not int or not (1<=rpe<=10 and 1<=exe<=10):continue
-            value=(rpe,exe)
-            if id_ in feedback and feedback[id_]!=value:conflicts.add(id_)
-            feedback[id_]=value
+            scores=_completed_session_scores(x)
+            if scores is None:continue
+            if id_ in feedback and feedback[id_]!=scores:conflicts.add(id_)
+            feedback[id_]=scores
         rows_by_group={}
-        for id_,(rpe,exe) in feedback.items():
+        for id_,(rpe,exe,after) in feedback.items():
             if id_ in conflicts:continue
             a=activities[id_];d=_day(a.get('date') or a.get('start_date_local'))
             dur=a.get('duration_min');load=a.get('load',a.get('icu_training_load'))
@@ -61588,23 +61626,36 @@ def _nova_health_input_v06(data, historical_wellness, completed_activities, owne
             'load':load,'verified_completed':True}
     logs=owner_logs if isinstance(owner_logs,list) else []
     feedback=[];feelings=[];events=[]
+    incomplete_logs=0;completed_logs=0
     for row in logs:
         if not isinstance(row,dict):continue
         day=str(row.get('local_date') or '')[:10]
         if len(day)!=10 or day>as_of:continue
-        value=row.get('feeling')
-        if type(value) is int and 1<=value<=10:
-            feelings.append({'athlete_id':owner,'date':day,'value':value,
-                'phase':str(row.get('phase') or '')})
+        # An RPE-only, After-only, Execution-only or Feeling-only Daily Log
+        # remains in the DB, but is NOT subjective NOVA Health evidence.
+        # All 3 scores must be valid and refer to an exact completed activity.
         act_id=str(row.get('execution_activity_id') or '')
-        if act_id in latest_by_id:
-            after=row.get('post_session_state');rpe=row.get('session_rpe');exe=row.get('session_execution_score')
-            # Keep fields independent and optional; a fabricated zero is forbidden.
-            if any(type(x) is int and 1<=x<=10 for x in (after,rpe,exe)):
-                feedback.append({'athlete_id':owner,'activity_id':act_id,
-                    'after':after if type(after) is int else None,
-                    'rpe':rpe if type(rpe) is int else None,
-                    'execution':exe if type(exe) is int else None})
+        scores=(row.get('session_rpe'),row.get('session_execution_score'),row.get('post_session_state'))
+        complete=all(type(x) is int and 1<=x<=10 for x in scores)
+        linked=bool(act_id and act_id in latest_by_id)
+        if complete and linked:
+            completed_logs+=1
+            feedback.append({'athlete_id':owner,'activity_id':act_id,
+                'rpe':scores[0],'execution':scores[1],'after':scores[2],
+                'complete_session_feedback':True})
+            value=row.get('feeling')
+            if type(value) is int and 1<=value<=10:
+                phase=str(row.get('phase') or '')
+                count=row.get('session_count')
+                if type(count) is not int or count not in (1,2):
+                    count=2 if '2 SESSIONS' in phase else 1 if '1 SESSION' in phase else None
+                if count in (1,2):
+                    feelings.append({'athlete_id':owner,'date':day,'value':value,
+                        'phase':phase,'session_count':count,'complete_session_feedback':True})
+        else:
+            incomplete_logs+=1
+        # Explicit health events are independent safety/context observations.
+        # A partial feedback log MUST NOT erase a real reported illness.
         status=str(row.get('status') or '').upper()
         restrict=str(row.get('restriction_type') or '').upper()
         if status in ('SICK','SICKNESS','INJURED') or restrict in ('NO_TRAINING','NO_INTENSITY'):
@@ -61612,10 +61663,13 @@ def _nova_health_input_v06(data, historical_wellness, completed_activities, owne
                 'kind':'SICKNESS' if status in ('SICK','SICKNESS') else ('INJURY' if status=='INJURED' else 'RESTRICTION'),
                 'restriction':restrict if restrict in ('NO_TRAINING','NO_INTENSITY') else None,
                 'medical_followup_requested':False})
+
     return {
       'athlete_id':owner,'as_of':as_of,'plan_started_on':direction.get('started_on'),
       'sleep_q':wellness,'activities':list(latest_by_id.values()),
       'session_feedback':feedback,'daily_feeling':feelings,'health_events':events,
+      'feedback_eligibility':{'policy':'COMPLETE_RPE_EXECUTION_AFTER_AND_VERIFIED_ACTIVITY',
+          'complete_rows_n':completed_logs,'excluded_rows_n':incomplete_logs},
       'current_wellness':{'hrv_ms':metrics.get('latest_hrv'),'rhr_bpm':metrics.get('latest_rhr'),
             'sleep_today_q':metrics.get('sleep_quality_label')},
       'training_context':{'ctl':metrics.get('ctl'),'atl':metrics.get('atl'),'tsb':metrics.get('tsb'),
@@ -61630,6 +61684,7 @@ def _nova_health_input_v06(data, historical_wellness, completed_activities, owne
     }
 
 def _nova_health_attach_v06(snapshot, native_wellness, activities, logs):
+    from collections import Counter
     # Called only after the canonical training authority seal. No other key changes.
     input_data=_nova_health_input_v06(snapshot,native_wellness,activities,logs)
     outcome=_NOVA_HEALTH_INTERPRET_V06(input_data)
@@ -61646,6 +61701,11 @@ def _nova_health_attach_v06(snapshot, native_wellness, activities, logs):
            'completed_activities_n':len(input_data['activities']),
            'matched_feedback_n':len(input_data['session_feedback']),
            'daily_feeling_n':len(input_data['daily_feeling']),
+           'incomplete_feedback_logs_excluded_n':input_data['feedback_eligibility']['excluded_rows_n'],
+           'complete_feedback_logs_n':input_data['feedback_eligibility']['complete_rows_n'],
+           'completed_training_days_n':len({a['date'] for a in input_data['activities']}),
+           'double_session_days_n':sum(n>=2 for n in
+               Counter(a['date'] for a in input_data['activities']).values()),
            'pre_nova_q_reference':bool((outcome.get('analysis') or {}).get('pre_nova_sleep_comparison_available'))},
        'quality_readiness_modified':False,
        'training_writes':[],'calendar_writes':[],'ledger_writes':[],
@@ -61676,8 +61736,8 @@ def _v4891_prepare_snapshot_for_ui(data):
        'This saved report predates longitudinal NOVA Health evidence.')
     return out
 
-APP_VERSION = ('THE LAB · PRODUCT V4.9.195 R196.9.95 · NOVA HEALTH U v0.6 '
-               'OBSERVATIONAL CARD + HISTORICAL Q · TRAINING AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
+APP_VERSION = ('THE LAB · PRODUCT V4.9.196 R196.9.96 · NOVA HEALTH U v0.6.1 '
+               'COMPLETE FEEDBACK + WHOLE-DAY EXPOSURE · TRAINING AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
 
 # INC-040: Install all adapters and Jinja before starting direct Flask server.
 if __name__ == "__main__":
