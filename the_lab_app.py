@@ -10105,12 +10105,35 @@ def save_daily_log(feeling, note="", status="NORMAL", restriction_type="NONE", d
             note=(note or "").strip(), upsert=True, owner_user_id=owner_id,
         )
     return item_id
+def _r1969100_daily_logs_read_cache():
+    # Strictly read-only routes: no caching in POST/save/QA or mutations.
+    if not has_request_context() or request.method != "GET" or request.path not in ("/", "/last-report"):
+        return None
+    cache = getattr(g, "_r1969100_daily_logs_read_cache", None)
+    if cache is None:
+        cache = {}
+        g._r1969100_daily_logs_read_cache = cache
+    return cache
+
+
 def load_daily_logs(limit=120, owner_user_id=None):
     owner_id = _data_owner_user_id(owner_user_id)
-    rows = _data_execute(owner_id,
-        "SELECT * FROM daily_logs WHERE user_id=? ORDER BY local_date DESC, local_time DESC, logged_at_utc DESC LIMIT ?",
-        (owner_id, int(limit)), fetch=True,
-    )
+    wanted = int(limit)
+    cache = _r1969100_daily_logs_read_cache() if wanted > 0 else None
+    cache_key = (str(owner_id), bool(_owner_personal_data_enabled(owner_id)))
+    entry = cache.get(cache_key) if cache is not None else None
+    if entry is not None and (entry["complete"] or entry["limit"] >= wanted):
+        rows = copy.deepcopy(entry["rows"][:wanted])
+    else:
+        rows = _data_execute(owner_id,
+            "SELECT * FROM daily_logs WHERE user_id=? ORDER BY local_date DESC, local_time DESC, logged_at_utc DESC LIMIT ?",
+            (owner_id, wanted), fetch=True,
+        )
+        if cache is not None:
+            # A short result certifies the complete available prefix. Larger
+            # LIMITs need no refetch until the next independent HTTP request.
+            cache[cache_key] = {"rows": copy.deepcopy(rows), "limit": wanted,
+                                "complete": len(rows) < wanted}
     for row in rows:
         row.setdefault("fueling_gph", None)
         row.setdefault("fueling_tolerance", None)
@@ -62084,25 +62107,19 @@ def _nova_r196999_context(data):
     today_iso = str(clock.get('iso') or '')[:10]
     same_day = [x for x in slots if isinstance(x, dict)
                 and str(x.get('date') or '')[:10] == today_iso]
-    if completed == 0 and not same_day:
-        today_explanation = ('No completed session is logged today and Nova has not identified a '
-                             'same-day opportunity from its learned rhythm. This does not prescribe rest '
-                             'or prevent an athlete-chosen easy session; verify current readiness and availability.')
-    elif completed == 0:
-        today_explanation = ('No completed session is logged yet. Listed opportunities are predictions or '
-                             'athlete bookings, not proof that training must occur.')
+    if completed == 0:
+        # A forecast is not an instruction. No forecast is not prescribed rest.
+        today_explanation = 'No workout logged yet.'
     elif completed is not None and completed > 0:
-        today_explanation = (f'{completed} completed session'+('s' if completed != 1 else '')+
-                             ' logged today. This is completed activity, not a requirement to add another session.')
+        today_explanation = f'{completed} workout'+('s' if completed != 1 else '')+' logged today.'
     else:
-        today_explanation = ('Daily completion data are not confirmed. The rhythm forecast does not prescribe rest.')
+        today_explanation = 'Today’s activity is unconfirmed.'
     action = str(decision.get('action') or '')
     if action == 'HOLD':
-        today_explanation += ' Current Training decision: HOLD; follow its explicit restrictions.'
+        today_explanation += ' HOLD: follow restrictions.'
     elif action == 'VALIDATE':
-        today_explanation += ' Current Training decision: VALIDATE; this is not blanket quality clearance.'
-    elif action == 'TRAIN':
-        today_explanation += ' Training action is TRAIN, not an instruction to exercise at a predicted time.'
+        today_explanation += ' VALIDATE: reassess readiness.'
+    # TRAIN does not mandate taking a forecast slot; no redundant status prose.
     reason = ''
     if offer_workout and str(offer_workout.get('source') or '') == 'RHYTHM':
         reason = ('The suggested quality window comes from learned training rhythm and hard-session spacing, '
@@ -62127,10 +62144,13 @@ def _nova_r196999_context(data):
     rhythm_window_explanation = ''
     if offer_workout and str(offer_workout.get('source') or '') == 'RHYTHM':
         if window.get('earliest') and window.get('preferred'):
-            rhythm_window_explanation = ('Hard-session forecast: earliest candidate '
-                + str(window['earliest']) + '; learned-rhythm preference '
-                + str(window['preferred']) + '. These are predictions, not bookings '
-                'or medically required waiting periods.')
+            earliest, preferred = str(window['earliest']), str(window['preferred'])
+            # No duplicate timestamps when earliest and preferred agree.
+            if earliest == preferred:
+                rhythm_window_explanation = 'Hard effort: ' + earliest + ' (estimate).'
+            else:
+                rhythm_window_explanation = ('Hard effort: earliest ' + earliest
+                                             + '; preferred ' + preferred + ' (estimates).')
     return {'schema':_R196999_PRESENTATION_SCHEMA, 'today_explanation':today_explanation,
             'rhythm_window_explanation':rhythm_window_explanation,
             'quality_explanation':reason,'quality_phases':_nova_r196999_phase_rows(offer_workout),
@@ -62156,7 +62176,7 @@ HOME_PAGE = HOME_PAGE.replace(_R196999_TODAY_OLD,
 _R196999_CLOCK_CONTEXT = '<p>Your current training window reflects the context THE LAB has available today.</p>'
 assert HOME_PAGE.count(_R196999_CLOCK_CONTEXT) == 1, 'INC043_CLOCK_CONTEXT_DRIFT'
 HOME_PAGE = HOME_PAGE.replace(_R196999_CLOCK_CONTEXT,
-    _R196999_CLOCK_CONTEXT + '\n<p class="r196999-today-reason" role="note">{{ (data.nova_cross_surface_explanation or {}).get("today_explanation", "")|e }}</p>\n{% if (data.nova_cross_surface_explanation or {}).get("rhythm_window_explanation") %}<p class="r196999-today-reason" role="note">{{ data.nova_cross_surface_explanation.rhythm_window_explanation|e }}</p>{% endif %}',1)
+    '<p class="r196999-today-reason" role="note">{{ (data.nova_cross_surface_explanation or {}).get("today_explanation", "")|e }}{% if (data.nova_cross_surface_explanation or {}).get("rhythm_window_explanation") %} {{ data.nova_cross_surface_explanation.rhythm_window_explanation|e }}{% endif %}</p>',1)
 
 # The same mechanical rows are reused for any chronologically displayed
 # quality, not just the standalone third card; recovery-only cards are untouched.
@@ -62213,7 +62233,7 @@ _R196999_STYLE_ANCHOR = '{% set upcoming=namespace(rows=[], quality_index=none, 
 assert HOME_PAGE.count(_R196999_STYLE_ANCHOR)==1, 'INC043_STYLE_ANCHOR_DRIFT'
 HOME_PAGE = HOME_PAGE.replace(_R196999_STYLE_ANCHOR,_R196999_CSS+'\n'+_R196999_STYLE_ANCHOR,1)
 
-APP_VERSION = ('THE LAB · PRODUCT V4.9.199 R196.9.99 · INC-043 EXPLAINABLE TRAINING SURFACES '
+APP_VERSION = ('THE LAB · PRODUCT V4.9.200 R196.9.100 · INC-044 SHORT CLOCK COPY + SAFE NEON GET READS '
                '+ CANONICAL QUALITY MECHANICS · HEALTH/TRAINING AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
 
 # INC-040: Install all adapters and Jinja before starting direct Flask server.
