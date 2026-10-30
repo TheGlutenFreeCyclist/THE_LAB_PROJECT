@@ -10176,6 +10176,9 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
             conn.commit()
         finally:
             conn.close()
+    # Any full report loaded earlier in this request now refers to the old
+    # row. Invalidate it after commit so downstream readers see the new one.
+    _r196999_report_cache_invalidate(owner_id)
     return {
         "generated_at_utc": generated_at_utc,
         "generated_at_local": generated_at_local,
@@ -10189,25 +10192,76 @@ def _format_report_timestamp(value):
         return dt.strftime("%d/%m/%Y · %I:%M %p")
     except Exception:
         return str(value or "—")
+# Neon egress reduction: cache immutable report rows ONLY for the current Flask
+# request. Never share a report across requests, athletes, or storage backends.
+# All callers still receive independently decoded dicts, so their mutations
+# cannot leak into subsequent consumers or saved evidence.
+def _r196999_report_row_cache():
+    if not has_request_context():
+        return None
+    cache = getattr(g, "_r196999_report_row_cache", None)
+    if cache is None:
+        cache = {}
+        g._r196999_report_row_cache = cache
+    return cache
+
+
+def _r196999_report_cache_invalidate(owner_user_id):
+    if not has_request_context():
+        return
+    cache = getattr(g, "_r196999_report_row_cache", None)
+    if isinstance(cache, dict):
+        for key in tuple(cache):
+            if key[0] == str(owner_user_id):
+                cache.pop(key, None)
+
+
 def load_latest_report(include_payload=True, owner_user_id=None, include_qa_replay=False):
     owner_id = _data_owner_user_id(owner_user_id)
-    rows = _data_execute(owner_id,
-        "SELECT singleton_id, user_id, generated_at_utc, generated_at_local, app_version, payload_json FROM latest_report WHERE user_id=? LIMIT 1",
-        (owner_id,), fetch=True,
-    )
-    if not rows:
-        return None
-    row = rows[0]
+    needs_payload = bool(include_payload or include_qa_replay)
+    # Owner requests use the separate Personal Neon bridge; retain this
+    # distinction in the request-local cache key for strict backend isolation.
+    personal_backend = bool(_owner_personal_data_enabled(owner_id))
+    cache = _r196999_report_row_cache()
+    cache_key = (str(owner_id), personal_backend)
+    cached_row = cache.get(cache_key) if cache is not None else None
+    if cached_row is not None and (not needs_payload or "payload_json" in cached_row):
+        row = cached_row
+    else:
+        if needs_payload:
+            projection = "singleton_id, user_id, generated_at_utc, generated_at_local, app_version, payload_json"
+        else:
+            # Calculate UTF-8 bytes inside Postgres/SQLite instead of sending
+            # the entire multi-megabyte JSON to Render for a metadata badge.
+            # Empty/NULL payloads retain the old '{}' fallback semantics.
+            raw_sql = "COALESCE(NULLIF(payload_json, ''), '{}')"
+            length_expr = (f"OCTET_LENGTH({raw_sql})"
+                           if (personal_backend or _db_is_postgres())
+                           else f"LENGTH(CAST({raw_sql} AS BLOB))")
+            projection = ("singleton_id, user_id, generated_at_utc, generated_at_local, app_version, "
+                          f"{length_expr} AS payload_bytes")
+        rows = _data_execute(owner_id,
+            f"SELECT {projection} FROM latest_report WHERE user_id=? LIMIT 1",
+            (owner_id,), fetch=True,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        if cache is not None:
+            cache[cache_key] = row  # Store the SQL row, never the mutable parsed JSON.
     meta = {
         "generated_at_utc": row.get("generated_at_utc"),
         "generated_at_local": row.get("generated_at_local"),
         "generated_at_local_display": _format_report_timestamp(row.get("generated_at_local")),
         "app_version": row.get("app_version") or "THE LAB",
     }
-    raw = row.get("payload_json") or "{}"
-    meta["payload_bytes"] = len(raw.encode("utf-8"))
+    if "payload_json" in row:
+        raw = row.get("payload_json") or "{}"
+        meta["payload_bytes"] = len(raw.encode("utf-8"))
+    else:
+        meta["payload_bytes"] = int(row.get("payload_bytes") or 0)
     meta["payload_human"] = _human_bytes(meta["payload_bytes"])
-    if include_payload or include_qa_replay:
+    if needs_payload:
         try:
             decoded = json.loads(raw)
         except (TypeError, json.JSONDecodeError):
@@ -12104,11 +12158,14 @@ def home():
             state = _r170_consent_queue(user["id"])
             if not state or (state.get("requested_at_utc") and not state.get("responded_at_utc")):
                 return redirect(url_for("beta_qa_consent_gate"))
-    latest_report_meta = get_latest_report_meta()
-    # R196.9.28: HOME renders with data=None. Offer only the currently signed,
-    # owner-scoped consent request from the last saved real Snapshot, never QA.
-    _consent_saved = (load_latest_report(include_payload=True, owner_user_id=user["id"])
-                      if latest_report_meta else None) or {}
+    # A single owner-scoped read supplies both home metadata and the signed
+    # consent state. The previous flow fetched the same multi-MB report twice.
+    # R196.9.28: HOME renders with data=None, and never offers QA consent.
+    _consent_saved = load_latest_report(include_payload=True, owner_user_id=user["id"]) or {}
+    latest_report_meta = ({k: _consent_saved.get(k) for k in (
+        "generated_at_utc", "generated_at_local", "generated_at_local_display",
+        "app_version", "payload_bytes", "payload_human")}
+        if _consent_saved else None)
     consent_snapshot_data = (_consent_saved.get("data")
                              if isinstance(_consent_saved.get("data"), dict) else None)
     return render_template_string(
