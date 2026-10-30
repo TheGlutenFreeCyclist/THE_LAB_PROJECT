@@ -61901,6 +61901,264 @@ def _v4891_prepare_snapshot_for_ui(data):
 APP_VERSION = ('THE LAB · PRODUCT V4.9.198 R196.9.98 · NOVA HEALTH U v0.6.2 '
                'EVIDENCE-FIRST + QUALITY FEEDBACK FRESHNESS · TRAINING AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
 
+
+# R196.9.99 / INC-043 — Cross-surface explanation and canonical mechanics fidelity.
+# Read-only additions to the last runtime presentation layer: these helpers
+# never write to training decisions, roadmap, quality clearance, Calendar,
+# Health, Energy Bank, ledger or session-feedback storage.
+_R196999_PRESENTATION_SCHEMA = 'NOVA-R196.9.99-CROSS-SURFACE-EXPLAINABILITY-1'
+
+
+def _nova_r196999_finite(value):
+    try:
+        n = float(value)
+        return n if math.isfinite(n) else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _nova_r196999_phase_rows(workout):
+    '''Preserve verified canonical duration and phases; no generated dose.
+
+    `session_composition` is a canonical upstream object. If the block total
+    differs from its declared total or its state is not COMPLETE, fail closed.
+    Work/recovery repeats are shown only when the existing canonical library
+    or power-prescription proves them; otherwise show aggregate minutes.
+    '''
+    w = workout if isinstance(workout, dict) else {}
+    comp = w.get('session_composition') or {}
+    if not isinstance(comp, dict) or comp.get('state') != 'COMPLETE':
+        return []
+    blocks = comp.get('blocks') or []
+    if not isinstance(blocks, list) or not blocks:
+        return []
+    total = _nova_r196999_finite(comp.get('total_seconds'))
+    durations = [_nova_r196999_finite(b.get('duration_seconds')) if isinstance(b, dict) else None for b in blocks]
+    if (total is None or total <= 0 or any(x is None or x < 0 for x in durations)
+        or abs(sum(durations) - total) > 1):
+        return []
+    def mins(seconds):
+        if seconds is None:
+            return None
+        return f'{seconds / 60:g} min' if seconds % 60 else f'{int(seconds / 60)} min'
+    label = {'PREPARATION': 'Warm-up', 'CANONICAL_INTERVALS': 'Main set',
+             'AEROBIC_TOPPER': 'Aerobic completion', 'COOLDOWN': 'Cool-down'}
+    power = w.get('power_prescription') or {}
+    feasibility = w.get('session_duration_feasibility') or {}
+    p_ok = (isinstance(power, dict) and str(power.get('state') or '') == 'PRESCRIBED'
+            and isinstance(feasibility, dict) and feasibility.get('state') == 'PASS')
+    rows = []
+    for block, sec in zip(blocks, durations):
+        typ = str(block.get('type') or '').upper()
+        duration = mins(sec)
+        intensity = str(block.get('intensity') or '').upper()
+        if typ == 'PREPARATION':
+            detail = 'Progressive Z1 to low Z2' if intensity == 'Z1_TO_LOW_Z2' else intensity.replace('_',' ').title()
+        elif typ == 'COOLDOWN':
+            detail = 'Very easy Z1' if intensity == 'Z1' else intensity.replace('_',' ').title()
+        elif typ == 'AEROBIC_TOPPER':
+            detail = 'Conversational Z1 to low Z2 · no additional hard reps' if intensity == 'Z1_TO_LOW_Z2' else intensity.replace('_',' ').title()
+        elif typ == 'CANONICAL_INTERVALS':
+            work_sec = _nova_r196999_finite(block.get('quality_work_seconds'))
+            rec_sec = _nova_r196999_finite(block.get('recovery_seconds'))
+            detail = (f'{mins(work_sec)} of quality work' if work_sec is not None else 'Canonical intervals')
+            if rec_sec is not None and rec_sec > 0:
+                detail += f' + {mins(rec_sec)} easy recovery'
+            if p_ok:
+                reps = _nova_r196999_finite(power.get('reps'))
+                rep_sec = _nova_r196999_finite(power.get('work_seconds'))
+                if (reps is not None and int(reps)==reps and 1 <= reps <= 100
+                    and rep_sec is not None and rep_sec > 0 and work_sec is not None
+                    and abs(reps * rep_sec - work_sec) <= 1):
+                    detail = f'{int(reps)} × {mins(rep_sec)} work'
+                    if rec_sec is not None and rec_sec > 0:
+                        detail += f' + {mins(rec_sec)} easy recovery'
+            if p_ok:
+                low = _nova_r196999_finite(power.get('low_watts'))
+                high = _nova_r196999_finite(power.get('high_watts'))
+                if low is not None and high is not None and 0 < low <= high:
+                    detail += f' · {low:g}–{high:g} W'
+                    if power.get('exploratory') is True:
+                        detail += ' (exploratory, not pass/fail)'
+        else:
+            detail = intensity.replace('_', ' ').title() if intensity else 'Canonical phase'
+        rows.append({'label': label.get(typ, typ.replace('_',' ').title() or 'Phase'),
+                     'duration': duration, 'detail': detail})
+    return rows
+
+
+def _nova_r196999_verified_card3_workout(data):
+    '''Only identity-matched, PASS verified canonical work, never stale offers.'''
+    d = data if isinstance(data, dict) else {}
+    q = d.get('next_quality_direction') or {}
+    offer = d.get('next_quality_offer') or {}
+    integrity = d.get('quality_offer_integrity') or {}
+    w = offer.get('workout') or {} if isinstance(offer, dict) else {}
+    if not all(isinstance(x, dict) for x in (q, offer, integrity, w)):
+        return {}
+    if (q.get('source') not in ('EXISTING_CANONICAL_QUALITY_OFFER', 'CURRENT_VERIFIED_R131_QUALITY_DIRECTION')
+        or integrity.get('state') != 'PASS'
+        or integrity.get('mechanics_complete') is not True
+        or integrity.get('science_provenance') is not True
+        or not offer.get('offer_id') or offer.get('offer_id') != integrity.get('offer_id')
+        or not offer.get('workout_id')
+        or str(offer.get('workout_id')) != str(w.get('nova_workout_id') or '')
+        or str(offer.get('workout_id')) != str(q.get('referenced_canonical_template_id') or '')):
+        return {}
+    return w
+
+
+def _nova_r196999_context(data):
+    '''Traceable athlete copy assembled exclusively from observed source data.'''
+    d = data if isinstance(data, dict) else {}
+    clock = d.get('coach_clock') or {}
+    decision = d.get('nova_decision') or {}
+    state = d.get('training_state') or {}
+    roadmap = d.get('adaptive_roadmap') or {}
+    window = roadmap.get('quality_window') or {}
+    advisory = state.get('wellness_advisory') or {}
+    offer_workout = _nova_r196999_verified_card3_workout(d)
+    today = str(clock.get('date_label') or '')
+    completed = clock.get('today_activity_count')
+    try: completed = int(completed)
+    except (TypeError, ValueError): completed = None
+    slots = clock.get('next_slots') or []
+    # A blank day is NOT a prescription of rest or an athlete booking.
+    today_iso = str(clock.get('iso') or '')[:10]
+    same_day = [x for x in slots if isinstance(x, dict)
+                and str(x.get('date') or '')[:10] == today_iso]
+    if completed == 0 and not same_day:
+        today_explanation = ('No completed session is logged today and Nova has not identified a '
+                             'same-day opportunity from its learned rhythm. This does not prescribe rest '
+                             'or prevent an athlete-chosen easy session; verify current readiness and availability.')
+    elif completed == 0:
+        today_explanation = ('No completed session is logged yet. Listed opportunities are predictions or '
+                             'athlete bookings, not proof that training must occur.')
+    elif completed is not None and completed > 0:
+        today_explanation = (f'{completed} completed session'+('s' if completed != 1 else '')+
+                             ' logged today. This is completed activity, not a requirement to add another session.')
+    else:
+        today_explanation = ('Daily completion data are not confirmed. The rhythm forecast does not prescribe rest.')
+    action = str(decision.get('action') or '')
+    if action == 'HOLD':
+        today_explanation += ' Current Training decision: HOLD; follow its explicit restrictions.'
+    elif action == 'VALIDATE':
+        today_explanation += ' Current Training decision: VALIDATE; this is not blanket quality clearance.'
+    elif action == 'TRAIN':
+        today_explanation += ' Training action is TRAIN, not an instruction to exercise at a predicted time.'
+    reason = ''
+    if offer_workout and str(offer_workout.get('source') or '') == 'RHYTHM':
+        reason = ('The suggested quality window comes from learned training rhythm and hard-session spacing, '
+                  'not from confirmed athlete availability or a medically required recovery deadline.')
+        if window.get('state'):
+            reason += f' Window: {str(window["state"]).replace("_", " ")}.'
+    elif offer_workout:
+        reason = ('This quality comes from the verified canonical training offer. '
+                  'Its displayed date is not proof of medical clearance or an athlete booking.')
+    else:
+        reason = ('The third card is a workout direction only; no appointment, watt target or '
+                  'execution clearance is inferred from an uncompiled template.')
+    if advisory.get('active') is True:
+        names = [str(x.get('label') or '') for x in advisory.get('signals') or [] if isinstance(x, dict) and x.get('label')]
+        if names:
+            reason += ' Current wellness WATCH: ' + '; '.join(names[:3]) + '.'
+        if advisory.get('quality_veto') is False:
+            reason += ' These signals did not impose a quality veto.'
+    reason += ' Reassess actual recovery before an intense session.'
+    # Calendar-oriented dates never enter Card 3's DIRECTION-only copy.
+    # Keep this specific forecast explanation in Coach Clock instead.
+    rhythm_window_explanation = ''
+    if offer_workout and str(offer_workout.get('source') or '') == 'RHYTHM':
+        if window.get('earliest') and window.get('preferred'):
+            rhythm_window_explanation = ('Hard-session forecast: earliest candidate '
+                + str(window['earliest']) + '; learned-rhythm preference '
+                + str(window['preferred']) + '. These are predictions, not bookings '
+                'or medically required waiting periods.')
+    return {'schema':_R196999_PRESENTATION_SCHEMA, 'today_explanation':today_explanation,
+            'rhythm_window_explanation':rhythm_window_explanation,
+            'quality_explanation':reason,'quality_phases':_nova_r196999_phase_rows(offer_workout),
+            'has_verified_offer':bool(offer_workout), 'today_count':completed,
+            'decision_action':action,'read_only':True}
+
+_r196999_ui_before = _v4891_prepare_snapshot_for_ui
+def _v4891_prepare_snapshot_for_ui(data):
+    ui = _r196999_ui_before(data)
+    if not isinstance(ui, dict):
+        return ui
+    out = dict(ui)
+    out['nova_cross_surface_explanation'] = _nova_r196999_context(out)
+    return out
+
+app.jinja_env.globals['nova_verified_session_phases'] = _nova_r196999_phase_rows
+
+# Bind a concise traceable explanation under the existing clock's today slot.
+_R196999_TODAY_OLD = '<small>{{ data.coach_clock.today_detail }}</small></div>'
+assert HOME_PAGE.count(_R196999_TODAY_OLD) == 1, 'INC043_TODAY_CONTEXT_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_R196999_TODAY_OLD,
+    '<small>{{ data.coach_clock.today_detail }}</small></div>',1)
+_R196999_CLOCK_CONTEXT = '<p>Your current training window reflects the context THE LAB has available today.</p>'
+assert HOME_PAGE.count(_R196999_CLOCK_CONTEXT) == 1, 'INC043_CLOCK_CONTEXT_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_R196999_CLOCK_CONTEXT,
+    _R196999_CLOCK_CONTEXT + '\n<p class="r196999-today-reason" role="note">{{ (data.nova_cross_surface_explanation or {}).get("today_explanation", "")|e }}</p>\n{% if (data.nova_cross_surface_explanation or {}).get("rhythm_window_explanation") %}<p class="r196999-today-reason" role="note">{{ data.nova_cross_surface_explanation.rhythm_window_explanation|e }}</p>{% endif %}',1)
+
+# The same mechanical rows are reused for any chronologically displayed
+# quality, not just the standalone third card; recovery-only cards are untouched.
+_R196999_CHRONO_MAIN = '<div class="v4-session-main">{{ athlete_view.instructions|replace(\'See coach recommendation.\',\'See the recommendation above.\') }}</div>'
+assert HOME_PAGE.count(_R196999_CHRONO_MAIN) == 1, 'INC043_CHRONO_MECHANICS_DRIFT'
+_R196999_CHRONO_BLOCK = '''{% set chrono_phases = nova_verified_session_phases(s) %}
+{% if chrono_phases %}
+<div class="r196999-workout-phases" role="group" aria-label="Verified workout timeline">
+  {% for phase in chrono_phases %}<div class="r196999-workout-phase"><strong>{{ phase.label|e }}</strong><span>{{ phase.duration|e }}</span><small>{{ phase.detail|e }}</small></div>{% endfor %}
+</div>
+{% endif %}
+'''
+HOME_PAGE = HOME_PAGE.replace(_R196999_CHRONO_MAIN,_R196999_CHRONO_BLOCK+_R196999_CHRONO_MAIN,1)
+
+# When Card 3 is a non-scheduled direction with an identity-verified offer,
+# the timeline now appears there as well. In other cases the existing
+# library-structure-only explanation remains intact (no fabricated phases).
+_R196999_PENDING_MAIN = '<div class="v4-session-main">{{ qdetail.main_set|e }}</div>'
+assert HOME_PAGE.count(_R196999_PENDING_MAIN) == 1, 'INC043_CARD3_DETAIL_DRIFT'
+_R196999_PENDING_PHASES = '''{% set card3_phases = (data.nova_cross_surface_explanation or {}).get('quality_phases', []) %}
+{% if card3_phases %}<div class="r196999-workout-phases" role="group" aria-label="Verified quality workout timeline">
+  {% for phase in card3_phases %}<div class="r196999-workout-phase"><strong>{{ phase.label|e }}</strong><span>{{ phase.duration|e }}</span><small>{{ phase.detail|e }}</small></div>{% endfor %}
+</div>{% endif %}
+'''
+HOME_PAGE = HOME_PAGE.replace(_R196999_PENDING_MAIN,_R196999_PENDING_PHASES+_R196999_PENDING_MAIN,1)
+
+# Shared explanation appears in Card 3 whether it is a direct canonical offer,
+# a library-only direction, or a duplicate already displayed above.
+_R196999_QUALITY_MARK = '{% set is_quality_slot=loop.index == 3 %}'
+assert HOME_PAGE.count(_R196999_QUALITY_MARK)==1, 'INC043_CARD3_MARK_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_R196999_QUALITY_MARK,_R196999_QUALITY_MARK+'\n',1)
+_R196999_ARTICLE_END = '</article>\n{% if not is_quality_slot or (('
+assert HOME_PAGE.count(_R196999_ARTICLE_END)==1, 'INC043_ARTICLE_END_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_R196999_ARTICLE_END,
+    '''{% if is_quality_slot %}<div class="r196999-quality-why" role="note"><strong>WHY THIS QUALITY / WINDOW</strong><p>{{ (data.nova_cross_surface_explanation or {}).get('quality_explanation','')|e }}</p></div>{% endif %}
+</article>
+{% if not is_quality_slot or ((''',1)
+
+_R196999_CSS = '''<style>
+.r196999-today-reason{font-family:var(--font);font-size:12px;line-height:1.5;color:var(--muted);border-left:2px solid var(--cyan);padding:5px 0 5px 11px;margin:9px 0}
+.r196999-workout-phases{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:10px 0;padding:0}
+.r196999-workout-phase{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:7px;row-gap:2px;align-content:start;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.025)}
+.r196999-workout-phase strong{font-size:11px;font-weight:800;color:var(--text);line-height:1.3}
+.r196999-workout-phase span{font-size:11px;font-weight:800;color:var(--cyan);white-space:nowrap}
+.r196999-workout-phase small{grid-column:1/-1;font-size:11px;line-height:1.4;color:var(--muted);overflow-wrap:anywhere}
+.r196999-quality-why{padding:10px 12px;margin-top:11px;border:1px solid var(--line);border-radius:11px;background:rgba(69,215,232,.035)}
+.r196999-quality-why strong{display:block;color:var(--cyan);font-size:10px;letter-spacing:.09em;font-weight:800}
+.r196999-quality-why p{font-size:11px;line-height:1.5;color:var(--muted);margin:4px 0 0}
+@media(max-width:430px){.r196999-workout-phases{grid-template-columns:1fr}.r196999-workout-phase{padding:9px}}
+@media print{.r196999-workout-phases{break-inside:avoid}.r196999-quality-why{break-inside:avoid}}
+</style>'''
+# CSS is global, but only the three training-card surfaces and coach clock use it.
+_R196999_STYLE_ANCHOR = '{% set upcoming=namespace(rows=[], quality_index=none, quality_in_first_two=none) %}'
+assert HOME_PAGE.count(_R196999_STYLE_ANCHOR)==1, 'INC043_STYLE_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_R196999_STYLE_ANCHOR,_R196999_CSS+'\n'+_R196999_STYLE_ANCHOR,1)
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.199 R196.9.99 · INC-043 EXPLAINABLE TRAINING SURFACES '
+               '+ CANONICAL QUALITY MECHANICS · HEALTH/TRAINING AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
+
 # INC-040: Install all adapters and Jinja before starting direct Flask server.
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
