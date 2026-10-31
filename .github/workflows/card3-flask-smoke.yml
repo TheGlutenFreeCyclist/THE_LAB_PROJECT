@@ -1,0 +1,25 @@
+name: INC051 authenticated Flask and SQLite regression
+on:
+  push:
+    paths:
+      - 'the_lab_app.py'
+      - 'qa/INC051_flask_sqlite_smoke.py'
+      - '.github/workflows/card3-flask-smoke.yml'
+  pull_request:
+    paths:
+      - 'the_lab_app.py'
+      - 'qa/INC051_flask_sqlite_smoke.py'
+      - '.github/workflows/card3-flask-smoke.yml'
+jobs:
+  flask-sqlite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install actual HTTP framework
+        run: python -m pip install --disable-pip-version-check Flask requests Jinja2
+      - name: Check genuine login, two-owner SQLite isolation and fail-closed Card 3
+        run: python qa/INC051_flask_sqlite_smoke.py
