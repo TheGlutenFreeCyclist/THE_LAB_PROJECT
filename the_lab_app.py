@@ -62164,6 +62164,17 @@ def _v4891_prepare_snapshot_for_ui(data):
         return ui
     out = dict(ui)
     out['nova_cross_surface_explanation'] = _nova_r196999_context(out)
+    # One canonical Card-3 view for both library-only and integrity-verified offers.
+    out['nova_card3_workout_view'] = _nova_r1969102_card3_copy(out)
+    view = out['nova_card3_workout_view']
+    prior_detail = out.get('quality_card3_detail')
+    if (view and isinstance(prior_detail, dict)
+        and prior_detail.get('level') == 'LIBRARY_STRUCTURE_ONLY'
+        and str(prior_detail.get('workout_id') or '') == view['workout_id']):
+        detail = dict(prior_detail)
+        detail['main_set'] = view['structure']
+        detail['why'] = view['purpose']
+        out['quality_card3_detail'] = detail
     return out
 
 app.jinja_env.globals['nova_verified_session_phases'] = _nova_r196999_phase_rows
@@ -62211,7 +62222,17 @@ HOME_PAGE = HOME_PAGE.replace(_R196999_QUALITY_MARK,_R196999_QUALITY_MARK+'\n',1
 _R196999_ARTICLE_END = '</article>\n{% if not is_quality_slot or (('
 assert HOME_PAGE.count(_R196999_ARTICLE_END)==1, 'INC043_ARTICLE_END_DRIFT'
 HOME_PAGE = HOME_PAGE.replace(_R196999_ARTICLE_END,
-    '''{% if is_quality_slot %}<div class="r196999-quality-why" role="note"><strong>WHY THIS QUALITY / WINDOW</strong><p>{{ (data.nova_cross_surface_explanation or {}).get('quality_explanation','')|e }}</p></div>{% endif %}
+    '''{% if is_quality_slot and data.nova_card3_workout_view %}
+{% set nova3 = data.nova_card3_workout_view %}
+<div class="r1969102-canonical-copy" role="group" aria-label="Canonical workout explanation">
+  <strong>YOUR WORKOUT EXPLAINED</strong>
+  <p class="r1969102-structure">{{ nova3.structure|e }}</p>
+  <p><b>How to ride it:</b> {{ nova3.execution|e }}</p>
+  <p><b>Training purpose:</b> {{ nova3.purpose|e }}</p>
+  {% if nova3.personalized_watts %}<p class="r1969102-power"><b>Verified personal power:</b> {{ nova3.personalized_watts|e }}</p>{% endif %}
+  {% if not nova3.verified_offer %}<small>Workout template only. No personal watts, scheduled time or clearance have been issued.</small>{% else %}<small>Verified workout details are shown for reference; reassess current clearance before execution.</small>{% endif %}
+</div>{% endif %}
+{% if is_quality_slot %}<div class="r196999-quality-why" role="note"><strong>WHY THIS QUALITY / WINDOW</strong><p>{{ (data.nova_cross_surface_explanation or {}).get('quality_explanation','')|e }}</p></div>{% endif %}
 </article>
 {% if not is_quality_slot or ((''',1)
 
@@ -62233,8 +62254,219 @@ _R196999_STYLE_ANCHOR = '{% set upcoming=namespace(rows=[], quality_index=none, 
 assert HOME_PAGE.count(_R196999_STYLE_ANCHOR)==1, 'INC043_STYLE_ANCHOR_DRIFT'
 HOME_PAGE = HOME_PAGE.replace(_R196999_STYLE_ANCHOR,_R196999_CSS+'\n'+_R196999_STYLE_ANCHOR,1)
 
-APP_VERSION = ('THE LAB · PRODUCT V4.9.200 R196.9.100 · INC-044 SHORT CLOCK COPY + SAFE NEON GET READS '
-               '+ CANONICAL QUALITY MECHANICS · HEALTH/TRAINING AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
+# INC-046 / R196.9.102 — One source, one description contract, one Card-3 view.
+# Canonical workout identity and mechanics are read directly from the existing
+# _R19696_LIBRARY_INDEX; no second catalogue, mutable ledger or selection route.
+R1969102_CARD3_SCHEMA = 'NOVA-R196.9.102-CANONICAL-CARD3-DESCRIPTION-1'
+_R1969102_PURPOSE = {
+    'POWER_1': 'Train repeatable high-power efforts around the one-minute goal, with recovery sufficient to preserve quality between efforts.',
+    'POWER_5': 'Accumulate repeatable multi-minute aerobic-power work relevant to the five-minute goal.',
+    'VO2MAX': 'Accumulate demanding aerobic work in separated bouts without turning the last effort into a maximal test.',
+    'SPRINTER': 'Develop repeated acceleration and sprint execution while preserving deliberate low-load recovery.',
+    'POWER_20': 'Accumulate sustained, repeatable work relevant to maintaining power across the 20-minute goal.',
+    'TIME_TRIAL': 'Rehearse even, controlled sustained output for time-trial pacing and fatigue management.',
+    'ENDURANCE_BASE': 'Build aerobic durability and observe how stable easy effort remains as riding time accumulates.',
+}
+
+def _nova_r1969102_span(seconds):
+    n = int(seconds)
+    minutes, remainder = divmod(n, 60)
+    if minutes and remainder:
+        return f'{minutes} min {remainder} s'
+    return f'{minutes} min' if minutes else f'{remainder} s'
+
+
+def _nova_r1969102_int(t, key, zero=False):
+    value = t.get(key)
+    if type(value) not in (int, float):
+        return None
+    if not math.isfinite(value) or int(value) != value or value < (0 if zero else 1) or value > 86400:
+        return None
+    return int(value)
+
+
+def _nova_r1969102_catalogue_copy(workout_id, goal):
+    """Read one verified ID + goal from the existing canonical template index.
+
+    All descriptions describe the exact known structure, never an executable
+    dose, individual watts or a dynamic scientific clearance. No lookup by title.
+    """
+    t = _R19696_LIBRARY_INDEX.get(str(workout_id or ''))
+    if not isinstance(t, dict) or str(t.get('goal') or '').upper() != str(goal or '').upper():
+        return None
+    pattern = str(t.get('pattern') or '').upper()
+    domain = str(t.get('work_domain') or '').upper()
+    variant = str(t.get('variant') or '').upper()
+    structure = execution = None
+    if pattern in {'STANDARD', 'SUSTAINED', 'OVER_UNDER', 'SHORT_POWER', 'SPRINT'}:
+        reps = _nova_r1969102_int(t, 'reps')
+        work = _nova_r1969102_int(t, 'work_s')
+        recover = _nova_r1969102_int(t, 'recovery_s', zero=True)
+        if None not in (reps, work, recover):
+            work_total = reps * work
+            structure = (f'{reps} × {_nova_r1969102_span(work)} work '
+                         f'({_nova_r1969102_span(work_total)} accumulated work)')
+            if reps > 1:
+                structure += (f'; {_nova_r1969102_span(recover)} easy recovery after each of the first '
+                              f'{reps - 1} efforts ({_nova_r1969102_span((reps - 1)*recover)} recovery total)')
+            structure += '.'
+            if domain == 'TEMPO_Z3':
+                execution = ('Keep all working intervals in the prescribed cycling tempo (Z3) domain, '
+                             'not threshold or maximal effort; cadence and power should stay consistent across repetitions.')
+            elif pattern == 'OVER_UNDER':
+                execution = ('Each work block is a variable-load block, alternating controlled stronger and easier segments. '
+                             'The exact internal over/under timings and watt limits are not part of this template and must come from an approved compiled session.')
+            elif pattern == 'SPRINT':
+                execution = ('Accelerate with deliberate technique during each short work bout; spin gently for the full '
+                             'specified recovery, avoiding fatigue-driven extra sprint attempts.')
+            elif pattern == 'SHORT_POWER':
+                execution = ('Keep the short efforts repeatable: start each bout with control rather than exhausting the first one, '
+                             'then use the specified easy recovery before the next effort.')
+            elif pattern == 'SUSTAINED':
+                execution = ('Hold an even, sustainable effort through each work block, avoiding a fast start and a final all-out surge. '
+                             'Use the specified recovery to reset cadence and breathing.')
+            else:
+                execution = ('Ride the prescribed work intervals with consistent pacing and genuinely easy recoveries. '
+                             'Do not replace repeatability with a final maximal effort.')
+    elif pattern in {'MICRO_30_15', 'SPRINT_CLUSTER'}:
+        sets = _nova_r1969102_int(t, 'sets')
+        reps = _nova_r1969102_int(t, 'reps_per_set')
+        work = _nova_r1969102_int(t, 'work_s')
+        float_s = _nova_r1969102_int(t, 'float_s', zero=True)
+        recover = _nova_r1969102_int(t, 'set_recovery_s', zero=True)
+        if None not in (sets, reps, work, float_s, recover):
+            structure = (f'{sets} sets × {reps} repetitions of {_nova_r1969102_span(work)} work '
+                         f'/ {_nova_r1969102_span(float_s)} easy float '
+                         f'({_nova_r1969102_span(sets*reps*work)} total hard work)')
+            if sets > 1:
+                structure += f'; {_nova_r1969102_span(recover)} easy recovery between sets'
+            structure += '.'
+            if pattern == 'SPRINT_CLUSTER':
+                execution = ('Make each acceleration distinct and technically controlled; the float is easy pedaling, '
+                             'not an additional sprint. Reset fully between sets.')
+            else:
+                execution = ('Alternate the prescribed short work bouts with the easy floats without extending hard efforts. '
+                             'Keep the last set repeatable rather than sprinting to exhaustion.')
+    elif pattern in {'ENDURANCE','ENDURANCE_STEADY','ENDURANCE_DURABILITY','ENDURANCE_LATE'}:
+        cases = {
+            ('ENDURANCE',''): ('Continuous easy aerobic volume or an easy-volume session according to the compiled duration.',
+                               'Keep conversation-level effort and steady breathing; no surges are implied.'),
+            ('ENDURANCE','CONTINUOUS'): ('Continuous easy aerobic riding without prescribed hard interruptions.',
+                                        'Keep effort conversational and cadence relaxed from start to finish.'),
+            ('ENDURANCE','SPLIT_EASY'): ('Easy aerobic riding divided into separate manageable sections.',
+                                       'Keep each section easy; the number and length of sections are set by the compiled session.'),
+            ('ENDURANCE_STEADY',''): ('Steady aerobic work with emphasis on metabolic stability.',
+                                    'Limit avoidable intensity changes; observe steady-state breathing and perceived effort.'),
+            ('ENDURANCE_STEADY','STEADY'): ('Continuous steady aerobic riding.',
+                                          'Avoid surges and hold comparable effort through the middle and late parts.'),
+            ('ENDURANCE_STEADY','CADENCE_STABLE'): ('Easy aerobic work emphasizing cadence stability.',
+                                                  'Maintain a repeatable cadence where terrain allows, without raising intensity to chase rpm.'),
+            ('ENDURANCE_DURABILITY',''): ('Longer easy aerobic work emphasizing durability.',
+                                         'Notice whether an initially comfortable effort becomes harder later in the session.'),
+            ('ENDURANCE_DURABILITY','LONG_STEADY'): ('Extended steady aerobic riding for durability.',
+                                                   'Keep later power controlled instead of making the final section a hard effort.'),
+            ('ENDURANCE_DURABILITY','LATE_MATCH'): ('Aerobic work with a late-output-matching focus.',
+                                                  'Compare perceived strain at similar easy outputs early and late in the session.'),
+            ('ENDURANCE_DURABILITY','BACK_TO_BACK_CONTEXT'): ('Easy aerobic riding within consecutive training-day context.',
+                                                              'Do not force intensity if fatigue carries over from the prior day.'),
+            ('ENDURANCE_LATE',''): ('Easy aerobic work focused on late-session stability.',
+                                   'Keep the final section stable without accelerating to compensate for fatigue.'),
+            ('ENDURANCE_LATE','LATE_MATCH'): ('Aerobic session with early-to-late output matching.',
+                                            'Maintain similar easy effort late in the ride and note changes in perceived strain.'),
+            ('ENDURANCE_LATE','DRIFT_CONTROL'): ('Easy aerobic session focused on later heart-rate/effort drift.',
+                                               'Avoid intensity spikes and assess drift only when comparable evidence is available.'),
+            ('ENDURANCE_LATE','CADENCE_MATCH'): ('Easy aerobic session focused on cadence matching later in the ride.',
+                                               'Maintain a manageable cadence late without increasing work intensity.'),
+        }
+        pair = cases.get((pattern,variant))
+        if pair:
+            structure,execution = pair
+            structure += ' Template does not declare total session duration.'
+    if not structure or not execution:
+        return None  # Unverified mechanics must not receive generic invented prose.
+    goal_key = str(t['goal']).upper()
+    return {'schema':R1969102_CARD3_SCHEMA,'workout_id':str(t['id']),
+            'goal':goal_key, 'title':str(t.get('title') or ''),
+            'pattern':pattern,'structure':structure,'execution':execution,
+            'purpose':_R1969102_PURPOSE[goal_key],
+            'source':'EXISTING_NOVA_WORKOUT_LIBRARY','verified_offer':False,
+            'personalized_watts':None,'is_prescription':False,
+            'execution_authorized':False,'read_only':True}
+
+
+def _nova_r1969102_verified_personal_watts(workout, canonical_id):
+    """Never convert observed bests, FTP or an uncompiled title into targets."""
+    w = workout if isinstance(workout,dict) else {}
+    if str(w.get('nova_workout_id') or '') != str(canonical_id or ''):
+        return None
+    power = w.get('power_prescription') or {}
+    duration = w.get('session_duration_feasibility') or {}
+    if (not isinstance(power,dict) or power.get('state') != 'PRESCRIBED'
+        or not isinstance(duration,dict) or duration.get('state') != 'PASS'):
+        return None
+    low = _nova_r196999_finite(power.get('low_watts'))
+    high = _nova_r196999_finite(power.get('high_watts'))
+    if low is None or high is None or not (0 < low <= high <= 2500):
+        return None
+    tpl = _R19696_LIBRARY_INDEX.get(str(canonical_id or '')) or {}
+    if tpl.get('pattern') in {'STANDARD','SUSTAINED','SHORT_POWER','OVER_UNDER','SPRINT'}:
+        if (power.get('reps') != tpl.get('reps')
+            or power.get('work_seconds') != tpl.get('work_s')):
+            return None
+    text = f'{low:g}–{high:g} W' if low != high else f'{low:g} W'
+    return text + (' (exploratory, not a pass/fail threshold)' if power.get('exploratory') is True else '')
+
+
+def _nova_r1969102_card3_copy(data):
+    """Exactly ONE Card-3 source: canonical ID + matching verified offer only.
+
+    Direction-only remains a non-executable library preview. Verified watts
+    require existing canonical integrity, power and duration attestations.
+    """
+    d = data if isinstance(data,dict) else {}
+    direction = d.get('next_quality_direction') or {}
+    if not isinstance(direction,dict) or direction.get('direction_only') is not True:
+        return None
+    if direction.get('source') not in {
+        'CANONICAL_LIBRARY_DIRECTION_ONLY_NOT_COMPILED',
+        'EXISTING_CANONICAL_QUALITY_OFFER',
+        'CURRENT_VERIFIED_R131_QUALITY_DIRECTION',
+    }:
+        return None
+    wid = str(direction.get('referenced_canonical_template_id') or '')
+    view = _nova_r1969102_catalogue_copy(wid,direction.get('goal_key'))
+    if not view:
+        return None
+    verified = _nova_r196999_verified_card3_workout(d)
+    if verified and str(verified.get('nova_workout_id') or '') == wid:
+        view = dict(view)
+        view['verified_offer'] = True
+        view['personalized_watts'] = _nova_r1969102_verified_personal_watts(verified,wid)
+        # This remains a DISPLAY representation, never a new prescription.
+    return view
+
+# All supported library templates must be described from their OWN mechanics,
+# with no missing IDs or cross-goal alias and no text-generated dosing.
+assert len(_R19696_LIBRARY_INDEX)==len(_NOVA_WORKOUT_LIBRARY),'INC046_DUPLICATE_CANONICAL_ID'
+assert (set(_R1969102_PURPOSE) == {t.get('goal') for t in _NOVA_WORKOUT_LIBRARY}
+        and all(_nova_r1969102_catalogue_copy(t.get('id'), t.get('goal'))
+                for t in _NOVA_WORKOUT_LIBRARY)), 'INC046_INCOMPLETE_CANONICAL_DESCRIPTIONS'
+
+_R1969102_SHARED_CSS = """<style>
+.r1969102-canonical-copy{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-left:3px solid var(--cyan);border-radius:9px;background:rgba(69,215,232,.025);overflow-wrap:anywhere}
+.r1969102-canonical-copy strong{display:block;font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--text)}
+.r1969102-canonical-copy p{font-size:12px;line-height:1.55;margin:6px 0;color:var(--muted)}
+.r1969102-canonical-copy b{color:var(--text)}
+.r1969102-canonical-copy small{display:block;color:var(--muted);font-size:11px;margin-top:6px}
+.r1969102-canonical-copy .r1969102-power{color:var(--cyan)}
+</style>"""
+assert HOME_PAGE.count(_R196999_STYLE_ANCHOR)==1,'INC046_STYLE_ANCHOR_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196999_STYLE_ANCHOR,
+                            _R1969102_SHARED_CSS+'\n'+_R196999_STYLE_ANCHOR,1)
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.202 R196.9.102 · INC-046 SINGLE-SOURCE ENGLISH WORKOUT DETAIL '
+               '+ VERIFIED PERSONAL WATTS · INC-044 PRESERVED · TRAINING/HEALTH AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
+
 
 # INC-040: Install all adapters and Jinja before starting direct Flask server.
 if __name__ == "__main__":
