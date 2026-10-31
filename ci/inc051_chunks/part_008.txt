@@ -1,0 +1,536 @@
+    if score >= 0.72:
+        status = "ALIGNED"
+    elif score >= 0.42:
+        status = "PARTIAL"
+    else:
+        status = "LIMITED"
+    return {"status": status, "score": score, "confidence": confidence, "missing_roles": missing}
+def build_strength_history_profile(activities, adaptive_roadmap=None, now=None, max_sessions=8):
+    now = now or get_rome_now()
+    cutoff = now.replace(tzinfo=None)
+    rows = []
+    for activity in activities or []:
+        if not _is_strength_activity(activity):
+            continue
+        dt = parse_local_activity_datetime(activity.get("start_date_local") or "")
+        if dt is None or dt > cutoff:
+            continue
+        rows.append((dt, activity))
+    rows.sort(key=lambda x: x[0], reverse=True)
+    rows = rows[:max(1, int(max_sessions or 8))]
+    goal_key, goal_profile, stage, _ = _v4882_strength_goal_context(adaptive_roadmap)
+    if not rows:
+        return {
+            "available": False, "status": "UNKNOWN", "confidence": "NONE", "goal_key": goal_key,
+            "goal_label": goal_profile.get("label"), "roadmap_stage": stage, "sessions_checked": 0,
+            "informative_sessions": 0, "structured_sessions": 0, "exercise_counts": {}, "role_session_counts": {},
+            "familiar_exercises": [], "movement_status": "UNKNOWN", "structure_status": "UNKNOWN",
+            "structure_confidence": "NONE", "median_observed_reps": None, "failure_session_ratio": None,
+            "explicit_load_mentions_kg": [], "missing_roles": sorted((_V4883_GOAL_ROLE_WEIGHTS.get(goal_key) or {}).keys()),
+            "method_note": "No canonical WeightTraining sessions available for gym-content learning.",
+        }
+    ids = [a.get("id") for _, a in rows if a.get("id")]
+    details = fetch_activity_details(ids) if len(rows) >= 2 and ids else {}
+    exercise_counts = {}
+    exercise_roles = {}
+    role_session_counts = {}
+    informative_sessions = 0
+    structured_sessions = 0
+    failure_sessions = 0
+    rep_values = []
+    load_mentions_kg = []
+    evidence_rows = []
+    for dt, summary in rows:
+        detail = details.get(str(summary.get("id"))) or summary
+        text = _v4883_strength_text_blob(detail)
+        if not text and detail is not summary:
+            text = _v4883_strength_text_blob(summary)
+        signals = _v4883_strength_exercise_signals(text)
+        structure = _v4883_strength_structure_signals(text)
+        if structure.get("rep_values"):
+            structured_sessions += 1
+            rep_values.extend(structure.get("rep_values") or [])
+            if structure.get("failure"):
+                failure_sessions += 1
+            load_mentions_kg.extend(structure.get("load_mentions_kg") or [])
+        if signals["exercises"]:
+            informative_sessions += 1
+            for exercise in signals["exercises"]:
+                exercise_counts[exercise] = exercise_counts.get(exercise, 0) + 1
+                exercise_roles.setdefault(exercise, set()).update(_v4883_strength_exercise_signals(exercise)["roles"])
+            for role in set(signals["roles"]):
+                role_session_counts[role] = role_session_counts.get(role, 0) + 1
+            evidence_rows.append({
+                "date": dt.date().isoformat(), "exercises": signals["exercises"][:8], "roles": signals["roles"],
+                "schemes": (structure.get("schemes") or [])[:6], "failure_reported": bool(structure.get("failure")),
+            })
+    alignment = _v4883_strength_alignment_from_counts(goal_key, informative_sessions, role_session_counts)
+    structure_assessment = _v4883_strength_structure_assessment(goal_key, rep_values, structured_sessions, failure_sessions)
+    overall_status = alignment["status"]
+    if overall_status != "UNKNOWN" and structure_assessment.get("status") == "HIGH_FATIGUE_BIAS":
+        overall_status = "PARTIAL" if overall_status == "ALIGNED" else "LIMITED"
+    elif overall_status == "ALIGNED" and structure_assessment.get("status") == "MIXED":
+        overall_status = "PARTIAL"
+    familiar = [
+        {"name": name, "sessions": count, "roles": sorted(exercise_roles.get(name) or [])}
+        for name, count in sorted(exercise_counts.items(), key=lambda item: (-item[1], item[0]))
+        if count >= 2
+    ]
+    method = (
+        "Deterministic gym-content profile from exercise words explicitly present in Intervals WeightTraining activity name/detail text. "
+        "No exercise, load or successful progression is inferred when the source does not contain it."
+    )
+    return {
+        "available": informative_sessions > 0,
+        "status": overall_status, "movement_status": alignment["status"], "score": alignment["score"], "confidence": alignment["confidence"],
+        "structure_status": structure_assessment.get("status"), "structure_confidence": structure_assessment.get("confidence"),
+        "median_observed_reps": structure_assessment.get("median_reps"), "failure_session_ratio": structure_assessment.get("failure_session_ratio"),
+        "goal_key": goal_key, "goal_label": goal_profile.get("label"), "roadmap_stage": stage,
+        "sessions_checked": len(rows), "informative_sessions": informative_sessions, "structured_sessions": structured_sessions,
+        "exercise_counts": exercise_counts, "exercise_roles": {k: sorted(v) for k, v in exercise_roles.items()},
+        "role_session_counts": role_session_counts, "familiar_exercises": familiar,
+        "missing_roles": alignment["missing_roles"], "explicit_load_mentions_kg": load_mentions_kg[-12:], "evidence_rows": evidence_rows[:6],
+        "method_note": method,
+    }
+def _v4883_strength_pick_familiar(content_profile, desired_roles, fallback, used=None):
+    profile = content_profile or {}
+    used = set(used or [])
+    desired = set(desired_roles or [])
+    for item in profile.get("familiar_exercises") or []:
+        name = str((item or {}).get("name") or "")
+        roles = set((item or {}).get("roles") or [])
+        if "UNILATERAL" not in desired and "UNILATERAL" in roles:
+            continue
+        if name and name not in used and roles.intersection(desired):
+            return name
+    return fallback
+def _v4883_strength_slot_roles(text):
+    return set(_v4883_strength_exercise_signals(text).get("roles") or [])
+def _v4883_strength_alignment_guard(main_set, goal_key):
+    goal = str(goal_key or "ENDURANCE_BASE").upper()
+    roles = _v4883_strength_slot_roles(main_set)
+    core = set(_V4883_GOAL_CORE_ROLES.get(goal) or _V4883_GOAL_CORE_ROLES["ENDURANCE_BASE"])
+    missing = sorted(core - roles)
+    return {"pass": not missing, "roles": sorted(roles), "missing_core_roles": missing}
+def _strength_type_key(value):
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+def _is_strength_activity(activity):
+    return _strength_type_key((activity or {}).get("type")) == "weighttraining"
+def build_strength_pattern(activities, now=None):
+    now = now or get_rome_now()
+    today = now.date()
+    window_start = today - timedelta(days=STRENGTH_PATTERN_LOOKBACK_DAYS - 1)
+    rows = [r for r in _rhythm_activity_records(activities, now) if _strength_type_key(r.get("type")) == "weighttraining" and r["date"] >= window_start]
+    rows.sort(key=lambda r: r["dt"])
+    if not rows:
+        return {
+            "state": "NONE", "confidence": "NONE", "can_propose": False,
+            "sessions_90d": 0, "distinct_weeks": 0, "last_session_date": None,
+            "days_since_last": None, "likely_weekdays": [], "typical_start_minute": None,
+            "typical_duration_min": None, "median_gap_days": None, "regularity": 0.0,
+            "pattern_mode": "NONE", "method_note": "No canonical Intervals WeightTraining history in the last 90 days.",
+        }
+    dates = sorted({r["date"] for r in rows})
+    last_date = dates[-1]
+    days_since_last = max(0, (today - last_date).days)
+    distinct_weeks = len({(d.isocalendar().year, d.isocalendar().week) for d in dates})
+    session_count = len(rows)
+    first_date = dates[0]
+    weekday_occurrences = {i: 0 for i in range(7)}
+    cursor = first_date
+    while cursor <= today:
+        weekday_occurrences[cursor.weekday()] += 1
+        cursor += timedelta(days=1)
+    weekday_counts = {i: 0 for i in range(7)}
+    for d in dates:
+        weekday_counts[d.weekday()] += 1
+    weekday_support = {
+        i: (weekday_counts[i] / weekday_occurrences[i]) if weekday_occurrences[i] else 0.0
+        for i in range(7)
+    }
+    likely_weekdays = [i for i in range(7) if weekday_counts[i] >= 2 and weekday_support[i] >= 0.50]
+    covered_sessions = sum(weekday_counts[i] for i in likely_weekdays)
+    weekday_coverage = covered_sessions / max(1, len(dates))
+    gaps = [(b - a).days for a, b in zip(dates, dates[1:]) if (b - a).days > 0]
+    median_gap = statistics.median(gaps) if gaps else None
+    if median_gap and len(gaps) >= 3:
+        rel_dev = statistics.median(abs(g - median_gap) / max(1.0, float(median_gap)) for g in gaps)
+        gap_consistency = max(0.0, min(1.0, 1.0 - rel_dev))
+    else:
+        gap_consistency = 0.0
+    regularity = round(max(weekday_coverage, gap_consistency), 3)
+    if likely_weekdays and weekday_coverage >= 0.65:
+        pattern_mode = "WEEKDAY"
+    elif gap_consistency >= 0.70:
+        pattern_mode = "CADENCE"
+    else:
+        pattern_mode = "MIXED"
+    if session_count == 1:
+        state, confidence = "INCIDENTAL", "LOW"
+    elif session_count <= 3:
+        state, confidence = "OBSERVED", "LOW"
+    elif days_since_last > 21:
+        state, confidence = "DORMANT", "LOW"
+    elif session_count >= STRENGTH_PATTERN_ESTABLISHED_MIN_SESSIONS and distinct_weeks >= STRENGTH_PATTERN_ESTABLISHED_MIN_WEEKS and days_since_last <= STRENGTH_PATTERN_MAX_ACTIVE_GAP_DAYS and regularity >= 0.65:
+        state, confidence = "ESTABLISHED", "HIGH"
+    elif session_count >= 4 and distinct_weeks >= 3 and days_since_last <= 21 and regularity >= 0.55:
+        state, confidence = "EMERGING", "MODERATE"
+    else:
+        state, confidence = "OBSERVED", "LOW"
+    starts = [(r.get("start_minute"), 1.0) for r in rows if r.get("start_minute") is not None]
+    durations = [r.get("duration_min") for r in rows if r.get("duration_min")]
+    typical_start = _rhythm_weighted_median(starts) if starts else None
+    typical_duration = statistics.median(durations) if durations else None
+    expected_next_date = None
+    if median_gap and pattern_mode in {"CADENCE", "MIXED"}:
+        expected_next_date = last_date + timedelta(days=max(1, int(round(median_gap))))
+    return {
+        "state": state, "confidence": confidence, "can_propose": state == "ESTABLISHED",
+        "sessions_90d": session_count, "distinct_weeks": distinct_weeks,
+        "last_session_date": last_date.isoformat(), "days_since_last": days_since_last,
+        "likely_weekdays": likely_weekdays,
+        "likely_weekday_labels": [_RHYTHM_WEEKDAYS[i] for i in likely_weekdays],
+        "typical_start_minute": round(typical_start) if typical_start is not None else None,
+        "typical_start_label": _rhythm_format_minutes(typical_start),
+        "typical_duration_min": round(float(typical_duration), 1) if typical_duration is not None else None,
+        "typical_duration_label": _rhythm_format_duration(typical_duration),
+        "median_gap_days": round(float(median_gap), 1) if median_gap is not None else None,
+        "expected_next_date": expected_next_date.isoformat() if expected_next_date else None,
+        "weekday_coverage": round(weekday_coverage, 3), "gap_consistency": round(gap_consistency, 3),
+        "regularity": regularity, "pattern_mode": pattern_mode,
+        "method_note": "Pattern-only model from canonical Intervals WeightTraining history; occurrence establishes eligibility, while goal-aligned exercise/load progression is generated downstream only when an eligible strength slot is actually selected.",
+    }
+def _v4882_strength_goal_context(adaptive_roadmap=None):
+    road = adaptive_roadmap or {}
+    key = str(road.get("goal_key") or "ENDURANCE_BASE").upper()
+    profile = _V4882_STRENGTH_GOAL_PROFILES.get(key) or _V4882_STRENGTH_GOAL_PROFILES["ENDURANCE_BASE"]
+    stage = str(((road.get("stage") or {}).get("code")) or "BUILD").upper()
+    load_cfg = _V4882_STRENGTH_LOAD_BY_STAGE.get(stage) or _V4882_STRENGTH_LOAD_BY_STAGE["BUILD"]
+    return key, profile, stage, load_cfg
+def strength_pattern_text(pattern, adaptive_roadmap=None):
+    p = pattern or {}
+    if not p.get("can_propose"):
+        return ""
+    days = ", ".join(p.get("likely_weekday_labels") or []) or "cadence-based"
+    duration = p.get("typical_duration_label") or "duration not established"
+    start = p.get("typical_start_label") or "time not established"
+    goal_key, profile, stage, _ = _v4882_strength_goal_context(adaptive_roadmap)
+    return (
+        "LEARNED STRENGTH PATTERN (deterministic; optional cycling-support behavior):\n"
+        f'- State ESTABLISHED | {p.get("sessions_90d", 0)} sessions / 90d across {p.get("distinct_weeks", 0)} weeks | mode {p.get("pattern_mode", "MIXED")} | regularity {p.get("regularity", 0):.2f}.\n'
+        f'- Typical pattern: {days}; around {start}; {duration}; last session {p.get("last_session_date") or "unknown"}.\n'
+        f'- Declared cycling goal context: {profile.get("label")} | roadmap stage {stage}.\n'
+        "- You MAY choose Strength only when that exact opportunity matches the learned pattern. Use intensity exactly 'Strength' when you do.\n"
+        "- Strength remains optional and must never displace an authoritative race/Calendar/restriction decision. If selected, Python owns the exact rotating goal-aligned gym prescription and progressive-load rule; do not invent a competing exercise list.\n"
+    )
+def _v4875_ai_strength_intent(raw):
+    if not isinstance(raw, dict):
+        return False
+    intensity = str(raw.get("intensity") or "").strip().lower()
+    title = str(raw.get("title") or "").strip().lower()
+    if intensity == "strength":
+        return True
+    return bool(re.search(r"\b(?:weight training|gym session|strength session|strength training|resistance training|lifting session)\b", title))
+def _v4875_strength_slot_supported(pattern, slot):
+    p = pattern or {}
+    if not p.get("can_propose") or not isinstance(slot, dict):
+        return False
+    if slot.get("is_race") or slot.get("is_planned_training") or str(slot.get("restriction") or "").upper() != "NONE":
+        return False
+    try:
+        slot_day = date.fromisoformat(str(slot.get("date") or "")[:10])
+    except ValueError:
+        return False
+    likely = set(int(x) for x in (p.get("likely_weekdays") or []) if isinstance(x, int) or str(x).isdigit())
+    if likely and slot_day.weekday() in likely:
+        return True
+    expected = p.get("expected_next_date")
+    if expected:
+        try:
+            expected_day = date.fromisoformat(str(expected)[:10])
+            return abs((slot_day - expected_day).days) <= 1
+        except ValueError:
+            pass
+    return False
+def _v4882_strength_progression_text(load_cfg):
+    cfg = load_cfg or _V4882_STRENGTH_LOAD_BY_STAGE["BUILD"]
+    return (
+        f'Primary lift {cfg.get("primary")} and secondary lifts {cfg.get("secondary")}, using loads that leave {cfg.get("rir")}. '
+        "When every prescribed rep is clean and the final set still meets the reps-in-reserve target, add about 2.5–5% the next time that same session variant returns. "
+        "If rep speed/technique clearly deteriorates, hold the load; if pain appears, stop that movement and use a familiar pain-free alternative. No failure reps and no 1RM testing are required."
+    )
+def _v4875_strength_session(slot, pattern, adaptive_roadmap=None, sequence_offset=0):
+    p = pattern or {}
+    content = p.get("content_profile") or {}
+    duration_min = _rhythm_num(p.get("typical_duration_min"))
+    duration = p.get("typical_duration_label") or "Your usual duration"
+    goal_key, profile, stage, load_cfg = _v4882_strength_goal_context(adaptive_roadmap)
+    variants = list(profile.get("variants") or [])
+    variant_index = (int(p.get("sessions_90d") or 0) + int(sequence_offset or 0)) % max(1, len(variants))
+    variant = variants[variant_index] if variants else ("A · GENERAL", "Squat or leg press", "Romanian deadlift", "Split squat", "Trunk brace")
+    variant_name, base_primary, base_secondary1, base_secondary2, base_accessory = variant
+    used = set()
+    primary_roles = _v4883_strength_slot_roles(base_primary) or {"KNEE"}
+    primary = _v4883_strength_pick_familiar(content, primary_roles, base_primary, used)
+    used.add(primary)
+    secondary1_roles = _v4883_strength_slot_roles(base_secondary1) or {"HINGE"}
+    secondary1 = _v4883_strength_pick_familiar(content, secondary1_roles, base_secondary1, used)
+    used.add(secondary1)
+    secondary2_roles = _v4883_strength_slot_roles(base_secondary2) or {"UNILATERAL"}
+    secondary2 = _v4883_strength_pick_familiar(content, secondary2_roles, base_secondary2, used)
+    used.add(secondary2)
+    accessory_roles = _v4883_strength_slot_roles(base_accessory) or {"TRUNK"}
+    accessory = _v4883_strength_pick_familiar(content, accessory_roles, base_accessory, used)
+    if "EXPLOSIVE" in primary_roles and not any("EXPLOSIVE" in set((x or {}).get("roles") or []) for x in (content.get("familiar_exercises") or [])):
+        primary = "Squat or leg press with fast concentric intent"
+    primary_scheme = str(load_cfg.get("primary") or "3 × 6")
+    secondary_scheme = str(load_cfg.get("secondary") or "2–3 × 6–8")
+    progression = _v4882_strength_progression_text(load_cfg)
+    main_set = (
+        "Warm-up 8–10 min with easy movement plus 2–3 gradual practice sets for the first lift. "
+        f"{primary}: {primary_scheme}. {secondary1}: {secondary_scheme}. {secondary2}: {secondary_scheme}. "
+        f"{accessory}: 2–3 controlled sets, stopping well before failure. {progression}"
+    )
+    alignment_guard = _v4883_strength_alignment_guard(main_set, goal_key)
+    if not alignment_guard.get("pass"):
+        primary, secondary1, secondary2, accessory = base_primary, base_secondary1, base_secondary2, base_accessory
+        if "EXPLOSIVE" in _v4883_strength_slot_roles(primary) and not any("EXPLOSIVE" in set((x or {}).get("roles") or []) for x in (content.get("familiar_exercises") or [])):
+            primary = "Squat or leg press with fast concentric intent"
+        main_set = (
+            "Warm-up 8–10 min with easy movement plus 2–3 gradual practice sets for the first lift. "
+            f"{primary}: {primary_scheme}. {secondary1}: {secondary_scheme}. {secondary2}: {secondary_scheme}. "
+            f"{accessory}: 2–3 controlled sets, stopping well before failure. {progression}"
+        )
+        alignment_guard = _v4883_strength_alignment_guard(main_set, goal_key)
+    history_status = str(content.get("status") or "UNKNOWN")
+    if content.get("informative_sessions"):
+        structure_status = str(content.get("structure_status") or "UNKNOWN").lower().replace("_", " ")
+        scope = f"movement alignment {history_status.lower()}"
+        if structure_status != "unknown":
+            scope += f", loading structure {structure_status}"
+        history_phrase = (
+            f"Your recent gym-content evidence shows {scope} for this bike goal; familiar aligned movements are retained where they fit, and missing qualities are filled without copying the old routine blindly."
+        )
+    else:
+        history_phrase = (
+            "Intervals confirms your gym habit but does not expose enough exercise detail to judge the old routine, so THE LAB does not pretend it knows your previous exercise mix; use familiar pain-free equivalents where needed."
+        )
+    why = (
+        f"This slot matches your established gym pattern, and this rotating {variant_name} session supports your declared {profile.get('label')} goal: {profile.get('intent')}. "
+        f"{history_phrase} The gym remains support for the bike rather than a separate objective; the load progresses only when execution is clean enough to earn it."
+    )
+    reasons = ["LEARNED_STRENGTH_PATTERN", "GOAL_ALIGNED_STRENGTH", "ROTATING_STRENGTH_SERIES", "PROGRESSIVE_LOAD_RULE", "STRENGTH_HISTORY_ALIGNMENT"]
+    if alignment_guard.get("pass"):
+        reasons.append("STRENGTH_GOAL_ALIGNMENT_GUARD_PASS")
+    else:
+        reasons.append("STRENGTH_GOAL_ALIGNMENT_GUARD_UNRESOLVED")
+    if content.get("informative_sessions"):
+        reasons.append("STRENGTH_HISTORY_CONTENT_OBSERVED")
+    else:
+        reasons.append("STRENGTH_HISTORY_CONTENT_UNKNOWN")
+    return {
+        "slot": slot.get("label") or "Upcoming session", "date": slot.get("date"), "period": slot.get("period"),
+        "title": f"Strength · {profile.get('label')} · {variant_name}", "duration": duration,
+        "duration_min": duration_min, "duration_max": duration_min,
+        "intensity": "Strength", "intensity_class": "strength", "session_kind": "STRENGTH",
+        "main_set": main_set, "why": why,
+        "restriction": "NONE", "environment": "INDOOR", "planned_demand": None,
+        "is_planned_training": False, "source": slot.get("source"), "timing_confidence": slot.get("timing_confidence"),
+        "start_minute": slot.get("start_minute"), "duration_hint_min": duration_min,
+        "hard_spacing_relevant": False, "hard_spacing_hours": None, "since_last_hard_hours": None,
+        "quality_relevance": "NOT_HARD", "athlete_intent_notice": None, "definition_notice": None,
+        "strength_goal_key": goal_key, "strength_goal_label": profile.get("label"),
+        "strength_roadmap_stage": stage, "strength_variant": variant_name,
+        "strength_progression_rule": progression,
+        "strength_history_status": history_status,
+        "strength_history_confidence": content.get("confidence") or "NONE",
+        "strength_history_informative_sessions": int(content.get("informative_sessions") or 0),
+        "strength_history_familiar_exercises": [x.get("name") for x in (content.get("familiar_exercises") or [])[:6]],
+        "strength_alignment_guard": alignment_guard,
+        "coherence_reasons": reasons,
+    }
+def _v4882_strength_suggestion_guard(text, strength_pattern=None, adaptive_roadmap=None, planning_context=None):
+    p = strength_pattern or {}
+    road = adaptive_roadmap or {}
+    planning = planning_context or {}
+    if p.get("can_propose") or int(p.get("sessions_90d") or 0) > 0 or not road.get("available") or planning.get("health_override"):
+        return None
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not s:
+        return None
+    sentences = _v4844_sentence_list(s)
+    s = (sentences[0] if sentences else s).strip()
+    overprescriptive = bool(re.search(r"\b\d+\s*[×x]\s*\d+|\b\d+\s*(?:kg|lb|lbs)\b|\b(?:sets?|reps?|squat|deadlift|lunge|leg press|hip thrust|jump squat)\b", s, flags=re.I))
+    if overprescriptive:
+        _, profile, _, _ = _v4882_strength_goal_context(road)
+        s = f"If you ever want to add gym work, a low-frequency strength block aligned with {profile.get('label')} could be useful support, but it is optional and THE LAB will not schedule it unless strength becomes part of your routine."
+    if len(s) > 260:
+        s = s[:257].rstrip(" ,;:-") + "…"
+    return s
+def _v1964_weekday_evidence(recent, established, season, weekday_scores, state):
+    """Training opportunities are supported per weekday, not capped by rounded weekly volume.
+
+    A date has evidence when it repeats at least twice in the recent sample, or
+    reliably in a longer established sample. Blended probability alone must not
+    invent a day with no repeated observations. "Likely" is a candidate, never
+    a mandate to train or a recovery clearance.
+    """
+    def occurrences(stats, weekday):
+        try:
+            lo = date.fromisoformat(str(stats.get("start_date")))
+            hi = date.fromisoformat(str(stats.get("end_date")))
+        except (TypeError, ValueError):
+            return 0
+        if hi < lo:
+            return 0
+        first = (weekday - lo.weekday()) % 7
+        return max(0, ((hi - lo).days - first) // 7 + 1)
+
+    result = {}
+    for wd in range(7):
+        r_occ = occurrences(recent, wd)
+        e_occ = occurrences(established, wd)
+        s_occ = occurrences(season, wd)
+        rp = float((recent.get("weekday_probability") or {}).get(wd) or 0.0)
+        ep = float((established.get("weekday_probability") or {}).get(wd) or 0.0)
+        sp = float((season.get("weekday_probability") or {}).get(wd) or 0.0)
+        r_days = int(round(r_occ * rp))
+        e_days = int(round(e_occ * ep))
+        s_days = int(round(s_occ * sp))
+        score = float(weekday_scores.get(wd) or 0.0)
+        recent_repeated = (r_occ >= 2 and r_days >= 2 and rp >= (2.0 / 3.0 - 0.001))
+        established_repeated = (e_occ >= 4 and e_days >= 3 and ep >= (2.0 / 3.0 - 0.001)
+                                and score >= 0.50)
+        supported = (state != "LEARNING" and (recent_repeated or established_repeated))
+        result[wd] = {
+            "recent_observed": r_days, "recent_opportunities": r_occ,
+            "established_observed": e_days, "established_opportunities": e_occ,
+            "long_term_observed": s_days, "long_term_opportunities": s_occ,
+            "blended_score": round(score, 3), "supported": supported,
+            "reason": ("RECENT_REPEAT" if recent_repeated else
+                       "ESTABLISHED_REPEAT" if established_repeated else
+                       "LEARNING" if state == "LEARNING" else "INSUFFICIENT_WEEKDAY_EVIDENCE"),
+        }
+    return result
+
+def build_training_rhythm(season_activities, now=None, scope="CYCLING"):
+    now = now or get_rome_now()
+    today = now.date()
+    records = _rhythm_activity_records(season_activities, now)
+    if str(scope or "CYCLING").upper() == "CYCLING":
+        records = [r for r in records if _v4887_is_cycling_activity({"type": r.get("type"), "name": r.get("name")})]
+    elif str(scope or "").upper() == "STRENGTH":
+        records = [r for r in records if _v4890_is_strength_activity({"type": r.get("type"), "name": r.get("name")})]
+    historical = [r for r in records if r["date"] < today]
+    history_start = min((r["date"] for r in historical), default=None)
+    end = today - timedelta(days=1)
+    recent = _rhythm_window_stats(historical, end, RHYTHM_RECENT_DAYS, history_start)
+    established = _rhythm_window_stats(historical, end, RHYTHM_ESTABLISHED_DAYS, history_start)
+    season = _rhythm_window_stats(historical, end, RHYTHM_SEASON_DAYS, history_start)
+    prior_end = end - timedelta(days=RHYTHM_RECENT_DAYS)
+    prior_start = max(prior_end - timedelta(days=27), history_start) if history_start else prior_end - timedelta(days=27)
+    prior = _rhythm_span_stats(historical, prior_start, prior_end) if prior_end >= prior_start else _rhythm_span_stats([], None, None)
+    shift_signals = []
+    if recent.get("days_observed", 0) >= 10 and prior.get("days_observed", 0) >= 14 and recent.get("training_days", 0) >= 3 and prior.get("training_days", 0) >= 3:
+        if abs(recent["days_per_week"] - prior["days_per_week"]) >= 1.25:
+            shift_signals.append("training-day frequency changed")
+        if abs(recent["sessions_per_week"] - prior["sessions_per_week"]) >= 1.5:
+            shift_signals.append("session frequency changed")
+        prior_hours = prior.get("hours_per_week") or 0.0
+        if prior_hours >= 2.0:
+            hours_change = abs(recent.get("hours_per_week", 0.0) - prior_hours)
+            if hours_change >= max(2.5, prior_hours * 0.30):
+                shift_signals.append("weekly volume changed")
+        if abs(recent.get("double_day_pct", 0.0) - prior.get("double_day_pct", 0.0)) >= 0.25:
+            shift_signals.append("double-session pattern changed")
+        rdur, pdur = recent.get("median_duration_min"), prior.get("median_duration_min")
+        if rdur and pdur and abs(rdur - pdur) >= max(30, pdur * 0.35):
+            shift_signals.append("typical session duration changed")
+    if established.get("days_observed", 0) < 14 or established.get("training_days", 0) < 3:
+        state = "LEARNING"
+        confidence = "LOW"
+    elif shift_signals:
+        state = "ADAPTING"
+        confidence = "MODERATE" if established.get("training_days", 0) >= 6 else "LOW"
+    elif established.get("days_observed", 0) >= 35 and established.get("training_days", 0) >= 8:
+        state = "STABLE"
+        confidence = "HIGH"
+    else:
+        state = "TRACKING"
+        confidence = "MODERATE"
+    if state == "ADAPTING":
+        raw_weights = ((recent, 0.30), (established, 0.52), (season, 0.18))
+    elif recent.get("training_days", 0) >= 3:
+        raw_weights = ((recent, 0.35), (established, 0.50), (season, 0.15))
+    elif established.get("training_days", 0) >= 4:
+        raw_weights = ((recent, 0.25), (established, 0.55), (season, 0.20))
+    else:
+        raw_weights = ((recent, 0.10), (established, 0.45), (season, 0.45))
+    valid = [(stats, weight) for stats, weight in raw_weights if stats.get("days_observed", 0) > 0]
+    total_weight = sum(weight for _, weight in valid) or 1.0
+    valid = [(stats, weight / total_weight) for stats, weight in valid]
+    def blend(key):
+        return sum(float(stats.get(key) or 0.0) * weight for stats, weight in valid)
+    def blend_optional(key):
+        pairs = []
+        for stats, weight in valid:
+            value = _rhythm_num(stats.get(key))
+            if value is not None:
+                pairs.append((value, weight))
+        if not pairs:
+            return None
+        denom = sum(weight for _, weight in pairs) or 1.0
+        return sum(value * weight for value, weight in pairs) / denom
+    weekday_scores = {}
+    weekday_double = {}
+    for wd in range(7):
+        weekday_scores[wd] = round(sum(float(stats.get("weekday_probability", {}).get(wd) or 0.0) * weight for stats, weight in valid), 3)
+        weekday_double[wd] = round(sum(float(stats.get("weekday_double_probability", {}).get(wd) or 0.0) * weight for stats, weight in valid), 3)
+    est_days = max(0.0, min(7.0, blend("days_per_week")))
+    est_sessions = max(est_days, blend("sessions_per_week"))
+    est_hours = max(0.0, blend("hours_per_week"))
+    double_propensity = max(0.0, min(1.0, blend("double_day_pct")))
+    # Estimated days/week describes observed volume; it is NOT the number of
+    # weekdays allowed to receive a candidate. An athlete can alternate days.
+    weekday_evidence = _v1964_weekday_evidence(recent, established, season, weekday_scores, state)
+    recent_start = end - timedelta(days=RHYTHM_RECENT_DAYS - 1)
+    for wd in range(7):
+        weekday_evidence[wd]["recent_recorded_dates"] = sorted({
+            row["date"].isoformat() for row in historical
+            if row["weekday"] == wd and row["date"] >= recent_start
+        })
+    ranked_days = sorted(range(7), key=lambda wd: (-weekday_scores[wd], wd))
+    likely_weekdays = [wd for wd in ranked_days if weekday_evidence[wd]["supported"]]
+    if len(likely_weekdays) == 7:
+        # Uniform 4-5d/week athletes do not thereby train *every* weekday.
+        # Only seven strong, nearly-daily weekday priors justify daily slots.
+        pattern_strength = "HIGH" if min(weekday_scores.values()) >= 0.80 else "LOW"
+    elif likely_weekdays:
+        top = [weekday_scores[i] for i in likely_weekdays]
+        rest = [weekday_scores[i] for i in ranked_days if i not in likely_weekdays]
+        separation = (statistics.mean(top) if top else 0) - (statistics.mean(rest) if rest else 0)
+        pattern_strength = "HIGH" if separation >= 0.28 else ("MODERATE" if separation >= 0.12 else "LOW")
+    else:
+        pattern_strength = "LOW"
+    clock_profile = _rhythm_clock_profile(historical, today, history_start)
+    median_duration = _rhythm_weighted_median([
+        (stats.get("median_duration_min"), weight) for stats, weight in valid if stats.get("median_duration_min")
+    ])
+    if median_duration is None:
+        median_duration = clock_profile.get("overall_duration_min")
+    median_gap = _rhythm_training_gap(historical, today)
+    typical_day_load = blend_optional("median_day_load")
+    day_load_q25 = blend_optional("day_load_q25")
+    day_load_q75 = blend_optional("day_load_q75")
+    typical_day_minutes = blend_optional("median_day_minutes")
+    day_minutes_q25 = blend_optional("day_minutes_q25")
+    day_minutes_q75 = blend_optional("day_minutes_q75")
+    typical_days = [_RHYTHM_WEEKDAYS[wd][:3] for wd in sorted(likely_weekdays)]
+    recent_label = f'{recent.get("training_days",0)}d/{recent.get("sessions",0)}s · {recent.get("hours_per_week",0):.1f} h/wk'
+    established_label = f'{established.get("training_days",0)}d/{established.get("sessions",0)}s · {established.get("hours_per_week",0):.1f} h/wk'
+    short_label = f'{est_days:.1f} d/wk · {est_hours:.1f} h/wk' if state != "LEARNING" else "Learning from Intervals"
+    detail_parts = [state]
+    if typical_days and pattern_strength != "LOW":
+        detail_parts.append("likely " + " · ".join(typical_days))
+    if double_propensity >= 0.35:
+        detail_parts.append(f'doubles {round(double_propensity*100)}%')
