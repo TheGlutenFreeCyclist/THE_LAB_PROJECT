@@ -6,7 +6,9 @@ staging gate, not a substitute for production-equivalent Neon and Android E2E.
 import json
 import os
 import tempfile
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 with tempfile.TemporaryDirectory(prefix="inc051-auth-") as tmp:
     os.environ.pop("DATABASE_URL", None)
