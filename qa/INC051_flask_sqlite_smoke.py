@@ -61,8 +61,13 @@ with tempfile.TemporaryDirectory(prefix="inc051-auth-") as tmp:
     assert a.get("/login").status_code == 200, "Login page unavailable"
 
     for client, suffix in ((a, "A"), (b, "B")):
+        assert client.get("/login").status_code == 200
+        with client.session_transaction() as sess:
+            csrf_token = sess.get("csrf_token")
+        assert csrf_token, "Missing login CSRF token"
         response = client.post("/login", data={
-            "username": "inc051_qa_" + suffix.lower(), "password": password})
+            "username": "inc051_qa_" + suffix.lower(), "password": password,
+            "csrf_token": csrf_token})
         assert response.status_code in (302, 303), (suffix, response.status_code)
         assert client.get("/session/csrf").status_code == 200
         state = client.get("/__inc051_test_session")
