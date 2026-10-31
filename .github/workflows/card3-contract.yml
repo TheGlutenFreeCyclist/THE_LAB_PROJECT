@@ -1,0 +1,28 @@
+name: Card 3 source-of-truth contract
+on:
+  push:
+    paths:
+      - 'the_lab_app.py'
+      - 'qa/INC051_release_gate.py'
+      - 'qa/_load_fix.py'
+      - 'qa/CARD3_CONTRACT_051.md'
+      - '.github/workflows/card3-contract.yml'
+  pull_request:
+    paths:
+      - 'the_lab_app.py'
+      - 'qa/**'
+      - 'qa/CARD3_CONTRACT_051.md'
+      - '.github/workflows/card3-contract.yml'
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install isolated gate dependencies
+        run: python -m pip install --disable-pip-version-check Jinja2 requests
+      - name: Block duplicate or ownerless Card 3 prescriptions
+        run: python qa/INC051_release_gate.py
