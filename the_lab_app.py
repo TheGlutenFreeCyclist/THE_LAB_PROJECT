@@ -63459,6 +63459,167 @@ APP_VERSION = ('THE LAB · PRODUCT V4.9.209 R196.9.109 · INC-056 '
                'SEPARATE FUTURE SCIENTIFIC PLANNING FROM EXECUTION CLEARANCE '
                '· OWNER-BOUND · OFFLINE RELEASE CANDIDATE')
 
+
+# INC-057 / R196.9.110 — REPAIR CURRENT OFFER -> CARD 3 PROJECTION DEADLOCK.
+# Offline-scoped source-lock correction. A canonical offered structure need not
+# pretend that unverified PERSONAL WATTS are a prescription. This read-only
+# bridge reads the already-issued canonical offer (never ranks or produces a
+# workout), verifies its identity/ledger fingerprint and the signed-in owner,
+# then projects only library mechanics. It cannot clear training or fuel a plan.
+_INC057_PREVIOUS_CARD3 = _nova_r1969104_canonical_card3
+_INC057_PREVIOUS_UI = _v4891_prepare_snapshot_for_ui
+INC057_SOURCE = 'CURRENT_CANONICAL_OFFER_STRUCTURE_ONLY'
+
+
+def _nova_r1969104_canonical_card3(data, expected_owner_user_id=None):
+    previous = _INC057_PREVIOUS_CARD3(data, expected_owner_user_id)
+    if (previous.get('verified_offer') or previous.get('verified_future_plan')
+            or previous.get('planned_quality')):
+        return previous
+    d = data if isinstance(data, dict) else {}
+    dec = d.get('nova_decision') or {}
+    road = d.get('adaptive_roadmap') or {}
+    ctx = d.get('planning_context') or {}
+    training_state = d.get('training_state') or {}
+    offer = d.get('next_quality_offer') or {}
+    integrity = d.get('quality_offer_integrity') or {}
+    workout = offer.get('workout') or {} if isinstance(offer, dict) else {}
+    if not all(isinstance(v, dict) for v in
+               (dec, road, ctx, training_state, offer, integrity, workout)):
+        return previous
+    # The renderer must have a genuine request-bound athlete. Admin QA target
+    # is resolved by the existing authenticated owner function, not by an
+    # untrusted owner id embedded in payloads.
+    owner = _nova_inc051_verified_owner_id(expected_owner_user_id)
+    if (not owner or not hmac.compare_digest(
+            str(d.get('future_quality_owner_scope') or ''),
+            _nova_inc050_owner_scope(owner))):
+        return previous
+    if ctx.get('health_override'):
+        return previous
+    goal = str(dec.get('goal_key') or road.get('goal_key') or '').upper()
+    dimension = str(((road.get('scientific_progression') or {}).get('dimension')
+        or dec.get('dimension') or '')).upper()
+    workout_id = str(offer.get('workout_id') or '')
+    template = _R19696_LIBRARY_INDEX.get(workout_id)
+    canonical = _nova_r1969102_catalogue_copy(workout_id, goal)
+    if (not workout_id or not isinstance(template, dict) or not canonical
+        or not goal or not dimension
+        or str(template.get('goal') or '').upper() != goal
+        or dimension not in set(template.get('dimensions') or ())
+        or ((workout.get('goal_key') or workout.get('goal'))
+            and str(workout.get('goal_key') or workout.get('goal')).upper() != goal)
+        or str(workout.get('nova_workout_id') or '') != workout_id
+        or offer.get('schema') != R196956_SCHEMA
+        or integrity.get('schema') != R196963_QUALITY_SCHEMA
+        or offer.get('offer_status') != 'OFFERED'
+        or offer.get('visibility_status') != 'QUALITY_OFFER_VISIBLE'
+        or offer.get('source') not in {
+            'CURRENT_CANONICAL_COMPILED', 'PRIOR_ISSUED_CANONICAL',
+            'SAME_ENGINE_DETACHED_OFFER_ONLY'}
+        or integrity.get('state') != 'PASS'
+        or integrity.get('offer_present') is not True
+        or integrity.get('visible_in_card_3') is not True
+        or integrity.get('mechanics_complete') is not True
+        or integrity.get('science_provenance') is not True
+        or integrity.get('offer_source') != offer.get('source')
+        or integrity.get('workout_id') != workout_id
+        or not offer.get('offer_id')
+        or not hmac.compare_digest(str(offer.get('offer_id') or ''),
+                                   str(integrity.get('offer_id') or ''))
+        or offer.get('execution_clearance_is_not_part_of_offer') is not True
+        or integrity.get('allow_unconditional_execution') is not False):
+        return previous
+    try:
+        if not _nova_r196956_structural_ok(workout):
+            return previous
+        # The real producer's workout fingerprint is recomputed from the
+        # actual workout. An integrity label alone is insufficient.
+        fingerprint = _v136_prescription_fingerprint(
+            _v4840_ledger_session_summary(workout))
+        if (not fingerprint
+            or not hmac.compare_digest(str(fingerprint),
+                str(offer.get('dose_fingerprint') or ''))
+            or not hmac.compare_digest(str(fingerprint),
+                str(integrity.get('issued_workout_fingerprint') or ''))):
+            return previous
+    except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError):
+        return previous
+    # No unbound 'why', mutable session composition, exploratory FTP band or
+    # simulated duration is used here. Only catalogued canonical mechanics.
+    action = str(dec.get('action') or '').upper()
+    clearance = str(offer.get('execution_authority') or '').upper()
+    # Match the future planner's independent RECOVERY_HOLD safety posture.
+    # A stale or inconsistent TRAIN label cannot down-grade a hard stop into
+    # RECHECK_REQUIRED, even though neither preview ever authorizes execution.
+    if (action in {'HOLD','VALIDATE','RACE_PRIORITY'}
+        or str(training_state.get('state') or '').upper() in {'RECOVERY_HOLD','RECOVERY HOLD'}
+        or dec.get('hard_session_allowed') is not True
+        or clearance == 'DO_NOT_EXECUTE_NOW'):
+        clearance = 'DO_NOT_EXECUTE_NOW'
+    else:
+        clearance = 'RECHECK_REQUIRED'
+    return dict(previous, state='CURRENT_CANONICAL_STRUCTURE_NOT_CLEARED',
+        offer_structure_only=True, planned_quality=False,
+        verified_offer=False, verified_future_plan=False,
+        direction_only=False, workout_id=workout_id,
+        title=canonical['title'], structure=canonical['structure'],
+        execution=canonical['execution'], purpose=canonical['purpose'],
+        personalized_watts=None, power_source=None, phases=[],
+        execution_clearance=clearance, is_scheduled=False,
+        execution_authorized_by_preview=False,
+        reason=('Nova has already selected this exact canonical workout as an '
+            'athlete-specific offer. Its structure is displayed for planning '
+            'only. Individual power dose and current execution clearance are '
+            'not established here; do not execute hard work on this preview.'))
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    out = _INC057_PREVIOUS_UI(data)
+    if not isinstance(out, dict):
+        return out
+    card = _nova_r1969104_canonical_card3(out)
+    out = dict(out)
+    out['nova_card3_workout_view'] = card
+    if card.get('offer_structure_only'):
+        direction = dict(out.get('next_quality_direction') or {})
+        direction.update(source=INC057_SOURCE, title=card['title'],
+            athlete_title=card['title'], athlete_explanation=card['reason'],
+            referenced_canonical_template_id=card['workout_id'],
+            direction_only=True, is_a_prescription=False,
+            is_scheduled=False, execution_authorized_by_preview=False,
+            suggested_date=None, suggested_time=None)
+        out['next_quality_direction'] = direction
+        out['quality_direction_fuel'] = None
+    return out
+
+
+# The executable offer and genuine INC-056 planning branches remain untouched.
+# Add one non-executable canonical-offer rendering branch, never an alternate
+# catalogue selector or template chosen by Jinja.
+_INC057_CARD3_MARKER = '{% elif card3.planned_quality %}'
+assert HOME_PAGE.count(_INC057_CARD3_MARKER) == 1, 'INC057_CARD3_MARKER_DRIFT'
+_INC057_CARD3_BRANCH = '''{% elif card3.offer_structure_only %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · CANONICAL OFFER</span></div>
+<h3>{{ card3.title|e }}</h3>
+<div class="v4-session-meta"><span class="v4-session-pill">SCIENTIFIC STRUCTURE · NOT CLEARED TO EXECUTE</span></div>
+<div class="r1969102-canonical-copy r1969110-offer-structure" role="group" aria-label="Current canonical quality offer without executable dose">
+<strong>YOUR NEXT QUALITY STRUCTURE</strong>
+<p><b>Work and recovery:</b> {{ card3.structure|e }}</p>
+<p><b>Training purpose:</b> {{ card3.purpose|e }}</p>
+<p><b>Personal watt targets:</b> Not verified for this view. No fixed, exploratory or historical power range is execution clearance.</p>
+<p><b>Execution:</b> {{ card3.execution_clearance|replace('_',' ')|e }}. Reassess recovery, actual training window and personalized dose before any hard intervals.</p>
+<small>{{ card3.reason|e }}</small>
+</div>
+'''
+HOME_PAGE = HOME_PAGE.replace(_INC057_CARD3_MARKER,
+    _INC057_CARD3_BRANCH + _INC057_CARD3_MARKER, 1)
+assert HOME_PAGE.count('r1969110-offer-structure') == 1, 'INC057_DUPLICATE_CARD3'
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · PRODUCT V4.9.211 R196.9.111 · INC-058 '
+    'CARD3 RECOVERY HOLD EXECUTION LABEL SAFETY ALIGNMENT '
+    '· OWNER-BOUND · OFFLINE RELEASE CANDIDATE')
+
 # INC-040: Install all adapters and Jinja before starting direct Flask server.
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
