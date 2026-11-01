@@ -28710,10 +28710,15 @@ def _r177_best_effort_ai_status(event_id, status, error_class=None):
     except Exception as exc:
         _r177_snapshot_incident("AI_USAGE_STATUS", "UNEXPECTED", exc.__class__.__name__)
 
-@app.route("/analyze", methods=["POST"])
+@app.route("/analyze", methods=["GET", "POST"])
 def analyze():
     if not require_login():
         return redirect(url_for("login"))
+    # INC-053: GET/HEAD may follow a mobile WebView history/reload of a
+    # POST-rendered Snapshot. Never recompute a Snapshot from navigation.
+    # The existing owner-scoped /last-report GET handles missing reports safely.
+    if request.method != "POST":
+        return redirect(url_for("last_report"), code=303)
     error = None
     data = None
     chat_context_meta = None
@@ -63152,8 +63157,8 @@ def _v4891_prepare_snapshot_for_ui(data):
 # The last projection adapter reads only the sealed source. Its direction,
 # description, personalized watts and fueling are all checked against the
 # same compiled workout. Source-free fallback cannot become an executable plan.
-APP_VERSION=('THE LAB · PRODUCT V4.9.206 R196.9.106 · INC-051 '
-             'CARD3 CONTRACT FIREWALL · SINGLE FUEL SOURCE · OFFLINE QA')
+APP_VERSION=('THE LAB · PRODUCT V4.9.207 R196.9.107 · INC-053 '
+             'METHOD-SAFE SNAPSHOT NAVIGATION · INC-051 CARD3 CONTRACT PRESERVED')
 # INC-040: Install all adapters and Jinja before starting direct Flask server.
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
