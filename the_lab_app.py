@@ -62498,6 +62498,9 @@ APP_VERSION = ('THE LAB · PRODUCT V4.9.202 R196.9.102 · INC-046 SINGLE-SOURCE 
                '+ VERIFIED PERSONAL WATTS · INC-044 PRESERVED · TRAINING/HEALTH AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
 
 
+# INC-054 — no-plan Card 3: a development target cannot be titled as an
+# issued "Next quality" session. This is display-only: the canonical producer,
+# training decision, owner signature, and workout integrity gates are untouched.
 # INC-049 / R196.9.104 — current-offer source-of-truth lock for Card 3.
 # View contract only: science, training load, database and Calendar unchanged.
 R1969104_CARD3_SCHEMA = 'NOVA-R196.9.104-CURRENT-DECISION-CARD3-1'
@@ -62518,7 +62521,7 @@ def _nova_r1969104_canonical_card3(data):
                     dec.get('dimension') or pres.get('dimension') or '').upper()
     view = {
       'schema':R1969104_CARD3_SCHEMA,
-      'title':'Next quality · '+{'POWER_20':'20-minute power','POWER_5':'5-minute power',
+      'title':'Development goal · '+{'POWER_20':'20-minute power','POWER_5':'5-minute power',
        'POWER_1':'1-minute power','TIME_TRIAL':'time-trial performance',
        'VO2MAX':'VO₂max','SPRINTER':'sprint execution',
        'ENDURANCE_BASE':'endurance development'}.get(goal,'goal-specific development'),
@@ -62531,7 +62534,18 @@ def _nova_r1969104_canonical_card3(data):
          if action=='HOLD' else
          'A formal performance check is required before selecting another hard workout.'
          if action=='VALIDATE' else
-         'No complete, verified quality fits the currently assessed opportunities. Nova will reassess with new evidence or available time.')}
+         'Nova has not issued a complete verified quality workout for this snapshot. '
+         'It will reassess when the scientific evidence and a suitable opportunity allow one.')}
+    # The goal direction is not a timed workout. Keep that fact explicit in
+    # the no-prescription UI, without manufacturing a template or power dose.
+    view['goal_explanation'] = (
+        '20-minute power measures the performance goal; it does not mean a 20-minute workout.'
+        if goal=='POWER_20' else
+        '5-minute power measures the performance goal; it does not mean a 5-minute workout.'
+        if goal=='POWER_5' else
+        '1-minute power measures the performance goal; it does not mean a 1-minute workout.'
+        if goal=='POWER_1' else
+        'This is your training development goal, not a scheduled or executable workout.')
     if not all(isinstance(x,dict) for x in (dec,pres,integ,offer,work,road)):
         return view
     wid = str(pres.get('workout_id') or '')
@@ -62659,11 +62673,11 @@ _R1969104_CARD='''{% if is_quality_slot %}
 <small>{{ card3.reason|e }}{% if card3.verified_future_plan %} The target is a conditional scientific plan, not permission to execute today. Recheck current recovery, future time availability and Nova clearance before attempting this workout.{% endif %}</small>
 </div>
 {% else %}
-<div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · SCIENTIFIC DIRECTION</span></div>
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">QUALITY GOAL · NOT A PRESCRIBED WORKOUT</span></div>
 <h3>{{ card3.title|e }}</h3>
-<div class="v4-session-meta"><span class="v4-session-pill">NO QUALITY CLEARED NOW</span></div>
-<div class="v4-session-main">{{ card3.reason|e }}</div>
-<div class="v4-session-why">No workout identity, interval structure or watt target has been issued by the current prescription engine. Previous workouts and single-effort records are not execution targets.</div>
+<div class="v4-session-meta"><span class="v4-session-pill">NO VERIFIED QUALITY WORKOUT</span></div>
+<div class="v4-session-main">{{ card3.goal_explanation|e }}</div>
+<div class="v4-session-why">{{ card3.reason|e }} No interval structure, session duration or personal watt target has been issued. Previous efforts are evidence, not execution targets.</div>
 {% endif %}
 {% elif is_chronological_pending %}
 <div class="v4-session-slot">UPCOMING · AWAITING PLAN</div>
@@ -63157,8 +63171,294 @@ def _v4891_prepare_snapshot_for_ui(data):
 # The last projection adapter reads only the sealed source. Its direction,
 # description, personalized watts and fueling are all checked against the
 # same compiled workout. Source-free fallback cannot become an executable plan.
-APP_VERSION=('THE LAB · PRODUCT V4.9.207 R196.9.107 · INC-053 '
-             'METHOD-SAFE SNAPSHOT NAVIGATION · INC-051 CARD3 CONTRACT PRESERVED')
+APP_VERSION=('THE LAB · PRODUCT V4.9.208 R196.9.108 · INC-054 '
+             'CARD3 GOAL LABEL CLARITY · SCIENTIFIC FIREWALL PRESERVED')
+
+
+# INC-056 / R196.9.109 — THREE INDEPENDENT CONTRACTS FOR CARD 3
+# FUTURE SCIENTIFIC PLANNING is not a recovery/execution decision and does not
+# turn template mechanics into an issued personal power dose. The shared NOVA
+# science selector chooses the actual future workout; Jinja never selects it.
+# No added database table, calendar entry, ledger mutation or user-side effect.
+INC056_SCHEMA = 'NOVA-R196.9.109-FUTURE-QUALITY-PLANNING-1'
+INC056_SOURCE = 'CURRENT_CANONICAL_SELECTOR_FUTURE_PLANNING'
+_inc056_previous_planner = _nova_inc050_future_quality
+_inc056_previous_attest = _nova_inc051_attest_future_snapshot
+_inc056_previous_view = _nova_r1969104_canonical_card3
+
+
+def _nova_inc056_plan_result(owner_user_id, decision, road, evidence_ledger,
+                             training_definitions, planning_context, training_state,
+                             active_offer):
+    """Scientific planning only. No shadow TRAIN, future date or 60-minute slot.
+
+    When objective/dimension is not scientifically supported, persist a blocked
+    diagnostic instead of silently losing the reason. Never pick a template by
+    title, goal-only popularity, or UI fallback.
+    """
+    dec = decision if isinstance(decision, dict) else {}
+    rd = road if isinstance(road, dict) else {}
+    ctx = planning_context if isinstance(planning_context, dict) else {}
+    state = training_state if isinstance(training_state, dict) else {}
+    goal = str(dec.get('goal_key') or rd.get('goal_key') or '').upper()
+    scientific = rd.get('scientific_progression') or {}
+    dimension = str((scientific if isinstance(scientific, dict) else {}).get('dimension')
+                    or dec.get('dimension') or '').upper()
+    action = str(dec.get('action') or '').upper()
+    execution_state = ('DO_NOT_EXECUTE_NOW'
+        if ctx.get('health_override') or action in {'HOLD','VALIDATE','RACE_PRIORITY'}
+        or state.get('state') in {'RECOVERY HOLD','RECOVERY_HOLD'}
+        or dec.get('hard_session_allowed') is not True
+        else 'RECHECK_REQUIRED')
+    candidate_count = sum(1 for t in _NOVA_WORKOUT_LIBRARY
+        if str(t.get('goal') or '').upper() == goal
+        and dimension in set(t.get('dimensions') or ())
+        and not t.get('adaptive_only'))
+    result = {
+        'schema': INC056_SCHEMA, 'source': INC056_SOURCE,
+        'status': 'PLANNING_BLOCKED', 'goal_key': goal, 'dimension': dimension,
+        'workout_id': None, 'owner_scope': _nova_inc050_owner_scope(owner_user_id),
+        'candidate_count': candidate_count, 'excluded_candidates': None,
+        'excluded_candidates_assessed': False,
+        'reason_codes': [], 'dose_evidence_state': 'NOT_AUTHORIZED',
+        'execution_state': execution_state, 'not_issued': True,
+        'not_scheduled': True, 'execution_authorized': False,
+        'adds_calendar_event': False, 'adds_ledger_row': False,
+        'actual_available_minutes_not_upgraded': True,
+        'workout': None,
+    }
+    def blocked(code):
+        result['reason_codes'] = [code]
+        return result
+    if not owner_user_id:
+        return blocked('OWNER_NOT_AUTHENTICATED')
+    if active_offer:
+        return blocked('CURRENT_CANONICAL_OFFER_TAKES_PRIORITY')
+    if ctx.get('health_override'):
+        return blocked('HEALTH_OVERRIDE_BLOCKS_FUTURE_QUALITY_PLANNING')
+    if goal not in _R1969102_PURPOSE:
+        return blocked('UNKNOWN_SCIENTIFIC_GOAL')
+    if not dimension:
+        return blocked('MISSING_SCIENTIFIC_DIMENSION')
+    if not candidate_count:
+        return blocked('NO_CANONICAL_MECHANICS_FOR_SCIENTIFIC_DIMENSION')
+    # Selector receives no fictional availability, date or recovery clearance.
+    # The real science filters (including repeat-exposure and purpose checks)
+    # stay in the canonical selection pipeline. No invented substitute on veto.
+    try:
+        template, audit = _v19699_select_workout_template(
+            goal, dimension, evidence_ledger=copy.deepcopy(evidence_ledger or {}),
+            training_definitions=copy.deepcopy(training_definitions), slot={})
+    except (TypeError, ValueError, KeyError, AttributeError, IndexError,
+            OverflowError, ArithmeticError):
+        return blocked('CANONICAL_SELECTOR_FAILED')
+    if not isinstance(template, dict):
+        # The selector audit can carry athlete-scoped evidence. Never place
+        # free-form audit text into the persisted privacy-safe reason code.
+        return blocked('CANONICAL_SELECTOR_NO_SCIENTIFIC_CANDIDATE')
+    wid = str(template.get('id') or '')
+    indexed = _R19696_LIBRARY_INDEX.get(wid)
+    base = _nova_r1969102_catalogue_copy(wid, goal)
+    if (not indexed or not base or
+        dimension not in set(indexed.get('dimensions') or ()) or
+        indexed.get('adaptive_only') or
+        str(template.get('goal') or '').upper() != goal):
+        return blocked('SELECTOR_RESULT_NOT_CANONICAL_FOR_GOAL_DIMENSION')
+    signature = hashlib.sha256(_nova_inc051_canonical_json(indexed).encode()).hexdigest()
+    min_seconds = _nova_quality_template_required_seconds(indexed, dimension)
+    if min_seconds is not None and not (0 < min_seconds <= 360*60):
+        return blocked('INVALID_CANONICAL_TIME_REQUIREMENT')
+    mechanics = {'workout_id': wid, 'title': base['title'],
+        'structure': base['structure'], 'execution': base['execution'],
+        'purpose': base['purpose'], 'template_digest': signature,
+        'minimum_session_minutes': (round(min_seconds/60, 1)
+                                    if min_seconds is not None else None)}
+    # This is a scientifically selected future SESSION STRUCTURE, not a compiled
+    # personal dose. No watt target, no FTP/PB proxy, no executable instruction.
+    result.update(status='PLANNED_NOT_CLEARED', workout_id=wid,
+        reason_codes=['FUTURE_STRUCTURE_SELECTED_NO_EXECUTION_CLEARANCE'],
+        dose_evidence_state='PERSONAL_POWER_NOT_COMPILED',
+        mechanics=mechanics,
+        workout=None, personalized_watts=None,
+        template_digest=signature)
+    return result
+
+
+def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
+        evidence_ledger=None, power_model=None, ftp_anchor=None,
+        aerobic_metabolic_range=None, training_definitions=None,
+        compiler_args=None, planning_context=None, training_state=None,
+        active_offer=None):
+    """INC-056 replaces the overgated INC-050 conditional replay with planning.
+
+    The current OFFER/prescription/quality-window/ledger pipeline is untouched.
+    We do not fake TRAIN or grow a learned 45-minute session into 60 minutes.
+    """
+    plan = _nova_inc056_plan_result(owner_user_id, decision, road,
+        evidence_ledger, training_definitions, planning_context,
+        training_state, active_offer)
+    # Reuse the existing scientific-context fingerprint captured at producer
+    # time, and the owner seal stamped at final Snapshot composition.
+    plan['producer_context_digest'] = _nova_inc051_context_digest({
+        'nova_decision': decision, 'coach_clock': clock,
+        'adaptive_roadmap': road, 'evidence_ledger': evidence_ledger,
+        'power_model': power_model, 'ftp_anchor': ftp_anchor,
+        'training_definitions': training_definitions,
+        'planning_context': planning_context, 'training_state': training_state})
+    return plan
+
+
+def _nova_inc051_attest_future_snapshot(data, owner_user_id):
+    plan = (data or {}).get('future_quality_plan') if isinstance(data, dict) else None
+    if not isinstance(plan, dict) or plan.get('schema') != INC056_SCHEMA:
+        return _inc056_previous_attest(data, owner_user_id)
+    # Fail closed: no unsigned legacy/report/other-owner future plan is migrated.
+    if (not owner_user_id or plan.get('source') != INC056_SOURCE
+        or plan.get('status') not in {'PLANNED_NOT_CLEARED','PLANNING_BLOCKED'}
+        or plan.get('owner_scope') != _nova_inc050_owner_scope(owner_user_id)
+        or data.get('future_quality_owner_scope') != plan.get('owner_scope')
+        or plan.get('execution_authorized') is not False
+        or plan.get('not_issued') is not True
+        or plan.get('not_scheduled') is not True
+        or plan.get('adds_calendar_event') is not False
+        or plan.get('adds_ledger_row') is not False
+        or data.get('next_quality_offer')
+        or plan.get('producer_context_digest') != _nova_inc051_context_digest(data)):
+        data['future_quality_plan'] = None
+        return False
+    if plan.get('status') == 'PLANNED_NOT_CLEARED':
+        goal = plan.get('goal_key')
+        wid = str(plan.get('workout_id') or '')
+        tpl = _R19696_LIBRARY_INDEX.get(wid)
+        copy_view = _nova_r1969102_catalogue_copy(wid, goal)
+        mechanics = plan.get('mechanics') or {}
+        if (not isinstance(tpl, dict) or not isinstance(mechanics, dict)
+            or not isinstance(copy_view, dict)
+            or str(tpl.get('goal') or '').upper() != goal
+            or plan.get('dimension') not in set(tpl.get('dimensions') or ())
+            or plan.get('template_digest') !=
+               hashlib.sha256(_nova_inc051_canonical_json(tpl).encode()).hexdigest()
+            or mechanics.get('workout_id') != wid
+            or mechanics.get('template_digest') != plan.get('template_digest')
+            or any(mechanics.get(k) != copy_view.get(k) for k in
+                   ('title','structure','execution','purpose'))
+            or plan.get('personalized_watts') is not None
+            or plan.get('dose_evidence_state') != 'PERSONAL_POWER_NOT_COMPILED'):
+            data['future_quality_plan'] = None
+            return False
+    else:
+        if plan.get('workout_id') is not None or plan.get('workout') is not None:
+            data['future_quality_plan'] = None
+            return False
+    plan['context_digest'] = plan['producer_context_digest']
+    plan['contract_schema'] = INC056_SCHEMA
+    plan['authority_seal'] = _nova_inc051_plan_seal(plan, owner_user_id)
+    if not plan['authority_seal']:
+        data['future_quality_plan'] = None
+        return False
+    return True
+
+
+def _nova_r1969104_canonical_card3(data, expected_owner_user_id=None):
+    """Render ONLY an attested, owner-matched canonical plan or old safe offer.
+
+    The view does not choose templates, produce watt targets or grant clearance.
+    """
+    d = data if isinstance(data, dict) else {}
+    existing = _inc056_previous_view(d, expected_owner_user_id)
+    # Current verified offer takes priority. An INC-050 signed legacy plan
+    # remains readable as it was, with unchanged attestation rules.
+    if existing.get('verified_offer') or existing.get('verified_future_plan'):
+        return dict(existing, planned_quality=False)
+    plan = d.get('future_quality_plan') or {}
+    if not isinstance(plan, dict) or plan.get('schema') != INC056_SCHEMA:
+        return dict(existing, planned_quality=False)
+    owner_id = _nova_inc051_verified_owner_id(expected_owner_user_id)
+    if not owner_id:
+        return dict(existing, planned_quality=False)
+    owner_scope = _nova_inc050_owner_scope(owner_id)
+    if (plan.get('source') != INC056_SOURCE
+        or not hmac.compare_digest(str(plan.get('owner_scope') or ''), owner_scope)
+        or not hmac.compare_digest(str(d.get('future_quality_owner_scope') or ''), owner_scope)
+        or plan.get('contract_schema') != INC056_SCHEMA
+        or not plan.get('context_digest')
+        or plan.get('context_digest') != _nova_inc051_context_digest(d)
+        or plan.get('producer_context_digest') != plan.get('context_digest')
+        or not hmac.compare_digest(str(plan.get('authority_seal') or ''),
+            str(_nova_inc051_plan_seal(plan, owner_id) or ''))
+        or plan.get('execution_authorized') is not False
+        or plan.get('not_issued') is not True
+        or plan.get('not_scheduled') is not True
+        or d.get('next_quality_offer')):
+        return dict(existing, planned_quality=False)
+    if plan.get('status') == 'PLANNING_BLOCKED':
+        return dict(existing, planned_quality=False,
+            state='SCIENTIFIC_PLANNING_BLOCKED',
+            reason=('The scientific planner cannot select a future structure: '
+                + ', '.join(plan.get('reason_codes') or ['UNSPECIFIED'])
+                + '. No hard session has been issued.'))
+    if plan.get('status') != 'PLANNED_NOT_CLEARED':
+        return dict(existing, planned_quality=False)
+    wid = str(plan.get('workout_id') or '')
+    tpl = _R19696_LIBRARY_INDEX.get(wid)
+    base = _nova_r1969102_catalogue_copy(wid, plan.get('goal_key'))
+    mech = plan.get('mechanics') or {}
+    if (not isinstance(tpl, dict) or not isinstance(base, dict)
+        or not isinstance(mech, dict)
+        or plan.get('goal_key') != existing.get('goal_key')
+        or plan.get('dimension') != existing.get('dimension')
+        or plan.get('dimension') not in set(tpl.get('dimensions') or ())
+        or plan.get('template_digest') !=
+            hashlib.sha256(_nova_inc051_canonical_json(tpl).encode()).hexdigest()
+        or mech.get('workout_id') != wid
+        or mech.get('template_digest') != plan.get('template_digest')
+        or any(mech.get(k) != base.get(k) for k in
+               ('title','structure','execution','purpose'))
+        or plan.get('personalized_watts') is not None
+        or plan.get('dose_evidence_state') != 'PERSONAL_POWER_NOT_COMPILED'):
+        return dict(existing, planned_quality=False)
+    minutes = mech.get('minimum_session_minutes')
+    return dict(existing, state='FUTURE_SCIENTIFIC_STRUCTURE',
+        verified_offer=False, verified_future_plan=False,
+        planned_quality=True, direction_only=False,
+        title=mech['title'], workout_id=wid, structure=mech['structure'],
+        execution=mech['execution'], purpose=mech['purpose'],
+        personalized_watts=None, power_source=None, phases=[],
+        minimum_session_minutes=minutes,
+        execution_clearance=plan.get('execution_state'),
+        reason=('A future quality structure selected by Nova’s current canonical science '
+                'for the athlete’s goal and progression. Not an issued session. '
+                'Personal watt targets, total duration, recovery and available time '
+                'must be reassessed before execution.'))
+
+
+# Display adapter only. The existing single canonical panel is still the only
+# renderer for executable/personal-watt content; no new executable UI appears.
+_INC056_NO_PLAN_BRANCH = """{% else %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">QUALITY GOAL · NOT A PRESCRIBED WORKOUT</span></div>"""
+assert HOME_PAGE.count(_INC056_NO_PLAN_BRANCH) == 1, 'INC056_CARD3_BRANCH_DRIFT'
+_INC056_PLANNED_BRANCH = """{% elif card3.planned_quality %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · SCIENTIFIC FUTURE PLAN</span></div>
+<h3>{{ card3.title|e }}</h3>
+<div class="v4-session-meta"><span class="v4-session-pill">PLANNED STRUCTURE · NOT CLEARED FOR EXECUTION</span></div>
+<div class="r1969102-canonical-copy r1969104-planned-structure" role="group" aria-label="Scientifically selected future quality structure">
+<strong>FUTURE WORKOUT STRUCTURE</strong>
+<p><b>Work and recovery:</b> {{ card3.structure|e }}</p>
+{% if card3.minimum_session_minutes %}<p><b>Minimum estimated session time:</b> {{ card3.minimum_session_minutes|e }} min, including standard preparation/cooldown. Not a booked or approved duration.</p>{% endif %}
+<p><b>Training focus:</b> {{ card3.purpose|e }}</p>
+<p><b>Personalized watt target:</b> Not yet compiled or cleared. No best-power or FTP proxy is an executable dose.</p>
+<p><b>Execution clearance:</b> {{ card3.execution_clearance|replace('_',' ')|e }}. Recheck recovery, safety, dose evidence and actual available time before performing any hard intervals.</p>
+<small>{{ card3.reason|e }}</small>
+</div>
+{% else %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">QUALITY GOAL · NOT A PRESCRIBED WORKOUT</span></div>"""
+HOME_PAGE = HOME_PAGE.replace(_INC056_NO_PLAN_BRANCH, _INC056_PLANNED_BRANCH, 1)
+assert HOME_PAGE.count('r1969104-planned-structure') == 1, 'INC056_UI_DUPLICATE'
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · PRODUCT V4.9.209 R196.9.109 · INC-056 '
+               'SEPARATE FUTURE SCIENTIFIC PLANNING FROM EXECUTION CLEARANCE '
+               '· OWNER-BOUND · OFFLINE RELEASE CANDIDATE')
+
 # INC-040: Install all adapters and Jinja before starting direct Flask server.
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
