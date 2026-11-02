@@ -50333,6 +50333,196 @@ def _v196910_find_micro_30_15(samples):
             'verified_set_pass_counts':[first[3],second[3]],
             'complete_pattern_verified':True}
 
+# INC096 / R196.9.132 — General RAW interval observations.
+# This is an OBSERVER, not a new scientific workout selector or watt prescriber.
+# The original two-set 30/15 attestation remains untouched and takes priority.
+R1969132_SCHEMA = "R196.9.132-GENERAL-RAW-INTERVAL-OBSERVER-1"
+R1969132_SOURCE = "ICU_RAW_WATTS_GENERAL_OBSERVATION"
+
+
+def _v1969132_detect_raw_repeats(samples):
+    """Observe repeated work/floats without trusting titles, laps or template IDs.
+
+    Segmentation uses bounded, smoothed actual time/power samples. At least
+    eight observed pairs and 85-90% contrast and per-window data coverage are
+    needed. Unsupported, mixed or noisy events fail closed. Results describe
+    past measured work; they NEVER authorize a future watt prescription.
+    """
+    if not isinstance(samples, list) or not 240 <= len(samples) <= 21600:
+        return None
+    size = len(samples)
+    sums = [0.0]; counts = [0]
+    for value in samples:
+        ok = (isinstance(value, (int, float)) and not isinstance(value, bool)
+              and math.isfinite(value) and 0 <= value <= 1600)
+        sums.append(sums[-1] + (float(value) if ok else 0.0))
+        counts.append(counts[-1] + int(ok))
+    if counts[-1] < max(180, int(size * .60)):
+        return None
+    def mean(start, end, coverage=.9):
+        if start < 0 or end > size or end <= start:
+            return None
+        count = counts[end] - counts[start]
+        if count < math.ceil((end - start) * coverage):
+            return None
+        return (sums[end] - sums[start]) / count
+    observed = sorted(float(v) for v in samples[::5]
+        if isinstance(v, (int,float)) and not isinstance(v,bool)
+        and math.isfinite(v) and 0 <= v <= 1600)
+    if len(observed) < 60:
+        return None
+    def quantile(q):return observed[min(len(observed)-1,round((len(observed)-1)*q))]
+    levels = sorted({round((quantile(lo)+quantile(hi)) / 2,1)
+        for lo,hi in ((.15,.8),(.2,.9),(.3,.9),(.4,.92),(.5,.95),(.6,.97),(.25,.97))
+        if quantile(hi)-quantile(lo) >= 65})
+    if not levels:
+        return None
+    smoothed = [mean(max(0,i-2),min(size,i+3),.65) for i in range(size)]
+    best = None
+    for threshold in levels:
+        labels = [v is not None and v >= threshold for v in smoothed]
+        # A 1-2 second sensor fluctuation is not a training transition.
+        for _ in range(2):
+            j = 1
+            while j < size-1:
+                if labels[j] != labels[j-1]:
+                    k = j + 1
+                    while k < size and labels[k] == labels[j] and k-j < 3:
+                        k += 1
+                    if k < size and k-j <= 2 and labels[k] == labels[j-1]:
+                        labels[j:k] = [labels[j-1]] * (k-j)
+                        j = k
+                        continue
+                j += 1
+        runs = []; start = 0
+        for i in range(1,size+1):
+            if i==size or labels[i] != labels[start]:
+                runs.append((labels[start],start,i))
+                start = i
+        pulses = []
+        for i,(high,start,end) in enumerate(runs[:-1]):
+            if not high or not 10 <= end-start <= 900:continue
+            next_high,low_start,low_end = runs[i+1]
+            if next_high or low_start != end or low_end-end < 8:continue
+            w = mean(start,end); f = mean(end,min(low_end,end+30))
+            if w is None or f is None:continue
+            if w < 95 or w-f < max(40.0,.18*w):continue
+            pulses.append({'run':i,'start':start,'end':end,'low_end':low_end,
+                           'work':w,'float_first':f,'work_len':end-start,
+                           'low_len':low_end-end})
+        if len(pulses) < 8:continue
+        # Reject rare duration buckets before combining candidate ratios.
+        # This bounds CPU for a long noisy ride, rather than brute-force
+        # hundreds of one-off permutations across the whole timeline.
+        work_counts={};float_counts={}
+        for pulse in pulses:
+            if 10<=pulse['work_len']<=600:
+                d=int(round(pulse['work_len']/5)*5)
+                work_counts[d]=work_counts.get(d,0)+1
+            if 8<=pulse['low_len']<=180:
+                d=int(round(pulse['low_len']/5)*5)
+                float_counts[d]=float_counts.get(d,0)+1
+        # Bound competing duration hypotheses per stream. In a variable-terrain
+        # ride there may be hundreds of distinct noisy cycle lengths; the
+        # dominant observed buckets are the only ones we can safely claim.
+        work_lengths=sorted((k for k,n in work_counts.items() if n>=6),
+                            key=lambda k:(-work_counts[k],k))[:8]
+        floats=sorted((k for k,n in float_counts.items() if n>=5),
+                      key=lambda k:(-float_counts[k],k))[:8]
+        for work_s in work_lengths:
+            tol_w = max(3,round(work_s*.10))
+            group_pulses=[p for p in pulses if abs(p['work_len']-work_s)<=tol_w]
+            if len(group_pulses)<8:continue
+            for float_s in floats:
+                if not 8 <= float_s <= 180:continue
+                tol_f=max(3,round(float_s*.16))
+                eligible=[]
+                for p in group_pulses:
+                    if p['low_len'] < float_s-tol_f:continue
+                    if (p['low_len'] > float_s+tol_f and
+                        not float_s+45 <= p['low_len'] <= float_s+900):continue
+                    f=mean(p['end'],p['end']+float_s)
+                    if f is None or p['work']-f < max(40,.18*p['work']):continue
+                    eligible.append(dict(p, float=f))
+                if len(eligible)<8:continue
+                # Exact adjacency at the source-run level prevents splicing
+                # unrelated high-power efforts across an unmatched interval.
+                chains=[]; chain=[]
+                for p in eligible:
+                    if chain and p['run'] != chain[-1]['run']+2:
+                        chains.append(chain);chain=[]
+                    chain.append(p)
+                if chain:chains.append(chain)
+                for chain in chains:
+                    if len(chain)<8:continue
+                    sets=[[]]
+                    for idx,p in enumerate(chain):
+                        if idx and chain[idx-1]['low_len']>float_s+tol_f:
+                            sets.append([])
+                        sets[-1].append(p)
+                    # Each claimed block must have multiple verified repeats;
+                    # a single set requires >=8. No forced equal-set count.
+                    if any(len(g)<4 for g in sets):continue
+                    watts=[p['work'] for p in chain]
+                    med_work=statistics.median(watts)
+                    med_float=statistics.median(p['float'] for p in chain)
+                    if (med_work<max(95,med_float*1.30) or
+                        med_work-med_float<45 or
+                        statistics.pstdev(watts)/med_work>.15):continue
+                    seq=[];work=[];breaks=[]
+                    for set_no,group in enumerate(sets,1):
+                        for rep,p in enumerate(group,1):
+                            wr={'type':'WORK','moving_time':p['work_len'],
+                                'elapsed_time':p['work_len'],'start_time':p['start'],
+                                'end_time':p['end'],'average_watts':round(p['work'],2),
+                                'set':set_no,'rep_in_set':rep,
+                                '_v1969132_observed':True}
+                            fl={'type':'RECOVERY','moving_time':float_s,
+                                'elapsed_time':float_s,'start_time':p['end'],
+                                'end_time':p['end']+float_s,
+                                'average_watts':round(p['float'],2),
+                                'set':set_no,'rep_in_set':rep,
+                                '_v1969132_observed':True}
+                            seq.extend((wr,fl));work.append(wr)
+                        if set_no<len(sets):
+                            last=group[-1];following=sets[set_no][0]
+                            rest_start=last['end']+float_s
+                            rest_end=following['start']
+                            if not 45<=rest_end-rest_start<=900:break
+                            rest_power=mean(rest_start,rest_end)
+                            if rest_power is None:break
+                            breaks.append(rest_end-rest_start)
+                            seq.append({'type':'RECOVERY','moving_time':rest_end-rest_start,
+                                'elapsed_time':rest_end-rest_start,'start_time':rest_start,
+                                'end_time':rest_end,'average_watts':round(rest_power,2),
+                                'between_sets':True,'_v1969132_observed':True})
+                    else:
+                        # A true measurement consists of both real work AND
+                        # real float samples for every advertised repetition.
+                        seq.sort(key=lambda r:(r['start_time'],r['type']!='WORK'))
+                        for pos,row in enumerate(seq):row['_truth_pos']=pos
+                        counts_by_set=[len(group) for group in sets]
+                        candidate={'schema':R1969132_SCHEMA,'status':'RESOLVED',
+                          'source':R1969132_SOURCE,'confidence':'HIGH',
+                          'pattern':'MEASURED_WORK_FLOAT','sets':len(sets),
+                          'reps_per_set':counts_by_set[0] if len(set(counts_by_set))==1 else None,
+                          'reps_by_set':counts_by_set,'work_s':int(statistics.median(p['work_len'] for p in chain)),
+                          'float_s':float_s,'set_recoveries_s':breaks,
+                          'repeated_work_count':len(work),'interval_secs':int(statistics.median(p['work_len'] for p in chain)),
+                          'sequence':seq,'work_rows':work,'corrections':[],
+                          'recovery_median_secs':float_s,
+                          'measured_work_watts':[r['average_watts'] for r in work],
+                          'coverage_rule':'PER_WINDOW_90_PERCENT_REAL_SAMPLES',
+                          'contrast_rule':'MEDIAN_30_PERCENT_AND_45_WATTS_WITH_STABLE_WORK',
+                          'complete_pattern_verified':True,
+                          'observed_subset_only':True,
+                          'full_activity_structure_attested':False,
+                          'numeric_prescription_authority':False}
+                        rank=(len(work),len(sets),round(med_work-med_float,1),
+                              -abs(work_s-candidate['work_s']))
+                        if best is None or rank>best[0]:best=(rank,candidate)
+    return best[1] if best else None
+
 _r196910_fetch_detail_baseline = fetch_activity_details
 
 
@@ -50350,16 +50540,17 @@ def fetch_activity_details(activity_ids):
         if isinstance(d,dict) and d.get('id') and _v4887_is_cycling_activity(d)
         and not _v1954_confirmed_competition(d)),
         key=lambda d: str(d.get('start_date_local') or ''), reverse=True)
-    def micro_probe_hint(d):
+    def stream_priority(d):
         title=str(d.get('name') or d.get('title') or '').lower()
-        return ('30/15' in title or '30-15' in title or '30x15' in title)
-    targeted=[d for d in chronological if micro_probe_hint(d)][:2]
+        # A title schedules ONLY inspection. It never proves intervals or W.
+        return bool(re.search(r'\b(?:interval|intervall|repet|ripet|hiit|vo2|power)\b|\d+\s*[x×]\s*\d+|\d+\s*[/\-]\s*\d+',title))
+    targeted=[d for d in chronological if stream_priority(d)][:3]
     seen={str(d.get('id')) for d in targeted}
-    recent=[d for d in chronological if str(d.get('id')) not in seen][:2]
+    recent=[d for d in chronological if str(d.get('id')) not in seen][:3]
     candidates=targeted+recent
     attempted = 0
     for d in candidates:
-        if attempted >= 4: break
+        if attempted >= 6: break
         # Do not trust automatic ICU work boundaries to rule out raw micro sets.
         aid = str(d['id']); attempted += 1
         out = dict(d)
@@ -50377,13 +50568,20 @@ def fetch_activity_details(activity_ids):
                 probe['status']='TIME_OR_WATTS_UNAVAILABLE'
             else:
                 detected = _v196910_find_micro_30_15(samples)
-                probe['status']='TWO_FULL_SETS_VERIFIED' if detected else 'NO_COMPLETE_MEASURED_30_15_PAIR'
+                general = None if detected else _v1969132_detect_raw_repeats(samples)
+                probe['status']=('TWO_FULL_SETS_VERIFIED' if detected else
+                    'GENERAL_RAW_REPEATS_OBSERVED' if general else 'NO_COMPLETE_MEASURED_PATTERN')
                 probe['sample_duration_seconds']=len(samples)
                 if detected:
                     probe['observed_reps_per_set']=detected['reps_per_set']
                     probe['observed_total_reps']=detected['repeated_work_count']
-                if detected:
                     out['_v196910_micro_truth']=detected
+                elif general:
+                    probe['observed_total_reps']=general['repeated_work_count']
+                    probe['observed_work_s']=general['work_s']
+                    probe['observed_float_s']=general['float_s']
+                    probe['observed_sets']=general['sets']
+                    out['_v1969132_general_truth']=general
         except Exception as exc:
             probe['status']='STREAM_PROBE_FAILED'
             probe['error_type']=type(exc).__name__
@@ -50399,6 +50597,15 @@ def _v79_activity_interval_truth(detail):
     detected = (detail or {}).get('_v196910_micro_truth')
     if isinstance(detected, dict) and detected.get('complete_pattern_verified') is True and not _v1954_confirmed_competition(detail):
         return dict(detected)
+    general = (detail or {}).get('_v1969132_general_truth')
+    if (isinstance(general,dict) and general.get('schema')==R1969132_SCHEMA
+        and general.get('complete_pattern_verified') is True
+        and not _v1954_confirmed_competition(detail)):
+        # Preserve established lap/ICU native reconstruction when it already
+        # delivers a complete RESOLVED workout. Only fill an actual raw gap.
+        original=_r196910_truth_baseline(detail)
+        if original.get('status')=='RESOLVED':return original
+        return dict(general)
     return _r196910_truth_baseline(detail)
 
 
@@ -50407,6 +50614,12 @@ _r196910_truth_summary_baseline = _v79_activity_truth_summary
 
 def _v79_activity_truth_summary(truth):
     out = _r196910_truth_summary_baseline(truth)
+    if (truth or {}).get('schema') == R1969132_SCHEMA:
+        out.update({k:truth.get(k) for k in (
+            'schema','pattern','sets','reps_by_set','reps_per_set','work_s',
+            'float_s','set_recoveries_s','complete_pattern_verified',
+            'observed_subset_only','full_activity_structure_attested',
+            'coverage_rule','contrast_rule','numeric_prescription_authority')})
     if (truth or {}).get('schema') == R196910_SCHEMA:
         out.update({'schema':R196910_SCHEMA,'pattern':truth.get('pattern'),
                     'sets':truth.get('sets'),'reps_per_set':truth.get('reps_per_set'),
@@ -50424,6 +50637,51 @@ _r196910_stats_baseline = _v4879_repeatability_stats
 
 
 def _v4879_repeatability_stats(intervals, source=None):
+    if str(source or '').upper() == R1969132_SOURCE:
+        sequence=[r for r in (intervals or []) if isinstance(r,dict)]
+        works=[r for r in sequence if r.get('type')=='WORK' and r.get('_v1969132_observed') is True]
+        floats=[r for r in sequence if r.get('type')=='RECOVERY'
+                and not r.get('between_sets') and r.get('_v1969132_observed') is True]
+        if not (len(works)>=8 and len(works)==len(floats)):return None
+        workw=[_num(r.get('average_watts')) for r in works]
+        floatw=[_num(r.get('average_watts')) for r in floats]
+        if any(w is None or not math.isfinite(w) for w in workw+floatw):return None
+        workd=[_num(r.get('moving_time')) for r in works]
+        recd=[_num(r.get('moving_time')) for r in floats]
+        if any(v is None or v<8 for v in workd+recd):return None
+        if max(recd)-min(recd)>max(5,round(statistics.median(recd)*.15)):
+            return None
+        sets=sorted({r.get('set') for r in works})
+        if sets!=list(range(1,len(sets)+1)):return None
+        sizes=[sum(r.get('set')==z for r in works) for z in sets]
+        if any(n<4 for n in sizes):return None
+        between=[r for r in sequence if r.get('between_sets')]
+        if len(between)!=len(sets)-1:return None
+        if any(_num(r.get('moving_time')) is None or _num(r.get('average_watts')) is None for r in between):return None
+        avg=statistics.mean(workw);early=statistics.mean(workw[:2]);late=statistics.mean(workw[-2:]);
+        first,last=workw[0],workw[-1];change=(last-first)/first*100 if first else None
+        return {'reps':len(works),'sets':len(sets),'reps_by_set':sizes,
+          'interval_secs':int(round(statistics.median(workd))),
+          'interval_label':format_duration_label(int(round(statistics.median(workd)))),
+          'recovery_secs':int(round(statistics.median(recd))),
+          'recovery_label':format_duration_label(int(round(statistics.median(recd)))),
+          'recovery_avg_watts':round(statistics.median(floatw),1),
+          'watts':[round(w) for w in workw], 'avg_watts':round(avg,1),
+          'min_watts':round(min(workw)), 'max_watts':round(max(workw)),
+          'spread_watts':round(max(workw)-min(workw)),
+          'first_watts':round(first), 'last_watts':round(last),
+          'first_to_last_delta_watts':round(last-first),
+          'first_to_last_change_pct':round(change,1) if change is not None else None,
+          'first_to_last_decay_pct':round(max(0,-change),1) if change is not None else None,
+          'cv_pct':round(statistics.pstdev(workw)/avg*100,1) if avg else None,
+          'early_rep_avg_watts':round(early,1), 'late_rep_avg_watts':round(late,1),
+          'late_rep_retention_pct':round(late/early*100,1) if early else None,
+          'source':R1969132_SOURCE,'activity_truth_source':R1969132_SOURCE,
+          'recovery_observation_complete':True,
+          'recovery_pair_count':len(works)-1,
+          'recovery_pair_expected':len(works)-1,
+          'raw_observer_schema':R1969132_SCHEMA,
+          'numeric_prescription_authority':False}
     if str(source or '').upper() != 'ICU_RAW_WATTS_30_15':
         return _r196910_stats_baseline(intervals, source=source)
     works=[r for r in (intervals or []) if isinstance(r,dict) and r.get('type')=='WORK'
@@ -50469,6 +50727,14 @@ def _v4895_activity_quality_truth(activity=None, family=None):
     if ((activity or {}).get('_v196910_micro_truth') or {}).get('complete_pattern_verified') is True \
             and not _v1954_confirmed_competition(activity):
         return {'quality_relevant':True,'basis':f"VERIFIED_RAW_POWER_2X{int((activity or {}).get('_v196910_micro_truth',{}).get('reps_per_set') or 0)}_30_15"}
+    general=(activity or {}).get('_v1969132_general_truth') or {}
+    if (isinstance(general,dict) and general.get('schema')==R1969132_SCHEMA
+        and general.get('complete_pattern_verified') is True
+        and general.get('numeric_prescription_authority') is False
+        and not _v1954_confirmed_competition(activity)
+        and _v79_activity_interval_truth(activity).get('source')==R1969132_SOURCE):
+        return {'quality_relevant':True,
+                'basis':'MEASURED_REPEATED_WORK_FLOAT_OBSERVATION_NO_PRESCRIPTION_AUTHORITY'}
     return result
 
 
@@ -50501,6 +50767,25 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
                             f"Observed between-set recovery: {truth['set_recovery_s']}s",
                             f"{truth['repeated_work_count']} measured work intervals · source: raw power stream"]
         block['consideration']='⚡ Verified raw 30/15 quality · count actual high-intensity load for recovery spacing.'
+        changed = True
+    # Descriptive general observations remain separated from canonical micro
+    # watt attestation and cannot unlock a new scientific prescription by name.
+    for block in blocks or []:
+        if not isinstance(block,dict) or _v1954_confirmed_competition(block):continue
+        detail=details.get(str(block.get('activity_id') or '')) or {}
+        general=detail.get('_v1969132_general_truth') or {}
+        if (not isinstance(general,dict) or general.get('schema')!=R1969132_SCHEMA
+            or block.get('interval_structure_source')!=R1969132_SOURCE):continue
+        block['raw_interval_observation']={k:general.get(k) for k in (
+            'schema','status','source','sets','reps_by_set','work_s','float_s',
+            'set_recoveries_s','repeated_work_count','coverage_rule','contrast_rule',
+            'numeric_prescription_authority')}
+        block['intervals']=[
+            f"{general.get('sets')} measured block(s): "
+            f"{general.get('reps_by_set')} repetitions, "
+            f"{general.get('work_s')}s work / {general.get('float_s')}s recovery",
+            'Raw watts measured; NOT an attested future prescription']
+        block['consideration']='⚡ Measured repeated work/floats · observation only, no automatic prescription watt authority.'
         changed = True
     if changed:
         try:_V146_BLOCK_CONTEXT.set(tuple(_v4831_json_clone(b) for b in blocks if isinstance(b,dict)))
@@ -66343,8 +66628,8 @@ _INC095_CARD3_TITLE_ROW = ('<div class="v150-workout-title-row"><h3>{{ card3.tit
 HOME_PAGE=HOME_PAGE.replace(_INC095_CARD3_H3,_INC095_CARD3_TITLE_ROW)
 app.jinja_env.parse(HOME_PAGE)
 
-APP_VERSION = ('THE LAB · R196.9.131 · INC095 COMPLETE MEASURED MICRO 30/15 '
-               'WATT EVIDENCE PATH · CANDIDATE')
+APP_VERSION = ('THE LAB · R196.9.132 · INC096 GENERAL RAW REPEAT OBSERVATIONS '
+               '+ R131 CANONICAL MICRO SCIENCE INTACT · CANDIDATE')
 
 
 if __name__ == "__main__":
