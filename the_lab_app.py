@@ -50340,14 +50340,26 @@ def fetch_activity_details(activity_ids):
     details = _r196910_fetch_detail_baseline(activity_ids)
     if not isinstance(details, dict) or not details:
         return details
-    # Only newest two candidates, no supplementary networking on all 24-history
-    # rides. This is a read-only probe and does not alter ICU intervals or FIT.
-    candidates = sorted((d for d in details.values() if isinstance(d,dict) and d.get('id')),
-                        key=lambda d: str(d.get('start_date_local') or ''), reverse=True)
+    # INC095 / R131: the old "newest two only" gate prevented a fully
+    # measured 30/15 ride eight days ago from ever reaching the original
+    # science selector when an athlete trains daily. Prioritize up to two
+    # TITLE-CANDIDATES for stream inspection (not proof!), plus up to two
+    # ordinary recent candidates. Only raw measured 30s/15s cycles can prove
+    # a complete micro set; a workout name cannot certify a dose.
+    chronological = sorted((d for d in details.values()
+        if isinstance(d,dict) and d.get('id') and _v4887_is_cycling_activity(d)
+        and not _v1954_confirmed_competition(d)),
+        key=lambda d: str(d.get('start_date_local') or ''), reverse=True)
+    def micro_probe_hint(d):
+        title=str(d.get('name') or d.get('title') or '').lower()
+        return ('30/15' in title or '30-15' in title or '30x15' in title)
+    targeted=[d for d in chronological if micro_probe_hint(d)][:2]
+    seen={str(d.get('id')) for d in targeted}
+    recent=[d for d in chronological if str(d.get('id')) not in seen][:2]
+    candidates=targeted+recent
     attempted = 0
     for d in candidates:
-        if attempted >= 2: break
-        if not _v4887_is_cycling_activity(d) or _v1954_confirmed_competition(d): continue
+        if attempted >= 4: break
         # Do not trust automatic ICU work boundaries to rule out raw micro sets.
         aid = str(d['id']); attempted += 1
         out = dict(d)
@@ -65939,6 +65951,400 @@ assert HOME_PAGE.count('data.quality_fuel_chronological_card == loop.index0') ==
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION = ('THE LAB · R196.9.130 · INC094 VERIFIED C07 QUALITY FUEL '
                'IN CARD 1/2 · OFFLINE CANDIDATE NO-GO')
+
+
+# INC095 / R196.9.131 — preserve ORIGINAL measured 30/15 float and set
+# recoveries and permit a SAME-PROTOCOL watt calculation ONLY for a complete
+# owner-scoped, resolved, non-race raw-power 2-set event. No FTP proxy, 5-minute
+# transfer, calendar, execution permission or new chooser is introduced.
+INC095_SCHEMA = 'NOVA-INC095-MEASURED-MICRO-30-15-1'
+_INC095_STATS_BEFORE = _v4879_repeatability_stats
+_INC095_LEDGER_BEFORE = build_evidence_ledger
+_INC095_BAND_BEFORE = _v1943_band
+_INC095_REPLAY_BEFORE = _nova_inc083_science_replay
+_INC095_TRUTH_BEFORE = _nova_inc091_truth
+
+
+def _v4879_repeatability_stats(intervals, source=None):
+    if str(source or '').upper() != 'ICU_RAW_WATTS_30_15':
+        return _INC095_STATS_BEFORE(intervals, source=source)
+    # Raw stream parsers may yield None/NaN in work OR float windows. Never
+    # crash a production Snapshot while trying to attest that incomplete data.
+    if not isinstance(intervals,list) or not intervals:
+        return None
+    for interval in intervals:
+        if not isinstance(interval,dict):return None
+        if str(interval.get('type') or '') in ('WORK','RECOVERY'):
+            watts=interval.get('average_watts')
+            if type(watts) not in (int,float) or not math.isfinite(watts):
+                return None
+    original = _INC095_STATS_BEFORE(intervals, source=source)
+    if not isinstance(original,dict):return original
+    rows = intervals if isinstance(intervals,list) else []
+    works = sorted((r for r in rows if isinstance(r,dict) and r.get('type')=='WORK'
+        and r.get('_v196910_observed') is True),key=lambda r:r.get('start_time',-1))
+    n = int(original.get('reps_per_set') or 0)
+    if not (8<=n<=24 and len(works)==2*n and original.get('sets')==2
+        and original.get('reps')==2*n and original.get('interval_secs')==30
+        and original.get('recovery_secs')==15):
+        return original
+    floats = [r for r in rows if isinstance(r,dict) and r.get('type')=='RECOVERY'
+        and r.get('between_sets') is not True]
+    bridges = [r for r in rows if isinstance(r,dict) and r.get('type')=='RECOVERY'
+        and r.get('between_sets') is True]
+    if len(floats)!=len(works) or len(bridges)!=1:
+        return original
+    for r in works:
+        if (r.get('moving_time')!=30 or r.get('elapsed_time')!=30
+            or r.get('_v196910_observed') is not True):return original
+        found = [f for f in floats if f.get('_v196910_observed') is True
+            and f.get('start_time')==r.get('end_time')
+            and f.get('end_time')==r.get('end_time')+15
+            and f.get('moving_time')==15 and f.get('set')==r.get('set')
+            and f.get('rep_in_set')==r.get('rep_in_set')
+            and type(f.get('average_watts')) in (int,float)
+            and math.isfinite(f['average_watts'])]
+        if len(found)!=1:return original
+    rest = bridges[0]
+    if (rest.get('_v196910_observed') is not True
+        or type(rest.get('moving_time')) not in (int,float)
+        or not 150<=rest['moving_time']<=540
+        or rest.get('end_time')!=works[n].get('start_time')
+        or rest.get('start_time')!=works[n-1].get('end_time')+15
+        or type(rest.get('average_watts')) not in (int,float)
+        or not math.isfinite(rest['average_watts'])):
+        return original
+    return dict(original,pattern='MICRO_30_15',float_s=15,work_s=30,
+        recovery_observation_complete=True,
+        recovery_pair_count=len(works)-1,
+        recovery_pair_expected=len(works)-1,
+        micro_recovery_proof_schema=INC095_SCHEMA)
+
+
+def _inc095_verified_micro_block(block):
+    b=block if isinstance(block,dict) else {}
+    truth=b.get('activity_truth') or {}
+    observed=b.get('micro_30_15_observed') or {}
+    rep=b.get('repeatability') or {}
+    n=observed.get('reps_per_set')
+    return bool(isinstance(truth,dict) and isinstance(observed,dict)
+        and isinstance(rep,dict) and b.get('quality_relevant') is True
+        and truth.get('status')=='RESOLVED'
+        and truth.get('source')=='ICU_RAW_WATTS_30_15'
+        and observed.get('source')=='ICU_RAW_WATTS_30_15'
+        and observed.get('complete_pattern_verified') is True
+        and observed.get('sets')==2 and type(n) is int and 8<=n<=24
+        and rep.get('source')=='ICU_RAW_WATTS_30_15'
+        and rep.get('micro_recovery_proof_schema')==INC095_SCHEMA
+        and rep.get('recovery_observation_complete') is True
+        and rep.get('recovery_pair_count')==rep.get('recovery_pair_expected')==2*n-1
+        and rep.get('reps')==2*n and rep.get('sets')==2
+        and rep.get('reps_per_set')==n and rep.get('recovery_secs')==15
+        and type(observed.get('set_recovery_s')) in (int,float)
+        and type(rep.get('set_recovery_secs')) in (int,float)
+        and abs(observed['set_recovery_s']-rep['set_recovery_secs'])<=1
+        and len(rep.get('watts') or [])==2*n)
+
+
+def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_key=None, scope_start=None):
+    result=_INC095_LEDGER_BEFORE(previous_training_blocks,overlay_blocks,
+        goal_key=goal_key,scope_start=scope_start)
+    if not isinstance(result,dict):return result
+    by_id={}
+    for b in list(previous_training_blocks or [])+list(overlay_blocks or []):
+        if _inc095_verified_micro_block(b):
+            by_id.setdefault(str(b.get('activity_id')),[]).append(b)
+    for row in ((result.get('repeatability') or {}).get('events') or []):
+        aid=str(row.get('activity_id') or '')
+        origin=by_id.get(aid) or []
+        if not origin or row.get('activity_truth_source')!='ICU_RAW_WATTS_30_15':
+            continue
+        # The prior blocks and the same-day overlay can legitimately contain
+        # the identical activity twice; accept ONLY byte-equivalent evidence.
+        # Any conflict with the same activity ID fails closed.
+        try:
+            fingerprints={hashlib.sha256(_nova_inc051_canonical_json({
+                'truth':b.get('activity_truth'),
+                'micro':b.get('micro_30_15_observed'),
+                'repeatability':b.get('repeatability')}).encode()).hexdigest()
+                for b in origin}
+        except (TypeError,ValueError,OverflowError):
+            continue
+        if len(fingerprints)!=1:continue
+        block=origin[0];rep=block['repeatability'];obs=block['micro_30_15_observed']
+        if (row.get('reps')!=rep.get('reps')
+            or row.get('recovery_secs')!=rep.get('recovery_secs')
+            or abs(float(row.get('avg_watts') or 0)-float(rep.get('avg_watts') or 0))>.11
+            or row.get('activity_truth_status')!='RESOLVED'):
+            continue
+        row.update(pattern='MICRO_30_15',sets=2,reps_per_set=rep['reps_per_set'],
+            float_s=15,set_recovery_s=obs['set_recovery_s'],
+            observed_work_watts=list(rep['watts']),
+            micro_recovery_proof_schema=INC095_SCHEMA)
+        # Attach the very SAME immutable evidence to the ordinary event list.
+        for ev in result.get('events') or []:
+            if (ev.get('activity_id')==row.get('activity_id')
+                and ev.get('repeatability') is not None):
+                ev['repeatability']=row
+    return result
+
+
+def _inc095_micro_band(template, evidence_ledger=None, as_of_date=None, dimension=None):
+    t=template if isinstance(template,dict) else {}
+    if str(t.get('pattern') or '').upper()!='MICRO_30_15':return None
+    count=int(t.get('reps_per_set') or 0)
+    if (t.get('sets')!=2 or count<8 or t.get('work_s')!=30
+        or t.get('float_s')!=15 or type(t.get('set_recovery_s')) is not int):
+        return None
+    events=(((evidence_ledger or {}).get('repeatability') or {}).get('events') or [])
+    supported=[]
+    for e in events:
+        if (not isinstance(e,dict) or e.get('strong') is not True
+            or e.get('activity_truth_status')!='RESOLVED'
+            or e.get('activity_truth_source')!='ICU_RAW_WATTS_30_15'
+            or e.get('micro_recovery_proof_schema')!=INC095_SCHEMA
+            or e.get('pattern')!='MICRO_30_15'
+            or e.get('sets')!=2 or e.get('reps_per_set')!=count
+            or e.get('reps')!=2*count or e.get('interval_secs')!=30
+            or e.get('float_s')!=15 or e.get('recovery_secs')!=15
+            or e.get('recovery_observation_complete') is not True
+            or e.get('recovery_pair_count')!=2*count-1
+            or e.get('recovery_pair_expected')!=2*count-1):
+            continue
+        if (type(e.get('set_recovery_s')) not in (int,float)
+            or abs(e['set_recovery_s']-t['set_recovery_s'])>90):continue
+        try:
+            day=date.fromisoformat(str(e['date'])[:10]);now=date.fromisoformat(str(as_of_date)[:10])
+            age=(now-day).days
+            avg=float(e['avg_watts']);cv=float(e['cv_pct'])
+            observed_watts=e.get('observed_work_watts') or []
+            repeated=[float(w) for w in observed_watts]
+            observed_mean=statistics.mean(repeated)
+            observed_cv=statistics.pstdev(repeated)/observed_mean*100
+        except (ValueError,KeyError,TypeError,OverflowError,statistics.StatisticsError,ZeroDivisionError):continue
+        if (not 0<=age<=42 or not 70<=avg<=1200 or not 0<=cv<=6
+            or len(repeated)!=2*count or any(not 70<=w<=1200 or not math.isfinite(w) for w in repeated)
+            or abs(observed_mean-avg)>.65 or abs(observed_cv-cv)>.6
+            or not str(e.get('activity_id') or '').strip()):continue
+        supported.append((age,str(e['activity_id']),e,avg))
+    supported.sort(key=lambda x:(x[0],x[1]))
+    if not supported:return None
+    age,aid,e,avg=supported[0]
+    if sum(str(x.get('activity_id') or '')==aid for x in events if isinstance(x,dict))!=1:
+        return None
+    target=int(round((avg*.98 if str(dimension or '').upper()=='RACE_TRANSFER' else avg)/5)*5)
+    return {'schema':R1943_SCHEMA,'state':'PRESCRIBED',
+        'confidence':'MODERATE','source':'COMPARABLE_VERIFIED_REPEATED_WORK',
+        'activity_id':aid,'activity_date':str(e['date'])[:10],
+        'observed_repeated_avg_watts':round(avg,1),
+        'target_watts':target,'low_watts':target-5,'high_watts':target+5,
+        'reps':2*count,'work_seconds':30,'evidence_interval_seconds':30,
+        'evidence_age_days':age,'observed_recovery_seconds':15,
+        'planned_recovery_seconds':15,'recovery_duration_comparable':True,
+        'repeatability_state':'VERIFIED_COMPARABLE_REPEATS',
+        'power_target_mode':'VERIFIED_REPEATED_TARGET',
+        'micro_recovery_proof_schema':INC095_SCHEMA,
+        'observed_set_recovery_seconds':e['set_recovery_s'],
+        'planned_set_recovery_seconds':t['set_recovery_s']}
+
+
+def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None, dimension=None):
+    if str((template or {}).get('pattern') or '').upper()=='MICRO_30_15':
+        return (_inc095_micro_band(template,evidence_ledger,as_of_date,dimension)
+            or {'schema':R1943_SCHEMA,'state':'NO_DEFENSIBLE_POWER_TARGET',
+                'reason':'NO_COMPLETE_MATCHED_MEASURED_MICRO_30_15'})
+    return _INC095_BAND_BEFORE(template,evidence_ledger=evidence_ledger,
+        ftp_anchor=ftp_anchor,as_of_date=as_of_date,dimension=dimension)
+
+
+def _nova_inc083_science_replay(work,evidence_ledger,ftp_anchor,road,today=None):
+    w=work if isinstance(work,dict) else {}
+    tpl=_R19696_LIBRARY_INDEX.get(str(w.get('nova_workout_id') or ''))
+    if str((tpl or {}).get('pattern') or '').upper()!='MICRO_30_15':
+        return _INC095_REPLAY_BEFORE(work,evidence_ledger,ftp_anchor,road,today=today)
+    reject=lambda why:{'schema':INC095_SCHEMA,'state':'FAIL','accepted':False,'reason':why}
+    dim=str(w.get('nova_prescription_dimension') or '').upper()
+    if (dim not in set(tpl.get('dimensions') or ())
+        or dim!=str(((road or {}).get('scientific_progression') or {}).get('dimension') or '').upper()):
+        return reject('WRONG_SCIENTIFIC_DIMENSION')
+    when=(today if isinstance(today,date) else get_rome_now().date())
+    band=_inc095_micro_band(tpl,evidence_ledger,when.isoformat(),dim)
+    issued=w.get('power_prescription') or {}
+    if not band or not isinstance(issued,dict):return reject('NO_MEASURED_MATCHED_MICRO_DOSE')
+    for field in ('activity_id','activity_date','observed_repeated_avg_watts',
+         'low_watts','high_watts','target_watts','source','reps',
+         'evidence_interval_seconds','observed_recovery_seconds',
+         'micro_recovery_proof_schema','observed_set_recovery_seconds'):
+        if band.get(field)!=issued.get(field):return reject('ISSUED_BAND_DIFFERS_'+field.upper())
+    return {'schema':INC095_SCHEMA,'state':'PASS','accepted':True,
+        'reason':'IDENTICAL_MEASURED_TWO_SET_MICRO_RECOVERIES_REPLAYED'}
+
+
+def _nova_inc091_truth(evidence_ledger,band,owner_user_id,producer_request=True):
+    # Preserve the original server actor / request / replay contract for all
+    # established numeric families. Micro source is the ONLY additional case.
+    if (not isinstance(band,dict) or
+        band.get('micro_recovery_proof_schema')!=INC095_SCHEMA):
+        return _INC095_TRUTH_BEFORE(evidence_ledger,band,owner_user_id,
+            producer_request=producer_request)
+    if not owner_user_id or not has_request_context():return None
+    actor=current_user(touch=False)
+    if (not isinstance(actor,dict) or str(actor.get('id') or '')!=str(owner_user_id)
+        or (producer_request and getattr(request,'endpoint',None)!='analyze')
+        or (producer_request and str(getattr(request,'form',{}).get('qa_mode') or '').upper() in {'LIVE','PYTHON'})
+        or getattr(g,'r169_qa_target_user_id',None)):
+        return None
+    ledger=evidence_ledger if isinstance(evidence_ledger,dict) else {}
+    aid=str(band.get('activity_id') or '')
+    rows=[x for x in (ledger.get('events') or []) if isinstance(x,dict)
+        and str(x.get('activity_id') or '')==aid and x.get('event_kind')=='TRAINING'
+        and x.get('activity_truth_status')=='RESOLVED'
+        and x.get('activity_truth_source')=='ICU_RAW_WATTS_30_15']
+    reps=[x for x in (((ledger.get('repeatability') or {}).get('events')) or [])
+        if isinstance(x,dict) and str(x.get('activity_id') or '')==aid
+        and x.get('micro_recovery_proof_schema')==INC095_SCHEMA
+        and x.get('recovery_observation_complete') is True
+        and x.get('recovery_pair_count')==x.get('recovery_pair_expected')==x.get('reps',0)-1
+        and x.get('activity_truth_source')=='ICU_RAW_WATTS_30_15']
+    if len(rows)!=1 or len(reps)!=1 or not aid or rows[0].get('repeatability')!=reps[0]:
+        return None
+    replay=_inc095_micro_band(_R19696_LIBRARY_INDEX.get(str(band.get('workout_id') or '')),
+        ledger,get_rome_now().date().isoformat(),None) if band.get('workout_id') else None
+    # The exact replay of science and identity is also enforced by
+    # _nova_inc091_eligible. Here prove the raw owner-bound ledger origin.
+    try:
+        digest=hashlib.sha256(_nova_inc051_canonical_json({
+            'owner_scope':_nova_inc050_owner_scope(owner_user_id),
+            'activity':rows[0],'repeat':reps[0]}).encode()).hexdigest()
+    except (TypeError,ValueError,OverflowError):return None
+    return {'state':'SERVER_RESOLVED_TRUTH_REPLAYED',
+        'activity_id':aid,'event_digest':digest,
+        'owner_scope':_nova_inc050_owner_scope(owner_user_id),
+        'raw_fit_byte_receipt_verified':False,
+        'micro_recovery_proof_schema':INC095_SCHEMA}
+
+
+
+_INC095_NATIVE_BEFORE = _nova_inc091_compile_native
+
+def _nova_inc091_compile_native(tpl, plan, ledger, ftp_anchor, road, power_model=None):
+    # The canonical MICRO 30/15 has a valid 55 min 30 s envelope: INC091's
+    # old `seconds % 60 == 0` validation mistakenly rejected every half-minute
+    # program even after a scientifically verified personal watt dose.
+    if str((tpl or {}).get('pattern') or '').upper()!='MICRO_30_15':
+        return _INC095_NATIVE_BEFORE(tpl,plan,ledger,ftp_anchor,road,power_model)
+    goal=str((plan or {}).get('goal_key') or '')
+    dim=str((plan or {}).get('dimension') or '')
+    if not isinstance(tpl,dict) or tpl.get('id')!=(plan or {}).get('workout_id'):
+        return None
+    wid=tpl['id']
+    band=_v1943_band(tpl,evidence_ledger=ledger,ftp_anchor=ftp_anchor,
+        as_of_date=get_rome_now().date().isoformat(),dimension=dim)
+    proof=_nova_inc083_science_replay({'nova_workout_id':wid,
+        'nova_prescription_dimension':dim,'power_prescription':band},
+        ledger,ftp_anchor,road)
+    if (proof.get('accepted') is not True or band.get('state')!='PRESCRIBED'):
+        return None
+    raw=_v109_render_library_workout(tpl,goal,dim,
+        power_model=power_model,ftp_anchor=ftp_anchor,slot=None)
+    seconds=_nova_quality_template_required_seconds(tpl,dim)
+    if (not isinstance(raw,dict) or type(seconds) not in (int,float)
+        or not math.isfinite(seconds) or seconds<=0 or seconds>6*3600
+        or abs(seconds*2-round(seconds*2))>1e-6):
+        return None
+    if (type(band.get('low_watts')) is not int
+        or type(band.get('high_watts')) is not int
+        or not 0<band['low_watts']<band['high_watts']<=2500):
+        return None
+    main=str(raw.get('main_set') or '')
+    main += (' Personal work range (calculated from directly measured complete '
+        '30/15 repeats and all floats, not an isolated power peak): '
+        f'{band["low_watts"]}–{band["high_watts"]} W. '
+        'Maintain 15 s very light floats; not a clearance to execute today.')
+    work={'nova_workout_id':wid,'goal_key':goal,
+        'nova_prescription_dimension':dim,
+        'nova_workout_library_version':NOVA_WORKOUT_LIBRARY_VERSION,
+        'nova_template_signature':_v109_template_signature(tpl),
+        'title':str(raw.get('title') or ''),'main_set':main,
+        'why':str(raw.get('why') or ''),'intensity':str(raw.get('intensity') or ''),
+        'intensity_class':'vo2',
+        'stimulus_architecture_state':'NOVA_CANONICAL_LIBRARY',
+        'hard_spacing_relevant':True,'nova_prescription_authority':False,
+        'restriction':'NONE','duration':f'{seconds/60:g} min',
+        'power_prescription':copy.deepcopy(band),
+        'prescribed_power_low':band['low_watts'],
+        'prescribed_power_high':band['high_watts'],
+        'session_duration_feasibility':{'state':'UNASSESSED',
+            'reason':'NO_ATHLETE_CONFIRMED_SLOT_OR_CALENDAR_DATE',
+            'actual_available_minutes':None},
+        'is_scheduled':False,'date':None}
+    complete,audit=_v19697_session_envelope(work)
+    if (not isinstance(complete,dict) or audit.get('state')!='COMPLETE'
+        or not _nova_inc075_valid_compiled_duration(complete)
+        or not _v19696_execution_contract(complete).get('ready')
+        or complete.get('nova_workout_id')!=wid):
+        return None
+    return complete
+
+
+
+_INC095_EXECUTION_BEFORE = _v19696_execution_contract
+
+def _v19696_execution_contract(session):
+    # INC095: R19696 classifies every MICRO_30_15 under generic effort-only.
+    # Work watts are now permitted only for the *same* exact measured protocol
+    # whose raw 2-set work/float provenance passed INC095. Other efforts and
+    # no-evidence workouts preserve the previous strict gate.
+    prior=_INC095_EXECUTION_BEFORE(session)
+    s=session if isinstance(session,dict) else {}
+    wid=str(s.get('nova_workout_id') or '')
+    tpl=_R19696_LIBRARY_INDEX.get(wid) or {}
+    band=s.get('power_prescription') or {}
+    if (str(tpl.get('pattern') or '').upper()!='MICRO_30_15'
+        or not isinstance(band,dict)
+        or band.get('micro_recovery_proof_schema')!=INC095_SCHEMA
+        or band.get('source')!='COMPARABLE_VERIFIED_REPEATED_WORK'
+        or band.get('schema')!=R1943_SCHEMA
+        or band.get('state')!='PRESCRIBED'
+        or band.get('repeatability_state')!='VERIFIED_COMPARABLE_REPEATS'
+        or not isinstance(prior,dict)
+        or prior.get('issues')!=['MISSING_ATTESTED_EFFORT_BASED_CONTRACT']):
+        return prior
+    lo=_v1943_finite(band.get('low_watts'),70,1200)
+    hi=_v1943_finite(band.get('high_watts'),70,1200)
+    n=tpl.get('reps_per_set')
+    if (lo is None or hi is None or not 0<lo<hi
+        or type(n) is not int
+        or band.get('reps')!=2*n
+        or band.get('work_seconds')!=tpl.get('work_s')==30
+        or band.get('observed_recovery_seconds')!=tpl.get('float_s')==15
+        or type(band.get('observed_set_recovery_seconds')) not in (int,float)
+        or abs(band['observed_set_recovery_seconds']-tpl.get('set_recovery_s',float('inf')))>90
+        or s.get('prescribed_power_low')!=int(lo)
+        or s.get('prescribed_power_high')!=int(hi)
+        or not str(band.get('activity_id') or '').strip()
+        or str(s.get('nova_prescription_dimension') or '').upper() not in set(tpl.get('dimensions') or ())
+        or 'Maintain 15 s very light floats' not in str(s.get('main_set') or '')):
+        return prior
+    return dict(prior,ready=True,issues=[],
+        power=f'{int(lo)}–{int(hi)} W directly observed 30/15 work range',
+        source=INC095_SCHEMA)
+
+
+# INC095: the inherited INC049 conditional Card3 HTML lost the ordinary
+# v150 clipboard button, despite F / DTM requiring it beside every title.
+# Restore the EXACT existing button class, attribute and listener used by
+# chronological Card 1/2. No new listener or UI decision path is introduced.
+_INC095_CARD3_H3 = '<h3>{{ card3.title|e }}</h3>'
+assert HOME_PAGE.count(_INC095_CARD3_H3)>=1, 'INC095_CARD3_TITLE_TEMPLATE_DRIFT'
+_INC095_CARD3_TITLE_ROW = ('<div class="v150-workout-title-row"><h3>{{ card3.title|e }}</h3>'
+    '<button class="v150-copy-workout" type="button" data-copy-workout="{{ card3.title|e }}" '
+    'aria-label="Copy workout name" title="Copy workout name">⧉<span>Copy</span></button></div>')
+HOME_PAGE=HOME_PAGE.replace(_INC095_CARD3_H3,_INC095_CARD3_TITLE_ROW)
+app.jinja_env.parse(HOME_PAGE)
+
+APP_VERSION = ('THE LAB · R196.9.131 · INC095 COMPLETE MEASURED MICRO 30/15 '
+               'WATT EVIDENCE PATH · CANDIDATE')
 
 
 if __name__ == "__main__":
