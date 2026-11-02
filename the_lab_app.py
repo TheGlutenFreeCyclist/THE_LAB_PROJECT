@@ -66632,5 +66632,168 @@ APP_VERSION = ('THE LAB · R196.9.132 · INC096 GENERAL RAW REPEAT OBSERVATIONS 
                '+ R131 CANONICAL MICRO SCIENCE INTACT · CANDIDATE')
 
 
+# INC-098 / R196.9.133 — RECONCILE PERSISTED CANONICAL QUALITY / ISSUER SEAL.
+# Retain the original R132 RAW detector and the same scientific producer.
+# This wrapper runs IN THE PRODUCER during a fresh /analyze Snapshot, before
+# any ledger rows or a conditional future plan are computed. It never patches
+# persisted history, derives a watt value, chooses a template, or fixes a
+# failing digest by signing old data. An unverified offer must not suppress
+# the independent fully verified future-quality planner.
+INC098_SCHEMA = 'NOVA-R196.9.133-CANONICAL-OFFER-RECONCILIATION-1'
+_INC098_CANONICAL_BUILDER = _nova_r196956_build_offer
+_INC098_TERMINAL_HISTORY = frozenset({'FULFILLED','SUPERSEDED','CANCELLED'})
+
+
+def _nova_inc098_can_retain_issued(prior, offered, ledger, decision, road,
+                                    evidence_ledger, ftp_anchor, owner_id):
+    """An *unchanged* existing signed promise; never mint a new authority.
+
+    The source and all issuer/audit bytes stay exactly as they were. A past
+    digest is sufficient only together with current owner, goal, science and
+    lifecycle checks. Even a signed stale goal or completed workout is rejected.
+    """
+    old = (prior or {}).get('next_quality_offer') if isinstance(prior,dict) else None
+    att = (prior or {}).get('quality_offer_integrity') if isinstance(prior,dict) else None
+    if not isinstance(old,dict) or not isinstance(att,dict) or not isinstance(offered,dict):
+        return False
+    if (not owner_id or not has_request_context()
+        or str(getattr(request,'endpoint',None) or '')!='analyze'
+        or str(_nova_inc051_verified_owner_id() or '')!=str(owner_id)
+        or str((prior or {}).get('future_quality_owner_scope') or '') !=
+            _nova_inc050_owner_scope(owner_id)
+        or not _nova_inc076_seal_ok(old,att,owner_id)
+        or old.get('schema') != R196956_SCHEMA
+        or old.get('offer_status')!='OFFERED'
+        or att.get('state')!='PASS'
+        or offered.get('source')!='PRIOR_ISSUED_CANONICAL'
+        or old.get('offer_id')!=offered.get('offer_id')
+        or old.get('workout_id')!=offered.get('workout_id')
+        or old.get('dose_fingerprint')!=offered.get('dose_fingerprint')):
+        return False
+    work=old.get('workout')
+    proposed=offered.get('workout')
+    if (not isinstance(work,dict) or not isinstance(proposed,dict)
+        or not _nova_r196956_structural_ok(work)
+        or not _nova_inc075_valid_compiled_duration(work)
+        or not _nova_r196956_structural_ok(proposed)
+        or proposed != work  # no partial reissue under a surviving old seal
+        or _nova_r196956_ledger_status(ledger,work) in _INC098_TERMINAL_HISTORY):
+        return False
+    # Identity equality covers the entire immutable native dose, not a title.
+    old_fp = _v136_prescription_fingerprint(_v4840_ledger_session_summary(work))
+    new_fp = _v136_prescription_fingerprint(_v4840_ledger_session_summary(proposed))
+    if (not old_fp or old_fp != new_fp or old_fp != old.get('dose_fingerprint')
+        or old_fp != att.get('issued_workout_fingerprint')
+        or work.get('nova_workout_id') != old.get('workout_id')):
+        return False
+    dec=decision if isinstance(decision,dict) else {}
+    rd=road if isinstance(road,dict) else {}
+    sci=rd.get('scientific_progression') or {}
+    if not isinstance(sci,dict):
+        return False
+    goal=str(dec.get('goal_key') or '').upper()
+    dim=str(sci.get('dimension') or '').upper()
+    t=_R19696_LIBRARY_INDEX.get(str(old.get('workout_id') or ''))
+    if (not goal or not dim or not isinstance(t,dict)
+        or str(t.get('goal') or '').upper()!=goal
+        or dim not in set(t.get('dimensions') or ())
+        or work.get('nova_template_signature') != _v109_template_signature(t)
+        or str(work.get('goal_key') or work.get('goal') or '').upper()!=goal
+        or str(work.get('nova_prescription_dimension') or '').upper()!=dim):
+        return False
+    # Recheck against *this* Snapshot's resolved evidence. A valid old HMAC
+    # does not make a changed original power source valid in perpetuity.
+    replay=_nova_inc083_science_replay(work,evidence_ledger,ftp_anchor,rd)
+    return isinstance(replay,dict) and replay.get('accepted') is True
+
+
+def _nova_inc098_withheld(audit,reason,previous_source=None):
+    previous=audit if isinstance(audit,dict) else {}
+    return {'schema':INC098_SCHEMA,'state':'WITHHELD_FOR_SCIENCE',
+        'reason':reason,'previous_producer_state':previous.get('state'),
+        'previous_producer_reason':previous.get('reason'),
+        'previous_offer_source':previous_source,
+        'offer_present':False,'visible_in_card_3':False,
+        'can_show_as_executable_workout':False,
+        'needs_fresh_canonical_science':True,
+        'legacy_is_history_not_prescription':True,
+        'no_invented_watts':True,'no_calendar_or_ledger_mutation':True}
+
+
+def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,
+        ledger,user_id,evidence_ledger=None,power_model=None,ftp_anchor=None,
+        aerobic_metabolic_range=None,training_definitions=None,
+        compile_arguments=None,planning_context=None,training_state=None):
+    args=(rows,prescription,prior,decision,clock,road,ledger,user_id)
+    kwargs=dict(evidence_ledger=evidence_ledger,power_model=power_model,
+        ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions,
+        compile_arguments=compile_arguments,planning_context=planning_context,
+        training_state=training_state)
+    # A report saved before the issuer MAC existed (or a changed/foreign
+    # predecessor) is never eligible to head the next scientific candidate
+    # list. Remove it from SELECTION INPUT, not from persisted history. This
+    # happens before the inherited engine runs so even its early alternation
+    # exits cannot let an invalid predecessor suppress fresh compilation.
+    stored=(prior or {}).get('next_quality_offer') if isinstance(prior,dict) else None
+    stored_audit=(prior or {}).get('quality_offer_integrity') if isinstance(prior,dict) else None
+    if isinstance(stored,dict) and not _nova_inc076_seal_ok(stored,stored_audit,user_id):
+        clean_prior=dict(prior)
+        clean_prior['next_quality_offer']=None
+        clean_prior['quality_offer_integrity']=None
+        offer,audit=_INC098_CANONICAL_BUILDER(rows,prescription,clean_prior,
+            decision,clock,road,ledger,user_id,**kwargs)
+        if isinstance(offer,dict) and isinstance(audit,dict) and _nova_inc076_seal_ok(offer,audit,user_id):
+            return offer,audit
+        if not isinstance(offer,dict) and isinstance(audit,dict) and audit.get('state')=='PLANNING_BLOCKED':
+            return offer,audit  # athlete's explicit injury restriction
+        return None,_nova_inc098_withheld(audit,
+            'HISTORICAL_UNSEALED_OFFER_REQUIRES_FRESH_CANONICAL_QUALITY',
+            stored.get('source'))
+    offer,audit=_INC098_CANONICAL_BUILDER(*args,**kwargs)
+    # The scientific producer itself may choose NO OFFER, e.g. injury,
+    # completed exposure or missing original evidence. Do not override it.
+    if not isinstance(offer,dict):
+        return offer,audit
+    if isinstance(audit,dict) and _nova_inc076_seal_ok(offer,audit,user_id):
+        return offer,audit
+    if str(offer.get('source') or '') != 'PRIOR_ISSUED_CANONICAL':
+        # A newly computed but unsealed dose is NOT a scientific offer. Let
+        # the already-existing future planner run without a phantom active
+        # offer suppressing it.
+        return None,_nova_inc098_withheld(audit,
+            'CURRENT_CANONICAL_OFFER_FAILED_ISSUER_ATTESTATION',offer.get('source'))
+    # A legacy producer frequently changes 'source' to PRIOR; issuer HMAC
+    # deliberately refuses to re-sign it. Keep exact signed predecessor,
+    # where present and STILL scientifically valid, instead of emitting a
+    # newly composed but unsigned copy that Card 3 always rejects.
+    if _nova_inc098_can_retain_issued(prior,offer,ledger,decision,road,
+                                      evidence_ledger,ftp_anchor,user_id):
+        return ((prior or {})['next_quality_offer'],
+                (prior or {})['quality_offer_integrity'])
+    # A legacy/changed predecessor never gets a fresh signature. Ask the
+    # *original* producer and original evidence/selector/compiler to create
+    # a genuinely new candidate, with the stale offer excluded from selection.
+    # Keep the rest of prior (history, owner state) intact.
+    fresh_prior=dict(prior or {})
+    fresh_prior['next_quality_offer']=None
+    fresh_prior['quality_offer_integrity']=None
+    fresh,fresh_audit=_INC098_CANONICAL_BUILDER(rows,prescription,fresh_prior,
+        decision,clock,road,ledger,user_id,**kwargs)
+    if (isinstance(fresh,dict) and isinstance(fresh_audit,dict)
+        and fresh.get('source')!='PRIOR_ISSUED_CANONICAL'
+        and _nova_inc076_seal_ok(fresh,fresh_audit,user_id)):
+        return fresh,fresh_audit
+    # Missing proof stays RED. Returning None is essential: the normal
+    # non-calendar future-quality producer then gets its chance to issue a
+    # separately attested plan, without an invalid active_offer veto.
+    return None,_nova_inc098_withheld(fresh_audit,
+        'LEGACY_CANONICAL_OFFER_REQUIRES_NEW_SCIENTIFIC_ISSUANCE',
+        offer.get('source'))
+
+APP_VERSION = ('THE LAB · R196.9.133 · INC098 CANONICAL OFFER REUSE/REISSUE '
+               '· R132 RAW DETECTOR PRESERVED · OFFLINE CANDIDATE')
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
