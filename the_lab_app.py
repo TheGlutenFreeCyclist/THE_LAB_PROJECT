@@ -22179,6 +22179,7 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
         else:
             open_seq=[d for d in (graph.get("sequence") or ()) if not _v82_question_exit_satisfied(question_state,d)]
             dim=(open_seq or list(graph.get("sequence") or ("FRESH_CAPACITY",)))[0]; scores[dim]=50.0; reasons[dim]="Insufficient evidence to rank a more specific unresolved adaptation question."
+    _nova_r134_rank_science_after_recent_transfer(scores, reasons, goal, evidence_ledger, roadmap)
     ranked=sorted(scores,key=lambda k:(-scores[k],(graph.get("sequence") or ()).index(k) if k in (graph.get("sequence") or ()) else 999))
     dim=ranked[0]; arch=list((graph.get("architectures") or {}).get(dim) or ())
     evidence=["TID_ELITE","CYCLIST_TRAINING_DISTRIBUTION","LONG_TERM_DEVELOPMENT"]
@@ -66791,8 +66792,64 @@ def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,
         'LEGACY_CANONICAL_OFFER_REQUIRES_NEW_SCIENTIFIC_ISSUANCE',
         offer.get('source'))
 
-APP_VERSION = ('THE LAB · R196.9.133 · INC098 CANONICAL OFFER REUSE/REISSUE '
-               '· R132 RAW DETECTOR PRESERVED · OFFLINE CANDIDATE')
+
+# INC099 / R196.9.134 — AFTER OBSERVED TRANSFER, RANK THE NEXT OPEN QUESTION.
+# Producer-side scientific priority only. No workout selection, new watts,
+# scheduling, ledger mutation, injury gate or issuer/HMAC bypass.
+INC099_SCHEMA = 'NOVA-R196.9.134-RECENT-VERIFIED-TRANSFER-SCIENCE-RANK-1'
+
+def _nova_r134_rank_science_after_recent_transfer(scores, reasons, goal, evidence_ledger, roadmap):
+    """Bounded postponement of an already-observed variable-intensity dose.
+
+    The original science engine owns all open scientific questions and scores.
+    Server-resolved exposure merely avoids looping immediately on the same
+    question when another OPEN same-goal question is scientifically ranked.
+    It never marks an adaptation fulfilled or issues a watt prescription.
+    """
+    if not isinstance(scores, dict) or not isinstance(reasons, dict):
+        return
+    if 'RACE_TRANSFER' not in scores:
+        return
+    try:
+        current=float(scores['RACE_TRANSFER'])
+        if not math.isfinite(current) or current<=0:
+            return
+        eligible=[(d,float(s)) for d,s in scores.items()
+                  if d not in {'RACE_TRANSFER','NONE','REVALIDATION',
+                               'EXTENSION_OR_REVALIDATION','VALIDATE'}
+                  and isinstance(s,(int,float)) and not isinstance(s,bool)
+                  and math.isfinite(float(s)) and float(s)>=40]
+        if not eligible:
+            return
+        if any(isinstance(s,(int,float)) and not isinstance(s,bool)
+               and float(s)>current for d,s in scores.items() if d!='RACE_TRANSFER'):
+            return
+        quality_window=(roadmap or {}).get('quality_window') or {}
+        candidate_date=str(quality_window.get('preferred_iso') or '')[:10]
+        if not candidate_date:
+            return
+        excluded=_r196966_producer_exclusions(evidence_ledger,candidate_date,goal)
+        variable=[wid for wid in excluded if
+                  str((_R19696_LIBRARY_INDEX.get(str(wid)) or {}).get('pattern') or '').upper()
+                  in _R19693_TRANSFER_PATTERNS]
+        if not variable:
+            return
+        eligible.sort(key=lambda x:(-x[1],x[0]))
+        alternative,score=eligible[0]
+        new_score=min(current,max(0.0,score-1.0))
+        if new_score>=current:
+            return
+        scores['RACE_TRANSFER']=new_score
+        reasons['RACE_TRANSFER']=(str(reasons.get('RACE_TRANSFER') or '').rstrip()
+            + ' A recent independently resolved, variable-intensity canonical '
+              'structure has already been observed. Temporarily prioritize '
+              'the next existing open goal-specific question rather than '
+              'repeating that dose; transfer is NOT marked fulfilled.')
+    except (ValueError,TypeError,AttributeError,OverflowError,KeyError):
+        return
+
+APP_VERSION = ('THE LAB · R196.9.134 · INC099 RECENT TRANSFER SCIENCE RANK '
+               '· R133 ISSUER + R132 RAW PRESERVED · OFFLINE CANDIDATE')
 
 
 if __name__ == "__main__":
