@@ -109,7 +109,11 @@ if __name__=="__main__":
     current_phase="ENTRY"
     try:raise SystemExit(run())
     except Exception as exc:
+        import re
+        key=(exc.args[0] if type(exc) is KeyError and len(exc.args)==1 else None)
+        safe_key=key if isinstance(key,str) and re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{1,63}",key) else "REDACTED"
         print(json.dumps({"suite":"INC109_PUBLIC_SYNTHETIC_FULL_PIPELINE",
                           "status":"BLOCKED","phase":current_phase,
+                          "missing_contract_field":safe_key,
                           "exception_class":type(exc).__name__}))
         raise SystemExit(2)
