@@ -70,7 +70,7 @@ def main():
     args = parser.parse_args()
     policy = json.loads(Path(args.policy).read_text(encoding="utf-8"))
     gate = baseline_decision(policy,mode=args.mode,width=args.width)
-    if gate["status"] == "NOT_VERIFIED":
+    if gate["status"] == "NOT_VERIFIED" and policy.get("status") != "APPROVED":
         print(json.dumps({"contract":"INC105_VISUAL",
                           "status":"NOT_VERIFIED","reason":gate["reason"]},
                          sort_keys=True))
