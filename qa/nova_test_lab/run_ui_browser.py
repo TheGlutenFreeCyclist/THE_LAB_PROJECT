@@ -98,7 +98,7 @@ def browser_audit(html, source_data, mode, screenshot_directory):
                     reduced_motion="reduce",
                 )
                 page = context.new_page()
-                page.on("pageerror", lambda err: js_errors.append({"kind": ("NETWORK_BLOCKED" if "Failed to fetch" in str(err) else "SECURITY" if "SecurityError" in str(err) else "REFERENCE" if "ReferenceError" in str(err) else "TYPE" if "TypeError" in str(err) else "OTHER"), "fingerprint": hashlib.sha256(str(err).encode("utf-8")).hexdigest()[:12]}))
+                page.on("pageerror", lambda err: js_errors.append({"kind": ("NETWORK_BLOCKED" if "Failed to fetch" in str(err) else "SECURITY" if "SecurityError" in str(err) else "REFERENCE" if "ReferenceError" in str(err) else "TYPE" if "TypeError" in str(err) else "OTHER"), "fingerprint": hashlib.sha256(str(err).encode("utf-8")).hexdigest()[:12], "synthetic_excerpt": str(err)[:150] if mode == "preview" else None}))
                 def route_handler(route):
                     if route.request.url == SAFE_BROWSER_ORIGIN:
                         route.fulfill(status=200, body=html, content_type="text/html; charset=utf-8")
@@ -237,7 +237,7 @@ def browser_audit(html, source_data, mode, screenshot_directory):
             tag=item["kind"]+":"+item["fingerprint"]
             signatures[tag]=signatures.get(tag,0)+1
         warnings.append({"id":"LAB-UI-JAVASCRIPT-ERROR-REVIEW","count":len(js_errors),
-                         "signatures":signatures})
+                         "signatures":signatures, "synthetic_examples": [v["synthetic_excerpt"] for v in js_errors[:2] if v["synthetic_excerpt"]]})
     failures=[x["id"] for x in audits if x["status"]=="FAIL"]
     return {"mode":"ACTUAL_R136_CHROMIUM_BROWSER",
             "scenario":"SYNTHETIC_PREVIEW" if mode=="preview" else "PRIVATE_FROZEN_R135_STORED_REPORT",
