@@ -29,7 +29,7 @@ def run(outdir):
         browser=p.chromium.launch(headless=True,args=[
             "--no-sandbox","--disable-dev-shm-usage"])
         try:
-            for width in (390,1280):
+            for width in (320,390,768,1280):
                 ctx=browser.new_context(
                     viewport={"width":width,"height":850},
                     reduced_motion="reduce",device_scale_factor=1,
