@@ -9,6 +9,7 @@ Non è produzione e NON modifica `main`. Il branch è stato riallineato alla R19
 - Installa Python 3.11 e le dipendenze reali del repository, incluso Flask.
 - Importa `the_lab_app.py` completo e prova `/healthz` e la protezione di `/qa/nova-replay` via client Flask, senza avviare un web server pubblico.
 - Esegue il calcolo nutrizionale reale su casi **sintetici**, controlla dose/watt/workout ID, proiezione INC101, template Jinja, identità Card 3/Recovery e assenza di mutazioni nel report.
+- Esegue anche la vera pipeline deterministica R115 completa su un contesto POWER_5 senza evidenze, richiedendo esito fail-closed (zero quality hard emesse) e replay ripetibile. Test obbligatori: **9**, senza accessi esterni.
 - Pubblica soltanto log PASS/FAIL dei casi sintetici, conservati come artifact per 7 giorni.
 - Runner limitato a 10 minuti, niente schedule ricorrente, niente nuovi servizi Render o Neon, niente invio di segreti.
 - Nessun `DATABASE_URL`, `THE_LAB_OWNER_DATABASE_URL`, Intervals.icu, Garmin o chiave AI nel processo del test. Queste variabili sono forzate a stringhe vuote prima dell'importazione.
@@ -43,6 +44,7 @@ Il comando esegue `_v115_replay_nova_core`, confronta le invarianti attese della
 - Merge di riallineamento: `cab5267a`.
 - Primo run CI: `41604146958`, 6/7 PASS (assert test HTTP attendeva 302, Flask risponde correttamente 303).
 - Secondo run CI: `41604254482`, **7/7 PASS**; corretto solo l'assert HTTP.
+- Run ampliato: `41604844325`, **9/9 PASS**, inclusa pipeline core R115 reale con input sintetici. Il probe esplorativo ha prodotto 47 campi senza emettere una falsa quality.
 - Nessun accesso al database di produzione; nessun nuovo Snapshot.
 
-Il laboratorio serve a rendere economiche e ripetibili le regressioni. L'obiettivo successivo è aggiungere fixture sintetiche scientificamente complete per l'intero R115 e un circuito sicuro per le fixture reali, senza pubblicare dati personali.
+Il laboratorio serve a rendere economiche e ripetibili le regressioni. L'obiettivo successivo è aggiungere fixture sintetiche **con evidenze sufficienti per una quality watt/dose valida** e un circuito sicuro per le fixture reali, senza pubblicare dati personali.
