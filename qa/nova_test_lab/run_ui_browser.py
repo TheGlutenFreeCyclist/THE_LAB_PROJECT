@@ -36,8 +36,79 @@ PANELS = ("training", "fuel", "physiology", "performance", "science")
 WIDTHS = (320, 390, 768, 1280)
 SAFE_BROWSER_ORIGIN = "https://nova-ui-lab.invalid/"
 
+def _make_quality_presentation(ui):
+    """Inject explicit SYNTHETIC 5x3/2x7 HTML conditions after real UI adapter.
+
+    This exercises Jinja/CSS/DOM, NOT actual issuer/HMAC or a real prescription.
+    """
+    view=copy.deepcopy(ui)
+    from test_real_app import scenario
+    evidence, canonical, rejected = scenario()
+    preview_rows=copy.deepcopy(view.get("next_sessions") or [])
+    if len(preview_rows)<2:
+        raise RuntimeError("preview_missing_chronology_for_card3")
+    first=preview_rows[:2]
+    for item in first:
+        item["nova_workout_id"]=None
+        item["nova_prescription_authority"]=False
+    demo_hard={
+        **(copy.deepcopy(preview_rows[2]) if len(preview_rows)>2 else {}),
+        **rejected,
+        "intensity_class":"vo2",
+        "hard_spacing_relevant":True,
+        "quality_relevance":"MEANINGFUL",
+        "provisional_quality":False,
+        "main_set":"Synthetic rejected 2×7 min — never issue",
+        "duration":"60 min",
+        "slot":"Next day",
+        "why":"Laboratory negative test: insufficient verified original repeated work.",
+    }
+    view["next_sessions"]=first+[demo_hard]
+    view["nutrition_plan"]=nova.build_nutrition_plan(view["next_sessions"],view.get("metabolic_context") or {})
+    view["future_quality_plan"]=evidence["future_quality_plan"]
+    view["next_quality_offer"]=None
+    view["quality_offer_integrity"]={"state":"FAIL"}
+    view["nova_card3_workout_view"]={
+        "verified_future_plan":True,"verified_offer":False,
+        "workout_id":canonical["nova_workout_id"],
+        "title":canonical["title"],
+        "structure":"5×3 min at 350–370 W; 5 min recovery between reps",
+        "personalized_watts":"350–370 W",
+        "phases":[{"label":"WARM-UP","duration":"12 min","detail":"Easy"},
+                  {"label":"MAIN SET","duration":"5×3 min","detail":"350–370 W"},
+                  {"label":"COOL DOWN","duration":"10 min","detail":"Easy"}],
+        "execution":"Controlled repeated VO2 intervals; do not execute until cleared.",
+        "purpose":"Improve specific five-minute power repeatability.",
+        "reason":"Laboratory-only signed-branch simulation; no execution authority.",
+        "is_scheduled":False,
+        "execution_authorized_by_preview":False,
+    }
+    with (
+        patch.object(nova,"_nova_inc051_verified_owner_id",return_value="synthetic-owner"),
+        patch.object(nova,"_nova_inc091_eligible",return_value=True),
+    ):
+        display_rows, alignment=nova._nova_inc101_recovery_projection(view)
+    if alignment["canonical_workout_id"] != canonical["nova_workout_id"]:
+        raise RuntimeError("synthetic_alignment_not_calculated")
+    view["nova_recovery_display_rows"]=display_rows
+    view["nova_recovery_alignment"]=alignment
+    return view
+
+
 def render_real_flask(mode, report_path):
     client = nova.app.test_client()
+    if mode == "synthetic_quality":
+        prior=nova._v4891_prepare_snapshot_for_ui
+        with (
+            patch.object(nova,"_v4891_prepare_snapshot_for_ui",
+                         side_effect=lambda d: _make_quality_presentation(prior(d))),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result=client.get("/preview")
+        if result.status_code!=200:
+            raise RuntimeError("synthetic_quality_preview_http_non200")
+        return result.get_data(as_text=True), None
     if mode == "preview":
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             result = client.get("/preview")
@@ -159,6 +230,23 @@ def browser_audit(html, source_data, mode, screenshot_directory):
                       detail={"count":state["sessionCount"]})
                 check(prefix+"-QUALITY-CARD-CONTENT",
                       state["qualityPresent"] and state["qualityInformative"] and state["qualityExplicit"])
+                if mode == "synthetic_quality":
+                    card_text=page.locator(".v1962-quality-card").inner_text()
+                    recovery=page.locator(".v23-recovery-card")
+                    recovery_ids=recovery.evaluate_all(
+                        "(els)=>els.map(e=>e.getAttribute('data-nova-workout-id')).filter(Boolean)"
+                    )
+                    check(prefix+"-QUALITY-5X3-NOT-REJECTED-2X7",
+                          ("5×3 min" in card_text and "350–370 W" in card_text
+                           and "2×7 min" not in card_text))
+                    check(prefix+"-RECOVERY-CANONICAL-5X3-ID",
+                          recovery_ids.count("P5_5X3_EASYREC")==1
+                          and "P5X_2X420_R300" not in recovery_ids,
+                          detail={"quality_recovery_count":len(recovery_ids)})
+                    check(prefix+"-RECOVERY-MATCHES-5X3",
+                          "5×3 min" in page.locator('.v23-recovery-card[data-nova-workout-id="P5_5X3_EASYREC"]').inner_text()
+                          and "UNSCHEDULED QUALITY" in page.locator('.v23-recovery-card[data-nova-workout-id="P5_5X3_EASYREC"]').inner_text()
+                    )
                 if state["qualityHasStructure"]:
                     check(prefix+"-QUALITY-PRESCRIPTION-COMPLETE",
                           page.locator('.v1962-quality-card').evaluate(
@@ -247,7 +335,7 @@ def browser_audit(html, source_data, mode, screenshot_directory):
                                                if v["synthetic_excerpt"]]})
     failures=[x["id"] for x in audits if x["status"]=="FAIL"]
     return {"mode":"ACTUAL_R136_CHROMIUM_BROWSER",
-            "scenario":"SYNTHETIC_PREVIEW" if mode=="preview" else "PRIVATE_FROZEN_R135_STORED_REPORT",
+            "scenario":("SYNTHETIC_PREVIEW" if mode=="preview" else "SYNTHETIC_5X3_2X7_UI" if mode=="synthetic_quality" else "PRIVATE_FROZEN_R135_STORED_REPORT"),
             "viewport_widths":list(WIDTHS),"check_count":len(audits),
             "pass_count":sum(x["status"]=="PASS" for x in audits),
             "hard_failures":failures,"warnings":warnings,
@@ -260,7 +348,7 @@ def browser_audit(html, source_data, mode, screenshot_directory):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--mode",choices=("preview","private"),default="preview")
+    parser.add_argument("--mode",choices=("preview","private","synthetic_quality"),default="preview")
     parser.add_argument("--report",default=None)
     parser.add_argument("--screenshots",default=None)
     parser.add_argument("--json",default="ui-audit.json")
@@ -271,7 +359,7 @@ def main():
     except BaseException as exc:
         result={"status":"BLOCKED","reason_class":type(exc).__name__,
                 "mode":"ACTUAL_R136_CHROMIUM_BROWSER",
-                "scenario":"SYNTHETIC_PREVIEW" if args.mode=="preview" else "PRIVATE_FROZEN_R135_STORED_REPORT"}
+                "scenario":("SYNTHETIC_PREVIEW" if args.mode=="preview" else "SYNTHETIC_5X3_2X7_UI" if args.mode=="synthetic_quality" else "PRIVATE_FROZEN_R135_STORED_REPORT")}
     Path(args.json).write_text(json.dumps(result,indent=2,ensure_ascii=False),encoding="utf-8")
     print(json.dumps(result,ensure_ascii=False))
     return 0 if result["status"]=="PASS" else 1
