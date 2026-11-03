@@ -89,8 +89,9 @@ def run():
                         saved=ctx.request.get(root+"/last-report")
                         if saved.status != 200:
                             raise AssertionError("authenticated_saved_report_not_rendered")
-                        if ".v1962-quality-card" not in saved.text() and "v1962-quality-card" not in saved.text():
-                            raise AssertionError("card3_markup_missing")
+                        page.goto(root+"/last-report",wait_until="domcontentloaded")
+                        if page.locator(".v1962-quality-card").count() != 1:
+                            raise AssertionError("card3_dom_missing")
                         # A different browser context has NO session and cannot read report.
                         unauth=browser.new_context()
                         try:
