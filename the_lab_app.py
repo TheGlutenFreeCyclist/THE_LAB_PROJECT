@@ -3720,15 +3720,16 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 <div class="v23-recovery-head"><span>🍚</span><div><strong>POST-WORKOUT RECOVERY</strong><small>Your first recovery meal is scaled to the exercise and the time available before the next demand. Carbs and protein get specific targets when useful; fat stays at normal meal intake because there is no robust recovery-specific gram target.</small></div>{% if ir.get('active') %}<div class="v4864-recovery-now" title="Just-completed demanding activity · {{ ir.get('family') or ir.get('kind') }}"><span class="v4864-recovery-now-label">RECOVERY NOW</span><span class="v4863-protein-dose"><em>CARBS</em><b>{{ ir.get('post_cho') }}</b></span><span class="v4863-protein-dose" title="{{ ir.get('post_protein_basis') or 'Post-workout protein target' }}"><em>PROTEIN</em><b>{{ ir.get('post_protein') }}</b></span><span class="v4863-protein-dose" title="{{ ir.get('post_fat_basis') or 'No recovery-specific fat gram target' }}"><em>FAT</em><b>{{ ir.get('post_fat') or 'Normal meal' }}</b></span><small class="v4864-recovery-now-name">{{ ir.get('activity_name') }}{% if ir.get('metabolic_demand') %} · metabolic {{ ir.get('metabolic_demand') }} · glycogen {{ ir.get('glycogen_pressure') }}{% endif %}</small></div>{% endif %}</div>
 <div class="v23-recovery-grid">
-{% for n in data.nutrition_plan %}
-{% set dated_session = data.next_sessions[loop.index0] if data.next_sessions and loop.index0 < (data.next_sessions|length) else none %}
-<div class="v23-recovery-card">
+{% for recovery_row in data.nova_recovery_display_rows %}
+{% set n = recovery_row.nutrition %}
+{% set dated_session = recovery_row.session %}
+<div class="v23-recovery-card" data-nova-recovery-source="{{ recovery_row.source|e }}" data-nova-workout-id="{{ recovery_row.workout_id|e }}">
 <div class="v23-recovery-slot">{% if dated_session and dated_session.date %}{{ dated_session.date[8:10] }}/{{ dated_session.date[5:7] }}/{{ dated_session.date[:4] }} · {% endif %}{{ n.slot }}</div>
 <h3>{{ n.title }}</h3>
 <div class="v23-recovery-demand"><span>SESSION DEMAND</span><b>{{ n.session_demand }}</b></div>
 <div class="v4863-recovery-macros"><span class="v4863-protein-dose"><em>CARBS</em><b>{{ n.post_cho }}</b></span><span class="v4863-protein-dose" title="{{ n.get('post_protein_basis') or 'No dedicated protein dose is needed for this session' }}"><em>PROTEIN</em><b>{{ n.get('post_protein') or 'Normal meal' }}</b></span><span class="v4863-protein-dose" title="{{ n.get('post_fat_basis') or 'No recovery-specific fat gram target' }}"><em>FAT</em><b>{{ n.get('post_fat') or 'Normal meal' }}</b></span></div>
 <div class="v23-recovery-label">{{ n.post_label }} · NEED {{ n.recovery_need }}</div>
-<small class="v26-first-feed-note">First recovery feeding — not total ride replacement.</small>
+{% if recovery_row.conditional %}<small class="v26-first-feed-note">UNSCHEDULED QUALITY · recovery guidance applies only after this exact workout is completed. No calendar booking or execution clearance.</small>{% else %}<small class="v26-first-feed-note">First recovery feeding — not total ride replacement.</small>{% endif %}
 <p>{{ n.guidance }}</p>
 <div class="v26-replenishment"><div class="v26-replenishment-head"><span>DAILY REPLENISHMENT</span><b>{{ n.daily_replenishment_priority }}</b></div><p>{{ n.replenishment_guidance }}</p></div>
 <div class="v23-recovery-timing">⏱️ {{ n.timing }}</div>
@@ -10105,12 +10106,35 @@ def save_daily_log(feeling, note="", status="NORMAL", restriction_type="NONE", d
             note=(note or "").strip(), upsert=True, owner_user_id=owner_id,
         )
     return item_id
+def _r1969100_daily_logs_read_cache():
+    # Strictly read-only routes: no caching in POST/save/QA or mutations.
+    if not has_request_context() or request.method != "GET" or request.path not in ("/", "/last-report"):
+        return None
+    cache = getattr(g, "_r1969100_daily_logs_read_cache", None)
+    if cache is None:
+        cache = {}
+        g._r1969100_daily_logs_read_cache = cache
+    return cache
+
+
 def load_daily_logs(limit=120, owner_user_id=None):
     owner_id = _data_owner_user_id(owner_user_id)
-    rows = _data_execute(owner_id,
-        "SELECT * FROM daily_logs WHERE user_id=? ORDER BY local_date DESC, local_time DESC, logged_at_utc DESC LIMIT ?",
-        (owner_id, int(limit)), fetch=True,
-    )
+    wanted = int(limit)
+    cache = _r1969100_daily_logs_read_cache() if wanted > 0 else None
+    cache_key = (str(owner_id), bool(_owner_personal_data_enabled(owner_id)))
+    entry = cache.get(cache_key) if cache is not None else None
+    if entry is not None and (entry["complete"] or entry["limit"] >= wanted):
+        rows = copy.deepcopy(entry["rows"][:wanted])
+    else:
+        rows = _data_execute(owner_id,
+            "SELECT * FROM daily_logs WHERE user_id=? ORDER BY local_date DESC, local_time DESC, logged_at_utc DESC LIMIT ?",
+            (owner_id, wanted), fetch=True,
+        )
+        if cache is not None:
+            # A short result certifies the complete available prefix. Larger
+            # LIMITs need no refetch until the next independent HTTP request.
+            cache[cache_key] = {"rows": copy.deepcopy(rows), "limit": wanted,
+                                "complete": len(rows) < wanted}
     for row in rows:
         row.setdefault("fueling_gph", None)
         row.setdefault("fueling_tolerance", None)
@@ -10176,6 +10200,9 @@ def save_latest_report(data, now=None, owner_user_id=None, qa_replay_bundle=None
             conn.commit()
         finally:
             conn.close()
+    # Any full report loaded earlier in this request now refers to the old
+    # row. Invalidate it after commit so downstream readers see the new one.
+    _r196999_report_cache_invalidate(owner_id)
     return {
         "generated_at_utc": generated_at_utc,
         "generated_at_local": generated_at_local,
@@ -10189,25 +10216,76 @@ def _format_report_timestamp(value):
         return dt.strftime("%d/%m/%Y · %I:%M %p")
     except Exception:
         return str(value or "—")
+# Neon egress reduction: cache immutable report rows ONLY for the current Flask
+# request. Never share a report across requests, athletes, or storage backends.
+# All callers still receive independently decoded dicts, so their mutations
+# cannot leak into subsequent consumers or saved evidence.
+def _r196999_report_row_cache():
+    if not has_request_context():
+        return None
+    cache = getattr(g, "_r196999_report_row_cache", None)
+    if cache is None:
+        cache = {}
+        g._r196999_report_row_cache = cache
+    return cache
+
+
+def _r196999_report_cache_invalidate(owner_user_id):
+    if not has_request_context():
+        return
+    cache = getattr(g, "_r196999_report_row_cache", None)
+    if isinstance(cache, dict):
+        for key in tuple(cache):
+            if key[0] == str(owner_user_id):
+                cache.pop(key, None)
+
+
 def load_latest_report(include_payload=True, owner_user_id=None, include_qa_replay=False):
     owner_id = _data_owner_user_id(owner_user_id)
-    rows = _data_execute(owner_id,
-        "SELECT singleton_id, user_id, generated_at_utc, generated_at_local, app_version, payload_json FROM latest_report WHERE user_id=? LIMIT 1",
-        (owner_id,), fetch=True,
-    )
-    if not rows:
-        return None
-    row = rows[0]
+    needs_payload = bool(include_payload or include_qa_replay)
+    # Owner requests use the separate Personal Neon bridge; retain this
+    # distinction in the request-local cache key for strict backend isolation.
+    personal_backend = bool(_owner_personal_data_enabled(owner_id))
+    cache = _r196999_report_row_cache()
+    cache_key = (str(owner_id), personal_backend)
+    cached_row = cache.get(cache_key) if cache is not None else None
+    if cached_row is not None and (not needs_payload or "payload_json" in cached_row):
+        row = cached_row
+    else:
+        if needs_payload:
+            projection = "singleton_id, user_id, generated_at_utc, generated_at_local, app_version, payload_json"
+        else:
+            # Calculate UTF-8 bytes inside Postgres/SQLite instead of sending
+            # the entire multi-megabyte JSON to Render for a metadata badge.
+            # Empty/NULL payloads retain the old '{}' fallback semantics.
+            raw_sql = "COALESCE(NULLIF(payload_json, ''), '{}')"
+            length_expr = (f"OCTET_LENGTH({raw_sql})"
+                           if (personal_backend or _db_is_postgres())
+                           else f"LENGTH(CAST({raw_sql} AS BLOB))")
+            projection = ("singleton_id, user_id, generated_at_utc, generated_at_local, app_version, "
+                          f"{length_expr} AS payload_bytes")
+        rows = _data_execute(owner_id,
+            f"SELECT {projection} FROM latest_report WHERE user_id=? LIMIT 1",
+            (owner_id,), fetch=True,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        if cache is not None:
+            cache[cache_key] = row  # Store the SQL row, never the mutable parsed JSON.
     meta = {
         "generated_at_utc": row.get("generated_at_utc"),
         "generated_at_local": row.get("generated_at_local"),
         "generated_at_local_display": _format_report_timestamp(row.get("generated_at_local")),
         "app_version": row.get("app_version") or "THE LAB",
     }
-    raw = row.get("payload_json") or "{}"
-    meta["payload_bytes"] = len(raw.encode("utf-8"))
+    if "payload_json" in row:
+        raw = row.get("payload_json") or "{}"
+        meta["payload_bytes"] = len(raw.encode("utf-8"))
+    else:
+        meta["payload_bytes"] = int(row.get("payload_bytes") or 0)
     meta["payload_human"] = _human_bytes(meta["payload_bytes"])
-    if include_payload or include_qa_replay:
+    if needs_payload:
         try:
             decoded = json.loads(raw)
         except (TypeError, json.JSONDecodeError):
@@ -12104,11 +12182,14 @@ def home():
             state = _r170_consent_queue(user["id"])
             if not state or (state.get("requested_at_utc") and not state.get("responded_at_utc")):
                 return redirect(url_for("beta_qa_consent_gate"))
-    latest_report_meta = get_latest_report_meta()
-    # R196.9.28: HOME renders with data=None. Offer only the currently signed,
-    # owner-scoped consent request from the last saved real Snapshot, never QA.
-    _consent_saved = (load_latest_report(include_payload=True, owner_user_id=user["id"])
-                      if latest_report_meta else None) or {}
+    # A single owner-scoped read supplies both home metadata and the signed
+    # consent state. The previous flow fetched the same multi-MB report twice.
+    # R196.9.28: HOME renders with data=None, and never offers QA consent.
+    _consent_saved = load_latest_report(include_payload=True, owner_user_id=user["id"]) or {}
+    latest_report_meta = ({k: _consent_saved.get(k) for k in (
+        "generated_at_utc", "generated_at_local", "generated_at_local_display",
+        "app_version", "payload_bytes", "payload_human")}
+        if _consent_saved else None)
     consent_snapshot_data = (_consent_saved.get("data")
                              if isinstance(_consent_saved.get("data"), dict) else None)
     return render_template_string(
@@ -22099,6 +22180,7 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
         else:
             open_seq=[d for d in (graph.get("sequence") or ()) if not _v82_question_exit_satisfied(question_state,d)]
             dim=(open_seq or list(graph.get("sequence") or ("FRESH_CAPACITY",)))[0]; scores[dim]=50.0; reasons[dim]="Insufficient evidence to rank a more specific unresolved adaptation question."
+    _nova_r134_rank_science_after_recent_transfer(scores, reasons, goal, evidence_ledger, roadmap)
     ranked=sorted(scores,key=lambda k:(-scores[k],(graph.get("sequence") or ()).index(k) if k in (graph.get("sequence") or ()) else 999))
     dim=ranked[0]; arch=list((graph.get("architectures") or {}).get(dim) or ())
     evidence=["TID_ELITE","CYCLIST_TRAINING_DISTRIBUTION","LONG_TERM_DEVELOPMENT"]
@@ -28630,10 +28712,15 @@ def _r177_best_effort_ai_status(event_id, status, error_class=None):
     except Exception as exc:
         _r177_snapshot_incident("AI_USAGE_STATUS", "UNEXPECTED", exc.__class__.__name__)
 
-@app.route("/analyze", methods=["POST"])
+@app.route("/analyze", methods=["GET", "POST"])
 def analyze():
     if not require_login():
         return redirect(url_for("login"))
+    # INC-053: GET/HEAD may follow a mobile WebView history/reload of a
+    # POST-rendered Snapshot. Never recompute a Snapshot from navigation.
+    # The existing owner-scoped /last-report GET handles missing reports safely.
+    if request.method != "POST":
+        return redirect(url_for("last_report"), code=303)
     error = None
     data = None
     chat_context_meta = None
@@ -29236,6 +29323,11 @@ def analyze():
                 analysis.get('next_sessions'), _r196956_offer)
             microcycle_ledger = update_microcycle_ledger_from_snapshot(
                 microcycle_ledger, _r196956_issued_sessions, user_id=user["id"])
+            # INC-061: old ACTIVE promise retires only AFTER an attested, newly
+            # issued goal-facet successor exists in this exact owner's ledger.
+            # R196.9.45 defers the final ledger write to the Snapshot commit.
+            microcycle_ledger = _nova_inc061_commit_goal_replan(
+                microcycle_ledger, _r196956_offer, user_id=user['id'])
             if _r196920_final.get('issued'):
                 _r196920_final = _v196920_attest_persisted_ledger(
                     microcycle_ledger, _r196920_final)
@@ -29252,6 +29344,17 @@ def analyze():
         nova_prescription['evidence_cycle_review'] = _r196920_review
         nova_workout_execution_memory = _nova_workout_execution_memory(
             microcycle_ledger, training_direction, previous_training_blocks)
+        # INC-050: conditional next-quality dose is a detached scientific product,
+        # never an actual booking, clearance, issued promise or ledger row.
+        _inc050_future_quality = _nova_inc050_future_quality(
+            owner_user_id=user['id'], decision=nova_decision, clock=coach_clock,
+            road=adaptive_roadmap, ledger=microcycle_ledger,
+            evidence_ledger=evidence_ledger, power_model=power_model,
+            ftp_anchor=ftp_anchor, aerobic_metabolic_range=aerobic_metabolic_range,
+            training_definitions=training_definitions,
+            compiler_args=_r196920_compile_args, planning_context=planning_context,
+            training_state=training_state,
+            active_offer=_r196956_offer)
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
         snapshot_fault_stage = "NUTRITION_PLAN"
         nutrition_plan = build_nutrition_plan(analysis.get("next_sessions"), metabolic_context)
@@ -29282,6 +29385,8 @@ def analyze():
             "nova_prescription": nova_prescription,
             "next_quality_offer": _r196956_offer,
             "quality_offer_integrity": _r196956_integrity,
+            "future_quality_plan": _inc050_future_quality,
+            "future_quality_owner_scope": _nova_inc050_owner_scope(user['id']),
             # R196.9.75: announcing a direction is NOT issuing or booking it.
             "next_quality_direction": _nova_r196975_quality_direction(
                 nova_decision, adaptive_roadmap, _r196956_offer),
@@ -29375,6 +29480,10 @@ def analyze():
         snapshot_fault_stage = "REASONING_TRACE"
         data["nova_reasoning_trace"] = _v190_reasoning_trace(data)
         data["nova_explanation"] = _v190_human_explanation(data)
+        # INC-051: seal the FINAL scientific input projection after all authority
+        # transforms. Rendering never generates a seal and never promotes an
+        # unsigned INC-050 plan (including older saved reports).
+        _nova_inc051_attest_future_snapshot(data, owner_user_id=user['id'])
         if python_qa or not qa_requested:
             _daily_grounded = _v119_grounded_answer(snapshot_question, data)
             if _daily_grounded:
@@ -30450,6 +30559,14 @@ def _v111_select_workout_template(goal, dimension, evidence_ledger=None, trainin
         if target_q and quality_min:score-=abs(quality_min-target_q)*0.8
         scored.append({"id":t.get("id"),"score":round(score,2),"signature":sig,"facet":band,"estimated_session_min":est,"quality_min":quality_min,"reasons":why,"template":t})
     scored.sort(key=lambda x:(-x["score"],-float((x["template"] or {}).get("priority") or 0),str(x.get("id") or "")))
+    # INC-050: exhausted science exclusions must fail CLOSED, not IndexError.
+    if not scored:
+        return None, {"version": NOVA_WORKOUT_LIBRARY_REVISION,
+                      "revision": NOVA_WORKOUT_LIBRARY_REVISION,
+                      "reason": "NO_SCIENCE_APPROVED_SCOREABLE_TEMPLATE",
+                      "candidate_count": 0, "selected_id": None,
+                      "stimulus_exposure": exposure,
+                      "no_invented_quality": True}
     best=scored[0]
     return dict(best.get("template") or {}),{"version":NOVA_WORKOUT_LIBRARY_REVISION,"revision":NOVA_WORKOUT_LIBRARY_REVISION,"reason":"ROADMAP_PURPOSE_BREADTH_FEASIBILITY_NOVELTY_RANK","candidate_count":len(scored),"selected_id":best.get("id"),"selected_score":best.get("score"),"selected_signature":best.get("signature"),"selected_facet":best.get("facet"),"target_missing_facet":target,"stimulus_exposure":exposure,
         "stimulus_selection_policy":{"schema":R196991_STIMULUS_SCHEMA,"specific_family":specific,
@@ -46995,12 +47112,22 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
     checkpoint_secs = _rhythm_num(test.get('seconds'))
     events = (performance_evidence or {}).get('events') or []
     validations = []
+    # INC-069: a formal checkpoint is an exact goal+duration+mode+dated
+    # activity identity, not a near-duration PB or another test protocol.
+    # This is the shared R1966 checkpoint truth owner, for every goal; it
+    # does NOT infer a pass mark or a new training/power prescription.
+    expected_mode = str(test.get('mode') or
+        ((_V4873_ROADMAP_GOALS.get(str(goal_key or '').upper()) or {})
+         .get('field_test') or {}).get('mode') or '').upper()
     for e in events:
-        if not isinstance(e, dict) or not e.get('formal_validation') or not e.get('activity_linked'):
+        if (not isinstance(e, dict) or e.get('formal_validation') is not True
+            or e.get('activity_linked') is not True
+            or not str(e.get('activity_id') or '').strip()):
             continue
         if str(e.get('goal_key') or '').upper() != str(goal_key or '').upper():
             continue
-        if checkpoint_secs is None or abs((_rhythm_num(e.get('secs')) or 0) - checkpoint_secs) > max(2, checkpoint_secs * .05):
+        if (not expected_mode or str(e.get('validation_mode') or '').upper() != expected_mode
+            or checkpoint_secs is None or _rhythm_num(e.get('secs')) != checkpoint_secs):
             continue
         try:
             age = (get_rome_now().date() - date.fromisoformat(str(e.get('date') or '')[:10])).days
@@ -50208,6 +50335,196 @@ def _v196910_find_micro_30_15(samples):
             'verified_set_pass_counts':[first[3],second[3]],
             'complete_pattern_verified':True}
 
+# INC096 / R196.9.132 — General RAW interval observations.
+# This is an OBSERVER, not a new scientific workout selector or watt prescriber.
+# The original two-set 30/15 attestation remains untouched and takes priority.
+R1969132_SCHEMA = "R196.9.132-GENERAL-RAW-INTERVAL-OBSERVER-1"
+R1969132_SOURCE = "ICU_RAW_WATTS_GENERAL_OBSERVATION"
+
+
+def _v1969132_detect_raw_repeats(samples):
+    """Observe repeated work/floats without trusting titles, laps or template IDs.
+
+    Segmentation uses bounded, smoothed actual time/power samples. At least
+    eight observed pairs and 85-90% contrast and per-window data coverage are
+    needed. Unsupported, mixed or noisy events fail closed. Results describe
+    past measured work; they NEVER authorize a future watt prescription.
+    """
+    if not isinstance(samples, list) or not 240 <= len(samples) <= 21600:
+        return None
+    size = len(samples)
+    sums = [0.0]; counts = [0]
+    for value in samples:
+        ok = (isinstance(value, (int, float)) and not isinstance(value, bool)
+              and math.isfinite(value) and 0 <= value <= 1600)
+        sums.append(sums[-1] + (float(value) if ok else 0.0))
+        counts.append(counts[-1] + int(ok))
+    if counts[-1] < max(180, int(size * .60)):
+        return None
+    def mean(start, end, coverage=.9):
+        if start < 0 or end > size or end <= start:
+            return None
+        count = counts[end] - counts[start]
+        if count < math.ceil((end - start) * coverage):
+            return None
+        return (sums[end] - sums[start]) / count
+    observed = sorted(float(v) for v in samples[::5]
+        if isinstance(v, (int,float)) and not isinstance(v,bool)
+        and math.isfinite(v) and 0 <= v <= 1600)
+    if len(observed) < 60:
+        return None
+    def quantile(q):return observed[min(len(observed)-1,round((len(observed)-1)*q))]
+    levels = sorted({round((quantile(lo)+quantile(hi)) / 2,1)
+        for lo,hi in ((.15,.8),(.2,.9),(.3,.9),(.4,.92),(.5,.95),(.6,.97),(.25,.97))
+        if quantile(hi)-quantile(lo) >= 65})
+    if not levels:
+        return None
+    smoothed = [mean(max(0,i-2),min(size,i+3),.65) for i in range(size)]
+    best = None
+    for threshold in levels:
+        labels = [v is not None and v >= threshold for v in smoothed]
+        # A 1-2 second sensor fluctuation is not a training transition.
+        for _ in range(2):
+            j = 1
+            while j < size-1:
+                if labels[j] != labels[j-1]:
+                    k = j + 1
+                    while k < size and labels[k] == labels[j] and k-j < 3:
+                        k += 1
+                    if k < size and k-j <= 2 and labels[k] == labels[j-1]:
+                        labels[j:k] = [labels[j-1]] * (k-j)
+                        j = k
+                        continue
+                j += 1
+        runs = []; start = 0
+        for i in range(1,size+1):
+            if i==size or labels[i] != labels[start]:
+                runs.append((labels[start],start,i))
+                start = i
+        pulses = []
+        for i,(high,start,end) in enumerate(runs[:-1]):
+            if not high or not 10 <= end-start <= 900:continue
+            next_high,low_start,low_end = runs[i+1]
+            if next_high or low_start != end or low_end-end < 8:continue
+            w = mean(start,end); f = mean(end,min(low_end,end+30))
+            if w is None or f is None:continue
+            if w < 95 or w-f < max(40.0,.18*w):continue
+            pulses.append({'run':i,'start':start,'end':end,'low_end':low_end,
+                           'work':w,'float_first':f,'work_len':end-start,
+                           'low_len':low_end-end})
+        if len(pulses) < 8:continue
+        # Reject rare duration buckets before combining candidate ratios.
+        # This bounds CPU for a long noisy ride, rather than brute-force
+        # hundreds of one-off permutations across the whole timeline.
+        work_counts={};float_counts={}
+        for pulse in pulses:
+            if 10<=pulse['work_len']<=600:
+                d=int(round(pulse['work_len']/5)*5)
+                work_counts[d]=work_counts.get(d,0)+1
+            if 8<=pulse['low_len']<=180:
+                d=int(round(pulse['low_len']/5)*5)
+                float_counts[d]=float_counts.get(d,0)+1
+        # Bound competing duration hypotheses per stream. In a variable-terrain
+        # ride there may be hundreds of distinct noisy cycle lengths; the
+        # dominant observed buckets are the only ones we can safely claim.
+        work_lengths=sorted((k for k,n in work_counts.items() if n>=6),
+                            key=lambda k:(-work_counts[k],k))[:8]
+        floats=sorted((k for k,n in float_counts.items() if n>=5),
+                      key=lambda k:(-float_counts[k],k))[:8]
+        for work_s in work_lengths:
+            tol_w = max(3,round(work_s*.10))
+            group_pulses=[p for p in pulses if abs(p['work_len']-work_s)<=tol_w]
+            if len(group_pulses)<8:continue
+            for float_s in floats:
+                if not 8 <= float_s <= 180:continue
+                tol_f=max(3,round(float_s*.16))
+                eligible=[]
+                for p in group_pulses:
+                    if p['low_len'] < float_s-tol_f:continue
+                    if (p['low_len'] > float_s+tol_f and
+                        not float_s+45 <= p['low_len'] <= float_s+900):continue
+                    f=mean(p['end'],p['end']+float_s)
+                    if f is None or p['work']-f < max(40,.18*p['work']):continue
+                    eligible.append(dict(p, float=f))
+                if len(eligible)<8:continue
+                # Exact adjacency at the source-run level prevents splicing
+                # unrelated high-power efforts across an unmatched interval.
+                chains=[]; chain=[]
+                for p in eligible:
+                    if chain and p['run'] != chain[-1]['run']+2:
+                        chains.append(chain);chain=[]
+                    chain.append(p)
+                if chain:chains.append(chain)
+                for chain in chains:
+                    if len(chain)<8:continue
+                    sets=[[]]
+                    for idx,p in enumerate(chain):
+                        if idx and chain[idx-1]['low_len']>float_s+tol_f:
+                            sets.append([])
+                        sets[-1].append(p)
+                    # Each claimed block must have multiple verified repeats;
+                    # a single set requires >=8. No forced equal-set count.
+                    if any(len(g)<4 for g in sets):continue
+                    watts=[p['work'] for p in chain]
+                    med_work=statistics.median(watts)
+                    med_float=statistics.median(p['float'] for p in chain)
+                    if (med_work<max(95,med_float*1.30) or
+                        med_work-med_float<45 or
+                        statistics.pstdev(watts)/med_work>.15):continue
+                    seq=[];work=[];breaks=[]
+                    for set_no,group in enumerate(sets,1):
+                        for rep,p in enumerate(group,1):
+                            wr={'type':'WORK','moving_time':p['work_len'],
+                                'elapsed_time':p['work_len'],'start_time':p['start'],
+                                'end_time':p['end'],'average_watts':round(p['work'],2),
+                                'set':set_no,'rep_in_set':rep,
+                                '_v1969132_observed':True}
+                            fl={'type':'RECOVERY','moving_time':float_s,
+                                'elapsed_time':float_s,'start_time':p['end'],
+                                'end_time':p['end']+float_s,
+                                'average_watts':round(p['float'],2),
+                                'set':set_no,'rep_in_set':rep,
+                                '_v1969132_observed':True}
+                            seq.extend((wr,fl));work.append(wr)
+                        if set_no<len(sets):
+                            last=group[-1];following=sets[set_no][0]
+                            rest_start=last['end']+float_s
+                            rest_end=following['start']
+                            if not 45<=rest_end-rest_start<=900:break
+                            rest_power=mean(rest_start,rest_end)
+                            if rest_power is None:break
+                            breaks.append(rest_end-rest_start)
+                            seq.append({'type':'RECOVERY','moving_time':rest_end-rest_start,
+                                'elapsed_time':rest_end-rest_start,'start_time':rest_start,
+                                'end_time':rest_end,'average_watts':round(rest_power,2),
+                                'between_sets':True,'_v1969132_observed':True})
+                    else:
+                        # A true measurement consists of both real work AND
+                        # real float samples for every advertised repetition.
+                        seq.sort(key=lambda r:(r['start_time'],r['type']!='WORK'))
+                        for pos,row in enumerate(seq):row['_truth_pos']=pos
+                        counts_by_set=[len(group) for group in sets]
+                        candidate={'schema':R1969132_SCHEMA,'status':'RESOLVED',
+                          'source':R1969132_SOURCE,'confidence':'HIGH',
+                          'pattern':'MEASURED_WORK_FLOAT','sets':len(sets),
+                          'reps_per_set':counts_by_set[0] if len(set(counts_by_set))==1 else None,
+                          'reps_by_set':counts_by_set,'work_s':int(statistics.median(p['work_len'] for p in chain)),
+                          'float_s':float_s,'set_recoveries_s':breaks,
+                          'repeated_work_count':len(work),'interval_secs':int(statistics.median(p['work_len'] for p in chain)),
+                          'sequence':seq,'work_rows':work,'corrections':[],
+                          'recovery_median_secs':float_s,
+                          'measured_work_watts':[r['average_watts'] for r in work],
+                          'coverage_rule':'PER_WINDOW_90_PERCENT_REAL_SAMPLES',
+                          'contrast_rule':'MEDIAN_30_PERCENT_AND_45_WATTS_WITH_STABLE_WORK',
+                          'complete_pattern_verified':True,
+                          'observed_subset_only':True,
+                          'full_activity_structure_attested':False,
+                          'numeric_prescription_authority':False}
+                        rank=(len(work),len(sets),round(med_work-med_float,1),
+                              -abs(work_s-candidate['work_s']))
+                        if best is None or rank>best[0]:best=(rank,candidate)
+    return best[1] if best else None
+
 _r196910_fetch_detail_baseline = fetch_activity_details
 
 
@@ -50215,14 +50532,27 @@ def fetch_activity_details(activity_ids):
     details = _r196910_fetch_detail_baseline(activity_ids)
     if not isinstance(details, dict) or not details:
         return details
-    # Only newest two candidates, no supplementary networking on all 24-history
-    # rides. This is a read-only probe and does not alter ICU intervals or FIT.
-    candidates = sorted((d for d in details.values() if isinstance(d,dict) and d.get('id')),
-                        key=lambda d: str(d.get('start_date_local') or ''), reverse=True)
+    # INC095 / R131: the old "newest two only" gate prevented a fully
+    # measured 30/15 ride eight days ago from ever reaching the original
+    # science selector when an athlete trains daily. Prioritize up to two
+    # TITLE-CANDIDATES for stream inspection (not proof!), plus up to two
+    # ordinary recent candidates. Only raw measured 30s/15s cycles can prove
+    # a complete micro set; a workout name cannot certify a dose.
+    chronological = sorted((d for d in details.values()
+        if isinstance(d,dict) and d.get('id') and _v4887_is_cycling_activity(d)
+        and not _v1954_confirmed_competition(d)),
+        key=lambda d: str(d.get('start_date_local') or ''), reverse=True)
+    def stream_priority(d):
+        title=str(d.get('name') or d.get('title') or '').lower()
+        # A title schedules ONLY inspection. It never proves intervals or W.
+        return bool(re.search(r'\b(?:interval|intervall|repet|ripet|hiit|vo2|power)\b|\d+\s*[x×]\s*\d+|\d+\s*[/\-]\s*\d+',title))
+    targeted=[d for d in chronological if stream_priority(d)][:3]
+    seen={str(d.get('id')) for d in targeted}
+    recent=[d for d in chronological if str(d.get('id')) not in seen][:3]
+    candidates=targeted+recent
     attempted = 0
     for d in candidates:
-        if attempted >= 2: break
-        if not _v4887_is_cycling_activity(d) or _v1954_confirmed_competition(d): continue
+        if attempted >= 6: break
         # Do not trust automatic ICU work boundaries to rule out raw micro sets.
         aid = str(d['id']); attempted += 1
         out = dict(d)
@@ -50240,13 +50570,20 @@ def fetch_activity_details(activity_ids):
                 probe['status']='TIME_OR_WATTS_UNAVAILABLE'
             else:
                 detected = _v196910_find_micro_30_15(samples)
-                probe['status']='TWO_FULL_SETS_VERIFIED' if detected else 'NO_COMPLETE_MEASURED_30_15_PAIR'
+                general = None if detected else _v1969132_detect_raw_repeats(samples)
+                probe['status']=('TWO_FULL_SETS_VERIFIED' if detected else
+                    'GENERAL_RAW_REPEATS_OBSERVED' if general else 'NO_COMPLETE_MEASURED_PATTERN')
                 probe['sample_duration_seconds']=len(samples)
                 if detected:
                     probe['observed_reps_per_set']=detected['reps_per_set']
                     probe['observed_total_reps']=detected['repeated_work_count']
-                if detected:
                     out['_v196910_micro_truth']=detected
+                elif general:
+                    probe['observed_total_reps']=general['repeated_work_count']
+                    probe['observed_work_s']=general['work_s']
+                    probe['observed_float_s']=general['float_s']
+                    probe['observed_sets']=general['sets']
+                    out['_v1969132_general_truth']=general
         except Exception as exc:
             probe['status']='STREAM_PROBE_FAILED'
             probe['error_type']=type(exc).__name__
@@ -50262,6 +50599,15 @@ def _v79_activity_interval_truth(detail):
     detected = (detail or {}).get('_v196910_micro_truth')
     if isinstance(detected, dict) and detected.get('complete_pattern_verified') is True and not _v1954_confirmed_competition(detail):
         return dict(detected)
+    general = (detail or {}).get('_v1969132_general_truth')
+    if (isinstance(general,dict) and general.get('schema')==R1969132_SCHEMA
+        and general.get('complete_pattern_verified') is True
+        and not _v1954_confirmed_competition(detail)):
+        # Preserve established lap/ICU native reconstruction when it already
+        # delivers a complete RESOLVED workout. Only fill an actual raw gap.
+        original=_r196910_truth_baseline(detail)
+        if original.get('status')=='RESOLVED':return original
+        return dict(general)
     return _r196910_truth_baseline(detail)
 
 
@@ -50270,6 +50616,12 @@ _r196910_truth_summary_baseline = _v79_activity_truth_summary
 
 def _v79_activity_truth_summary(truth):
     out = _r196910_truth_summary_baseline(truth)
+    if (truth or {}).get('schema') == R1969132_SCHEMA:
+        out.update({k:truth.get(k) for k in (
+            'schema','pattern','sets','reps_by_set','reps_per_set','work_s',
+            'float_s','set_recoveries_s','complete_pattern_verified',
+            'observed_subset_only','full_activity_structure_attested',
+            'coverage_rule','contrast_rule','numeric_prescription_authority')})
     if (truth or {}).get('schema') == R196910_SCHEMA:
         out.update({'schema':R196910_SCHEMA,'pattern':truth.get('pattern'),
                     'sets':truth.get('sets'),'reps_per_set':truth.get('reps_per_set'),
@@ -50287,6 +50639,51 @@ _r196910_stats_baseline = _v4879_repeatability_stats
 
 
 def _v4879_repeatability_stats(intervals, source=None):
+    if str(source or '').upper() == R1969132_SOURCE:
+        sequence=[r for r in (intervals or []) if isinstance(r,dict)]
+        works=[r for r in sequence if r.get('type')=='WORK' and r.get('_v1969132_observed') is True]
+        floats=[r for r in sequence if r.get('type')=='RECOVERY'
+                and not r.get('between_sets') and r.get('_v1969132_observed') is True]
+        if not (len(works)>=8 and len(works)==len(floats)):return None
+        workw=[_num(r.get('average_watts')) for r in works]
+        floatw=[_num(r.get('average_watts')) for r in floats]
+        if any(w is None or not math.isfinite(w) for w in workw+floatw):return None
+        workd=[_num(r.get('moving_time')) for r in works]
+        recd=[_num(r.get('moving_time')) for r in floats]
+        if any(v is None or v<8 for v in workd+recd):return None
+        if max(recd)-min(recd)>max(5,round(statistics.median(recd)*.15)):
+            return None
+        sets=sorted({r.get('set') for r in works})
+        if sets!=list(range(1,len(sets)+1)):return None
+        sizes=[sum(r.get('set')==z for r in works) for z in sets]
+        if any(n<4 for n in sizes):return None
+        between=[r for r in sequence if r.get('between_sets')]
+        if len(between)!=len(sets)-1:return None
+        if any(_num(r.get('moving_time')) is None or _num(r.get('average_watts')) is None for r in between):return None
+        avg=statistics.mean(workw);early=statistics.mean(workw[:2]);late=statistics.mean(workw[-2:]);
+        first,last=workw[0],workw[-1];change=(last-first)/first*100 if first else None
+        return {'reps':len(works),'sets':len(sets),'reps_by_set':sizes,
+          'interval_secs':int(round(statistics.median(workd))),
+          'interval_label':format_duration_label(int(round(statistics.median(workd)))),
+          'recovery_secs':int(round(statistics.median(recd))),
+          'recovery_label':format_duration_label(int(round(statistics.median(recd)))),
+          'recovery_avg_watts':round(statistics.median(floatw),1),
+          'watts':[round(w) for w in workw], 'avg_watts':round(avg,1),
+          'min_watts':round(min(workw)), 'max_watts':round(max(workw)),
+          'spread_watts':round(max(workw)-min(workw)),
+          'first_watts':round(first), 'last_watts':round(last),
+          'first_to_last_delta_watts':round(last-first),
+          'first_to_last_change_pct':round(change,1) if change is not None else None,
+          'first_to_last_decay_pct':round(max(0,-change),1) if change is not None else None,
+          'cv_pct':round(statistics.pstdev(workw)/avg*100,1) if avg else None,
+          'early_rep_avg_watts':round(early,1), 'late_rep_avg_watts':round(late,1),
+          'late_rep_retention_pct':round(late/early*100,1) if early else None,
+          'source':R1969132_SOURCE,'activity_truth_source':R1969132_SOURCE,
+          'recovery_observation_complete':True,
+          'recovery_pair_count':len(works)-1,
+          'recovery_pair_expected':len(works)-1,
+          'raw_observer_schema':R1969132_SCHEMA,
+          'numeric_prescription_authority':False}
     if str(source or '').upper() != 'ICU_RAW_WATTS_30_15':
         return _r196910_stats_baseline(intervals, source=source)
     works=[r for r in (intervals or []) if isinstance(r,dict) and r.get('type')=='WORK'
@@ -50332,6 +50729,14 @@ def _v4895_activity_quality_truth(activity=None, family=None):
     if ((activity or {}).get('_v196910_micro_truth') or {}).get('complete_pattern_verified') is True \
             and not _v1954_confirmed_competition(activity):
         return {'quality_relevant':True,'basis':f"VERIFIED_RAW_POWER_2X{int((activity or {}).get('_v196910_micro_truth',{}).get('reps_per_set') or 0)}_30_15"}
+    general=(activity or {}).get('_v1969132_general_truth') or {}
+    if (isinstance(general,dict) and general.get('schema')==R1969132_SCHEMA
+        and general.get('complete_pattern_verified') is True
+        and general.get('numeric_prescription_authority') is False
+        and not _v1954_confirmed_competition(activity)
+        and _v79_activity_interval_truth(activity).get('source')==R1969132_SOURCE):
+        return {'quality_relevant':True,
+                'basis':'MEASURED_REPEATED_WORK_FLOAT_OBSERVATION_NO_PRESCRIPTION_AUTHORITY'}
     return result
 
 
@@ -50364,6 +50769,25 @@ def build_previous_training_blocks(recent_activities, limit=3, activity_details=
                             f"Observed between-set recovery: {truth['set_recovery_s']}s",
                             f"{truth['repeated_work_count']} measured work intervals · source: raw power stream"]
         block['consideration']='⚡ Verified raw 30/15 quality · count actual high-intensity load for recovery spacing.'
+        changed = True
+    # Descriptive general observations remain separated from canonical micro
+    # watt attestation and cannot unlock a new scientific prescription by name.
+    for block in blocks or []:
+        if not isinstance(block,dict) or _v1954_confirmed_competition(block):continue
+        detail=details.get(str(block.get('activity_id') or '')) or {}
+        general=detail.get('_v1969132_general_truth') or {}
+        if (not isinstance(general,dict) or general.get('schema')!=R1969132_SCHEMA
+            or block.get('interval_structure_source')!=R1969132_SOURCE):continue
+        block['raw_interval_observation']={k:general.get(k) for k in (
+            'schema','status','source','sets','reps_by_set','work_s','float_s',
+            'set_recoveries_s','repeated_work_count','coverage_rule','contrast_rule',
+            'numeric_prescription_authority')}
+        block['intervals']=[
+            f"{general.get('sets')} measured block(s): "
+            f"{general.get('reps_by_set')} repetitions, "
+            f"{general.get('work_s')}s work / {general.get('float_s')}s recovery",
+            'Raw watts measured; NOT an attested future prescription']
+        block['consideration']='⚡ Measured repeated work/floats · observation only, no automatic prescription watt authority.'
         changed = True
     if changed:
         try:_V146_BLOCK_CONTEXT.set(tuple(_v4831_json_clone(b) for b in blocks if isinstance(b,dict)))
@@ -60809,26 +61233,78 @@ APP_VERSION = ('THE LAB · PRODUCT V4.9.192 R196.9.92 · INC-039 LONGITUDINAL ST
 R196993_SCHEMA = 'V4.9.193-R196.9.93-CROSS-SURFACE-COHERENCE-1'
 
 
-def _nova_r196993_card3_duplicate_index(data):
-    """Strict read-only match to an actually displayed chronological quality.
+def _nova_inc079_explicit_injury_restriction(planning_context):
+    """Read *the athlete-selected Calendar restriction*, never Health advice.
 
-    A title alone is insufficient: the immutable workout identity, date and
-    work structure have to agree. A historical offer that merely shares a
-    template does not become a duplicate of a newly compiled prescription.
+    build_planning_context derives active_today from owner-scoped Calendar
+    items. A bare health_override/illness/readiness value cannot stop planning.
     """
-    d=data if isinstance(data,dict) else {}
-    offer=d.get('next_quality_offer') or {}
-    workout=offer.get('workout') if isinstance(offer,dict) else None
-    rows=d.get('next_sessions') or []
-    if not isinstance(workout,dict) or not isinstance(rows,list):return None
-    wid=str(offer.get('workout_id') or '')
-    if not wid or str(workout.get('nova_workout_id') or '')!=wid:return None
-    for i,row in enumerate(rows[:2]):
-        if (isinstance(row,dict) and str(row.get('nova_workout_id') or '')==wid
-            and str(row.get('date') or '')==str(workout.get('date') or '')
-            and str(row.get('title') or '')==str(workout.get('title') or '')
-            and str(row.get('main_set') or '')==str(workout.get('main_set') or '')):
-            return i
+    ctx = planning_context if isinstance(planning_context, dict) else {}
+    for row in ctx.get('active_today') or []:
+        if (isinstance(row, dict)
+            and str(row.get('kind') or '').upper() in {'INJURY', 'INJURED'}
+            and str(row.get('restriction_type') or '').upper() in {'NO_TRAINING', 'NO_INTENSITY'}
+            and row.get('active', 1) not in (0, False)):
+            return str(row['restriction_type']).upper()
+    return None
+
+
+def _nova_r196993_card3_duplicate_index(data):
+    """C07: verified SAME owner-bound COMPLETE dose, not same clock/date/title.
+
+    Refuse to hide Card 3 for empty, stale, off-owner, unsealed, incomplete,
+    provisional or mutated Card 1/2 records. A date move does not change the
+    underlying training dose. Completed sessions require reconciled successors.
+    """
+    d = data if isinstance(data, dict) else {}
+    offer = d.get('next_quality_offer') or {}
+    audit = d.get('quality_offer_integrity') or {}
+    rows = d.get('next_sessions') or []
+    if not isinstance(offer, dict) or not isinstance(audit, dict) or not isinstance(rows, list):
+        return None
+    owner = _nova_inc051_verified_owner_id()
+    work = offer.get('workout') or {}
+    wid = str(offer.get('workout_id') or '')
+    if (not owner or not wid or not isinstance(work, dict)
+        or d.get('future_quality_owner_scope') != _nova_inc050_owner_scope(owner)
+        or audit.get('state') != 'PASS' or offer.get('offer_status') != 'OFFERED'
+        or offer.get('visibility_status') != 'QUALITY_OFFER_VISIBLE'
+        or not _nova_inc076_seal_ok(offer, audit, owner)
+        or str(work.get('nova_workout_id') or '') != wid
+        or not _nova_inc075_valid_compiled_duration(work)
+        or not _nova_r1969102_verified_personal_watts(work, wid)
+        or not str(work.get('main_set') or '').strip()
+        or not str(work.get('why') or '').strip()):
+        return None
+    fp = str(offer.get('dose_fingerprint') or '')
+    ledger = d.get('microcycle_ledger') or {}
+    history = ledger.get('prescription_history') or [] if isinstance(ledger,dict) else []
+    if any(isinstance(h,dict) and str(h.get('prescription_fingerprint') or '') == fp
+           and str(h.get('prescription_status') or '').upper() == 'FULFILLED'
+           and h.get('executed_activity_id') and h.get('fulfilled_at_local')
+           for h in history):
+        return None
+    # The original canonical selection/compilation is the single authority.
+    # Date, UI title and athlete-selected clock are NOT scientific dose identity.
+    dose_fields = ('nova_workout_id', 'nova_canonical_plan_id',
+                   'nova_contract_id', 'nova_template_signature', 'main_set',
+                   'power_prescription', 'session_composition')
+    for i, row in enumerate(rows[:2]):
+        if (not isinstance(row, dict) or row.get('provisional_quality') is True
+            or row.get('hidden') is True or row.get('visible') is False
+            or row.get('is_race') is True
+            or str(row.get('restriction') or 'NONE').upper() not in {'NONE', ''}
+            or str(row.get('nova_workout_id') or '') != wid
+            or (row.get('owner_user_id') is not None and str(row['owner_user_id']) != str(owner))
+            or (row.get('owner_scope') is not None
+                and row.get('owner_scope') != _nova_inc050_owner_scope(owner))
+            or not _nova_inc075_valid_compiled_duration(row)
+            or not _nova_r1969102_verified_personal_watts(row, wid)
+            or not str(row.get('title') or '').strip()
+            or not str(row.get('why') or '').strip()
+            or any(row.get(k) != work.get(k) for k in dose_fields)):
+            continue
+        return i
     return None
 
 
@@ -62027,25 +62503,19 @@ def _nova_r196999_context(data):
     today_iso = str(clock.get('iso') or '')[:10]
     same_day = [x for x in slots if isinstance(x, dict)
                 and str(x.get('date') or '')[:10] == today_iso]
-    if completed == 0 and not same_day:
-        today_explanation = ('No completed session is logged today and Nova has not identified a '
-                             'same-day opportunity from its learned rhythm. This does not prescribe rest '
-                             'or prevent an athlete-chosen easy session; verify current readiness and availability.')
-    elif completed == 0:
-        today_explanation = ('No completed session is logged yet. Listed opportunities are predictions or '
-                             'athlete bookings, not proof that training must occur.')
+    if completed == 0:
+        # A forecast is not an instruction. No forecast is not prescribed rest.
+        today_explanation = 'No workout logged yet.'
     elif completed is not None and completed > 0:
-        today_explanation = (f'{completed} completed session'+('s' if completed != 1 else '')+
-                             ' logged today. This is completed activity, not a requirement to add another session.')
+        today_explanation = f'{completed} workout'+('s' if completed != 1 else '')+' logged today.'
     else:
-        today_explanation = ('Daily completion data are not confirmed. The rhythm forecast does not prescribe rest.')
+        today_explanation = 'Today’s activity is unconfirmed.'
     action = str(decision.get('action') or '')
     if action == 'HOLD':
-        today_explanation += ' Current Training decision: HOLD; follow its explicit restrictions.'
+        today_explanation += ' HOLD: follow restrictions.'
     elif action == 'VALIDATE':
-        today_explanation += ' Current Training decision: VALIDATE; this is not blanket quality clearance.'
-    elif action == 'TRAIN':
-        today_explanation += ' Training action is TRAIN, not an instruction to exercise at a predicted time.'
+        today_explanation += ' VALIDATE: reassess readiness.'
+    # TRAIN does not mandate taking a forecast slot; no redundant status prose.
     reason = ''
     if offer_workout and str(offer_workout.get('source') or '') == 'RHYTHM':
         reason = ('The suggested quality window comes from learned training rhythm and hard-session spacing, '
@@ -62070,10 +62540,13 @@ def _nova_r196999_context(data):
     rhythm_window_explanation = ''
     if offer_workout and str(offer_workout.get('source') or '') == 'RHYTHM':
         if window.get('earliest') and window.get('preferred'):
-            rhythm_window_explanation = ('Hard-session forecast: earliest candidate '
-                + str(window['earliest']) + '; learned-rhythm preference '
-                + str(window['preferred']) + '. These are predictions, not bookings '
-                'or medically required waiting periods.')
+            earliest, preferred = str(window['earliest']), str(window['preferred'])
+            # No duplicate timestamps when earliest and preferred agree.
+            if earliest == preferred:
+                rhythm_window_explanation = 'Hard effort: ' + earliest + ' (estimate).'
+            else:
+                rhythm_window_explanation = ('Hard effort: earliest ' + earliest
+                                             + '; preferred ' + preferred + ' (estimates).')
     return {'schema':_R196999_PRESENTATION_SCHEMA, 'today_explanation':today_explanation,
             'rhythm_window_explanation':rhythm_window_explanation,
             'quality_explanation':reason,'quality_phases':_nova_r196999_phase_rows(offer_workout),
@@ -62087,6 +62560,17 @@ def _v4891_prepare_snapshot_for_ui(data):
         return ui
     out = dict(ui)
     out['nova_cross_surface_explanation'] = _nova_r196999_context(out)
+    # One canonical Card-3 view for both library-only and integrity-verified offers.
+    out['nova_card3_workout_view'] = _nova_r1969102_card3_copy(out)
+    view = out['nova_card3_workout_view']
+    prior_detail = out.get('quality_card3_detail')
+    if (view and isinstance(prior_detail, dict)
+        and prior_detail.get('level') == 'LIBRARY_STRUCTURE_ONLY'
+        and str(prior_detail.get('workout_id') or '') == view['workout_id']):
+        detail = dict(prior_detail)
+        detail['main_set'] = view['structure']
+        detail['why'] = view['purpose']
+        out['quality_card3_detail'] = detail
     return out
 
 app.jinja_env.globals['nova_verified_session_phases'] = _nova_r196999_phase_rows
@@ -62099,7 +62583,7 @@ HOME_PAGE = HOME_PAGE.replace(_R196999_TODAY_OLD,
 _R196999_CLOCK_CONTEXT = '<p>Your current training window reflects the context THE LAB has available today.</p>'
 assert HOME_PAGE.count(_R196999_CLOCK_CONTEXT) == 1, 'INC043_CLOCK_CONTEXT_DRIFT'
 HOME_PAGE = HOME_PAGE.replace(_R196999_CLOCK_CONTEXT,
-    _R196999_CLOCK_CONTEXT + '\n<p class="r196999-today-reason" role="note">{{ (data.nova_cross_surface_explanation or {}).get("today_explanation", "")|e }}</p>\n{% if (data.nova_cross_surface_explanation or {}).get("rhythm_window_explanation") %}<p class="r196999-today-reason" role="note">{{ data.nova_cross_surface_explanation.rhythm_window_explanation|e }}</p>{% endif %}',1)
+    '<p class="r196999-today-reason" role="note">{{ (data.nova_cross_surface_explanation or {}).get("today_explanation", "")|e }}{% if (data.nova_cross_surface_explanation or {}).get("rhythm_window_explanation") %} {{ data.nova_cross_surface_explanation.rhythm_window_explanation|e }}{% endif %}</p>',1)
 
 # The same mechanical rows are reused for any chronologically displayed
 # quality, not just the standalone third card; recovery-only cards are untouched.
@@ -62134,7 +62618,17 @@ HOME_PAGE = HOME_PAGE.replace(_R196999_QUALITY_MARK,_R196999_QUALITY_MARK+'\n',1
 _R196999_ARTICLE_END = '</article>\n{% if not is_quality_slot or (('
 assert HOME_PAGE.count(_R196999_ARTICLE_END)==1, 'INC043_ARTICLE_END_DRIFT'
 HOME_PAGE = HOME_PAGE.replace(_R196999_ARTICLE_END,
-    '''{% if is_quality_slot %}<div class="r196999-quality-why" role="note"><strong>WHY THIS QUALITY / WINDOW</strong><p>{{ (data.nova_cross_surface_explanation or {}).get('quality_explanation','')|e }}</p></div>{% endif %}
+    '''{% if is_quality_slot and data.nova_card3_workout_view %}
+{% set nova3 = data.nova_card3_workout_view %}
+<div class="r1969102-canonical-copy" role="group" aria-label="Canonical workout explanation">
+  <strong>YOUR WORKOUT EXPLAINED</strong>
+  <p class="r1969102-structure">{{ nova3.structure|e }}</p>
+  <p><b>How to ride it:</b> {{ nova3.execution|e }}</p>
+  <p><b>Training purpose:</b> {{ nova3.purpose|e }}</p>
+  {% if nova3.personalized_watts %}<p class="r1969102-power"><b>Verified personal power:</b> {{ nova3.personalized_watts|e }}</p>{% endif %}
+  {% if not nova3.verified_offer %}<small>Workout template only. No personal watts, scheduled time or clearance have been issued.</small>{% else %}<small>Verified workout details are shown for reference; reassess current clearance before execution.</small>{% endif %}
+</div>{% endif %}
+{% if is_quality_slot %}<div class="r196999-quality-why" role="note"><strong>WHY THIS QUALITY / WINDOW</strong><p>{{ (data.nova_cross_surface_explanation or {}).get('quality_explanation','')|e }}</p></div>{% endif %}
 </article>
 {% if not is_quality_slot or ((''',1)
 
@@ -62156,9 +62650,4451 @@ _R196999_STYLE_ANCHOR = '{% set upcoming=namespace(rows=[], quality_index=none, 
 assert HOME_PAGE.count(_R196999_STYLE_ANCHOR)==1, 'INC043_STYLE_ANCHOR_DRIFT'
 HOME_PAGE = HOME_PAGE.replace(_R196999_STYLE_ANCHOR,_R196999_CSS+'\n'+_R196999_STYLE_ANCHOR,1)
 
-APP_VERSION = ('THE LAB · PRODUCT V4.9.199 R196.9.99 · INC-043 EXPLAINABLE TRAINING SURFACES '
-               '+ CANONICAL QUALITY MECHANICS · HEALTH/TRAINING AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
+# INC-046 / R196.9.102 — One source, one description contract, one Card-3 view.
+# Canonical workout identity and mechanics are read directly from the existing
+# _R19696_LIBRARY_INDEX; no second catalogue, mutable ledger or selection route.
+R1969102_CARD3_SCHEMA = 'NOVA-R196.9.102-CANONICAL-CARD3-DESCRIPTION-1'
+_R1969102_PURPOSE = {
+    'POWER_1': 'Train repeatable high-power efforts around the one-minute goal, with recovery sufficient to preserve quality between efforts.',
+    'POWER_5': 'Accumulate repeatable multi-minute aerobic-power work relevant to the five-minute goal.',
+    'VO2MAX': 'Accumulate demanding aerobic work in separated bouts without turning the last effort into a maximal test.',
+    'SPRINTER': 'Develop repeated acceleration and sprint execution while preserving deliberate low-load recovery.',
+    'POWER_20': 'Accumulate sustained, repeatable work relevant to maintaining power across the 20-minute goal.',
+    'TIME_TRIAL': 'Rehearse even, controlled sustained output for time-trial pacing and fatigue management.',
+    'ENDURANCE_BASE': 'Build aerobic durability and observe how stable easy effort remains as riding time accumulates.',
+}
+
+def _nova_r1969102_span(seconds):
+    n = int(seconds)
+    minutes, remainder = divmod(n, 60)
+    if minutes and remainder:
+        return f'{minutes} min {remainder} s'
+    return f'{minutes} min' if minutes else f'{remainder} s'
+
+
+def _nova_r1969102_int(t, key, zero=False):
+    value = t.get(key)
+    if type(value) not in (int, float):
+        return None
+    if not math.isfinite(value) or int(value) != value or value < (0 if zero else 1) or value > 86400:
+        return None
+    return int(value)
+
+
+def _nova_r1969102_catalogue_copy(workout_id, goal):
+    """Read one verified ID + goal from the existing canonical template index.
+
+    All descriptions describe the exact known structure, never an executable
+    dose, individual watts or a dynamic scientific clearance. No lookup by title.
+    """
+    t = _R19696_LIBRARY_INDEX.get(str(workout_id or ''))
+    if not isinstance(t, dict) or str(t.get('goal') or '').upper() != str(goal or '').upper():
+        return None
+    pattern = str(t.get('pattern') or '').upper()
+    domain = str(t.get('work_domain') or '').upper()
+    variant = str(t.get('variant') or '').upper()
+    structure = execution = None
+    if pattern in {'STANDARD', 'SUSTAINED', 'OVER_UNDER', 'SHORT_POWER', 'SPRINT'}:
+        reps = _nova_r1969102_int(t, 'reps')
+        work = _nova_r1969102_int(t, 'work_s')
+        recover = _nova_r1969102_int(t, 'recovery_s', zero=True)
+        if None not in (reps, work, recover):
+            work_total = reps * work
+            structure = (f'{reps} × {_nova_r1969102_span(work)} work '
+                         f'({_nova_r1969102_span(work_total)} accumulated work)')
+            if reps > 1:
+                structure += (f'; {_nova_r1969102_span(recover)} easy recovery after each of the first '
+                              f'{reps - 1} efforts ({_nova_r1969102_span((reps - 1)*recover)} recovery total)')
+            structure += '.'
+            if domain == 'TEMPO_Z3':
+                execution = ('Keep all working intervals in the prescribed cycling tempo (Z3) domain, '
+                             'not threshold or maximal effort; cadence and power should stay consistent across repetitions.')
+            elif pattern == 'OVER_UNDER':
+                execution = ('Each work block is a variable-load block, alternating controlled stronger and easier segments. '
+                             'The exact internal over/under timings and watt limits are not part of this template and must come from an approved compiled session.')
+            elif pattern == 'SPRINT':
+                execution = ('Accelerate with deliberate technique during each short work bout; spin gently for the full '
+                             'specified recovery, avoiding fatigue-driven extra sprint attempts.')
+            elif pattern == 'SHORT_POWER':
+                execution = ('Keep the short efforts repeatable: start each bout with control rather than exhausting the first one, '
+                             'then use the specified easy recovery before the next effort.')
+            elif pattern == 'SUSTAINED':
+                execution = ('Hold an even, sustainable effort through each work block, avoiding a fast start and a final all-out surge. '
+                             'Use the specified recovery to reset cadence and breathing.')
+            else:
+                execution = ('Ride the prescribed work intervals with consistent pacing and genuinely easy recoveries. '
+                             'Do not replace repeatability with a final maximal effort.')
+    elif pattern in {'MICRO_30_15', 'SPRINT_CLUSTER'}:
+        sets = _nova_r1969102_int(t, 'sets')
+        reps = _nova_r1969102_int(t, 'reps_per_set')
+        work = _nova_r1969102_int(t, 'work_s')
+        float_s = _nova_r1969102_int(t, 'float_s', zero=True)
+        recover = _nova_r1969102_int(t, 'set_recovery_s', zero=True)
+        if None not in (sets, reps, work, float_s, recover):
+            structure = (f'{sets} sets × {reps} repetitions of {_nova_r1969102_span(work)} work '
+                         f'/ {_nova_r1969102_span(float_s)} easy float '
+                         f'({_nova_r1969102_span(sets*reps*work)} total hard work)')
+            if sets > 1:
+                structure += f'; {_nova_r1969102_span(recover)} easy recovery between sets'
+            structure += '.'
+            if pattern == 'SPRINT_CLUSTER':
+                execution = ('Make each acceleration distinct and technically controlled; the float is easy pedaling, '
+                             'not an additional sprint. Reset fully between sets.')
+            else:
+                execution = ('Alternate the prescribed short work bouts with the easy floats without extending hard efforts. '
+                             'Keep the last set repeatable rather than sprinting to exhaustion.')
+    elif pattern in {'ENDURANCE','ENDURANCE_STEADY','ENDURANCE_DURABILITY','ENDURANCE_LATE'}:
+        cases = {
+            ('ENDURANCE',''): ('Continuous easy aerobic volume or an easy-volume session according to the compiled duration.',
+                               'Keep conversation-level effort and steady breathing; no surges are implied.'),
+            ('ENDURANCE','CONTINUOUS'): ('Continuous easy aerobic riding without prescribed hard interruptions.',
+                                        'Keep effort conversational and cadence relaxed from start to finish.'),
+            ('ENDURANCE','SPLIT_EASY'): ('Easy aerobic riding divided into separate manageable sections.',
+                                       'Keep each section easy; the number and length of sections are set by the compiled session.'),
+            ('ENDURANCE_STEADY',''): ('Steady aerobic work with emphasis on metabolic stability.',
+                                    'Limit avoidable intensity changes; observe steady-state breathing and perceived effort.'),
+            ('ENDURANCE_STEADY','STEADY'): ('Continuous steady aerobic riding.',
+                                          'Avoid surges and hold comparable effort through the middle and late parts.'),
+            ('ENDURANCE_STEADY','CADENCE_STABLE'): ('Easy aerobic work emphasizing cadence stability.',
+                                                  'Maintain a repeatable cadence where terrain allows, without raising intensity to chase rpm.'),
+            ('ENDURANCE_DURABILITY',''): ('Longer easy aerobic work emphasizing durability.',
+                                         'Notice whether an initially comfortable effort becomes harder later in the session.'),
+            ('ENDURANCE_DURABILITY','LONG_STEADY'): ('Extended steady aerobic riding for durability.',
+                                                   'Keep later power controlled instead of making the final section a hard effort.'),
+            ('ENDURANCE_DURABILITY','LATE_MATCH'): ('Aerobic work with a late-output-matching focus.',
+                                                  'Compare perceived strain at similar easy outputs early and late in the session.'),
+            ('ENDURANCE_DURABILITY','BACK_TO_BACK_CONTEXT'): ('Easy aerobic riding within consecutive training-day context.',
+                                                              'Do not force intensity if fatigue carries over from the prior day.'),
+            ('ENDURANCE_LATE',''): ('Easy aerobic work focused on late-session stability.',
+                                   'Keep the final section stable without accelerating to compensate for fatigue.'),
+            ('ENDURANCE_LATE','LATE_MATCH'): ('Aerobic session with early-to-late output matching.',
+                                            'Maintain similar easy effort late in the ride and note changes in perceived strain.'),
+            ('ENDURANCE_LATE','DRIFT_CONTROL'): ('Easy aerobic session focused on later heart-rate/effort drift.',
+                                               'Avoid intensity spikes and assess drift only when comparable evidence is available.'),
+            ('ENDURANCE_LATE','CADENCE_MATCH'): ('Easy aerobic session focused on cadence matching later in the ride.',
+                                               'Maintain a manageable cadence late without increasing work intensity.'),
+        }
+        pair = cases.get((pattern,variant))
+        if pair:
+            structure,execution = pair
+            structure += ' Template does not declare total session duration.'
+    if not structure or not execution:
+        return None  # Unverified mechanics must not receive generic invented prose.
+    goal_key = str(t['goal']).upper()
+    return {'schema':R1969102_CARD3_SCHEMA,'workout_id':str(t['id']),
+            'goal':goal_key, 'title':str(t.get('title') or ''),
+            'pattern':pattern,'structure':structure,'execution':execution,
+            'purpose':_R1969102_PURPOSE[goal_key],
+            'source':'EXISTING_NOVA_WORKOUT_LIBRARY','verified_offer':False,
+            'personalized_watts':None,'is_prescription':False,
+            'execution_authorized':False,'read_only':True}
+
+
+def _nova_r1969102_verified_personal_watts(workout, canonical_id):
+    """Never convert observed bests, FTP or an uncompiled title into targets."""
+    w = workout if isinstance(workout,dict) else {}
+    if str(w.get('nova_workout_id') or '') != str(canonical_id or ''):
+        return None
+    power = w.get('power_prescription') or {}
+    duration = w.get('session_duration_feasibility') or {}
+    if (not isinstance(power,dict) or power.get('state') != 'PRESCRIBED'
+        or not isinstance(duration,dict) or duration.get('state') != 'PASS'):
+        return None
+    # INC082: a plausible number is NOT athlete evidence. This helper may
+    # format only source types already recognized by the versioned compiler.
+    # The upstream original-evidence reattestation remains mandatory for an
+    # issuer and cannot be replaced by this source-name check.
+    source = str(power.get('source') or '')
+    if source not in _R196917_TRUSTED_NUMERIC:
+        return None
+    if (source == 'COMPARABLE_VERIFIED_REPEATED_WORK'
+        and not str(power.get('activity_id') or '').strip()):
+        return None
+    low = _nova_r196999_finite(power.get('low_watts'))
+    high = _nova_r196999_finite(power.get('high_watts'))
+    if low is None or high is None or not (0 < low <= high <= 2500):
+        return None
+    tpl = _R19696_LIBRARY_INDEX.get(str(canonical_id or '')) or {}
+    if tpl.get('pattern') in {'STANDARD','SUSTAINED','SHORT_POWER','OVER_UNDER','SPRINT'}:
+        if (power.get('reps') != tpl.get('reps')
+            or power.get('work_seconds') != tpl.get('work_s')):
+            return None
+    text = f'{low:g}–{high:g} W' if low != high else f'{low:g} W'
+    return text + (' (exploratory, not a pass/fail threshold)' if power.get('exploratory') is True else '')
+
+
+def _nova_r1969102_card3_copy(data):
+    """Exactly ONE Card-3 source: canonical ID + matching verified offer only.
+
+    Direction-only remains a non-executable library preview. Verified watts
+    require existing canonical integrity, power and duration attestations.
+    """
+    d = data if isinstance(data,dict) else {}
+    direction = d.get('next_quality_direction') or {}
+    if not isinstance(direction,dict) or direction.get('direction_only') is not True:
+        return None
+    if direction.get('source') not in {
+        'CANONICAL_LIBRARY_DIRECTION_ONLY_NOT_COMPILED',
+        'EXISTING_CANONICAL_QUALITY_OFFER',
+        'CURRENT_VERIFIED_R131_QUALITY_DIRECTION',
+    }:
+        return None
+    wid = str(direction.get('referenced_canonical_template_id') or '')
+    view = _nova_r1969102_catalogue_copy(wid,direction.get('goal_key'))
+    if not view:
+        return None
+    verified = _nova_r196999_verified_card3_workout(d)
+    if verified and str(verified.get('nova_workout_id') or '') == wid:
+        view = dict(view)
+        view['verified_offer'] = True
+        view['personalized_watts'] = _nova_r1969102_verified_personal_watts(verified,wid)
+        # This remains a DISPLAY representation, never a new prescription.
+    return view
+
+# All supported library templates must be described from their OWN mechanics,
+# with no missing IDs or cross-goal alias and no text-generated dosing.
+assert len(_R19696_LIBRARY_INDEX)==len(_NOVA_WORKOUT_LIBRARY),'INC046_DUPLICATE_CANONICAL_ID'
+assert (set(_R1969102_PURPOSE) == {t.get('goal') for t in _NOVA_WORKOUT_LIBRARY}
+        and all(_nova_r1969102_catalogue_copy(t.get('id'), t.get('goal'))
+                for t in _NOVA_WORKOUT_LIBRARY)), 'INC046_INCOMPLETE_CANONICAL_DESCRIPTIONS'
+
+_R1969102_SHARED_CSS = """<style>
+.r1969102-canonical-copy{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-left:3px solid var(--cyan);border-radius:9px;background:rgba(69,215,232,.025);overflow-wrap:anywhere}
+.r1969102-canonical-copy strong{display:block;font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--text)}
+.r1969102-canonical-copy p{font-size:12px;line-height:1.55;margin:6px 0;color:var(--muted)}
+.r1969102-canonical-copy b{color:var(--text)}
+.r1969102-canonical-copy small{display:block;color:var(--muted);font-size:11px;margin-top:6px}
+.r1969102-canonical-copy .r1969102-power{color:var(--cyan)}
+</style>"""
+assert HOME_PAGE.count(_R196999_STYLE_ANCHOR)==1,'INC046_STYLE_ANCHOR_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R196999_STYLE_ANCHOR,
+                            _R1969102_SHARED_CSS+'\n'+_R196999_STYLE_ANCHOR,1)
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.202 R196.9.102 · INC-046 SINGLE-SOURCE ENGLISH WORKOUT DETAIL '
+               '+ VERIFIED PERSONAL WATTS · INC-044 PRESERVED · TRAINING/HEALTH AUTHORITY UNCHANGED · OFFLINE CANDIDATE')
+
+
+# INC-054 — no-plan Card 3: a development target cannot be titled as an
+# issued "Next quality" session. This is display-only: the canonical producer,
+# training decision, owner signature, and workout integrity gates are untouched.
+# INC-049 / R196.9.104 — current-offer source-of-truth lock for Card 3.
+# View contract only: science, training load, database and Calendar unchanged.
+R1969104_CARD3_SCHEMA = 'NOVA-R196.9.104-CURRENT-DECISION-CARD3-1'
+
+
+def _nova_r1969104_canonical_card3(data):
+    """Only CURRENT identity + integrity + signed per-workout watts can be shown."""
+    d = data if isinstance(data,dict) else {}
+    dec = d.get('nova_decision') or {}
+    pres = d.get('nova_prescription') or {}
+    integ = d.get('quality_offer_integrity') or {}
+    offer = d.get('next_quality_offer') or {}
+    work = offer.get('workout') or {} if isinstance(offer,dict) else {}
+    road = d.get('adaptive_roadmap') or {}
+    goal = str(dec.get('goal_key') or pres.get('goal_key') or road.get('goal_key') or '').upper()
+    action = str(dec.get('action') or pres.get('action') or '').upper()
+    dimension = str((road.get('scientific_progression') or {}).get('dimension') or
+                    dec.get('dimension') or pres.get('dimension') or '').upper()
+    view = {
+      'schema':R1969104_CARD3_SCHEMA,
+      'title':'Development goal · '+{'POWER_20':'20-minute power','POWER_5':'5-minute power',
+       'POWER_1':'1-minute power','TIME_TRIAL':'time-trial performance',
+       'VO2MAX':'VO₂max','SPRINTER':'sprint execution',
+       'ENDURANCE_BASE':'endurance development'}.get(goal,'goal-specific development'),
+      'state':'NOT_PRESCRIBED','verified_offer':False,'workout_id':None,
+      'goal_key':goal,'action':action,'dimension':dimension,
+      'structure':None,'execution':None,'purpose':None,
+      'personalized_watts':None,'power_source':None,'phases':[],
+      'is_scheduled':False,'direction_only':True,'execution_authorized_by_preview':False,
+      'reason':('Recovery or safety restrictions take priority. No hard workout is cleared.'
+         if action=='HOLD' else
+         'A formal performance check is required before selecting another hard workout.'
+         if action=='VALIDATE' else
+         'Nova has not issued a complete verified quality workout for this snapshot. '
+         'It will reassess when the scientific evidence and a suitable opportunity allow one.')}
+    # The goal direction is not a timed workout. Keep that fact explicit in
+    # the no-prescription UI, without manufacturing a template or power dose.
+    view['goal_explanation'] = (
+        '20-minute power measures the performance goal; it does not mean a 20-minute workout.'
+        if goal=='POWER_20' else
+        '5-minute power measures the performance goal; it does not mean a 5-minute workout.'
+        if goal=='POWER_5' else
+        '1-minute power measures the performance goal; it does not mean a 1-minute workout.'
+        if goal=='POWER_1' else
+        'This is your training development goal, not a scheduled or executable workout.')
+    if not all(isinstance(x,dict) for x in (dec,pres,integ,offer,work,road)):
+        return view
+    wid = str(pres.get('workout_id') or '')
+    oid = str(offer.get('workout_id') or '')
+    if (action!='TRAIN' or pres.get('status')!='PRESCRIBED'
+        or pres.get('hard_prescription_available') is not True
+        or not wid or wid!=oid or oid!=str(work.get('nova_workout_id') or '')
+        or integ.get('state')!='PASS' or integ.get('mechanics_complete') is not True
+        or integ.get('science_provenance') is not True or not offer.get('offer_id')
+        or str(offer.get('offer_id'))!=str(integ.get('offer_id') or '')
+        or str(pres.get('goal_key') or goal).upper()!=goal
+        or str(work.get('goal_key') or work.get('goal') or goal).upper()!=goal):
+        return view
+    tpl=_R19696_LIBRARY_INDEX.get(wid)
+    if not isinstance(tpl,dict) or str(tpl.get('goal') or '').upper()!=goal:
+        return view
+    feasibility=work.get('session_duration_feasibility') or {}
+    power=work.get('power_prescription') or {}
+    if (not isinstance(feasibility,dict) or feasibility.get('state')!='PASS'
+        or not isinstance(power,dict) or power.get('state')!='PRESCRIBED'
+        or not str(power.get('source') or '').strip()):
+        return view
+    watts=_nova_r1969102_verified_personal_watts(work,wid)
+    structure=str(work.get('main_set') or '').strip()
+    why=str(work.get('why') or '').strip()
+    base=_nova_r1969102_catalogue_copy(wid,goal)
+    if not watts or not structure or not why or not base:
+        return view
+    # Existing compiled main_set, not re-derived from FTP or a single PB.
+    return dict(view,state='CURRENT_VERIFIED_PRESCRIPTION',verified_offer=True,
+        workout_id=wid,title=str(work.get('title') or base['title']),
+        structure=structure,execution=base['execution'],purpose=why,
+        personalized_watts=watts,power_source=str(power.get('source') or ''),
+        phases=_nova_r196999_phase_rows(work),
+        reason='Current canonical prescription, not an automatic Calendar appointment.')
+
+
+_r1969104_ui_before=_v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui=_r1969104_ui_before(data)
+    if not isinstance(ui,dict):return ui
+    out=dict(ui)
+    card=_nova_r1969104_canonical_card3(out)
+    q=dict(out.get('next_quality_direction') or {})
+    q.update(schema=R1969104_CARD3_SCHEMA,title=card['title'],
+        athlete_title=card['title'],athlete_explanation=card['reason'],
+        referenced_canonical_template_id=card['workout_id'],
+        source=('CURRENT_VERIFIED_PRESCRIPTION' if card['verified_offer']
+                else 'CURRENT_CANONICAL_CONDITIONAL_FUTURE' if card.get('verified_future_plan')
+                else 'CURRENT_GOAL_STATE_NO_WORKOUT'),
+        direction_only=True,is_a_prescription=False,
+        execution_authorized_by_preview=False,is_scheduled=False,
+        suggested_date=None,suggested_time=None)
+    out['next_quality_direction']=q
+    out['nova_card3_workout_view']=card
+    out['quality_card3_detail']=None
+    # Fueling must use the SAME compiled future duration (60 min in the
+    # beta), not the independent 45-min historical median.
+    if card.get('verified_future_plan'):
+        out['quality_direction_fuel']=_nova_inc050_conditional_fuel(out,card)
+    cross=dict(out.get('nova_cross_surface_explanation') or {})
+    cross['quality_phases']=card['phases']
+    cross['has_verified_offer']=card['verified_offer']
+    out['nova_cross_surface_explanation']=cross
+    return out
+
+# Deprecate the fallback paths at THEIR entry points as well. The old
+# direction helper must not independently rank a library workout anymore.
+def _nova_r196975_quality_direction(decision, road, offer=None):
+    d=decision if isinstance(decision,dict) else {}
+    r=road if isinstance(road,dict) else {}
+    goal=str(d.get('goal_key') or r.get('goal_key') or '').upper()
+    science=r.get('scientific_progression') or {}
+    dim=str((science if isinstance(science,dict) else {}).get('dimension') or
+            d.get('dimension') or '').upper()
+    name={'POWER_20':'20-minute power','POWER_5':'5-minute power',
+          'POWER_1':'1-minute power','TIME_TRIAL':'time-trial performance',
+          'VO2MAX':'VO₂max','SPRINTER':'sprint execution',
+          'ENDURANCE_BASE':'endurance development'}.get(goal,'goal-specific development')
+    return {'schema':R1969104_CARD3_SCHEMA,'title':'Next quality · '+name,
+       'goal_key':goal,'decision_action_observed':str(d.get('action') or '').upper(),
+       'roadmap_dimension_observed':dim,'source':'CURRENT_GOAL_STATE_NO_WORKOUT',
+       'referenced_canonical_template_id':None,'direction_only':True,
+       'is_a_prescription':False,'is_scheduled':False,'suggested_date':None,
+       'suggested_time':None,'execution_authorized_by_preview':False,
+       'adds_workout_to_ledger':False,'adds_calendar_event':False}
+
+
+def _nova_r1969102_card3_copy(data):
+    """Legacy callers now receive the SAME checked canonical representation."""
+    return _nova_r1969104_canonical_card3(data)
+
+
+def _nova_r196989_card3_detail(data):
+    """Legacy side-channel is retired; no library-as-prescription fallback."""
+    return None
+
+# Single Card-3 body for pending and future offers alike. Chronological cards
+# remain unchanged; a matched planned workout is only linked, not copied.
+_R1969104_BEGIN='{% if is_chronological_pending %}'
+_R1969104_END='{% else %}\n<div class="v4-session-slot">'
+assert HOME_PAGE.count(_R1969104_BEGIN)==1,'INC049_BRANCH_START_DRIFT'
+_a=HOME_PAGE.index(_R1969104_BEGIN)
+_b=HOME_PAGE.index(_R1969104_END,_a)
+_R1969104_CARD='''{% if is_quality_slot %}
+{% set card3 = data.nova_card3_workout_view or {} %}
+{% if quality_already_shown %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · ALREADY IN YOUR PLAN</span></div>
+<h3>{{ data.next_sessions[upcoming.quality_index].title|e }}</h3>
+<div class="v4-session-main">This quality is already in card {{ upcoming.quality_index + 1 }}. Its instructions and fueling are shown there.</div>
+{% elif card3.verified_offer or card3.verified_future_plan %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">{{ 'NEXT QUALITY · VERIFIED WORKOUT' if card3.verified_offer else 'FUTURE QUALITY · CONDITIONAL PLAN' }}</span></div>
+<h3>{{ card3.title|e }}</h3>
+<div class="v4-session-meta"><span class="v4-session-pill">{{ 'YOU CHOOSE WHEN · NOT BOOKED' if card3.verified_offer else 'NEEDS A SUITABLE WINDOW · NOT CLEARED' }}</span></div>
+<div class="r1969102-canonical-copy r1969104-single-workout" role="group" aria-label="Single canonical quality plan">
+<strong>YOUR WORKOUT</strong>
+<p><b>Work and recovery:</b> {{ card3.structure|e }}</p>
+<p><b>Personalized work target:</b> <span class="r1969102-power">{{ card3.personalized_watts|e }}</span></p>
+{% if card3.phases %}<div class="r196999-workout-phases" role="group" aria-label="Workout phases">
+{% for ph in card3.phases %}<div class="r196999-workout-phase"><strong>{{ ph.label|e }}</strong><span>{{ ph.duration|e }}</span><small>{{ ph.detail|e }}</small></div>{% endfor %}
+</div>{% endif %}
+<p><b>How to execute:</b> {{ card3.execution|e }}</p>
+<p><b>Why this session:</b> {{ card3.purpose|e }}</p>
+<small>{{ card3.reason|e }}{% if card3.verified_future_plan %} The target is a conditional scientific plan, not permission to execute today. Recheck current recovery, future time availability and Nova clearance before attempting this workout.{% endif %}</small>
+</div>
+{% else %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">QUALITY GOAL · NOT A PRESCRIBED WORKOUT</span></div>
+<h3>{{ card3.title|e }}</h3>
+<div class="v4-session-meta"><span class="v4-session-pill">NO VERIFIED QUALITY WORKOUT</span></div>
+<div class="v4-session-main">{{ card3.goal_explanation|e }}</div>
+<div class="v4-session-why">{{ card3.reason|e }} No interval structure, session duration or personal watt target has been issued. Previous efforts are evidence, not execution targets.</div>
+{% endif %}
+{% elif is_chronological_pending %}
+<div class="v4-session-slot">UPCOMING · AWAITING PLAN</div>
+<h3>Next chronological session not yet scheduled</h3>
+<div class="v4-session-main">Nova has not established another safe session opportunity yet. No date or workout has been invented.</div>
+'''
+HOME_PAGE=HOME_PAGE[:_a]+_R1969104_CARD+HOME_PAGE[_b:]
+# The old appended copy is an independent source of execution instructions.
+_R1969104_OLD_START='{% if is_quality_slot and data.nova_card3_workout_view %}'
+_R1969104_OLD_END='</article>\n{% if not is_quality_slot or (('
+assert HOME_PAGE.count(_R1969104_OLD_START)==1,'INC049_OLD_PANEL_DRIFT'
+_c=HOME_PAGE.index(_R1969104_OLD_START)
+_e=HOME_PAGE.index(_R1969104_OLD_END,_c)
+HOME_PAGE=HOME_PAGE[:_c]+HOME_PAGE[_e:]
+assert HOME_PAGE.count('YOUR WORKOUT EXPLAINED')==0,'INC049_DUPLICATE_WORKOUT'
+assert HOME_PAGE.count('qdetail.main_set|e')==0,'INC049_LEGACY_MAIN'
+assert HOME_PAGE.count('r1969104-single-workout')==1,'INC049_SINGLE_RENDERER'
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION=('THE LAB · PRODUCT V4.9.204 R196.9.104 · INC-049 CURRENT SCIENTIFIC '
+             'CARD3 PRESCRIPTION LOCK · SINGLE PERSONALIZED EXECUTION PATH · OFFLINE QA')
+
+
+# INC-050 — UNSCHEDULED CONDITIONAL SCIENTIFIC QUALITY (NO EXECUTION AUTHORITY)
+# The current PLAN is computed only while producing the Snapshot, using the SAME
+# canonical producer/compiler and an explicit hypothetical duration. It is
+# persisted as a non-issued advisory artifact and has no calendar/ledger effect.
+INC050_SCHEMA='NOVA-R196.9.105-CONDITIONAL-FUTURE-QUALITY-1'
+INC050_ENVELOPE_MIN=60.0  # planning requirement, NOT claimed athlete availability
+
+
+def _nova_inc050_owner_scope(owner_id):
+    return hmac.new(str(SECRET_KEY).encode(),
+                    ('INC050-SCOPE|'+str(owner_id)).encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def _nova_inc050_workout_digest(work):
+    '''Detect accidental cross-snapshot drift of the compiled workout contract.'''
+    if not isinstance(work,dict):
+        return None
+    fields=('nova_workout_id','goal_key','title','main_set','why',
+            'power_prescription','session_duration_feasibility','session_composition')
+    raw=json.dumps({k:work.get(k) for k in fields},sort_keys=True,
+                   ensure_ascii=True,separators=(',',':'),default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _nova_inc050_conditional_fuel(data,card):
+    d=data if isinstance(data,dict) else {}
+    plan=d.get('future_quality_plan') or {}
+    minutes=plan.get('required_window_minutes')
+    goal=str(card.get('goal_key') or '').upper()
+    kind={'POWER_5':'VO2','VO2MAX':'VO2','POWER_20':'THRESHOLD',
+          'TIME_TRIAL':'THRESHOLD','POWER_1':'SPRINTS',
+          'SPRINTER':'SPRINTS','ENDURANCE_BASE':'ENDURANCE'}.get(goal)
+    if not (kind and isinstance(minutes,(int,float)) and
+            math.isfinite(minutes) and 20<=minutes<=360):
+        return None
+    metabolic=d.get('metabolic_context') or {}
+    pressure=metabolic.get('glycogen_pressure') if isinstance(metabolic,dict) else None
+    indoor=_intra_fueling_strategy(kind,'INDOOR',kind,float(minutes),
+                        glycogen_pressure=pressure,metabolic_context=metabolic)
+    outdoor=_intra_fueling_strategy(kind,'OUTDOOR',kind,float(minutes),
+                        glycogen_pressure=pressure,metabolic_context=metabolic)
+    return {'source':'CURRENT_CANONICAL_CONDITIONAL_FUTURE',
+         'workout_id':card.get('workout_id'),
+         'display':str(indoor.get('display') or 'See duration'),
+         'outdoor_display':str(outdoor.get('display') or 'See duration'),
+         'detail':(f'Conditional fueling estimate for the full {minutes:g}-min '
+                   'compiled workout, not your historical session median. '
+                   'Indoor and outdoor needs differ. No booking or clearance.'),
+         'example':True,'read_only':True,'total_minutes_example':float(minutes)}
+
+
+def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
+        evidence_ledger=None, power_model=None, ftp_anchor=None,
+        aerobic_metabolic_range=None, training_definitions=None,
+        compiler_args=None, planning_context=None, training_state=None,
+        active_offer=None):
+    dec=decision if isinstance(decision,dict) else {}
+    ctx=planning_context if isinstance(planning_context,dict) else {}
+    ts=training_state if isinstance(training_state,dict) else {}
+    rd=road if isinstance(road,dict) else {}
+    ck=clock if isinstance(clock,dict) else {}
+    # No competing provisional quality when the real producer has offered one.
+    if active_offer:
+        return None
+    if (str(dec.get('action') or '').upper()!='TRAIN'
+        or dec.get('hard_session_allowed') is not True
+        or dec.get('quality_window_eligible') is False
+        or str((rd.get('quality_window') or {}).get('state') or '').upper()
+           not in {'WATCH','OPEN'}
+        or ctx.get('health_override')
+        or str(ts.get('state') or '').upper().replace(' ','_')=='RECOVERY_HOLD'):
+        return None
+    # Only known, unrestricted rhythm opportunities can anchor a conditional
+    # science replay. A calendar event, race or explicit availability cap is
+    # never made longer by this planner.
+    candidates=[x for x in (ck.get('next_slots') or []) if isinstance(x,dict)
+        and str(x.get('source') or '').upper()=='RHYTHM'
+        and x.get('is_planned_training') is not True
+        and x.get('availability_confirmed') is not True
+        and str(x.get('restriction') or 'NONE').upper()=='NONE'
+        and x.get('is_race') is not True]
+    preferred=str((rd.get('quality_window') or {}).get('preferred_iso') or '')[:10]
+    choices=[x for x in candidates if str(x.get('date') or '')[:10]==preferred]
+    if not choices:
+        return None  # no invented date, no new rhythm opportunity
+    source=choices[0]
+    try:
+        actual_duration=float(source.get('duration_hint_min'))
+    except (TypeError,ValueError):
+        return None
+    if not math.isfinite(actual_duration) or actual_duration<=0:
+        return None
+    # This dedicated branch answers "what if the athlete chooses a suitable
+    # future window?" It does not upgrade the real 48.4 min into 60 min.
+    shadow_clock=copy.deepcopy(ck)
+    shadow_slot=copy.deepcopy(source)
+    shadow_slot.update(duration_hint_min=INC050_ENVELOPE_MIN,
+        duration_hint_label='conditional 60 min, NOT observed availability',
+        inc050_unconfirmed_conditional_envelope=True,
+        availability_confirmed=False)
+    shadow_clock['next_slots']=[shadow_slot]
+    # Roadmap/decision are unchanged. No HOLD→TRAIN, no WATCH→OPEN mutation.
+    shadow_road=copy.deepcopy(rd)
+    kw=dict(adaptive_roadmap=shadow_road,
+        microcycle_ledger=copy.deepcopy(ledger or {}),
+        evidence_ledger=copy.deepcopy(evidence_ledger or {}),
+        power_model=copy.deepcopy(power_model or {}),
+        ftp_anchor=copy.deepcopy(ftp_anchor or {}),
+        aerobic_metabolic_range=copy.deepcopy(aerobic_metabolic_range),
+        training_definitions=copy.deepcopy(training_definitions))
+    # Invalid science or missing evidence means NO provisional plan. Reject
+    # rather than upgrade FTP/PB into guessed repeatable work.
+    try:
+        produced=build_nova_prescription(copy.deepcopy(dec),shadow_clock,**kw)
+        if (not isinstance(produced,dict) or produced.get('status')!='PRESCRIBED'
+            or produced.get('hard_prescription_available') is not True):
+            return None
+        wid=str(produced.get('workout_id') or '')
+        tpl=_R19696_LIBRARY_INDEX.get(wid)
+        if not wid or not isinstance(tpl,dict):
+            return None
+        compile_kw=copy.deepcopy(compiler_args or {})
+        compile_kw.update(adaptive_roadmap=shadow_road,
+                          microcycle_ledger=copy.deepcopy(ledger or {}))
+        out=compile_nova_prescription(produced,shadow_clock,**compile_kw)
+        if not isinstance(out,dict) or out.get('status')!='PRESCRIBED':
+            return None
+        sessions=[x for x in (out.get('sessions') or [])
+            if isinstance(x,dict) and x.get('nova_workout_id')==wid
+            and _nova_r196956_structural_ok(x)]
+        if len(sessions)!=1:
+            return None
+        work=sessions[0]
+        duration=(work.get('session_composition') or {}).get('total_seconds')
+        feasibility=work.get('session_duration_feasibility') or {}
+        power=work.get('power_prescription') or {}
+        if (feasibility.get('state')!='PASS'
+            or not isinstance(duration,(int,float))
+            or not 0 < duration <= INC050_ENVELOPE_MIN*60+1
+            or power.get('state')!='PRESCRIBED'
+            or not power.get('source')
+            or not _nova_r1969102_verified_personal_watts(work,wid)
+            # A conditional proposal cannot promote FTP-only or a single PB
+            # into a future *personal* repeatable dose.
+            or str(power.get('source') or '')!='COMPARABLE_VERIFIED_REPEATED_WORK'
+            or not power.get('activity_id')
+            or str(tpl.get('goal') or '').upper()!=str(dec.get('goal_key') or '').upper()
+            or not _nova_r1969102_catalogue_copy(wid,dec.get('goal_key'))):
+            return None
+        if _nova_r196965_verified_duplicate(work,ledger,
+                str(source.get('date') or '')[:10],evidence_ledger):
+            return None
+        # Persist a minimal, owner-scoped conditional plan. Strip proposed
+        # clock/date fields and execution flags; it is NOT next_quality_offer.
+        excerpt={k:copy.deepcopy(work.get(k)) for k in (
+            'nova_workout_id','goal_key','title','main_set','why',
+            'power_prescription','session_duration_feasibility','session_composition')}
+        excerpt.update(date=None,start_minute=None,is_scheduled=False,
+                       execution_authorized=False)
+        context_hash=hashlib.sha256((str(owner_user_id)+'|'+wid+'|'+
+            str((rd.get('scientific_progression') or {}).get('dimension') or '')+'|'+
+            str(power.get('low_watts'))+'|'+str(power.get('high_watts'))+'|'+
+            str(duration)).encode()).hexdigest()[:24]
+        # INC-051: capture the exact context at the SCIENTIFIC PRODUCER, not
+        # later at the save hook. Mutations between producer and snapshot seal
+        # must INVALIDATE, not legitimize, a stale conditional dose.
+        producer_context_digest=_nova_inc051_context_digest({
+            'nova_decision':dec,'coach_clock':ck,'adaptive_roadmap':rd,
+            'evidence_ledger':evidence_ledger,'power_model':power_model,
+            'ftp_anchor':ftp_anchor,'training_definitions':training_definitions,
+            'planning_context':ctx,'training_state':ts})
+        if not producer_context_digest:
+            return None
+        return {'schema':INC050_SCHEMA,'plan_id':'NOVA-FUTURE-'+context_hash,
+            'producer_context_digest':producer_context_digest,
+            'owner_scope':_nova_inc050_owner_scope(owner_user_id),
+            'source':'CURRENT_CANONICAL_PRODUCER_AND_COMPILER_CONDITIONAL',
+            'status':'CONDITIONAL_NOT_CLEARED',
+            'workout_id':wid,'goal_key':str(dec.get('goal_key') or '').upper(),
+            'producer_status':produced.get('status'),
+            'producer_workout_id':wid,'workout':excerpt,
+            'compiled_workout_digest':_nova_inc050_workout_digest(excerpt),
+            'required_window_minutes':round(duration/60,2),
+            'actual_known_window_minutes':actual_duration,
+            'slot_can_host_plan':actual_duration+0.01>=duration/60,
+            'planning_envelope_minutes':INC050_ENVELOPE_MIN,
+            'actual_available_minutes_not_upgraded':True,
+            'not_scheduled':True,'not_issued':True,
+            'execution_authorized':False,'recheck_required':True,
+            'science_provenance':True,'mechanics_complete':True,
+            'power_source':str(power['source'])}
+    except (TypeError,ValueError,KeyError,AttributeError,IndexError,OverflowError):
+        # Fail closed. No athlete-scoped evidence or exception details leaked.
+        return None
+
+
+_inc050_current_view_before=_nova_r1969104_canonical_card3
+
+def _nova_r1969104_canonical_card3(data):
+    current=_inc050_current_view_before(data)
+    if current.get('verified_offer'):
+        return dict(current,verified_future_plan=False)
+    d=data if isinstance(data,dict) else {}
+    plan=d.get('future_quality_plan') or {}
+    pres=d.get('nova_prescription') or {}
+    dec=d.get('nova_decision') or {}
+    integrity=d.get('quality_offer_integrity') or {}
+    if not all(isinstance(x,dict) for x in (plan,pres,dec,integrity)):
+        return dict(current,verified_future_plan=False)
+    work=plan.get('workout') or {}
+    wid=str(plan.get('workout_id') or '')
+    power=work.get('power_prescription') or {} if isinstance(work,dict) else {}
+    comp=work.get('session_composition') or {} if isinstance(work,dict) else {}
+    feas=work.get('session_duration_feasibility') or {} if isinstance(work,dict) else {}
+    required=plan.get('required_window_minutes')
+    goal=str(dec.get('goal_key') or '').upper()
+    if (plan.get('schema')!=INC050_SCHEMA or plan.get('status')!='CONDITIONAL_NOT_CLEARED'
+        or plan.get('source')!='CURRENT_CANONICAL_PRODUCER_AND_COMPILER_CONDITIONAL'
+        or plan.get('producer_status')!='PRESCRIBED'
+        or str(dec.get('action') or '').upper()!='TRAIN'
+        or dec.get('hard_session_allowed') is not True
+        or dec.get('quality_window_eligible') is False
+        or str(((d.get('adaptive_roadmap') or {}).get('quality_window') or {}).get('state') or '').upper() not in {'OPEN','WATCH'}
+        or pres.get('status')=='PRESCRIBED' # no competing future plan
+        or integrity.get('state')=='PASS' or d.get('next_quality_offer')
+        or not plan.get('plan_id') or not wid
+        or not plan.get('owner_scope')
+        or not hmac.compare_digest(str(plan.get('owner_scope')),
+                 str(d.get('future_quality_owner_scope') or ''))
+        or wid!=str(plan.get('producer_workout_id') or '')
+        or wid!=str(work.get('nova_workout_id') or '')
+        or plan.get('compiled_workout_digest')!=_nova_inc050_workout_digest(work)
+        or goal!=plan.get('goal_key')
+        or not plan.get('mechanics_complete') or not plan.get('science_provenance')
+        or plan.get('not_issued') is not True
+        or plan.get('not_scheduled') is not True
+        or plan.get('execution_authorized') is not False
+        or not isinstance(comp,dict) or comp.get('state')!='COMPLETE'
+        or not isinstance(feas,dict) or feas.get('state')!='PASS'
+        or not isinstance(power,dict) or power.get('state')!='PRESCRIBED'
+        or not isinstance(required,(float,int)) or required<=0
+        or abs((comp.get('total_seconds') or 0)/60-required)>0.01):
+        return dict(current,verified_future_plan=False)
+    base=_nova_r1969102_catalogue_copy(wid,goal)
+    watts=_nova_r1969102_verified_personal_watts(work,wid)
+    if not base or not watts or not str(work.get('main_set') or '').strip() or not str(work.get('why') or '').strip():
+        return dict(current,verified_future_plan=False)
+    known=plan.get('actual_known_window_minutes')
+    shortage= ('The learned window currently contains only %.1f min; this plan needs %.0f min.'%
+                (known,required) if isinstance(known,(int,float)) and known<required else
+               'No athlete-confirmed appointment has been established.')
+    return dict(current,state='CONDITIONAL_FUTURE_PLAN',
+        verified_offer=False,verified_future_plan=True,
+        workout_id=wid,title=str(work.get('title') or base['title']),
+        structure=str(work.get('main_set')),
+        execution=base['execution'],purpose=str(work.get('why')),
+        personalized_watts=watts,power_source=str(power.get('source') or ''),
+        phases=_nova_r196999_phase_rows(work),
+        reason=('A %.0f-minute conditional workout compiled by the canonical scientific engine. '%required
+                +shortage+' Not booked or cleared for execution.'))
+
+# INC-051 / DTM 1.0.42: CONTRACT FIREWALL.  Fail closed for
+# stale, cross-owner or manipulated FUTURE prescriptions.  The producer remains
+# the ONLY authority on workout choice and personal watts.
+INC051_SCHEMA='NOVA-R196.9.106-CARD3-CONTRACT-FIREWALL-1'
+INC051_CONTEXT_KEYS=(
+    'nova_decision','coach_clock','adaptive_roadmap','evidence_ledger',
+    'power_model','ftp_anchor','training_definitions','planning_context',
+    'training_state',
+)
+
+def _nova_inc051_canonical_json(value):
+    return json.dumps(value,sort_keys=True,separators=(',',':'),
+                      ensure_ascii=True,default=str,allow_nan=False)
+
+def _nova_inc051_context_digest(data):
+    """Bind the plan to the decision, science and actual availability at save."""
+    if not isinstance(data,dict):
+        return None
+    try:
+        selected={k:data.get(k) for k in INC051_CONTEXT_KEYS}
+        # Existing read-only UI adapters rewrite *display prose* (headlines,
+        # test explanations) in roadmap/training state. That must NOT invalidate
+        # an otherwise byte-identical scientific plan. Only scientific control
+        # inputs are fingerprinted from these two presentation-heavy objects.
+        roadmap=data.get('adaptive_roadmap') or {}
+        training=data.get('training_state') or {}
+        if not isinstance(roadmap,dict) or not isinstance(training,dict):
+            return None
+        window=roadmap.get('quality_window') or {}
+        if not isinstance(window,dict):
+            return None
+        selected['adaptive_roadmap']={
+            'goal_key':roadmap.get('goal_key'),
+            'scientific_progression':roadmap.get('scientific_progression'),
+            'quality_window':{k:v for k,v in window.items() if k!='headline'},
+        }
+        selected['training_state']={k:v for k,v in training.items()
+                                    if k not in ('why','headline','description','explanation')}
+        return hashlib.sha256(_nova_inc051_canonical_json(selected).encode()).hexdigest()
+    except (TypeError,ValueError,OverflowError):
+        return None
+
+def _nova_inc051_plan_seal(plan,owner_user_id):
+    """Authenticated integrity check, NOT a replacement for owner-scoped SQL."""
+    if not isinstance(plan,dict) or not owner_user_id:
+        return None
+    try:
+        payload={k:v for k,v in plan.items() if k!='authority_seal'}
+        message=('INC051|'+str(owner_user_id)+'|'+
+                 _nova_inc051_canonical_json(payload)).encode()
+        return hmac.new(str(SECRET_KEY).encode(),message,hashlib.sha256).hexdigest()
+    except (TypeError,ValueError,OverflowError):
+        return None
+
+def _nova_inc051_attest_future_snapshot(data,owner_user_id):
+    """Run only AFTER cross-module authority validation, BEFORE Snapshot save.
+
+    Invalid conditional plans fail closed. This is a projection-only sidecar:
+    never issues, clears, reschedules or writes to the training ledger.
+    """
+    if not isinstance(data,dict):
+        return False
+    plan=data.get('future_quality_plan')
+    if not isinstance(plan,dict) or not plan:
+        data['future_quality_plan']=None
+        return False
+    owner_scope=_nova_inc050_owner_scope(owner_user_id)
+    if (not owner_user_id or plan.get('status')!='CONDITIONAL_NOT_CLEARED'
+        or plan.get('schema')!=INC050_SCHEMA
+        or plan.get('source')!='CURRENT_CANONICAL_PRODUCER_AND_COMPILER_CONDITIONAL'
+        or plan.get('owner_scope')!=owner_scope
+        or data.get('future_quality_owner_scope')!=owner_scope
+        or (data.get('next_quality_offer') or {}).get('offer_id')
+        or (data.get('nova_decision') or {}).get('action')!='TRAIN'
+        or (data.get('nova_decision') or {}).get('hard_session_allowed') is not True
+        or (data.get('nova_prescription') or {}).get('status')=='PRESCRIBED'
+        or plan.get('compiled_workout_digest')!=
+            _nova_inc050_workout_digest(plan.get('workout'))
+        or plan.get('producer_context_digest') != _nova_inc051_context_digest(data)):
+        data['future_quality_plan']=None
+        return False
+    input_digest=_nova_inc051_context_digest(data)
+    if not input_digest:
+        data['future_quality_plan']=None
+        return False
+    plan['context_digest']=input_digest
+    plan['contract_schema']=INC051_SCHEMA
+    plan['authority_seal']=_nova_inc051_plan_seal(plan,owner_user_id)
+    if not plan['authority_seal']:
+        data['future_quality_plan']=None
+        return False
+    return True
+
+def _nova_inc051_verified_owner_id(explicit_owner_user_id=None):
+    """Use authenticated identity, not two correlated snapshot fields.
+
+    Explicit owner override exists ONLY for offline test calls without an HTTP
+    request.  It cannot override a real signed-in request.
+    """
+    if has_request_context():
+        actor=current_user(touch=False)
+        if not isinstance(actor,dict) or not actor.get('id'):
+            return None
+        try:
+            target=getattr(g,'r169_qa_target_user_id',None)
+        except (AttributeError,RuntimeError):
+            target=None
+        if target:
+            if actor.get('role')!='admin':
+                return None
+            return str(target)
+        return str(actor['id'])
+    return str(explicit_owner_user_id) if explicit_owner_user_id else None
+
+_inc051_view_before=_nova_r1969104_canonical_card3
+
+def _nova_r1969104_canonical_card3(data,expected_owner_user_id=None):
+    """Only saved + context-bound + owner-authenticated plans reach Card 3.
+
+    Old and unsigned reports remain readable, without an executable future
+    workout: they are NOT silently migrated and their watts are NOT guessed.
+    """
+    d=data if isinstance(data,dict) else {}
+    current=_inc050_current_view_before(d)
+    if current.get('verified_offer'):
+        # INC-049 current scientific offer remains higher priority than the
+        # conditional product; do not cause regression to current offers.
+        return dict(current,verified_future_plan=False)
+    unverified=dict(current,verified_future_plan=False)
+    plan=d.get('future_quality_plan')
+    if not isinstance(plan,dict) or not plan:
+        return unverified
+    owner_id=_nova_inc051_verified_owner_id(expected_owner_user_id)
+    if not owner_id:
+        return unverified
+    owner_scope=_nova_inc050_owner_scope(owner_id)
+    if (not hmac.compare_digest(str(plan.get('owner_scope') or ''),owner_scope)
+        or not hmac.compare_digest(str(d.get('future_quality_owner_scope') or ''),owner_scope)
+        or plan.get('contract_schema')!=INC051_SCHEMA
+        or plan.get('context_digest')!=_nova_inc051_context_digest(d)
+        or plan.get('producer_context_digest')!=plan.get('context_digest')
+        or not plan.get('authority_seal')
+        or not hmac.compare_digest(str(plan['authority_seal']),
+                                   str(_nova_inc051_plan_seal(plan,owner_id) or ''))):
+        return unverified
+    # The existing INC-050 scientific checks still validate template, goal,
+    # workout digest, personal power provenance, timing and clearance state.
+    return _inc051_view_before(d)
+
+def _nova_inc051_fuel_for_canonical_card3(data,card):
+    """Exactly one duration source: the compiled workout shown in Card 3.
+
+    A goal direction with no verified workout has no CHO/h execution example;
+    the historical 45-minute median must NOT be presented as workout fueling.
+    """
+    if not isinstance(data,dict) or not isinstance(card,dict):
+        return None
+    if card.get('verified_future_plan'):
+        return _nova_inc050_conditional_fuel(data,card)
+    if not card.get('verified_offer'):
+        return None
+    offer=data.get('next_quality_offer') or {}
+    work=offer.get('workout') or {} if isinstance(offer,dict) else {}
+    comp=work.get('session_composition') or {} if isinstance(work,dict) else {}
+    if (not isinstance(work,dict) or not isinstance(comp,dict)
+        or str(work.get('nova_workout_id') or '')!=str(card.get('workout_id') or '')
+        or comp.get('state')!='COMPLETE'):
+        return None
+    seconds=comp.get('total_seconds')
+    if not isinstance(seconds,(int,float)) or not math.isfinite(seconds):
+        return None
+    minutes=seconds/60.0
+    if not 20<=minutes<=360:
+        return None
+    kind={'POWER_5':'VO2','VO2MAX':'VO2','POWER_20':'THRESHOLD',
+          'TIME_TRIAL':'THRESHOLD','POWER_1':'SPRINTS',
+          'SPRINTER':'SPRINTS','ENDURANCE_BASE':'ENDURANCE'}.get(str(card.get('goal_key') or '').upper())
+    if not kind:
+        return None
+    metabolic=data.get('metabolic_context') or {}
+    metabolic=metabolic if isinstance(metabolic,dict) else {}
+    pressure=metabolic.get('glycogen_pressure')
+    inside=_intra_fueling_strategy(kind,'INDOOR',kind,minutes,
+                       glycogen_pressure=pressure,metabolic_context=metabolic)
+    outside=_intra_fueling_strategy(kind,'OUTDOOR',kind,minutes,
+                       glycogen_pressure=pressure,metabolic_context=metabolic)
+    return {'source':'CURRENT_VERIFIED_PRESCRIPTION',
+        'workout_id':card['workout_id'],
+        'display':str(inside.get('display') or 'See duration'),
+        'outdoor_display':str(outside.get('display') or 'See duration'),
+        'detail':(f'Fueling guidance for the full {minutes:g}-minute compiled workout; '
+                  'it is not an automatic calendar booking. Indoor/outdoor needs differ.'),
+        'example':False,'read_only':True,'total_minutes_example':round(minutes,2)}
+
+_inc051_ui_before=_v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui=_inc051_ui_before(data)
+    if not isinstance(ui,dict):
+        return ui
+    out=dict(ui)
+    card=out.get('nova_card3_workout_view') or {}
+    # One fuel source even after the many inherited presentation adapters.
+    out['quality_direction_fuel']=_nova_inc051_fuel_for_canonical_card3(out,card)
+    return out
+
+# The last projection adapter reads only the sealed source. Its direction,
+# description, personalized watts and fueling are all checked against the
+# same compiled workout. Source-free fallback cannot become an executable plan.
+APP_VERSION=('THE LAB · PRODUCT V4.9.208 R196.9.108 · INC-054 '
+             'CARD3 GOAL LABEL CLARITY · SCIENTIFIC FIREWALL PRESERVED')
+
+
+# INC-056 / R196.9.109 — THREE INDEPENDENT CONTRACTS FOR CARD 3
+# FUTURE SCIENTIFIC PLANNING is not a recovery/execution decision and does not
+# turn template mechanics into an issued personal power dose. The shared NOVA
+# science selector chooses the actual future workout; Jinja never selects it.
+# No added database table, calendar entry, ledger mutation or user-side effect.
+INC056_SCHEMA = 'NOVA-R196.9.109-FUTURE-QUALITY-PLANNING-1'
+INC056_SOURCE = 'CURRENT_CANONICAL_SELECTOR_FUTURE_PLANNING'
+_inc056_previous_planner = _nova_inc050_future_quality
+_inc056_previous_attest = _nova_inc051_attest_future_snapshot
+_inc056_previous_view = _nova_r1969104_canonical_card3
+
+
+def _nova_inc056_plan_result(owner_user_id, decision, road, evidence_ledger,
+                             training_definitions, planning_context, training_state,
+                             active_offer):
+    """Scientific planning only. No shadow TRAIN, future date or 60-minute slot.
+
+    When objective/dimension is not scientifically supported, persist a blocked
+    diagnostic instead of silently losing the reason. Never pick a template by
+    title, goal-only popularity, or UI fallback.
+    """
+    dec = decision if isinstance(decision, dict) else {}
+    rd = road if isinstance(road, dict) else {}
+    ctx = planning_context if isinstance(planning_context, dict) else {}
+    state = training_state if isinstance(training_state, dict) else {}
+    goal = str(dec.get('goal_key') or rd.get('goal_key') or '').upper()
+    scientific = rd.get('scientific_progression') or {}
+    dimension = str((scientific if isinstance(scientific, dict) else {}).get('dimension')
+                    or dec.get('dimension') or '').upper()
+    action = str(dec.get('action') or '').upper()
+    execution_state = ('DO_NOT_EXECUTE_NOW'
+        if ctx.get('health_override') or action in {'HOLD','VALIDATE','RACE_PRIORITY'}
+        or state.get('state') in {'RECOVERY HOLD','RECOVERY_HOLD'}
+        or dec.get('hard_session_allowed') is not True
+        else 'RECHECK_REQUIRED')
+    candidate_count = sum(1 for t in _NOVA_WORKOUT_LIBRARY
+        if str(t.get('goal') or '').upper() == goal
+        and dimension in set(t.get('dimensions') or ())
+        and not t.get('adaptive_only'))
+    result = {
+        'schema': INC056_SCHEMA, 'source': INC056_SOURCE,
+        'status': 'PLANNING_BLOCKED', 'goal_key': goal, 'dimension': dimension,
+        'workout_id': None, 'owner_scope': _nova_inc050_owner_scope(owner_user_id),
+        'candidate_count': candidate_count, 'excluded_candidates': None,
+        'excluded_candidates_assessed': False,
+        'reason_codes': [], 'dose_evidence_state': 'NOT_AUTHORIZED',
+        'execution_state': execution_state, 'not_issued': True,
+        'not_scheduled': True, 'execution_authorized': False,
+        'adds_calendar_event': False, 'adds_ledger_row': False,
+        'actual_available_minutes_not_upgraded': True,
+        'workout': None,
+    }
+    def blocked(code):
+        result['reason_codes'] = [code]
+        return result
+    if not owner_user_id:
+        return blocked('OWNER_NOT_AUTHENTICATED')
+    if active_offer:
+        return blocked('CURRENT_CANONICAL_OFFER_TAKES_PRIORITY')
+    if ctx.get('health_override'):
+        return blocked('HEALTH_OVERRIDE_BLOCKS_FUTURE_QUALITY_PLANNING')
+    if goal not in _R1969102_PURPOSE:
+        return blocked('UNKNOWN_SCIENTIFIC_GOAL')
+    if not dimension:
+        return blocked('MISSING_SCIENTIFIC_DIMENSION')
+    if not candidate_count:
+        return blocked('NO_CANONICAL_MECHANICS_FOR_SCIENTIFIC_DIMENSION')
+    # Selector receives no fictional availability, date or recovery clearance.
+    # The real science filters (including repeat-exposure and purpose checks)
+    # stay in the canonical selection pipeline. No invented substitute on veto.
+    try:
+        template, audit = _v19699_select_workout_template(
+            goal, dimension, evidence_ledger=copy.deepcopy(evidence_ledger or {}),
+            training_definitions=copy.deepcopy(training_definitions), slot={})
+    except (TypeError, ValueError, KeyError, AttributeError, IndexError,
+            OverflowError, ArithmeticError):
+        return blocked('CANONICAL_SELECTOR_FAILED')
+    if not isinstance(template, dict):
+        # The selector audit can carry athlete-scoped evidence. Never place
+        # free-form audit text into the persisted privacy-safe reason code.
+        return blocked('CANONICAL_SELECTOR_NO_SCIENTIFIC_CANDIDATE')
+    wid = str(template.get('id') or '')
+    indexed = _R19696_LIBRARY_INDEX.get(wid)
+    base = _nova_r1969102_catalogue_copy(wid, goal)
+    if (not indexed or not base or
+        dimension not in set(indexed.get('dimensions') or ()) or
+        indexed.get('adaptive_only') or
+        str(template.get('goal') or '').upper() != goal):
+        return blocked('SELECTOR_RESULT_NOT_CANONICAL_FOR_GOAL_DIMENSION')
+    signature = hashlib.sha256(_nova_inc051_canonical_json(indexed).encode()).hexdigest()
+    min_seconds = _nova_quality_template_required_seconds(indexed, dimension)
+    if min_seconds is not None and not (0 < min_seconds <= 360*60):
+        return blocked('INVALID_CANONICAL_TIME_REQUIREMENT')
+    mechanics = {'workout_id': wid, 'title': base['title'],
+        'structure': base['structure'], 'execution': base['execution'],
+        'purpose': base['purpose'], 'template_digest': signature,
+        'minimum_session_minutes': (round(min_seconds/60, 1)
+                                    if min_seconds is not None else None)}
+    # This is a scientifically selected future SESSION STRUCTURE, not a compiled
+    # personal dose. No watt target, no FTP/PB proxy, no executable instruction.
+    result.update(status='PLANNED_NOT_CLEARED', workout_id=wid,
+        reason_codes=['FUTURE_STRUCTURE_SELECTED_NO_EXECUTION_CLEARANCE'],
+        dose_evidence_state='PERSONAL_POWER_NOT_COMPILED',
+        mechanics=mechanics,
+        workout=None, personalized_watts=None,
+        template_digest=signature)
+    return result
+
+
+def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
+        evidence_ledger=None, power_model=None, ftp_anchor=None,
+        aerobic_metabolic_range=None, training_definitions=None,
+        compiler_args=None, planning_context=None, training_state=None,
+        active_offer=None):
+    """INC-056 replaces the overgated INC-050 conditional replay with planning.
+
+    The current OFFER/prescription/quality-window/ledger pipeline is untouched.
+    We do not fake TRAIN or grow a learned 45-minute session into 60 minutes.
+    """
+    plan = _nova_inc056_plan_result(owner_user_id, decision, road,
+        evidence_ledger, training_definitions, planning_context,
+        training_state, active_offer)
+    # Reuse the existing scientific-context fingerprint captured at producer
+    # time, and the owner seal stamped at final Snapshot composition.
+    plan['producer_context_digest'] = _nova_inc051_context_digest({
+        'nova_decision': decision, 'coach_clock': clock,
+        'adaptive_roadmap': road, 'evidence_ledger': evidence_ledger,
+        'power_model': power_model, 'ftp_anchor': ftp_anchor,
+        'training_definitions': training_definitions,
+        'planning_context': planning_context, 'training_state': training_state})
+    return plan
+
+
+def _nova_inc051_attest_future_snapshot(data, owner_user_id):
+    plan = (data or {}).get('future_quality_plan') if isinstance(data, dict) else None
+    if not isinstance(plan, dict) or plan.get('schema') != INC056_SCHEMA:
+        return _inc056_previous_attest(data, owner_user_id)
+    # Fail closed: no unsigned legacy/report/other-owner future plan is migrated.
+    if (not owner_user_id or plan.get('source') != INC056_SOURCE
+        or plan.get('status') not in {'PLANNED_NOT_CLEARED','PLANNING_BLOCKED'}
+        or plan.get('owner_scope') != _nova_inc050_owner_scope(owner_user_id)
+        or data.get('future_quality_owner_scope') != plan.get('owner_scope')
+        or plan.get('execution_authorized') is not False
+        or plan.get('not_issued') is not True
+        or plan.get('not_scheduled') is not True
+        or plan.get('adds_calendar_event') is not False
+        or plan.get('adds_ledger_row') is not False
+        or data.get('next_quality_offer')
+        or plan.get('producer_context_digest') != _nova_inc051_context_digest(data)):
+        data['future_quality_plan'] = None
+        return False
+    if plan.get('status') == 'PLANNED_NOT_CLEARED':
+        goal = plan.get('goal_key')
+        wid = str(plan.get('workout_id') or '')
+        tpl = _R19696_LIBRARY_INDEX.get(wid)
+        copy_view = _nova_r1969102_catalogue_copy(wid, goal)
+        mechanics = plan.get('mechanics') or {}
+        if (not isinstance(tpl, dict) or not isinstance(mechanics, dict)
+            or not isinstance(copy_view, dict)
+            or str(tpl.get('goal') or '').upper() != goal
+            or plan.get('dimension') not in set(tpl.get('dimensions') or ())
+            or plan.get('template_digest') !=
+               hashlib.sha256(_nova_inc051_canonical_json(tpl).encode()).hexdigest()
+            or mechanics.get('workout_id') != wid
+            or mechanics.get('template_digest') != plan.get('template_digest')
+            or any(mechanics.get(k) != copy_view.get(k) for k in
+                   ('title','structure','execution','purpose'))
+            or plan.get('personalized_watts') is not None
+            or plan.get('dose_evidence_state') != 'PERSONAL_POWER_NOT_COMPILED'):
+            data['future_quality_plan'] = None
+            return False
+    else:
+        if plan.get('workout_id') is not None or plan.get('workout') is not None:
+            data['future_quality_plan'] = None
+            return False
+    plan['context_digest'] = plan['producer_context_digest']
+    plan['contract_schema'] = INC056_SCHEMA
+    plan['authority_seal'] = _nova_inc051_plan_seal(plan, owner_user_id)
+    if not plan['authority_seal']:
+        data['future_quality_plan'] = None
+        return False
+    return True
+
+
+def _nova_r1969104_canonical_card3(data, expected_owner_user_id=None):
+    """Render ONLY an attested, owner-matched canonical plan or old safe offer.
+
+    The view does not choose templates, produce watt targets or grant clearance.
+    """
+    d = data if isinstance(data, dict) else {}
+    existing = _inc056_previous_view(d, expected_owner_user_id)
+    # Current verified offer takes priority. An INC-050 signed legacy plan
+    # remains readable as it was, with unchanged attestation rules.
+    if existing.get('verified_offer') or existing.get('verified_future_plan'):
+        return dict(existing, planned_quality=False)
+    plan = d.get('future_quality_plan') or {}
+    if not isinstance(plan, dict) or plan.get('schema') != INC056_SCHEMA:
+        return dict(existing, planned_quality=False)
+    owner_id = _nova_inc051_verified_owner_id(expected_owner_user_id)
+    if not owner_id:
+        return dict(existing, planned_quality=False)
+    owner_scope = _nova_inc050_owner_scope(owner_id)
+    if (plan.get('source') != INC056_SOURCE
+        or not hmac.compare_digest(str(plan.get('owner_scope') or ''), owner_scope)
+        or not hmac.compare_digest(str(d.get('future_quality_owner_scope') or ''), owner_scope)
+        or plan.get('contract_schema') != INC056_SCHEMA
+        or not plan.get('context_digest')
+        or plan.get('context_digest') != _nova_inc051_context_digest(d)
+        or plan.get('producer_context_digest') != plan.get('context_digest')
+        or not hmac.compare_digest(str(plan.get('authority_seal') or ''),
+            str(_nova_inc051_plan_seal(plan, owner_id) or ''))
+        or plan.get('execution_authorized') is not False
+        or plan.get('not_issued') is not True
+        or plan.get('not_scheduled') is not True
+        or d.get('next_quality_offer')):
+        return dict(existing, planned_quality=False)
+    if plan.get('status') == 'PLANNING_BLOCKED':
+        return dict(existing, planned_quality=False,
+            state='SCIENTIFIC_PLANNING_BLOCKED',
+            reason=('The scientific planner cannot select a future structure: '
+                + ', '.join(plan.get('reason_codes') or ['UNSPECIFIED'])
+                + '. No hard session has been issued.'))
+    if plan.get('status') != 'PLANNED_NOT_CLEARED':
+        return dict(existing, planned_quality=False)
+    wid = str(plan.get('workout_id') or '')
+    tpl = _R19696_LIBRARY_INDEX.get(wid)
+    base = _nova_r1969102_catalogue_copy(wid, plan.get('goal_key'))
+    mech = plan.get('mechanics') or {}
+    if (not isinstance(tpl, dict) or not isinstance(base, dict)
+        or not isinstance(mech, dict)
+        or plan.get('goal_key') != existing.get('goal_key')
+        or plan.get('dimension') != existing.get('dimension')
+        or plan.get('dimension') not in set(tpl.get('dimensions') or ())
+        or plan.get('template_digest') !=
+            hashlib.sha256(_nova_inc051_canonical_json(tpl).encode()).hexdigest()
+        or mech.get('workout_id') != wid
+        or mech.get('template_digest') != plan.get('template_digest')
+        or any(mech.get(k) != base.get(k) for k in
+               ('title','structure','execution','purpose'))
+        or plan.get('personalized_watts') is not None
+        or plan.get('dose_evidence_state') != 'PERSONAL_POWER_NOT_COMPILED'):
+        return dict(existing, planned_quality=False)
+    minutes = mech.get('minimum_session_minutes')
+    return dict(existing, state='FUTURE_SCIENTIFIC_STRUCTURE',
+        verified_offer=False, verified_future_plan=False,
+        planned_quality=True, direction_only=False,
+        title=mech['title'], workout_id=wid, structure=mech['structure'],
+        execution=mech['execution'], purpose=mech['purpose'],
+        personalized_watts=None, power_source=None, phases=[],
+        minimum_session_minutes=minutes,
+        execution_clearance=plan.get('execution_state'),
+        reason=('A future quality structure selected by Nova’s current canonical science '
+                'for the athlete’s goal and progression. Not an issued session. '
+                'Personal watt targets, total duration, recovery and available time '
+                'must be reassessed before execution.'))
+
+
+# Display adapter only. The existing single canonical panel is still the only
+# renderer for executable/personal-watt content; no new executable UI appears.
+_INC056_NO_PLAN_BRANCH = """{% else %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">QUALITY GOAL · NOT A PRESCRIBED WORKOUT</span></div>"""
+assert HOME_PAGE.count(_INC056_NO_PLAN_BRANCH) == 1, 'INC056_CARD3_BRANCH_DRIFT'
+_INC056_PLANNED_BRANCH = """{% elif card3.planned_quality %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · SCIENTIFIC FUTURE PLAN</span></div>
+<h3>{{ card3.title|e }}</h3>
+<div class="v4-session-meta"><span class="v4-session-pill">PLANNED STRUCTURE · NOT CLEARED FOR EXECUTION</span></div>
+<div class="r1969102-canonical-copy r1969104-planned-structure" role="group" aria-label="Scientifically selected future quality structure">
+<strong>FUTURE WORKOUT STRUCTURE</strong>
+<p><b>Work and recovery:</b> {{ card3.structure|e }}</p>
+{% if card3.minimum_session_minutes %}<p><b>Minimum estimated session time:</b> {{ card3.minimum_session_minutes|e }} min, including standard preparation/cooldown. Not a booked or approved duration.</p>{% endif %}
+<p><b>Training focus:</b> {{ card3.purpose|e }}</p>
+<p><b>Personalized watt target:</b> Not yet compiled or cleared. No best-power or FTP proxy is an executable dose.</p>
+<p><b>Execution clearance:</b> {{ card3.execution_clearance|replace('_',' ')|e }}. Recheck recovery, safety, dose evidence and actual available time before performing any hard intervals.</p>
+<small>{{ card3.reason|e }}</small>
+</div>
+{% else %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">QUALITY GOAL · NOT A PRESCRIBED WORKOUT</span></div>"""
+HOME_PAGE = HOME_PAGE.replace(_INC056_NO_PLAN_BRANCH, _INC056_PLANNED_BRANCH, 1)
+assert HOME_PAGE.count('r1969104-planned-structure') == 1, 'INC056_UI_DUPLICATE'
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · PRODUCT V4.9.209 R196.9.109 · INC-056 '
+               'SEPARATE FUTURE SCIENTIFIC PLANNING FROM EXECUTION CLEARANCE '
+               '· OWNER-BOUND · OFFLINE RELEASE CANDIDATE')
+
+
+# INC-057 / R196.9.110 — REPAIR CURRENT OFFER -> CARD 3 PROJECTION DEADLOCK.
+# Offline-scoped source-lock correction. A canonical offered structure need not
+# pretend that unverified PERSONAL WATTS are a prescription. This read-only
+# bridge reads the already-issued canonical offer (never ranks or produces a
+# workout), verifies its identity/ledger fingerprint and the signed-in owner,
+# then projects only library mechanics. It cannot clear training or fuel a plan.
+_INC057_PREVIOUS_CARD3 = _nova_r1969104_canonical_card3
+_INC057_PREVIOUS_UI = _v4891_prepare_snapshot_for_ui
+INC057_SOURCE = 'CURRENT_CANONICAL_OFFER_STRUCTURE_ONLY'
+
+
+# INC-060: a signed, prior canonical offer is not proof that its individual
+# work-bout duration matches the question NOW open in the evidence-gated goal.
+# Reconstruct the target from the underlying verified-exposure model, not from
+# an offered workout's title, suggested slot or cumulative minutes. This is
+# strictly a READ-ONLY goal-alignment contract, not an alternative selector.
+# INC-064 / R196.9.114 — POWER_5 scientific breadth uses the SAME canonical
+# decision, selector, compiler and succession/ledger architecture. Only the
+# biological interpretation of a template is goal-specific. Intermittent 30/15
+# work (including any number of sets) is NOT a continuous 300-second punch;
+# 12–15-minute TEMPO complements are not mislabeled 6–10-minute punch.
+INC064_POWER5_SCHEMA = 'NOVA-R196.9.114-POWER5-PUNCH-BREADTH-1'
+_INC064_FACET_DIMENSIONS = {'POWER_20': 'TIME_AT_PRESSURE',
+                            'TIME_TRIAL': 'TIME_AT_PRESSURE',
+                            'POWER_5': 'SPECIFIC_DOSE',
+                            # INC-069: same shared alignment/succession authority;
+                            # anaerobic duration bands are goal-specific data.
+                            'POWER_1': 'SPECIFIC_DOSE',
+                            # INC-070: same shared authority; VO2 facets are
+                            # continuous 120-480s, distinct from 30/15/Tempo.
+                            'VO2MAX': 'SPECIFIC_DOSE',
+                            # INC-071: sprint duration and cluster architectures
+                            # are distinct, using the SAME canonical authority.
+                            'SPRINTER': 'SPECIFIC_DOSE'}
+
+
+def _nova_inc064_template_facet(goal, template):
+    """Canonical work architecture -> goal-specific facet OR explicit support.
+
+    This classifier is about *what was offered*, not completed exposure, an
+    athlete's watts, current clearance, or evidence of a successful test.
+    """
+    g = str(goal or '').upper()
+    if not isinstance(template, dict) or str(template.get('goal') or '').upper() != g:
+        return None
+    pattern = str(template.get('pattern') or '').upper()
+    # A 30/15 block contains separate 30-second attacks.  Its accumulated
+    # work can support race transfer, never a continuous 60-second benchmark,
+    # repeatability result, or attainment of a missing continuous bout facet.
+    # Keep the exact same verified-intermittency test across supported
+    # goal-specific families rather than introducing workout-ID exceptions.
+    if g in {'POWER_5', 'POWER_1', 'VO2MAX'} and pattern == 'MICRO_30_15':
+        if (type(template.get('work_s')) is int and template['work_s'] == 30
+            and type(template.get('float_s')) is int and template['float_s'] == 15
+            and type(template.get('sets')) is int and template['sets'] > 0
+            and type(template.get('reps_per_set')) is int
+            and template['reps_per_set'] > 0
+            and type(template.get('set_recovery_s')) in {int, float}
+            and math.isfinite(template['set_recovery_s'])
+            and template['set_recovery_s'] >= 0):
+            return 'INTERMITTENT_30_15_SUPPORT'
+        return None
+    if g == 'VO2MAX':
+        # Intermittent 30/15 above is support, not continuous 2-8 min VO2.
+        # Tempo is complementary training, not proof of maximal aerobic
+        # interval breadth, even though its work bout is longer.
+        if (template.get('complementary_only') is True or
+                str(template.get('work_domain') or '').upper() == 'TEMPO_Z3'):
+            return 'COMPLEMENTARY_TEMPO_SUPPORT'
+        if pattern != 'STANDARD':
+            return None
+        return _v111_band_for_seconds(g, template.get('work_s'))
+    if g == 'SPRINTER':
+        # Repeat-sprint CLUSTERS are not one sustained peak / core / long sprint.
+        # Their repetitions and recoveries are structurally different from a
+        # continuous sprint effort: support for repeatability, not a maximal
+        # 5-30 s test and not evidence of a completed peak sprint.
+        if pattern == 'SPRINT_CLUSTER':
+            if (type(template.get('sets')) is int and template['sets'] > 0
+                and type(template.get('reps_per_set')) is int
+                and template['reps_per_set'] > 0
+                and type(template.get('work_s')) is int
+                and 5 <= template['work_s'] <= 30
+                and type(template.get('float_s')) is int
+                and template['float_s'] > 0
+                and type(template.get('set_recovery_s')) in {int, float}
+                and math.isfinite(template['set_recovery_s'])
+                and template['set_recovery_s'] >= 0):
+                return 'REPEATED_SPRINT_CLUSTER_SUPPORT'
+            return None
+        if pattern != 'SPRINT':
+            return None
+        if (type(template.get('reps')) is not int
+            or template['reps'] <= 0
+            or type(template.get('recovery_s')) not in {int, float}
+            or not math.isfinite(template['recovery_s'])
+            or template['recovery_s'] < 0):
+            return None
+        return _v111_band_for_seconds(g, template.get('work_s'))
+    if g == 'POWER_1':
+        # Only continuous SHORT_POWER from the canonical library may address
+        # the 20-44 / 45-75 / 76-120 second exposure facet.  A template's
+        # claim is not evidence of execution, fitness, or validated watts.
+        if pattern != 'SHORT_POWER':
+            return None
+        return _v111_band_for_seconds(g, template.get('work_s'))
+    if g != 'POWER_5':
+        return _v111_band_for_seconds(g, template.get('work_s'))
+    if (template.get('complementary_only') is True or
+            str(template.get('work_domain') or '').upper() == 'TEMPO_Z3'):
+        return 'COMPLEMENTARY_TEMPO_SUPPORT'
+    if pattern == 'STANDARD':
+        return _v111_band_for_seconds(g, template.get('work_s')) or 'OUT_OF_PUNCH_FACET_SUPPORT'
+    return None
+
+
+INC060_ALIGNMENT_SCHEMA = 'NOVA-R196.9.112-CARD3-DURATION-FACET-ALIGNMENT-1'
+
+
+def _nova_inc060_offer_facet_alignment(data, goal, dimension, template):
+    result = {'schema': INC060_ALIGNMENT_SCHEMA, 'state': 'NOT_ASSESSED',
+              'offered_facet': None, 'current_target_facet': None,
+              'directly_addresses_current_facet': False,
+              'counts_as_execution_evidence': False,
+              'needs_new_prescription': True}
+    if _INC064_FACET_DIMENSIONS.get(str(goal or '').upper()) != str(dimension or '').upper():
+        return result
+    road = data.get('adaptive_roadmap') or {}
+    if not isinstance(road, dict):
+        return dict(result, state='CONTEXT_INCONSISTENT')
+    progress = road.get('scientific_progression') or {}
+    if not isinstance(progress, dict):
+        return dict(result, state='CONTEXT_INCONSISTENT')
+    identity = progress.get('current_question_identity') or {}
+    breadth = progress.get('breadth_override') or {}
+    prior_profile = progress.get('facet_profile') or {}
+    evidence = data.get('evidence_ledger') or {}
+    performance = data.get('performance_evidence') or {}
+    if not all(isinstance(x, dict) for x in (identity, breadth, prior_profile,
+                evidence, performance)):
+        return dict(result, state='CONTEXT_INCONSISTENT')
+    # This authoritative classification uses SINGLE interval duration, not
+    # reps * seconds (24 accumulated min != one continuous 24-minute effort).
+    offered = _nova_inc064_template_facet(goal, template)
+    reconstructed = _v111_goal_facet_state(goal, evidence, performance)
+    target = reconstructed.get('next_missing')
+    expected = identity.get('target_facet') or breadth.get('target_facet')
+    prior_target = prior_profile.get('next_missing')
+    if not offered or not target or not expected or not prior_target:
+        return dict(result, state='CONTEXT_UNVERIFIED', offered_facet=offered,
+                    current_target_facet=target)
+    if (target != expected or target != prior_target
+            or (breadth.get('applied') is True and breadth.get('target_facet') != target)
+            or progress.get('dimension') != dimension
+            or reconstructed.get('covered') != prior_profile.get('covered')
+            or reconstructed.get('missing') != prior_profile.get('missing')):
+        return dict(result, state='CONTEXT_INCONSISTENT', offered_facet=offered,
+                    current_target_facet=target)
+    if offered == target:
+        return dict(result, state='TARGET_DURATION_FACET', offered_facet=offered,
+                    current_target_facet=target,
+                    directly_addresses_current_facet=True)
+    support_states = {
+        'REPEATED_SPRINT_CLUSTER_SUPPORT': 'SUPPORTING_REPEATED_SPRINT_CLUSTER',
+        'INTERMITTENT_30_15_SUPPORT': 'SUPPORTING_INTERMITTENT_SPECIFIC_DOSE',
+        'COMPLEMENTARY_TEMPO_SUPPORT': 'SUPPORTING_COMPLEMENTARY_TEMPO',
+        'OUT_OF_PUNCH_FACET_SUPPORT': 'SUPPORTING_OUT_OF_PUNCH_FACET',
+    }
+    state = support_states.get(offered, 'SUPPORTING_DIFFERENT_DURATION_FACET')
+    return dict(result, state=state, offered_facet=offered,
+                current_target_facet=target)
+
+
+def _nova_r1969104_canonical_card3(data, expected_owner_user_id=None):
+    previous = _INC057_PREVIOUS_CARD3(data, expected_owner_user_id)
+    if (previous.get('verified_offer') or previous.get('verified_future_plan')
+            or previous.get('planned_quality')):
+        return previous
+    d = data if isinstance(data, dict) else {}
+    dec = d.get('nova_decision') or {}
+    road = d.get('adaptive_roadmap') or {}
+    ctx = d.get('planning_context') or {}
+    training_state = d.get('training_state') or {}
+    offer = d.get('next_quality_offer') or {}
+    integrity = d.get('quality_offer_integrity') or {}
+    workout = offer.get('workout') or {} if isinstance(offer, dict) else {}
+    if not all(isinstance(v, dict) for v in
+               (dec, road, ctx, training_state, offer, integrity, workout)):
+        return previous
+    # The renderer must have a genuine request-bound athlete. Admin QA target
+    # is resolved by the existing authenticated owner function, not by an
+    # untrusted owner id embedded in payloads.
+    owner = _nova_inc051_verified_owner_id(expected_owner_user_id)
+    if (not owner or not hmac.compare_digest(
+            str(d.get('future_quality_owner_scope') or ''),
+            _nova_inc050_owner_scope(owner))):
+        return previous
+    if _nova_inc079_explicit_injury_restriction(ctx):
+        return previous
+    goal = str(dec.get('goal_key') or road.get('goal_key') or '').upper()
+    dimension = str(((road.get('scientific_progression') or {}).get('dimension')
+        or dec.get('dimension') or '')).upper()
+    workout_id = str(offer.get('workout_id') or '')
+    template = _R19696_LIBRARY_INDEX.get(workout_id)
+    canonical = _nova_r1969102_catalogue_copy(workout_id, goal)
+    if (not workout_id or not isinstance(template, dict) or not canonical
+        or not goal or not dimension
+        or str(template.get('goal') or '').upper() != goal
+        or dimension not in set(template.get('dimensions') or ())
+        or ((workout.get('goal_key') or workout.get('goal'))
+            and str(workout.get('goal_key') or workout.get('goal')).upper() != goal)
+        or str(workout.get('nova_workout_id') or '') != workout_id
+        or offer.get('schema') != R196956_SCHEMA
+        or integrity.get('schema') != R196963_QUALITY_SCHEMA
+        or offer.get('offer_status') != 'OFFERED'
+        or offer.get('visibility_status') != 'QUALITY_OFFER_VISIBLE'
+        or offer.get('source') not in {
+            'CURRENT_CANONICAL_COMPILED', 'PRIOR_ISSUED_CANONICAL',
+            'SAME_ENGINE_DETACHED_OFFER_ONLY'}
+        or integrity.get('state') != 'PASS'
+        or integrity.get('offer_present') is not True
+        or integrity.get('visible_in_card_3') is not True
+        or integrity.get('mechanics_complete') is not True
+        or integrity.get('science_provenance') is not True
+        or integrity.get('offer_source') != offer.get('source')
+        or integrity.get('workout_id') != workout_id
+        or not offer.get('offer_id')
+        or not hmac.compare_digest(str(offer.get('offer_id') or ''),
+                                   str(integrity.get('offer_id') or ''))
+        or offer.get('execution_clearance_is_not_part_of_offer') is not True
+        or integrity.get('allow_unconditional_execution') is not False):
+        return previous
+    try:
+        if not _nova_r196956_structural_ok(workout):
+            return previous
+        # The real producer's workout fingerprint is recomputed from the
+        # actual workout. An integrity label alone is insufficient.
+        fingerprint = _v136_prescription_fingerprint(
+            _v4840_ledger_session_summary(workout))
+        if (not fingerprint
+            or not hmac.compare_digest(str(fingerprint),
+                str(offer.get('dose_fingerprint') or ''))
+            or not hmac.compare_digest(str(fingerprint),
+                str(integrity.get('issued_workout_fingerprint') or ''))):
+            return previous
+    except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError):
+        return previous
+    alignment = _nova_inc060_offer_facet_alignment(d, goal, dimension, template)
+    # An inconsistent current roadmap must not be presented as verified goal
+    # fit. Fail closed to the historical direction-only path; never modify the
+    # persisted offer, ledger, selected workout, or safety decision.
+    if alignment['state'] == 'CONTEXT_INCONSISTENT':
+        return previous
+    science_note = ''
+    if alignment['state'] in {'SUPPORTING_DIFFERENT_DURATION_FACET',
+            'SUPPORTING_INTERMITTENT_SPECIFIC_DOSE',
+            'SUPPORTING_COMPLEMENTARY_TEMPO',
+            'SUPPORTING_OUT_OF_PUNCH_FACET'}:
+        if alignment['state'] == 'SUPPORTING_INTERMITTENT_SPECIFIC_DOSE':
+            science_note = ('This 30/15 session is legitimate intermittent '
+                'aerobic-power support, not a continuous 5-minute punch '
+                'exposure. Its work seconds must not be added together to '
+                'claim completion of the missing sustained-duration facet.')
+        elif alignment['state'] == 'SUPPORTING_COMPLEMENTARY_TEMPO':
+            science_note = ('This tempo complement is not evidence of a '
+                'continuous 2.5–10-minute punch at the current quality target.')
+        else:
+            science_note = (
+                'This previously issued workout supports the broader goal, but '
+                'its individual work intervals do NOT cover the currently missing '
+                'duration facet. It cannot close that evidence gap; a distinct '
+                'goal-aligned quality must be selected by Nova when evidence, '
+                'actual available time and recovery allow.')
+    # No unbound 'why', mutable session composition, exploratory FTP band or
+    # simulated duration is used here. Only catalogued canonical mechanics.
+    action = str(dec.get('action') or '').upper()
+    clearance = str(offer.get('execution_authority') or '').upper()
+    # Match the future planner's independent RECOVERY_HOLD safety posture.
+    # A stale or inconsistent TRAIN label cannot down-grade a hard stop into
+    # RECHECK_REQUIRED, even though neither preview ever authorizes execution.
+    if (action in {'HOLD','VALIDATE','RACE_PRIORITY'}
+        or str(training_state.get('state') or '').upper() in {'RECOVERY_HOLD','RECOVERY HOLD'}
+        or dec.get('hard_session_allowed') is not True
+        or clearance == 'DO_NOT_EXECUTE_NOW'):
+        clearance = 'DO_NOT_EXECUTE_NOW'
+    else:
+        clearance = 'RECHECK_REQUIRED'
+    return dict(previous, state='CURRENT_CANONICAL_STRUCTURE_NOT_CLEARED',
+        offer_structure_only=True, planned_quality=False,
+        verified_offer=False, verified_future_plan=False,
+        direction_only=False, workout_id=workout_id,
+        title=canonical['title'], structure=canonical['structure'],
+        execution=canonical['execution'], purpose=canonical['purpose'],
+        personalized_watts=None, power_source=None, phases=[],
+        science_alignment=alignment, science_note=science_note,
+        execution_clearance=clearance, is_scheduled=False,
+        execution_authorized_by_preview=False,
+        reason=('Nova has already selected this exact canonical workout as an '
+            'athlete-specific offer. Its structure is displayed for planning '
+            'only. Individual power dose and current execution clearance are '
+            'not established here; do not execute hard work on this preview. ' + science_note))
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    out = _INC057_PREVIOUS_UI(data)
+    if not isinstance(out, dict):
+        return out
+    card = _nova_r1969104_canonical_card3(out)
+    out = dict(out)
+    out['nova_card3_workout_view'] = card
+    if card.get('offer_structure_only'):
+        direction = dict(out.get('next_quality_direction') or {})
+        direction.update(source=INC057_SOURCE, title=card['title'],
+            athlete_title=card['title'], athlete_explanation=card['reason'],
+            referenced_canonical_template_id=card['workout_id'],
+            direction_only=True, is_a_prescription=False,
+            is_scheduled=False, execution_authorized_by_preview=False,
+            suggested_date=None, suggested_time=None)
+        out['next_quality_direction'] = direction
+        out['quality_direction_fuel'] = None
+    return out
+
+
+# The executable offer and genuine INC-056 planning branches remain untouched.
+# Add one non-executable canonical-offer rendering branch, never an alternate
+# catalogue selector or template chosen by Jinja.
+_INC057_CARD3_MARKER = '{% elif card3.planned_quality %}'
+assert HOME_PAGE.count(_INC057_CARD3_MARKER) == 1, 'INC057_CARD3_MARKER_DRIFT'
+_INC057_CARD3_BRANCH = '''{% elif card3.offer_structure_only %}
+<div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · CANONICAL OFFER</span></div>
+<h3>{{ card3.title|e }}</h3>
+<div class="v4-session-meta"><span class="v4-session-pill">SCIENTIFIC STRUCTURE · NOT CLEARED TO EXECUTE</span></div>
+<div class="r1969102-canonical-copy r1969110-offer-structure" role="group" aria-label="Current canonical quality offer without executable dose">
+<strong>YOUR NEXT QUALITY STRUCTURE</strong>
+<p><b>Work and recovery:</b> {{ card3.structure|e }}</p>
+<p><b>Training purpose:</b> {{ card3.purpose|e }}</p>
+{% if card3.science_alignment and card3.science_alignment.state == 'SUPPORTING_DIFFERENT_DURATION_FACET' %}
+<p><b>Goal evidence alignment:</b> Supporting work only. Its single-repetition duration does not address the currently missing duration facet; the source goal question remains open.</p>
+{% endif %}
+<p><b>Personal watt targets:</b> Not verified for this view. No fixed, exploratory or historical power range is execution clearance.</p>
+<p><b>Execution:</b> {{ card3.execution_clearance|replace('_',' ')|e }}. Reassess recovery, actual training window and personalized dose before any hard intervals.</p>
+<small>{{ card3.reason|e }}</small>
+</div>
+'''
+HOME_PAGE = HOME_PAGE.replace(_INC057_CARD3_MARKER,
+    _INC057_CARD3_BRANCH + _INC057_CARD3_MARKER, 1)
+assert HOME_PAGE.count('r1969110-offer-structure') == 1, 'INC057_DUPLICATE_CARD3'
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · PRODUCT V4.9.212 R196.9.112 · INC-060 '
+    'CARD3 GOAL-DURATION EVIDENCE ALIGNMENT '
+    '· OWNER-BOUND · OFFLINE RELEASE CANDIDATE')
+
+# INC-061 / R196.9.113 — VERIFIED SCIENTIFIC OFFER SUCCESSION
+# The old canonical quality was a real owner-bound promise. Replacing it requires
+# both the SAME original Nova producer/compiler selecting a more relevant workout
+# AND a ledger lifecycle transaction; a mere UI alignment label cannot do that.
+INC061_SCHEMA = 'NOVA-R196.9.113-OWNER-BOUND-FACET-SUCCESSION-1'
+_INC061_PRIOR_OFFER_BUILDER = _nova_r196956_build_offer
+
+
+def _nova_inc061_prior_conflict(prior, ledger, decision, road, evidence_ledger,
+                                user_id, planning_context=None, training_state=None):
+    """Pure eligibility proof. Unverified claims never displace an issued plan."""
+    d = decision if isinstance(decision, dict) else {}
+    rd = road if isinstance(road, dict) else {}
+    ev = evidence_ledger if isinstance(evidence_ledger, dict) else {}
+    prev = (prior or {}).get('next_quality_offer') if isinstance(prior, dict) else None
+    row = prev.get('workout') if isinstance(prev, dict) else None
+    hist = (ledger or {}).get('prescription_history') if isinstance(ledger, dict) else None
+    goal = str(d.get('goal_key') or '').upper()
+    science = rd.get('scientific_progression') or {}
+    ctx = planning_context if isinstance(planning_context, dict) else {}
+    training = training_state if isinstance(training_state, dict) else {}
+    if (not user_id or not isinstance(science, dict) or not isinstance(row, dict)
+        or not isinstance(hist, list) or prev.get('schema') != R196956_SCHEMA
+        or prev.get('offer_status') != 'OFFERED'
+        or prev.get('workout_id') != row.get('nova_workout_id')
+        or prev.get('source') not in {'CURRENT_CANONICAL_COMPILED',
+            'PRIOR_ISSUED_CANONICAL', 'SAME_ENGINE_DETACHED_OFFER_ONLY'}
+        or str((prior or {}).get('future_quality_owner_scope') or '') !=
+            _nova_inc050_owner_scope(user_id)
+        or goal not in _INC064_FACET_DIMENSIONS
+        or str(science.get('dimension') or '').upper() != _INC064_FACET_DIMENSIONS[goal]
+        or str(d.get('dimension') or '').upper() != _INC064_FACET_DIMENSIONS[goal]
+        or d.get('action') != 'TRAIN' or d.get('hard_session_allowed') is not True
+        or ctx.get('health_override') or
+        str(training.get('state') or '').upper() in {'RECOVERY_HOLD','RECOVERY HOLD'}):
+        return None
+    old_id = str(prev.get('workout_id') or '')
+    old_template = _R19696_LIBRARY_INDEX.get(old_id)
+    if (not isinstance(old_template, dict) or old_template.get('goal') != goal
+        or not _nova_r196956_structural_ok(row)
+        or str(row.get('goal_key') or row.get('goal') or goal).upper() != goal
+        or row.get('is_planned_training') is True
+        or str(row.get('source') or '').upper() == 'CALENDAR'
+        or row.get('is_race') is True
+        or str(row.get('restriction') or 'NONE').upper() not in {'NONE',''}):
+        return None
+    fingerprint = _v136_prescription_fingerprint(_v4840_ledger_session_summary(row))
+    expected_id = 'NOVA-Q56-' + hashlib.sha256(
+        (str(user_id)+'|'+fingerprint).encode()).hexdigest()[:24]
+    if (not hmac.compare_digest(str(prev.get('dose_fingerprint') or ''), fingerprint)
+        or not hmac.compare_digest(str(prev.get('offer_id') or ''), expected_id)):
+        return None
+    matches = [r for r in hist if isinstance(r, dict) and
+        hmac.compare_digest(str(r.get('prescription_fingerprint') or ''), fingerprint)]
+    if (len(matches) != 1 or matches[0].get('prescription_status') != 'ACTIVE'
+        or matches[0].get('executed_activity_id') or matches[0].get('fulfilled_at_local')
+        or str(matches[0].get('nova_workout_id') or '') != old_id):
+        return None
+    identity = science.get('current_question_identity') or {}
+    profile = science.get('facet_profile') or {}
+    breadth = science.get('breadth_override') or {}
+    if not all(isinstance(x, dict) for x in (identity,profile,breadth)):
+        return None
+    reconstructed = _v111_goal_facet_state(goal, ev, None)
+    target = reconstructed.get('next_missing')
+    offered = _nova_inc064_template_facet(goal, old_template)
+    if (not target or not offered or target == offered
+        or identity.get('target_facet') != target
+        or profile.get('next_missing') != target
+        or reconstructed.get('covered') != profile.get('covered')
+        or reconstructed.get('missing') != profile.get('missing')
+        or (breadth.get('applied') is True and breadth.get('target_facet') != target)):
+        return None
+    return {'schema':INC061_SCHEMA,'prior_fingerprint':fingerprint,
+        'prior_workout_id':old_id,'goal_key':goal,'target_facet':target,
+        'offered_facet':offered,'owner_scope':_nova_inc050_owner_scope(user_id),
+        'prior_offer_id':expected_id}
+
+
+def _nova_r196956_build_offer(rows, prescription, prior, decision, clock, road,
+        ledger, user_id, evidence_ledger=None, power_model=None, ftp_anchor=None,
+        aerobic_metabolic_range=None, training_definitions=None,
+        compile_arguments=None, planning_context=None, training_state=None):
+    args = (rows,prescription,prior,decision,clock,road,ledger,user_id)
+    kwargs = dict(evidence_ledger=evidence_ledger,power_model=power_model,
+        ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions,compile_arguments=compile_arguments,
+        planning_context=planning_context,training_state=training_state)
+    existing, audit = _INC061_PRIOR_OFFER_BUILDER(*args, **kwargs)
+    proof = _nova_inc061_prior_conflict(prior,ledger,decision,road,
+        evidence_ledger,user_id,planning_context,training_state)
+    if not proof:
+        return existing,audit
+    # Use the genuine full producer+compiler again, without putting the stale
+    # promise at the head of the scientific candidate list. In this detached
+    # evaluation no ledger, calendar or database is written.
+    without = dict(prior, next_quality_offer=None)
+    candidate, candidate_audit = _INC061_PRIOR_OFFER_BUILDER(
+        rows,prescription,without,decision,clock,road,ledger,user_id,**kwargs)
+    replacement = candidate.get('workout') if isinstance(candidate,dict) else None
+    template = _R19696_LIBRARY_INDEX.get((candidate or {}).get('workout_id')) if isinstance(candidate,dict) else None
+    candidate_fp = None
+    if isinstance(replacement,dict):
+        candidate_fp = _v136_prescription_fingerprint(_v4840_ledger_session_summary(replacement))
+    good = bool(isinstance(candidate,dict) and isinstance(candidate_audit,dict)
+        and candidate_audit.get('state') == 'PASS'
+        and candidate.get('source') in {'CURRENT_CANONICAL_COMPILED',
+            'SAME_ENGINE_DETACHED_OFFER_ONLY'}
+        and candidate.get('schema') == R196956_SCHEMA
+        and candidate.get('workout_id') != proof['prior_workout_id']
+        and candidate_fp != proof['prior_fingerprint']
+        and candidate_fp == candidate.get('dose_fingerprint')
+        and candidate_fp == candidate_audit.get('issued_workout_fingerprint')
+        and isinstance(template,dict) and template.get('goal') == proof['goal_key']
+        and _INC064_FACET_DIMENSIONS[proof['goal_key']] in set(template.get('dimensions') or ())
+        and _nova_inc064_template_facet(proof['goal_key'],template) == proof['target_facet']
+        and _nova_r196956_structural_ok(replacement)
+        and candidate.get('execution_authority') in {'RECHECK_REQUIRED','DO_NOT_EXECUTE_NOW'}
+        and candidate.get('execution_clearance_is_not_part_of_offer') is True
+        and candidate_audit.get('allow_unconditional_execution') is False)
+    # A genuine current compiled hard session is authoritative in Cards 1–2.
+    # Never place a second, competing detached quality ahead of it. Only the
+    # same exact current compiled successor may be mirrored in Card 3.
+    current_hard = [r for r in rows or [] if _nova_r196956_structural_ok(r)]
+    if current_hard and (len(current_hard) != 1 or not candidate_fp or
+            _v136_prescription_fingerprint(_v4840_ledger_session_summary(current_hard[0])) != candidate_fp):
+        good = False
+    if not good:
+        if isinstance(audit,dict):
+            audit = dict(audit, inc061_transition={**proof,
+                'state':'KEEP_PREVIOUS_NO_VERIFIED_TARGET_SUCCESSOR',
+                'candidate_outcome':str((candidate_audit or {}).get('reason') or
+                    (candidate_audit or {}).get('state') or 'NO_CANDIDATE')})
+        return existing,audit
+    transition = dict(proof,state='RESELECTED_AWAIT_PERSISTED_LEDGER',
+        successor_fingerprint=candidate_fp,
+        successor_workout_id=candidate['workout_id'],
+        previous_history_preserved=True, execution_authorized=False)
+    candidate = dict(candidate, inc061_transition=transition)
+    candidate_audit = dict(candidate_audit,inc061_transition=transition)
+    return candidate,candidate_audit
+
+
+def _nova_inc061_reconcile_goal_replan(ledger, offer, user_id):
+    """Copy-on-write atomic successor/retirement projection, owner-bound."""
+    transition=(offer or {}).get('inc061_transition') if isinstance(offer,dict) else None
+    if not isinstance(transition,dict) or transition.get('state') != 'RESELECTED_AWAIT_PERSISTED_LEDGER':
+        return ledger,False
+    out=copy.deepcopy(ledger) if isinstance(ledger,dict) else {}
+    if (not user_id or not out.get('available') or not out.get('ledger_id')
+        or transition.get('schema') != INC061_SCHEMA
+        or transition.get('owner_scope') != _nova_inc050_owner_scope(user_id)
+        or transition.get('successor_workout_id') != offer.get('workout_id')
+        or transition.get('successor_fingerprint') != offer.get('dose_fingerprint')):
+        raise ValueError('INC061_OWNER_OR_TRANSITION_MISMATCH')
+    old_fp=transition['prior_fingerprint']; new_fp=transition['successor_fingerprint']
+    successor = offer.get('workout') or {}
+    expected_offer_id='NOVA-Q56-'+hashlib.sha256(
+        (str(user_id)+'|'+str(new_fp)).encode()).hexdigest()[:24]
+    if (offer.get('schema') != R196956_SCHEMA
+        or offer.get('source') not in {'CURRENT_CANONICAL_COMPILED',
+                                      'SAME_ENGINE_DETACHED_OFFER_ONLY'}
+        or offer.get('offer_status') != 'OFFERED'
+        or not hmac.compare_digest(str(offer.get('offer_id') or ''),expected_offer_id)
+        or str(successor.get('nova_workout_id') or '') != offer.get('workout_id')
+        or not _nova_r196956_structural_ok(successor)
+        or _v136_prescription_fingerprint(_v4840_ledger_session_summary(successor)) != new_fp
+        or offer.get('execution_clearance_is_not_part_of_offer') is not True
+        or offer.get('execution_authority') not in {'RECHECK_REQUIRED','DO_NOT_EXECUTE_NOW'}):
+        raise ValueError('INC061_SUCCESSOR_OFFER_NOT_ATTESTED_AT_WRITE')
+    goal = str(transition.get('goal_key') or '').upper()
+    new_template = _R19696_LIBRARY_INDEX.get(transition.get('successor_workout_id'))
+    old_template = _R19696_LIBRARY_INDEX.get(transition.get('prior_workout_id'))
+    if (goal not in _INC064_FACET_DIMENSIONS
+        or not isinstance(new_template, dict) or not isinstance(old_template, dict)
+        or _INC064_FACET_DIMENSIONS[goal] not in set(new_template.get('dimensions') or ())
+        or _nova_inc064_template_facet(goal, new_template) != transition.get('target_facet')
+        or _nova_inc064_template_facet(goal, old_template) != transition.get('offered_facet')
+        or transition.get('offered_facet') == transition.get('target_facet')):
+        raise ValueError('INC064_SUCCESSOR_SCIENTIFIC_FACET_NOT_ATTESTED_AT_WRITE')
+    hist=out.get('prescription_history') or []
+    if not old_fp or not new_fp or old_fp == new_fp:
+        raise ValueError('INC061_SAME_FINGERPRINT_REISSUE')
+    before=[r for r in hist if isinstance(r,dict) and r.get('prescription_fingerprint')==old_fp]
+    after=[r for r in hist if isinstance(r,dict) and r.get('prescription_fingerprint')==new_fp]
+    if (len(before)!=1 or len(after)!=1
+        or str(before[0].get('nova_workout_id') or '') != transition['prior_workout_id']
+        or str(after[0].get('nova_workout_id') or '') != transition['successor_workout_id']
+        or after[0].get('prescription_status') != 'ACTIVE'
+        or after[0].get('executed_activity_id')
+        or before[0].get('executed_activity_id') or before[0].get('fulfilled_at_local')):
+        raise ValueError('INC061_LEDGER_LIFECYCLE_NOT_PROVEN')
+    if before[0].get('prescription_status') == 'SUPERSEDED':
+        if before[0].get('superseded_by_fingerprint') == new_fp:
+            return out,False  # idempotent existing reconciliation
+        raise ValueError('INC061_CONFLICTING_PRIOR_SUPERSESSION')
+    if before[0].get('prescription_status') != 'ACTIVE':
+        raise ValueError('INC061_PRIOR_NO_LONGER_ACTIVE')
+    old_row=before[0]
+    old_row.update(prescription_status='SUPERSEDED',
+        supersession_reason='CURRENT_EVIDENCE_REQUIRES_DIFFERENT_DURATION_FACET',
+        supersession_schema=INC061_SCHEMA,
+        superseded_at_local=get_rome_now().isoformat(timespec='seconds'),
+        superseded_by_fingerprint=new_fp,
+        superseded_by_workout_id=transition['successor_workout_id'],
+        effective_execution_authority='NOT_IN_CURRENT_ATHLETE_PLAN')
+    anchor=out.get('primary_anchor')
+    if (isinstance(anchor,dict) and anchor.get('status') in {'PLANNED','ACTIVE'}
+        and (anchor.get('prescription_fingerprint') == old_fp or
+            (not anchor.get('prescription_fingerprint')
+             and str(anchor.get('date') or '')[:10] == str(old_row.get('date') or '')[:10]
+             and str(anchor.get('nova_workout_id') or anchor.get('nova_contract_id') or '') == transition['prior_workout_id']
+             and str(anchor.get('main_set') or '') == str(old_row.get('main_set') or '')))
+        and not anchor.get('executed_activity_id')):
+        anchor.update(status='SUPERSEDED',prescription_lock=False,
+            effective_execution_authority='NOT_IN_CURRENT_ATHLETE_PLAN')
+    out['inc061_transition_audit']={**transition,'state':'PREPARED_FOR_ATOMIC_REPORT_COMMIT',
+        'one_active_successor':True,'historical_ledger_preserved':True}
+    return out,True
+
+
+def _nova_inc061_commit_goal_replan(ledger, offer, user_id):
+    out,changed=_nova_inc061_reconcile_goal_replan(ledger,offer,user_id)
+    if changed:
+        _db_execute('UPDATE microcycle_ledgers SET ledger_json=?, updated_at_utc=? WHERE id=? AND user_id=?',
+            (json.dumps(out,ensure_ascii=False,separators=(',',':'),default=_report_json_default),
+             _now_utc_text(),out['ledger_id'],_data_owner_user_id(user_id)))
+    return out
+
+APP_VERSION=('THE LAB · PRODUCT V4.9.214 R196.9.114 · INC-064 '
+    'POWER5 GOAL-SPECIFIC PUNCH FACET AND SAFE SUCCESSION '
+    '· OWNER-BOUND · OFFLINE RELEASE CANDIDATE')
+
+# INC-066 / R196.9.115 — A CANONICAL, GOAL-AGNOSTIC TIME-ENVELOPE REPAIR.
+# An unconfirmed RHYTHM opportunity with a numeric estimated session duration
+# was compiled with the literal placeholder "Nova-selected duration". The
+# original session-composition owner correctly rejected that opaque string,
+# so the otherwise fully compiled canonical POWER_5 dose could not be offered.
+# Apply the SAME narrow time-accounting rule to any canonical goal; never
+# change quality identity, intensity, power policy, recovery, or safety state.
+INC066_SCHEMA = 'NOVA-R196.9.115-RHYTHM-PLACEHOLDER-TIME-ACCOUNTING-1'
+_INC066_ENVELOPE_BEFORE = _v19697_session_envelope
+
+def _v19697_session_envelope(session):
+    s = session if isinstance(session, dict) else {}
+    raw = str(s.get('duration') or '').strip()
+    is_unknown = raw in {'Nova-selected duration', 'Coach-selected duration'}
+    # UNKNOWN is not a license to invent availability. Only an existing,
+    # bounded RHYTHM estimate may be used for the OFFLINE/ADVISORY timeline.
+    if (is_unknown and s.get('stimulus_architecture_state') == 'NOVA_CANONICAL_LIBRARY'
+        and str(s.get('source') or '').upper() == 'RHYTHM'
+        and s.get('availability_confirmed') is not True
+        and s.get('is_planned_training') is not True
+        and s.get('is_race') is not True
+        and str(s.get('restriction') or 'NONE').upper() == 'NONE'
+        and s.get('nova_prescription_authority') is True
+        and s.get('hard_spacing_relevant') is True):
+        minutes = _rhythm_num(s.get('duration_hint_min'))
+        if minutes is not None and math.isfinite(float(minutes)) and 30 <= minutes <= 180:
+            # A one-off estimate gives a descriptive TOTAL, never clearance
+            # for a specific workout or a fixed appointment.
+            out = dict(s, duration=f'{minutes:g} min',
+                inc066_time_estimate_schema=INC066_SCHEMA,
+                inc066_time_estimate_is_not_availability=True,
+                inc066_original_duration=raw)
+            return _INC066_ENVELOPE_BEFORE(out)
+    return _INC066_ENVELOPE_BEFORE(session)
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.217 R196.9.118 · INC-071 '
+    'SPRINTER FACET + CLUSTER SUPPORT + SHARED SUCCESSION '
+    '· OWNER-BOUND · OFFLINE RELEASE CANDIDATE')
 
 # INC-040: Install all adapters and Jinja before starting direct Flask server.
+# INC-072 / R196.9.119 — ENDURANCE_BASE is not a hard-duration facet.
+# This is a read-only science evidence/offer assessment and a fail-closed
+# question-state repair. It does NOT turn an EASY workout into a hard quality,
+# claim validated decoupling, prescribe wattage or perform any ledger write.
+INC072_ENDURANCE_SCHEMA = 'NOVA-R196.9.119-ENDURANCE-OBSERVED-VOLUME-NO-FALSE-DURABILITY-1'
+_INC072_EB_ARCHITECTURES = {
+    'ENDURANCE': {'', 'CONTINUOUS', 'SPLIT_EASY'},
+    'ENDURANCE_STEADY': {'', 'STEADY', 'CADENCE_STABLE'},
+    'ENDURANCE_DURABILITY': {'', 'LONG_STEADY', 'LATE_MATCH', 'BACK_TO_BACK_CONTEXT'},
+    'ENDURANCE_LATE': {'', 'LATE_MATCH', 'DRIFT_CONTROL', 'CADENCE_MATCH'},
+}
+_INC072_EB_DIMENSION = {
+    'ENDURANCE': 'AEROBIC_VOLUME',
+    'ENDURANCE_STEADY': 'METABOLIC_STABILITY',
+    'ENDURANCE_DURABILITY': 'DURABILITY',
+    'ENDURANCE_LATE': 'LATE_SESSION_STABILITY',
+}
+_INC072_EB_OLD_CLASSIFIER = _nova_inc064_template_facet
+
+def _nova_inc064_template_facet(goal, template):
+    """Classify easy endurance *intent*, never a work-bout duration or proof."""
+    g = str(goal or '').upper()
+    if g != 'ENDURANCE_BASE':
+        return _INC072_EB_OLD_CLASSIFIER(goal, template)
+    if not isinstance(template,dict) or template.get('goal') != g:
+        return None
+    pattern=str(template.get('pattern') or '').upper()
+    variant=str(template.get('variant') or '').upper()
+    if (variant not in _INC072_EB_ARCHITECTURES.get(pattern, set())
+        or tuple(template.get('dimensions') or ()) != (_INC072_EB_DIMENSION.get(pattern),)
+        or any(k in template for k in ('work_s','reps','sets','reps_per_set','float_s',
+                                      'recovery_s','set_recovery_s','work_domain'))):
+        return None
+    return 'ENDURANCE_INTENT_' + _INC072_EB_DIMENSION[pattern]
+
+def _nova_inc072_endurance_evidence(evidence_ledger, now=None):
+    """Volume observations from distinct, RESOLVED easy activity truth only.
+
+    150 min reuses the product's existing LONG_SESSION heuristic for auditing
+    exposures, NOT a universal physiological threshold or a durability test.
+    No drift/power/HR comparison is available at this evidence-ledger boundary.
+    """
+    ev=evidence_ledger if isinstance(evidence_ledger,dict) else {}
+    result={'schema':INC072_ENDURANCE_SCHEMA,'goal_key':'ENDURANCE_BASE',
+        'evidence_verified':False,'aerobic_sessions':0,'aerobic_days':0,
+        'aerobic_minutes_observed':0.,'long_aerobic_days':0,
+        'long_aerobic_activity_ids':[], 'durability_comparison_verified':False,
+        'metabolic_comparison_verified':False,
+        'rule':'RESOLVED easy training only; time and title never establish durability.'}
+    if (ev.get('schema') != 'V4.8.74-R81-1'
+        or ev.get('goal_key') != 'ENDURANCE_BASE'
+        or not isinstance(ev.get('events'),list)
+        or ev.get('scope') != 'ACTIVE_TRAINING_BLOCK'):
+        return result
+    anchor = now.date() if isinstance(now,datetime) else (now if isinstance(now,date) else get_rome_now().date())
+    start=None
+    if ev.get('scope_start'):
+        try:start=date.fromisoformat(str(ev['scope_start'])[:10])
+        except (ValueError,TypeError):return result
+    grouped={}
+    for e in ev['events']:
+        if not isinstance(e,dict):continue
+        aid=e.get('activity_id')
+        if not isinstance(aid,(str,int)) or not str(aid).strip():continue
+        grouped.setdefault(str(aid),[]).append(e)
+    rows=[]
+    for aid,records in grouped.items():
+        # Duplicate activity identities are ambiguous even if metrics agree.
+        if len(records)!=1:continue
+        e=records[0]
+        if (e.get('activity_truth_status') != 'RESOLVED'
+            or e.get('event_kind') != 'TRAINING'
+            or e.get('family') != 'Endurance / Z2'
+            or e.get('quality_relevant') is not False):continue
+        minutes=e.get('duration_min')
+        if (type(minutes) not in {int,float} or not math.isfinite(minutes)
+            or not 0 < minutes <= 1440):continue
+        try: day=date.fromisoformat(str(e.get('date') or '')[:10])
+        except (TypeError,ValueError):continue
+        if day>anchor or (start and day<start):continue
+        rows.append((aid,day,float(minutes)))
+    long_days={day for _,day,mins in rows if mins>=150}
+    return dict(result,evidence_verified=bool(rows),aerobic_sessions=len(rows),
+        aerobic_days=len({day for _,day,_ in rows}),
+        aerobic_minutes_observed=round(sum(mins for _,_,mins in rows),1),
+        long_aerobic_days=len(long_days),
+        long_aerobic_activity_ids=[aid for aid,day,mins in rows if mins>=150])
+
+_INC072_OLD_QUESTION_STATE = build_question_state
+
+def build_question_state(goal_key, evidence_ledger=None, performance_evidence=None,
+                         roadmap=None, microcycle_ledger=None,
+                         aerobic_metabolic_range=None, now=None):
+    out=_INC072_OLD_QUESTION_STATE(goal_key,evidence_ledger,performance_evidence,
+        roadmap,microcycle_ledger,aerobic_metabolic_range,now=now)
+    if str(goal_key or '').upper() != 'ENDURANCE_BASE' or not isinstance(out,dict):
+        return out
+    result=copy.deepcopy(out)
+    dimensions=result.get('dimensions')
+    if not isinstance(dimensions,dict):return result
+    p=_nova_inc072_endurance_evidence(evidence_ledger,now=now)
+    count=p['long_aerobic_days'] if p['evidence_verified'] else 0
+    if count>=2:
+        volume=_v82_question_record('CONSOLIDATED',True,count,None,
+            'At least two different days contain RESOLVED Z2 training of >=150 min; volume exposure only, not physiological durability.',INC072_ENDURANCE_SCHEMA)
+    elif count==1:
+        volume=_v82_question_record('SUPPORTED',False,1,None,
+            'One resolved long Z2 training day; repeat independently before closing the volume question.',INC072_ENDURANCE_SCHEMA)
+    else:
+        volume=_v82_question_record('UNPROVEN',False,0,None,
+            'No independently verified long easy training day; hard sessions and conflicting activity truth do not count.',INC072_ENDURANCE_SCHEMA)
+    dimensions['AEROBIC_VOLUME']=volume
+    amr=aerobic_metabolic_range if isinstance(aerobic_metabolic_range,dict) else {}
+    amr_ready=str(amr.get('confidence') or amr.get('state') or '').upper() in {'ESTABLISHED','HIGH'}
+    dimensions['METABOLIC_STABILITY']=_v82_question_record(
+        'SUPPORTED' if amr_ready and count else ('BUILDING' if amr_ready else 'UNPROVEN'),
+        False,count if amr_ready else 0,None,
+        'Aerobic reference and verified long easy exposure are context, not a paired efficiency/HR-drift comparison.' if amr_ready else 'A verified aerobic reference and paired stable power/HR evidence are missing.',INC072_ENDURANCE_SCHEMA)
+    for key in ('DURABILITY','LATE_SESSION_STABILITY'):
+        dimensions[key]=_v82_question_record('UNPROVEN',False,0,None,
+            'Duration, sprint/quality tags and session names cannot prove stable late Z2 cost. An independent comparable intra-session power/HR/effort protocol is not present in the canonical evidence ledger.',INC072_ENDURANCE_SCHEMA)
+    seq=list((_V503_GOAL_GRAPH.get('ENDURANCE_BASE') or {}).get('sequence') or ())
+    result['open_dimensions']=[d for d in seq if d not in {'REVALIDATION','EXTENSION_OR_REVALIDATION'} and not bool((dimensions.get(d) or {}).get('exit_satisfied'))]
+    result['closed_dimensions']=[d for d in seq if bool((dimensions.get(d) or {}).get('exit_satisfied'))]
+    result['inc072_endurance_evidence']=p
+    result['method_note']=str(result.get('method_note') or '')+' ENDURANCE_BASE audit: verified EASY volume only; no durability closure from time, tags or inherited hard logic.'
+    return result
+
+_INC072_OLD_ALIGNMENT = _nova_inc060_offer_facet_alignment
+
+def _nova_inc060_offer_facet_alignment(data,goal,dimension,template):
+    if str(goal or '').upper() != 'ENDURANCE_BASE':
+        return _INC072_OLD_ALIGNMENT(data,goal,dimension,template)
+    base={'schema':INC060_ALIGNMENT_SCHEMA,'endurance_schema':INC072_ENDURANCE_SCHEMA,
+        'state':'CONTEXT_UNVERIFIED','offered_facet':None,'current_target_facet':None,
+        'directly_addresses_current_facet':False,'counts_as_execution_evidence':False,
+        'needs_new_prescription':True,'execution_authorized':False}
+    design=_nova_inc064_template_facet('ENDURANCE_BASE',template)
+    if not design:return base
+    target=str(dimension or '').upper()
+    if not target or design!='ENDURANCE_INTENT_'+target:
+        return dict(base,state='SUPPORTING_OTHER_ENDURANCE_QUESTION',offered_facet=design)
+    d=data if isinstance(data,dict) else {}
+    road=d.get('adaptive_roadmap') or {}
+    sci=road.get('scientific_progression') or {} if isinstance(road,dict) else {}
+    if (not isinstance(road,dict) or road.get('goal_key')!='ENDURANCE_BASE'
+        or not isinstance(sci,dict) or sci.get('dimension')!=target):
+        return base
+    proof=_nova_inc072_endurance_evidence(d.get('evidence_ledger'))
+    if not proof['evidence_verified']:
+        return dict(base,offered_facet=design)
+    # The design belongs to the existing selector, but this is ONLY a future
+    # easy-direction intent. Never signal a hard/current prescription or proof
+    # that volume/durability was successfully executed.
+    return dict(base,state='ENDURANCE_DIRECTION_ONLY',offered_facet=design,
+        current_target_facet=target,needs_new_prescription=False,
+        evidence_summary={'aerobic_days':proof['aerobic_days'],
+            'long_aerobic_days':proof['long_aerobic_days'],
+            'observed_minutes':proof['aerobic_minutes_observed']})
+
+APP_VERSION=('THE LAB · PRODUCT V4.9.218 R196.9.119 · INC-072 '
+    'ENDURANCE-BASE RESOLVED EASY VOLUME / FAIL-CLOSED DURABILITY '
+    '· OWNER-BOUND · OFFLINE RELEASE CANDIDATE')
+
+
+# INC-073 / R196.9.120 — ACTIVE-BLOCK TEMPORAL BOUNDARY FOR ENDURANCE.
+# Strict timestamp parsing belongs at the final evidence consumer as defense
+# in depth. No changes to canonical RAW ledger, workout selection, prescriptions,
+# issuer, owner/HTTP identity, adaptive state, or data persistence.
+INC073_ENDURANCE_TIME_SCHEMA = 'NOVA-R196.9.120-EASY-TEMPORAL-SCOPE-1'
+_INC073_OLD_ENDURANCE_EVIDENCE = _nova_inc072_endurance_evidence
+_INC073_CALENDAR_DATE = re.compile(r'\d{4}-\d{2}-\d{2}\Z')
+_INC073_ZONED_TIMESTAMP = re.compile(
+    r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})\Z')
+
+def _nova_inc073_strict_rome_date(value):
+    """Accepted: exact YYYY-MM-DD or fully offset-aware ISO timestamp.
+
+    Invalid suffixes, impossible calendar values, and ambiguous local times
+    without an explicit offset cannot become R81 training evidence.
+    """
+    if not isinstance(value, str):
+        return None
+    if _INC073_CALENDAR_DATE.fullmatch(value):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+    if _INC073_ZONED_TIMESTAMP.fullmatch(value):
+        try:
+            stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            return stamp.astimezone(ZoneInfo('Europe/Rome')).date()
+        except (ValueError, OverflowError):
+            return None
+    return None
+
+def _nova_inc072_endurance_evidence(evidence_ledger, now=None):
+    """Constrain INC072 volume proof to a valid active block and dated rows.
+
+    The previous classifier remains the only source of training type, truth,
+    identity, long-day and duplicate rules. We only normalize/reject dates
+    before delegating; all other goal evidence and prescriptions are untouched.
+    """
+    ev=evidence_ledger if isinstance(evidence_ledger,dict) else {}
+    scope_day=_nova_inc073_strict_rome_date(ev.get('scope_start'))
+    if isinstance(now, datetime) and now.tzinfo is not None:
+        effective_now=now.astimezone(ZoneInfo('Europe/Rome')).date()
+    else:
+        effective_now=now
+    if (ev.get('scope')!='ACTIVE_TRAINING_BLOCK' or scope_day is None):
+        locked=dict(ev, events=[], scope_start=None)
+        out=_INC073_OLD_ENDURANCE_EVIDENCE(locked, now=effective_now)
+        return dict(out, inc073_temporal_guard={
+            'schema':INC073_ENDURANCE_TIME_SCHEMA,
+            'state':'NO_VALID_ACTIVE_BLOCK_START',
+            'excluded_malformed_dates':0})
+    events=ev.get('events')
+    if not isinstance(events,list):
+        out=_INC073_OLD_ENDURANCE_EVIDENCE(ev, now=effective_now)
+        return dict(out, inc073_temporal_guard={
+            'schema':INC073_ENDURANCE_TIME_SCHEMA,
+            'state':'INVALID_EVENTS_COLLECTION',
+            'excluded_malformed_dates':0})
+    normalized=[]
+    rejected=0
+    for item in events:
+        if not isinstance(item,dict):
+            normalized.append(item)
+            continue
+        day=_nova_inc073_strict_rome_date(item.get('date'))
+        if day is None:
+            rejected+=1
+            # Retain the row identity for duplicate protection while making
+            # the invalid date ineligible for training volume evidence.
+            normalized.append(dict(item,date=None))
+        else:
+            normalized.append(dict(item,date=day.isoformat()))
+    out=_INC073_OLD_ENDURANCE_EVIDENCE(
+        dict(ev,scope_start=scope_day.isoformat(),events=normalized),now=effective_now)
+    return dict(out, inc073_temporal_guard={
+        'schema':INC073_ENDURANCE_TIME_SCHEMA,
+        'state':'PASS' if rejected==0 else 'REJECTED_MALFORMED_EVENT_DATES',
+        'excluded_malformed_dates':rejected})
+
+_INC073_OLD_BUILD_EVIDENCE_LEDGER = build_evidence_ledger
+
+def build_evidence_ledger(previous_training_blocks, overlay_blocks=None,
+                          goal_key=None, scope_start=None):
+    """Do not let legacy R81 producer's date-prefix coerce a bad block scope.
+
+    For ENDURANCE_BASE only. The original Activity Truth producer and all event
+    classification remain unchanged. Invalid scope keeps historical records
+    for audit but explicitly prevents downstream proof of active-block volume.
+    """
+    if str(goal_key or '').upper()!='ENDURANCE_BASE':
+        return _INC073_OLD_BUILD_EVIDENCE_LEDGER(previous_training_blocks,
+            overlay_blocks=overlay_blocks,goal_key=goal_key,scope_start=scope_start)
+    strict_start=_nova_inc073_strict_rome_date(scope_start)
+    raw=_INC073_OLD_BUILD_EVIDENCE_LEDGER(previous_training_blocks,
+        overlay_blocks=overlay_blocks,goal_key=goal_key,
+        scope_start=strict_start.isoformat() if strict_start is not None else scope_start)
+    if not isinstance(raw,dict):
+        return raw
+    return dict(raw,scope_start=strict_start.isoformat() if strict_start else None,
+        inc073_scope_integrity='PASS' if strict_start else 'NO_VALID_ACTIVE_BLOCK_START')
+
+APP_VERSION=('THE LAB · PRODUCT V4.9.219 R196.9.120 · INC-073 '
+             'ENDURANCE ACTIVE-BLOCK TIME INTEGRITY · OFFLINE NO-GO')
+
+# INC-075 / R196.9.121 — STRICT COMPILED-DURATION CONSISTENCY (FAIL CLOSED)
+# RED on R120: forged session_composition.total_seconds=2700 for a 5700-second
+# canonical 5x3 / 3x10 candidate retained offer_structure_only in Card 3.
+# The legacy dose fingerprint does not fully cover duration/envelope fields.
+# Bind the read-only Card 3 view to coherent compiler blocks WITHOUT deriving
+# an independent workout, changing dose, permission, persistence, or fueling.
+INC075_SCHEMA = 'NOVA-R196.9.121-CARD3-COMPOSITION-INTEGRITY-1'
+
+
+def _nova_inc075_valid_compiled_duration(workout):
+    if not isinstance(workout, dict):
+        return False
+    composition=workout.get('session_composition')
+    if not isinstance(composition, dict) or composition.get('state')!='COMPLETE':
+        return False
+    blocks=composition.get('blocks')
+    if not isinstance(blocks, list) or not blocks:
+        return False
+    def finite(x):
+        return (type(x) in (int,float) and math.isfinite(x))
+    total=composition.get('total_seconds')
+    if not finite(total) or total<=0:
+        return False
+    summed=0.0
+    for block in blocks:
+        if not isinstance(block,dict) or not finite(block.get('duration_seconds')) or block['duration_seconds']<=0:
+            return False
+        summed+=block['duration_seconds']
+    if abs(total-summed)>0.5:
+        return False
+    for key in ('total_min_low','total_min_high'):
+        v=composition.get(key)
+        if v is not None and (not finite(v) or v<=0):
+            return False
+    lo=composition.get('total_min_low'); hi=composition.get('total_min_high')
+    # A COMPLETE compiled session with a concrete total_seconds must not
+    # carry contradictory min/max labels. Do not silently widen to 45–95.
+    for boundary in (lo, hi):
+        if boundary is not None and abs(boundary-total/60.0)>0.01:
+            return False
+    if lo is not None and hi is not None and lo>hi:
+        return False
+    intervals=[b for b in blocks if b.get('type')=='CANONICAL_INTERVALS']
+    if len(intervals)!=1:
+        return False
+    b=intervals[0]
+    for src,dest in (('primary_work_seconds','quality_work_seconds'),
+                     ('interval_recovery_seconds','recovery_seconds')):
+        x=composition.get(src); y=b.get(dest)
+        if not finite(x) or not finite(y) or x<0 or y<0 or abs(x-y)>0.5:
+            return False
+    if b.get('duration_seconds')+0.5 < b['quality_work_seconds']+b['recovery_seconds']:
+        return False
+    return True
+
+
+_INC075_PRIOR_STRUCTURAL_OK = _nova_r196956_structural_ok
+
+def _nova_r196956_structural_ok(workout):
+    return (_INC075_PRIOR_STRUCTURAL_OK(workout)
+            and _nova_inc075_valid_compiled_duration(workout))
+
+
+_INC075_PRIOR_UI = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    out=_INC075_PRIOR_UI(data)
+    if not isinstance(out,dict):
+        return out
+    card=out.get('nova_card3_workout_view') or {}
+    if not isinstance(card,dict) or not (card.get('offer_structure_only') or card.get('verified_offer')):
+        return out
+    offer=out.get('next_quality_offer') or {}
+    work=offer.get('workout') if isinstance(offer,dict) else None
+    if _nova_inc075_valid_compiled_duration(work):
+        return out
+    # Never show an incoherent workout from the compiler as an athlete-ready
+    # plan. Keep a readable goal, but remove workout identity, structure,
+    # numeric targets, phases, dates and all workout-specific fueling.
+    goal=str(card.get('goal_key') or '').upper()
+    goal_label={'POWER_5':'5-minute power','POWER_20':'20-minute power',
+                'POWER_1':'1-minute power','SPRINTER':'sprint performance',
+                'VO2MAX':'VO₂max','TIME_TRIAL':'time-trial performance',
+                'ENDURANCE_BASE':'endurance development'}.get(goal,'goal-specific development')
+    safe=dict(card, schema=INC075_SCHEMA, state='NOT_PRESCRIBED',
+        title='Development goal · '+goal_label, workout_id=None,
+        verified_offer=False, verified_future_plan=False,
+        planned_quality=False,offer_structure_only=False,direction_only=True,
+        structure=None,execution=None,purpose=None,phases=[],
+        personalized_watts=None,power_source=None,
+        execution_clearance='DO_NOT_EXECUTE_NOW',
+        execution_authorized_by_preview=False,is_scheduled=False,
+        reason=('The canonical workout duration is inconsistent with its '
+                'compiled blocks. No workout or watt target is issued. '
+                'Nova must produce a new coherent snapshot before hard work.'),
+        goal_explanation='This is your development goal, not an executable workout.')
+    direction=dict(out.get('next_quality_direction') or {})
+    direction.update(title=safe['title'],athlete_title=safe['title'],
+        athlete_explanation=safe['reason'],
+        referenced_canonical_template_id=None,
+        source='CURRENT_GOAL_STATE_COMPOSITION_INTEGRITY_HOLD',
+        direction_only=True,is_a_prescription=False,
+        execution_authorized_by_preview=False,is_scheduled=False,
+        suggested_date=None,suggested_time=None)
+    updated=dict(out)
+    updated['nova_card3_workout_view']=safe
+    updated['next_quality_direction']=direction
+    updated['quality_direction_fuel']=None
+    updated['inc075_card3_integrity']='INCONSISTENT_COMPILED_DURATION'
+    return updated
+
+# INC-076 / R196.9.122 — COMPILED OFFER COMPOSITION DIGEST (OFFLINE CANDIDATE)
+# This is an issuer/consumer equality digest, NOT an HMAC, signature, trust
+# token, or independent proof of scientific correctness. A party allowed to
+# rewrite all snapshot fields could recalculate the digest. E2E authenticity
+# and real owner-scoped persistence remain NOT_VERIFIED.
+INC076_SCHEMA = 'NOVA-R196.9.126-COMPOSITION-DIGEST-2'
+_INC076_PRIOR_OFFER_BUILDER = _nova_r196956_build_offer
+_INC076_PRIOR_UI = _v4891_prepare_snapshot_for_ui
+
+
+def _nova_inc076_composition_digest(offer, user_id):
+    """Bind the entire compiled envelope and current prescribed-dose fields.
+
+    Stable canonical JSON is essential so a saved immutable offer can be checked
+    without depending on dict key order. No credentials or raw personal data
+    enter the payload, only the owner-scope reference already used by INC050.
+    """
+    if not user_id or not isinstance(offer, dict):
+        return None
+    workout=offer.get('workout')
+    if not isinstance(workout,dict) or not _nova_inc075_valid_compiled_duration(workout):
+        return None
+    if not offer.get('offer_id') or not offer.get('dose_fingerprint'):
+        return None
+    payload={'schema':INC076_SCHEMA,
+        'owner_scope':_nova_inc050_owner_scope(user_id),
+        'offer_id':offer.get('offer_id'), 'offer_source':offer.get('source'),
+        'workout_id':offer.get('workout_id'),
+        'canonical_plan_id':offer.get('canonical_plan_id'),
+        'dose_fingerprint':offer.get('dose_fingerprint'),
+        # INC082: prevent post-signature edits from making an unfeasible
+        # session feasible or rewriting athlete-facing wording/provenance.
+        # The issuer MAC covers this digest; re-hashing is never authority.
+        'offer_status':offer.get('offer_status'),
+        'workout':{key:workout.get(key) for key in (
+            'nova_workout_id','nova_canonical_plan_id','nova_contract_id',
+            'nova_prescription_dimension','nova_template_signature',
+            'goal','goal_key','title','why','main_set',
+            'date','intensity_class','duration','expected_duration_min',
+            'expected_duration_max','session_duration_feasibility',
+            'power_prescription','prescribed_power_low','prescribed_power_high',
+            'session_composition')}}
+    try:
+        raw=json.dumps(payload,sort_keys=True,ensure_ascii=False,
+                       separators=(',',':'),allow_nan=False)
+        return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+    except (TypeError,ValueError,OverflowError):
+        return None
+
+
+def _nova_inc076_seal_ok(offer, audit, user_id):
+    if not isinstance(offer,dict) or not isinstance(audit,dict):
+        return False
+    expected=_nova_inc076_composition_digest(offer,user_id)
+    a=offer.get('inc076_composition_digest')
+    b=audit.get('inc076_composition_digest')
+    return bool(expected and offer.get('inc076_schema')==INC076_SCHEMA
+        and audit.get('inc076_schema')==INC076_SCHEMA
+        and isinstance(a,str) and isinstance(b,str)
+        and len(a)==len(b)==64
+        and hmac.compare_digest(expected,a) and hmac.compare_digest(a,b))
+
+
+def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,
+        ledger,user_id,**kwargs):
+    offer,audit=_INC076_PRIOR_OFFER_BUILDER(rows,prescription,prior,
+        decision,clock,road,ledger,user_id,**kwargs)
+    if not isinstance(offer,dict) or not isinstance(audit,dict):
+        return offer,audit
+    if (offer.get('source')=='PRIOR_ISSUED_CANONICAL'
+        and not _nova_inc076_seal_ok(
+            (prior or {}).get('next_quality_offer') if isinstance(prior,dict) else None,
+            (prior or {}).get('quality_offer_integrity') if isinstance(prior,dict) else None,
+            user_id)):
+        # A pre-INC076 persisted offer is still preserved as history; it must
+        # not be silently given a fresh claim of issuer integrity on replay.
+        return offer,audit
+    digest=_nova_inc076_composition_digest(offer,user_id)
+    if (not digest or audit.get('state')!='PASS'
+        or offer.get('offer_status')!='OFFERED'
+        or not _nova_r196956_structural_ok(offer.get('workout'))):
+        return offer,audit
+    return (dict(offer,inc076_schema=INC076_SCHEMA,
+                 inc076_composition_digest=digest),
+            dict(audit,inc076_schema=INC076_SCHEMA,
+                 inc076_composition_digest=digest))
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    out=_INC076_PRIOR_UI(data)
+    if not isinstance(out,dict):
+        return out
+    card=out.get('nova_card3_workout_view')
+    # Only the current non-executable canonical offer branch uses this new
+    # contract. Do not rewrite archived report bytes, or reinterpret other
+    # generations' verified-future-plan / fueling authorization paths.
+    if not isinstance(card,dict) or card.get('offer_structure_only') is not True:
+        return out
+    owner=_nova_inc051_verified_owner_id()
+    offer=out.get('next_quality_offer')
+    audit=out.get('quality_offer_integrity')
+    if _nova_inc076_seal_ok(offer,audit,owner):
+        return out
+    goal=str(card.get('goal_key') or '').upper()
+    labels={'POWER_5':'5-minute power','POWER_20':'20-minute power',
+        'POWER_1':'1-minute power','SPRINTER':'sprint performance',
+        'VO2MAX':'VO₂max','TIME_TRIAL':'time-trial performance',
+        'ENDURANCE_BASE':'endurance development'}
+    title='Development goal · '+labels.get(goal,'goal-specific development')
+    reason=('The current canonical workout is not bound to a verified '
+        'composition digest. Nova must reissue a coherent offer; this '
+        'legacy or changed snapshot cannot authorize a quality workout.')
+    safe=dict(card,schema=INC076_SCHEMA,state='NOT_PRESCRIBED',title=title,
+        workout_id=None,verified_offer=False,verified_future_plan=False,
+        planned_quality=False,offer_structure_only=False,direction_only=True,
+        structure=None,execution=None,purpose=None,phases=[],
+        personalized_watts=None,power_source=None,
+        execution_clearance='DO_NOT_EXECUTE_NOW',
+        execution_authorized_by_preview=False,is_scheduled=False,
+        reason=reason,goal_explanation='Development direction only; not a workout.')
+    direction=dict(out.get('next_quality_direction') or {})
+    direction.update(title=title,athlete_title=title,athlete_explanation=reason,
+        referenced_canonical_template_id=None,source='CURRENT_GOAL_UNSEALED_COMPOSITION',
+        direction_only=True,is_a_prescription=False,
+        execution_authorized_by_preview=False,is_scheduled=False,
+        suggested_date=None,suggested_time=None)
+    return dict(out,nova_card3_workout_view=safe,next_quality_direction=direction,
+        quality_direction_fuel=None,inc076_card3_integrity='UNSEALED_OR_CHANGED_COMPOSITION')
+
+APP_VERSION=('THE LAB · PRODUCT V4.9.221 R196.9.122 · INC-076 '
+             'CARD3 COMPOSITION DIGEST · OFFLINE NO-GO')
+
+# INC-078 / R196.9.123 - READ-ONLY PRESENTATION OF VERIFIED REAL WATTS
+# The coaching quality and its real compiled numeric dose are separate from
+# TRAIN/HOLD and execution clearance. No new workouts or wattages are chosen.
+INC078_SCHEMA = 'NOVA-R196.9.123-CARD3-POWER-VISIBILITY-1'
+_INC078_PRIOR_UI = _v4891_prepare_snapshot_for_ui
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    output = _INC078_PRIOR_UI(data)
+    if not isinstance(output, dict):
+        return output
+    card = output.get('nova_card3_workout_view')
+    # Existing checks of canonical science, owner, fingerprints, duration and
+    # INC076 composition digest must all pass before this presentation code.
+    if (not isinstance(card, dict)
+        or card.get('offer_structure_only') is not True
+        or card.get('execution_authorized_by_preview') is not False
+        or card.get('verified_offer') is not False
+        or card.get('is_scheduled') is not False):
+        return output
+    offer = output.get('next_quality_offer')
+    audit = output.get('quality_offer_integrity')
+    owner = _nova_inc051_verified_owner_id()
+    if (not _nova_inc076_seal_ok(offer, audit, owner)
+        or not isinstance(offer, dict)
+        or not isinstance(audit, dict)
+        or audit.get('state') != 'PASS'):
+        return output
+    workout = offer.get('workout')
+    if (not isinstance(workout, dict)
+        or not _nova_r196956_structural_ok(workout)
+        or not _nova_inc075_valid_compiled_duration(workout)):
+        return output
+    try:
+        fingerprint = _v136_prescription_fingerprint(
+            _v4840_ledger_session_summary(workout))
+        if (not fingerprint
+            or not hmac.compare_digest(str(fingerprint),str(offer.get('dose_fingerprint') or ''))
+            or not hmac.compare_digest(str(fingerprint),str(audit.get('issued_workout_fingerprint') or ''))):
+            return output
+        workout_id = str(card.get('workout_id') or '')
+        if (not workout_id or workout_id != str(offer.get('workout_id') or '')
+            or workout_id != str(workout.get('nova_workout_id') or '')):
+            return output
+        # Genuine compiler PRESCRIBED/feasible power range only; never a PB,
+        # FTP extrapolation, or obsolete historical preview generated here.
+        verified = _nova_r1969102_verified_personal_watts(workout, workout_id)
+        power = workout.get('power_prescription') or {}
+        source = str(power.get('source') or '').strip() if isinstance(power,dict) else ''
+        if not verified or not source:
+            return dict(output, inc078_power_visibility='REAL_WATTS_NOT_COMPILED')
+        safe = dict(card, quality_power_preview=verified,
+            quality_power_source=source,
+            quality_power_read_only=True,
+            quality_power_schema=INC078_SCHEMA,
+            reason=('Nova has selected this exact canonical workout and calculated '
+                'the shown athlete-specific power range from its compiled evidence. '
+                'The training target is coaching guidance independent of TRAIN/HOLD. '
+                'It is not a calendar booking or automatic clearance to perform '
+                'hard intervals. Athlete wellness and any explicit health '
+                'restrictions remain separate considerations. '
+                + str(card.get('science_note') or '')))
+        return dict(output, nova_card3_workout_view=safe,
+                    inc078_power_visibility='VERIFIED_COMPILER_WATTS_READ_ONLY')
+    except (TypeError,ValueError,KeyError,AttributeError,ArithmeticError):
+        return output
+
+
+# Update exactly one non-executable canonical-offer presentation branch.
+_INC078_PREVIOUS_WATT_COPY = ('<p><b>Personal watt targets:</b> Not verified for this '
+    'view. No fixed, exploratory or historical power range is execution clearance.</p>')
+assert HOME_PAGE.count(_INC078_PREVIOUS_WATT_COPY) == 1, 'INC078_WATT_BRANCH_DRIFT'
+_INC078_WATT_COPY = '''{% if card3.quality_power_read_only and card3.quality_power_preview %}
+<p><b>Personalized power range:</b> <span class="r1969102-power">{{ card3.quality_power_preview|e }}</span></p>
+<p><small>Evidence: {{ card3.quality_power_source|e }}. A calculated training proposal, not a pass/fail grade or execution clearance; consult Nova Health and your own judgement.</small></p>
+{% else %}
+<p><b>Personal watt targets:</b> No verified compiled watt dose is available for this snapshot; Nova must obtain suitable evidence. No personal watts are invented from PB or an expired FTP.</p>
+{% endif %}'''
+HOME_PAGE = HOME_PAGE.replace(_INC078_PREVIOUS_WATT_COPY, _INC078_WATT_COPY, 1)
+assert HOME_PAGE.count('card3.quality_power_read_only') == 1, 'INC078_DUPLICATE_WATT_BRANCH'
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · PRODUCT V4.9.222 R196.9.123 · INC-078 '
+               'CARD3 CANONICAL POWER VISIBILITY · OFFLINE NO-GO')
+
+
+# INC-079 / R196.9.124 — OWNER-APPROVED CROSS-GOAL LOCAL CORRECTION C04/C05/C07.
+# Every goal (including ENDURANCE_BASE) uses the SAME verified science contract.
+# This patch does not create watt targets, certify missing evidence, reissue
+# legacy unsealed offers, change the approved DTM, or authorize execution.
+INC079_SCHEMA = 'NOVA-R196.9.124-CROSS-GOAL-CARD3-FIX-1'
+
+_INC079_PRIOR_PLAN_RESULT = _nova_inc056_plan_result
+
+def _nova_inc056_plan_result(owner_user_id, decision, road, evidence_ledger,
+                             training_definitions, planning_context, training_state,
+                             active_offer):
+    restriction = _nova_inc079_explicit_injury_restriction(planning_context)
+    if restriction:
+        # Explicit injury plan is the ONLY planning stop: preserve existing
+        # non-issue semantics; never convert a safety stop into a workout.
+        ctx = dict(planning_context or {})
+        ctx['health_override'] = {'kind':'INJURED', 'restriction_type': restriction}
+        result = _INC079_PRIOR_PLAN_RESULT(owner_user_id, decision, road,
+            evidence_ledger, training_definitions, ctx, training_state, None)
+        if result.get('reason_codes') == ['HEALTH_OVERRIDE_BLOCKS_FUTURE_QUALITY_PLANNING']:
+            result['reason_codes'] = ['ATHLETE_DECLARED_INJURY_RESTRICTION_' + restriction]
+        return result
+    # Health advisory remains observable for execution caution but may not
+    # veto the scientific selection of a future workout structure.
+    ctx = dict(planning_context or {})
+    ctx.pop('health_override', None)
+    result = _INC079_PRIOR_PLAN_RESULT(owner_user_id, decision, road,
+        evidence_ledger, training_definitions, ctx, training_state, active_offer)
+    if (planning_context or {}).get('health_override') and isinstance(result,dict):
+        result['execution_state'] = 'DO_NOT_EXECUTE_NOW'
+    return result
+
+# A former Card 3 view contained a second, generic Health planning veto.
+# The explicit injury check now governs that view consistently with the producer.
+# Issuance guard reads the same direct athlete restriction as planning.
+# An old offer remains historical evidence; it is not re-issued while the
+# athlete has an active NO TRAINING / NO INTENSITY injury plan.
+_INC079_PREVIOUS_OFFER_BUILDER = _nova_r196956_build_offer
+
+def _nova_r196956_build_offer(rows, prescription, prior, decision, clock, road,
+                              ledger, user_id, planning_context=None, **kwargs):
+    restriction = _nova_inc079_explicit_injury_restriction(planning_context)
+    if restriction:
+        return None, {'schema':INC079_SCHEMA, 'state':'PLANNING_BLOCKED',
+            'reason':'ATHLETE_DECLARED_INJURY_RESTRICTION_'+restriction,
+            'offer_present':False, 'allow_unconditional_execution':False,
+            'adds_ledger_row':False, 'adds_calendar_event':False}
+    return _INC079_PREVIOUS_OFFER_BUILDER(rows, prescription, prior,
+        decision, clock, road, ledger, user_id,
+        planning_context=planning_context, **kwargs)
+
+_INC079_PRIOR_FUEL = _nova_inc051_fuel_for_canonical_card3
+
+def _nova_inc051_fuel_for_canonical_card3(data, card):
+    existing = _INC079_PRIOR_FUEL(data, card)
+    if existing is not None:
+        return existing
+    if not isinstance(data, dict) or not isinstance(card, dict):
+        return None
+    # A structure-only view is fuelable ONLY when the original compiled dose
+    # is sealed, owner-scoped and has verified real numeric targets. The view
+    # alone never chooses a recipe, duration or power range.
+    if not (card.get('offer_structure_only') is True
+            and card.get('verified_offer') is False
+            and card.get('execution_authorized_by_preview') is False
+            and card.get('quality_power_read_only') is True
+            and card.get('quality_power_preview')):
+        return None
+    owner = _nova_inc051_verified_owner_id()
+    offer = data.get('next_quality_offer') or {}
+    audit = data.get('quality_offer_integrity') or {}
+    work = offer.get('workout') or {} if isinstance(offer, dict) else {}
+    if (not owner or not isinstance(work,dict)
+        or data.get('future_quality_owner_scope') != _nova_inc050_owner_scope(owner)
+        or not _nova_inc076_seal_ok(offer, audit, owner)
+        or audit.get('state') != 'PASS'
+        or not _nova_inc075_valid_compiled_duration(work)
+        or str(offer.get('workout_id') or '') != str(card.get('workout_id') or '')
+        or str(work.get('nova_workout_id') or '') != str(card.get('workout_id') or '')
+        or not _nova_r196956_structural_ok(work)
+        or card.get('quality_power_preview') != _nova_r1969102_verified_personal_watts(work, card.get('workout_id'))
+        or card.get('quality_power_source') != (work.get('power_prescription') or {}).get('source')):
+        return None
+    # Feed the existing duration-based fueling calculation by marking this
+    # internally verified *dose*, without granting UI execution clearance.
+    trusted = dict(card, verified_offer=True)
+    fuel = _INC079_PRIOR_FUEL(data, trusted)
+    if not fuel:
+        return None
+    return dict(fuel, source='CURRENT_SEALED_CANONICAL_FUTURE_QUALITY',
+                example=False, read_only=True)
+
+_INC079_PRIOR_UI = _v4891_prepare_snapshot_for_ui
+
+def _v4891_prepare_snapshot_for_ui(data):
+    output = _INC079_PRIOR_UI(data)
+    if not isinstance(output,dict):
+        return output
+    out = dict(output)
+    # The final R123 power adapter has run; only now compute aligned fueling.
+    out['quality_direction_fuel'] = _nova_inc051_fuel_for_canonical_card3(
+        out, out.get('nova_card3_workout_view') or {})
+    return out
+
+# Template: completely empty third workout/fuel card on verified C07 match.
+_INC079_ARTICLE_START = '<article class="v4-card v4-session {{ s.intensity_class if s else \'recovery\' }} v23-session-card v23-col-{{ loop.index }}{{ \' v1962-quality-card\' if is_quality_slot else \'\' }}"{% if is_quality_slot %} aria-label="Next quality session status"{% endif %}>'
+assert HOME_PAGE.count(_INC079_ARTICLE_START) == 1, 'INC079_CARD3_ARTICLE_DRIFT'
+_inc079_a = HOME_PAGE.index(_INC079_ARTICLE_START)
+_inc079_end = HOME_PAGE.index('</article>', _inc079_a) + len('</article>')
+HOME_PAGE = (HOME_PAGE[:_inc079_a]
+    + '{% if not (is_quality_slot and quality_already_shown) %}\n'
+    + HOME_PAGE[_inc079_a:_inc079_end]
+    + '\n{% endif %}' + HOME_PAGE[_inc079_end:])
+# Historical CSS/fueling conditions remain unchanged for Card 1/2.
+_inc079_fuel_conditions = (
+    '{% if not is_quality_slot or n or (data.quality_direction_fuel and not quality_already_shown) %}',
+    '{% if not is_quality_slot or (not (data.next_quality_direction and data.next_quality_direction.pending_attempt_review) and (n or (data.quality_direction_fuel and not quality_already_shown))) %}',
+    '{% if not is_quality_slot or ((n or (data.quality_direction_fuel and not quality_already_shown))) %}',
+)
+_inc079_found = [x for x in _inc079_fuel_conditions if x in HOME_PAGE]
+assert len(_inc079_found) == 1, 'INC079_CARD3_FUEL_CONDITION_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_inc079_found[0],
+    _inc079_found[0].replace('not is_quality_slot or',
+        'not is_quality_slot or (not quality_already_shown) and', 1), 1)
+app.jinja_env.globals['nova_quality_card3_duplicate_index'] = _nova_r196993_card3_duplicate_index
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · PRODUCT V4.9.223 R196.9.124 · INC-079 '
+               'C04/C05/C07 CROSS-GOAL LOCAL CORRECTIONS · OFFLINE NO-GO')
+
+# INC-080 / R196.9.125 — OFFLINE DEFENSE-IN-DEPTH, ENDURANCE DURATION TYPE.
+# Approved DTM unchanged. No new workout selector, watt calculation, clearance,
+# scheduling or persistence changes. Historic unkeyed offers fail closed.
+INC080_SCHEMA = 'NOVA-R196.9.126-ISSUER-HMAC-COMPOSITION-2'
+_INC080_PREVIOUS_VALID_DURATION = _nova_inc075_valid_compiled_duration
+_INC080_ENDURANCE_PATTERNS = frozenset({
+    'ENDURANCE','ENDURANCE_STEADY','ENDURANCE_DURABILITY','ENDURANCE_LATE'})
+
+
+def _nova_inc075_valid_compiled_duration(workout):
+    """Accept *already compiled* native endurance phases, never fake intervals.
+
+    This does NOT generate the phases, make the workout an issued quality, or
+    turn a duration-only library template into an athlete-specific dose.
+    """
+    w = workout if isinstance(workout,dict) else {}
+    tpl = _R19696_LIBRARY_INDEX.get(str(w.get('nova_workout_id') or ''))
+    if not isinstance(tpl,dict) or tpl.get('pattern') not in _INC080_ENDURANCE_PATTERNS:
+        if not _INC080_PREVIOUS_VALID_DURATION(workout):
+            return False
+        comp = w.get('session_composition') or {}
+        total = comp.get('total_seconds') if isinstance(comp,dict) else None
+    else:
+        comp = w.get('session_composition')
+        total = comp.get('total_seconds') if isinstance(comp,dict) else None
+    # The athlete-facing duration and the compiled timeline must agree in
+    # every goal. Optional only for historic helper fixtures lacking the field;
+    # issuer science must still produce actual explicit duration upstream.
+    if w.get('duration') is not None:
+        declared = _parse_duration_minutes(w.get('duration'))
+        if (type(total) not in (int,float) or not math.isfinite(total)
+            or declared is None or abs(declared*60-total)>3.1):
+            return False
+    if not isinstance(tpl,dict) or tpl.get('pattern') not in _INC080_ENDURANCE_PATTERNS:
+        return True
+    if (tpl.get('goal') != 'ENDURANCE_BASE'
+        or not isinstance(comp,dict) or comp.get('state')!='COMPLETE'
+        or str(w.get('nova_prescription_dimension') or '') not in (tpl.get('dimensions') or ())):
+        return False
+    blocks = comp.get('blocks')
+    if not isinstance(blocks,list) or len(blocks)!=3:
+        return False
+    if [b.get('type') if isinstance(b,dict) else None for b in blocks] != [
+            'PREPARATION','CANONICAL_ENDURANCE','COOLDOWN']:
+        return False
+    def secs(v):
+        return type(v) in (int,float) and math.isfinite(v) and v>0
+    values = [b.get('duration_seconds') for b in blocks]
+    total = comp.get('total_seconds')
+    if not secs(total) or total>6*3600 or not all(secs(v) for v in values):
+        return False
+    if abs(sum(values)-total)>0.5 or not bool(w.get('main_set')):
+        return False
+    if blocks[1].get('canonical_workout_id')!=w.get('nova_workout_id'):
+        return False
+    if str(tpl.get('variant') or '')=='SPLIT_EASY':
+        sections=blocks[1].get('segments_seconds')
+        if (not isinstance(sections,list) or len(sections)<2
+            or not all(secs(v) for v in sections)
+            or abs(sum(sections)-values[1])>0.5):
+            return False
+    elif blocks[1].get('segments_seconds') is not None:
+        return False
+    if (type(comp.get('interval_recovery_seconds')) not in (int,float)
+        or comp.get('interval_recovery_seconds')!=0
+        or type(comp.get('primary_work_seconds')) not in (int,float)
+        or abs(comp['primary_work_seconds']-values[1])>0.5):
+        return False
+    for k in ('total_min_low','total_min_high'):
+        minute=comp.get(k)
+        if type(minute) not in (int,float) or not math.isfinite(minute) or abs(minute*60-total)>0.6:
+            return False
+    # One continuous easy block; no hidden interval or hard-recovery structure.
+    if any(b.get('type')=='CANONICAL_INTERVALS' for b in blocks):
+        return False
+    if any(str(b.get('intensity') or '').upper() in {'HARD','VO2','SPRINT','THRESHOLD'} for b in blocks):
+        return False
+    return True
+
+
+_INC080_PRIOR_SEAL_OK = _nova_inc076_seal_ok
+
+def _nova_inc080_issuer_mac(offer, user_id, audit=None):
+    """R126 HMAC of owner, compiled offer AND its final science audit.
+
+    Do not trust recomputed SHA-256 or source labels. Audit PASS/FAIL and
+    science provenance must be bound to the same immutable signed snapshot.
+    Server-side SECRET_KEY protection and authenticated persistence remain
+    separate external gates; this function does not prove either one.
+    """
+    key = SECRET_KEY
+    if not isinstance(key,str) or len(key)<32 or key=='change-this-key':
+        return None
+    if not isinstance(audit,dict) or not isinstance(offer,dict):
+        return None
+    digest = _nova_inc076_composition_digest(offer,user_id)
+    scope = _nova_inc050_owner_scope(user_id) if user_id else None
+    if not digest or not scope:
+        return None
+    try:
+        audit_payload={k:v for k,v in audit.items() if k not in {
+            'inc080_schema','inc080_issuer_mac'}}
+        raw=json.dumps({'schema':INC080_SCHEMA,'scope':scope,
+            'offer_digest':digest,'integrity_audit':audit_payload},
+            sort_keys=True,ensure_ascii=False,separators=(',',':'),
+            allow_nan=False).encode('utf-8')
+    except (TypeError,ValueError,OverflowError):
+        return None
+    return hmac.new(key.encode('utf-8'),raw,hashlib.sha256).hexdigest()
+
+
+def _nova_inc076_seal_ok(offer, audit, user_id):
+    if not _INC080_PRIOR_SEAL_OK(offer,audit,user_id):
+        return False
+    if not isinstance(offer,dict) or not isinstance(audit,dict):
+        return False
+    # Fail closed for audit/offer status: a valid previous-key HMAC is not
+    # by itself an authorization to display a revoked or failed composition.
+    if audit.get('state') != 'PASS' or offer.get('offer_status') != 'OFFERED':
+        return False
+    tag = _nova_inc080_issuer_mac(offer,user_id,audit)
+    a=offer.get('inc080_issuer_mac'); b=audit.get('inc080_issuer_mac')
+    return bool(tag and offer.get('inc080_schema')==INC080_SCHEMA
+        and audit.get('inc080_schema')==INC080_SCHEMA
+        and isinstance(a,str) and isinstance(b,str) and len(a)==len(b)==64
+        and hmac.compare_digest(tag,a) and hmac.compare_digest(a,b))
+
+
+_INC080_PREVIOUS_OFFER_BUILDER = _nova_r196956_build_offer
+
+def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,
+        ledger,user_id,**kwargs):
+    offer,audit=_INC080_PREVIOUS_OFFER_BUILDER(rows,prescription,prior,
+        decision,clock,road,ledger,user_id,**kwargs)
+    if not isinstance(offer,dict) or not isinstance(audit,dict):
+        return offer,audit
+    # Never retrospectively legitimize a legacy offer or a different owner.
+    if offer.get('source')=='PRIOR_ISSUED_CANONICAL':
+        return offer,audit
+    if (audit.get('state')!='PASS' or offer.get('offer_status')!='OFFERED'
+        or not _nova_r196956_structural_ok(offer.get('workout'))
+        or not _INC080_PRIOR_SEAL_OK(offer,audit,user_id)):
+        return offer,audit
+    # INC082: reuse the *existing* source-specific evidence validator, with
+    # original producer prescription/roadmap, before issuing the HMAC.
+    # A string 'source' or a recomputed SHA must never grant watt authority.
+    try:
+        evidence = _v196917_power_contract(offer.get('workout'), {
+            'nova_prescription':prescription,'adaptive_roadmap':road})
+    except (TypeError,ValueError,KeyError,AttributeError,ArithmeticError):
+        return offer,audit
+    if not isinstance(evidence,dict) or evidence.get('accepted') is not True:
+        return offer,audit
+    mac = _nova_inc080_issuer_mac(offer,user_id,audit)
+    if not mac:
+        return offer,audit
+    return (dict(offer,inc080_schema=INC080_SCHEMA,inc080_issuer_mac=mac),
+            dict(audit,inc080_schema=INC080_SCHEMA,inc080_issuer_mac=mac))
+
+APP_VERSION = ('THE LAB · PRODUCT V4.9.225 R196.9.126 · INC-082 '
+               'ISSUER BINDING + EVIDENCE GUARD · OFFLINE NO-GO')
+
+
+# INC-083 / R196.9.127 — ENDURANCE NATIVE TIME ACCOUNTING + CROSS-GOAL
+# SCIENCE DEFICIT DIAGNOSTICS. OFFLINE CANDIDATE, NON-NORMATIVE, NO-GO.
+# DTM v1.0.70 stays byte-for-byte untouched. This adapter is subordinate to
+# the original one-engine selector/compiler. It does NOT create a prescription,
+# validate athlete-specific power, choose an intensity or grant execution.
+INC083_SCHEMA = 'NOVA-R196.9.127-NATIVE-ENDURANCE-TIME-1'
+_INC083_OLD_ENVELOPE = _v19697_session_envelope
+_INC083_OLD_FUTURE = _nova_inc050_future_quality
+
+
+def _nova_inc083_endurance_explicit_phases(session, template):
+    """Account only durations explicitly given by the original workout text.
+
+    A template name and a future planning envelope cannot invent warm-up,
+    cooldown, long aerobic duration, an FTP band or a split dose. Caller is
+    responsible for evidence validation upstream; no numeric watts originate
+    here. SPLIT_EASY requires two explicit exact-duration segments.
+    """
+    s = session if isinstance(session, dict) else {}
+    t = template if isinstance(template, dict) else {}
+    text = str(s.get('main_set') or '')
+    if (s.get('stimulus_architecture_state') != 'NOVA_CANONICAL_LIBRARY'
+        or s.get('nova_prescription_authority') is not True
+        or s.get('is_planned_training') is True
+        or s.get('is_race') is True
+        or str(s.get('source') or '').upper() == 'CALENDAR'
+        or str(s.get('restriction') or 'NONE').upper() not in {'NONE',''}
+        or str(s.get('nova_prescription_dimension') or '').upper()
+            not in (t.get('dimensions') or ())
+        or not text or str(s.get('intensity') or '').upper().startswith('HARD')
+        or str(s.get('intensity_class') or '').lower() in
+            {'vo2','threshold','tempo','sprint'}):
+        return None, 'ORIGINAL_CANONICAL_ENDURANCE_AUTHORITY_REQUIRED'
+    # Explicit hard repeats in a supposedly EASY plan mean an inconsistent
+    # upstream description; never silently re-label them as easy volume.
+    if re.search(r'\b(?:VO2|threshold|sprints?|\d+\s*[x×]\s*\d+\s*min)\b', text, re.I):
+        return None, 'AEROBIC_ONLY_INSTRUCTIONS_REQUIRED'
+    warm = re.search(r'\bWarm[- ]?up:\s*(\d+(?:\.\d+)?)\s*min\b', text, re.I)
+    cool = re.search(r'\bCool[- ]?down:\s*(\d+(?:\.\d+)?)\s*min\b', text, re.I)
+    if not warm or not cool:
+        return None, 'EXPLICIT_PREPARATION_AND_COOLDOWN_REQUIRED'
+    try:
+        minute = _parse_duration_minutes(s.get('duration'))
+        prep = round(float(warm.group(1))*60)
+        finish = round(float(cool.group(1))*60)
+        total = round(float(minute)*60)
+    except (TypeError, ValueError, OverflowError):
+        return None, 'VALID_ORIGINAL_TOTAL_DURATION_REQUIRED'
+    if (minute is None or not math.isfinite(minute)
+        or not (20*60 <= total <= 6*3600)
+        or not (0 < prep <= 90*60) or not (0 < finish <= 60*60)
+        or total <= prep+finish):
+        return None, 'IMPOSSIBLE_EXPLICIT_ENDURANCE_PHASES'
+    core = total-prep-finish
+    parts = s.get('endurance_segments_seconds')
+    if str(t.get('variant') or '') == 'SPLIT_EASY':
+        if (not isinstance(parts,list) or len(parts)!=2
+            or any(type(x) is not int or x<=0 for x in parts)
+            or sum(parts)!=core):
+            return None, 'EXPLICIT_SPLIT_EASY_SEGMENTS_REQUIRED'
+        segment_text = re.search(r'\bEasy blocks:\s*(\d+(?:\.\d+)?)\s*min\s*\+\s*(\d+(?:\.\d+)?)\s*min\b', text, re.I)
+        if (not segment_text or
+            [round(float(segment_text.group(1))*60),
+             round(float(segment_text.group(2))*60)] != parts):
+            return None, 'SPLIT_DURATION_NOT_IN_CANONICAL_INSTRUCTIONS'
+    elif parts is not None:
+        return None, 'UNREQUESTED_ENDURANCE_SEGMENTS'
+    return {'total':total,'prep':prep,'core':core,'finish':finish,
+        'segments':list(parts) if parts is not None else None}, None
+
+
+def _v19697_session_envelope(session):
+    """Native EASY timeline, only from explicit already-produced time inputs.
+
+    This accounts for mechanics but never certifies physiological intensity or
+    repeatable athlete power. Audit states deliberately distinguish accounting
+    completion from the BD-001 full quality contract.
+    """
+    s = session if isinstance(session, dict) else {}
+    wid = str(s.get('nova_workout_id') or '')
+    tpl = _R19696_LIBRARY_INDEX.get(wid)
+    if (not isinstance(tpl,dict) or tpl.get('goal')!='ENDURANCE_BASE'
+        or tpl.get('pattern') not in _INC080_ENDURANCE_PATTERNS):
+        return _INC083_OLD_ENVELOPE(session)
+    audit={'schema':INC083_SCHEMA,'workout_id':wid,'state':'UNASSESSED',
+           'modified':False,'science_power_verified':False,'issues':[]}
+    original_comp=s.get('session_composition')
+    if original_comp not in (None,{}):
+        if (isinstance(original_comp,dict)
+            and _nova_inc075_valid_compiled_duration(s)):
+            audit.update(state='EXISTING_VALID_TIMELINE_PRESERVED')
+        else:
+            audit.update(state='EXISTING_COMPOSITION_PRESERVED_NOT_ATTESTED',
+                         issues=['NEVER_OVERWRITE_EXISTING_WORKOUT_COMPOSITION'])
+        return session,audit
+    timing,issue=_nova_inc083_endurance_explicit_phases(s,tpl)
+    if timing is None:
+        audit.update(state='NEEDS_EXPLICIT_ENDURANCE_INPUT',issues=[issue])
+        return session,audit
+    blocks=[{'type':'PREPARATION','duration_seconds':timing['prep'],
+             'intensity':'Z1_TO_LOW_Z2'},
+            {'type':'CANONICAL_ENDURANCE','duration_seconds':timing['core'],
+             'canonical_workout_id':wid,'intensity':'Z1_TO_LOW_Z2'},
+            {'type':'COOLDOWN','duration_seconds':timing['finish'],
+             'intensity':'Z1'}]
+    if timing['segments'] is not None:
+        blocks[1]['segments_seconds']=timing['segments']
+    comp={'schema':R19697_SCHEMA,'state':'COMPLETE',
+          'total_duration':s.get('duration'),
+          'total_seconds':timing['total'],
+          'total_min_low':timing['total']/60,
+          'total_min_high':timing['total']/60,
+          'primary_duration_min':timing['core']/60,
+          'primary_work_seconds':timing['core'],
+          'interval_recovery_seconds':0,
+          'aerobic_fill_min_low':0.,'aerobic_fill_min_high':0.,
+          'blocks':blocks,
+          'policy':'EXPLICIT_CANONICAL_EASY_TIMES_ONLY_NO_NEW_POWER_OR_CLEARANCE',
+          'inc083_schema':INC083_SCHEMA,
+          'power_or_metabolic_evidence_attested':False}
+    # Use the previously installed strict endurance composition validator.
+    candidate=dict(s,session_composition=comp)
+    if not _nova_inc075_valid_compiled_duration(candidate):
+        audit.update(state='COMPILED_TIMELINE_REJECTED',issues=['R126_DURATION_VALIDATOR_FAILED'])
+        return session,audit
+    suffix=(' SESSION TIMELINE ('+_v19697_time_label(timing['total'])+
+        ' total, explicit EASY durations; power still unverified): '
+        +_v19697_time_label(timing['prep'])+' aerobic preparation; '
+        +_v19697_time_label(timing['core'])+' original canonical easy endurance'
+        +((' ('+', '.join(_v19697_time_label(x) for x in timing['segments'])+
+           ' explicit easy segments)') if timing['segments'] else '')
+        +'; '+_v19697_time_label(timing['finish'])+' Z1 cooldown. '
+        'No extra intervals or inferred personal watt targets.')
+    candidate['main_set']=str(s['main_set']).rstrip()+suffix
+    audit.update(state='NATIVE_TIMELINE_ACCOUNTED_SCIENCE_UNVERIFIED',modified=True,
+        accounted_seconds=timing['total'],core_seconds=timing['core'],
+        observation='MECHANICS_ONLY_NO_WATTS_NO_FUELING_GO')
+    return candidate,audit
+
+
+def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
+                                **kwargs):
+    """Audit missing BD-001 science without altering canonical planner inputs.
+
+    Never derive power, dates, dose, availability, fueling or execution flags.
+    All original evidence is passed through intact to the original producer.
+    """
+    plan=_INC083_OLD_FUTURE(owner_user_id,decision,clock,road,ledger,**kwargs)
+    if not isinstance(plan,dict):
+        return plan
+    goal=str(plan.get('goal_key') or '').upper()
+    deficits=[]
+    if plan.get('status')=='PLANNED_NOT_CLEARED':
+        workout=plan.get('workout')
+        if not isinstance(workout,dict):
+            deficits.extend(['FUTURE_WORKOUT_NOT_COMPILED',
+                'PERSONAL_WATTS_NOT_DERIVED_FROM_ORIGINAL_EVIDENCE',
+                'PHASES_AND_RECOVERIES_NOT_COMPILED',
+                'FUELING_NOT_DERIVED_FROM_COMPILED_DURATION'])
+        else:
+            deficits.append('UNVERIFIED_COMPILED_FUTURE_PROVENANCE')
+    elif plan.get('status')=='PLANNING_BLOCKED':
+        deficits.append('SCIENTIFIC_TEMPLATE_SELECTION_BLOCKED')
+    plan['inc083_science_audit']={'schema':INC083_SCHEMA,'goal_key':goal,
+        'contract':'BD-001_BD-002_BD-003_BD-005_BD-006',
+        'state':'NOT_VERIFIED','complete_quality':False,
+        'unresolved':deficits,'release_gate':'OFFLINE_NO_GO'}
+    return plan
+
+
+
+# BD-001 provenance hardening: a labelled `activity_id` or a signed SHA
+# of that label is not itself a measurement. Check the ORIGINAL owner-scoped
+# event ledger and replay the original watt model before the new issuer can
+# sign an athlete-facing quality. No new watts are computed or overridden.
+INC083_ISSUER_SCHEMA = 'NOVA-R196.9.127-ORIGINAL-SCIENCE-REPLAY-1'
+INC080_SCHEMA = 'NOVA-R196.9.127-ISSUER-HMAC-EVIDENCE-3'
+_INC083_PRIOR_ISSUER = _nova_r196956_build_offer
+_INC083_PRIOR_SEAL = _nova_inc076_seal_ok
+
+
+def _nova_inc083_science_replay(work, evidence_ledger, ftp_anchor,
+                               road, today=None):
+    """Re-run same canonical watt policy on the original repetition ledger.
+
+    Repeating self-reported prescription metadata is never an origin proof.
+    Fail closed for absent/foreign/undated/mismatched raw evidence and for
+    session types with no currently proven *numeric* BD-001 dose (including
+    optional effort-only sprint alternatives). No new science coefficients.
+    """
+    w=work if isinstance(work,dict) else {}
+    wid=str(w.get('nova_workout_id') or '')
+    t=_R19696_LIBRARY_INDEX.get(wid)
+    band=w.get('power_prescription') or {}
+    failure=lambda reason:{'schema':INC083_ISSUER_SCHEMA,'state':'FAIL',
+        'accepted':False,'reason':reason}
+    if not isinstance(t,dict) or not isinstance(band,dict):
+        return failure('UNKNOWN_CANONICAL_TEMPLATE_OR_POWER_BAND')
+    if str(t.get('pattern') or '').upper() not in {'STANDARD','SUSTAINED','SHORT_POWER'}:
+        return failure('CANONICAL_PATTERN_HAS_NO_ATTESTED_NUMERIC_BD001_DOSE')
+    if band.get('state')!='PRESCRIBED' or band.get('source')!='COMPARABLE_VERIFIED_REPEATED_WORK':
+        return failure('CURRENT_NUMERIC_SOURCE_NOT_REPEATED_WORK_PROVEN')
+    ev=evidence_ledger if isinstance(evidence_ledger,dict) else {}
+    repeats=(ev.get('repeatability') or {}).get('events') if isinstance(ev.get('repeatability'),dict) else None
+    if not isinstance(repeats,list):
+        return failure('ORIGINAL_REPEATABILITY_LEDGER_MISSING')
+    activity=str(band.get('activity_id') or '').strip()
+    matches=[e for e in repeats if isinstance(e,dict)
+        and activity and str(e.get('activity_id') or '').strip()==activity
+        and e.get('strong') is True
+        and str(e.get('activity_truth_source') or e.get('source') or '').upper()
+            in {'ICU_INTERVALS_CANONICAL','DEVICE_LAPS'}]
+    # Duplicated activity identities are an ambiguity, not independent proof.
+    if len(matches)!=1:
+        return failure('ACTIVITY_EVIDENCE_MISSING_OR_DUPLICATED')
+    event=matches[0]
+    def finite(x):
+        if type(x) not in (int,float):return None
+        return float(x) if math.isfinite(float(x)) else None
+    for x,y in (('avg_watts','observed_repeated_avg_watts'),
+                ('recovery_secs','observed_recovery_seconds'),
+                ('interval_secs','evidence_interval_seconds')):
+        a=finite(event.get(x));b=finite(band.get(y))
+        if a is None or b is None or abs(a-b)>0.1:
+            return failure('REPEATED_WORK_EVENT_AND_ISSUED_PROOF_MISMATCH_'+x.upper())
+    if (finite(event.get('reps')) is None
+        or finite(band.get('reps')) is None
+        or finite(event.get('reps'))<finite(band.get('reps'))
+        or str(event.get('date') or '')[:10] != str(band.get('activity_date') or '')[:10]
+        or band.get('recovery_duration_comparable') is not True
+        or (band.get('repeatability_state') not in {'VERIFIED_COMPARABLE_REPEATS',
+                                                   'SUPPORTED_BY_LONGER_REPEATS'}
+            and not _nova_inc100_independent_numeric_repeats_for_new_preload(
+                t, w, band, event))):
+        return failure('ORIGINAL_REPETITION_STRUCTURE_OR_DATE_NOT_VERIFIED')
+    try:
+        clock_day=(today if isinstance(today,date) else get_rome_now().date())
+        observed_day=date.fromisoformat(str(event['date'])[:10])
+        if not 0 <= (clock_day-observed_day).days <= 42:
+            return failure('REPEATED_WORK_OUTSIDE_ORIGINAL_42_DAY_ELIGIBILITY')
+        sci=(road or {}).get('scientific_progression') or {}
+        dimension=str(w.get('nova_prescription_dimension') or '').upper()
+        if (dimension not in set(t.get('dimensions') or ()) or
+            dimension!=str(sci.get('dimension') or '').upper()):
+            return failure('ORIGINAL_SCIENTIFIC_DIMENSION_MISMATCH')
+        replay=_v1943_band(t,evidence_ledger=ev,ftp_anchor=ftp_anchor,
+                           as_of_date=clock_day.isoformat(),dimension=dimension)
+    except (TypeError,ValueError,KeyError,OverflowError,AttributeError,ArithmeticError):
+        return failure('CANONICAL_WATT_MODEL_REPLAY_FAILED')
+    if (not isinstance(replay,dict) or replay.get('state')!='PRESCRIBED'
+        or replay.get('source')!='COMPARABLE_VERIFIED_REPEATED_WORK'
+        or replay.get('activity_id')!=activity
+        or replay.get('low_watts')!=band.get('low_watts')
+        or replay.get('high_watts')!=band.get('high_watts')
+        or replay.get('observed_repeated_avg_watts')!=band.get('observed_repeated_avg_watts')
+        or replay.get('observed_recovery_seconds')!=band.get('observed_recovery_seconds')
+        or replay.get('recovery_duration_comparable') is not True):
+        return failure('CANONICAL_WATT_REPLAY_DIFFERS_FROM_ISSUED_BAND')
+    separate_preload = _nova_inc100_independent_numeric_repeats_for_new_preload(
+        t, w, band, event)
+    return {'schema':INC083_ISSUER_SCHEMA,'state':'PASS','accepted':True,
+            'reason':'ORIGINAL_COMPLETED_REPETITION_LEDGER_REPLAY_MATCHED',
+            'source':'ORIGINAL_CANONICAL_WATT_MODEL_REPLAY',
+            'inc100_numeric_repeat_dose':('VERIFIED_BASE_REPEATS_NEW_PRELOAD_EXPLORATORY'
+                 if separate_preload else 'INHERITED_VERIFIED_REPEATABILITY'),
+            'inc100_new_preload_execution_preverified':False if separate_preload else None}
+
+
+def _nova_inc083_build_offer(*args,**kwargs):
+    result,audit=_INC083_PRIOR_ISSUER(*args,**kwargs)
+    if not isinstance(result,dict) or not isinstance(audit,dict):
+        return result,audit
+    if result.get('source')=='PRIOR_ISSUED_CANONICAL':
+        return result,audit  # never re-sign legacy without original inputs
+    if result.get('offer_status')!='OFFERED' or audit.get('state')!='PASS':
+        return result,audit
+    user_id=args[7] if len(args)>7 else kwargs.get('user_id')
+    road=args[5] if len(args)>5 else kwargs.get('road')
+    original=_nova_inc083_science_replay(result.get('workout'),
+        kwargs.get('evidence_ledger'),kwargs.get('ftp_anchor'),road)
+    if original.get('accepted') is not True:
+        # Discard the newly minted issuer rather than returning a signed but
+        # physiologically unsupported workout as an offer for Card 3.
+        return None,dict(audit,state='FAIL',inc083_science_replay=original,
+                         reason='ORIGINAL_SCIENCE_PROOF_MISSING_NO_ISSUANCE')
+    checked=dict(audit,inc083_origin_state='PASS',
+                 inc083_origin_proof_schema=INC083_ISSUER_SCHEMA)
+    # The HMAC covers the issuer's final audit, including this origin verdict.
+    mac=_nova_inc080_issuer_mac(result,user_id,checked)
+    if not mac:
+        return None,dict(checked,state='FAIL',reason='ORIGIN_REPLAY_HMAC_UNAVAILABLE')
+    result=dict(result,inc080_schema=INC080_SCHEMA,inc080_issuer_mac=mac)
+    checked.update(inc080_schema=INC080_SCHEMA,inc080_issuer_mac=mac)
+    return result,checked
+
+
+def _nova_inc083_seal_verified(offer,audit,user_id):
+    return bool(_INC083_PRIOR_SEAL(offer,audit,user_id)
+                and isinstance(audit,dict)
+                and audit.get('inc083_origin_state')=='PASS'
+                and audit.get('inc083_origin_proof_schema')==INC083_ISSUER_SCHEMA)
+
+_nova_r196956_build_offer = _nova_inc083_build_offer
+_nova_inc076_seal_ok = _nova_inc083_seal_verified
+
+APP_VERSION=('THE LAB · PRODUCT V4.9.226 R196.9.127 · INC-083 '
+             'ENDURANCE NATIVE + WATT ORIGIN REPLAY · OFFLINE NO-GO')
+
+
+
+# INC088 OFFLINE candidate — original producer selection loop, with explicit
+# no-issuance boundaries. NOT deployable. Does not authenticate activity origin.
+# Insert into R196.9.127 after the final existing INC083 bindings and before
+# the APP_VERSION / __main__ footer. The same canonical selector and watt model
+# remain the ONLY scientific decision authorities.
+INC088_SCHEMA = 'NOVA-INC088-SCIENCE-COMPATIBILITY-OFFLINE-CANDIDATE-1'
+_INC088_PLAN_PREVIOUS = _nova_inc056_plan_result
+
+
+def _nova_inc088_scientific_candidate(goal, dimension, evidence_ledger,
+                                     training_definitions, road, ftp_anchor=None,
+                                     today=None):
+    """Search original selector again only after its chosen dose fails replay.
+
+    This is a preliminary gate: `strong=True` in the caller's ledger is NOT
+    authenticated RAW input. No offer, HMAC, personal Watt display or training
+    clearance may be derived from this helper alone.
+    """
+    g = str(goal or '').upper()
+    dim = str(dimension or '').upper()
+    library = [t for t in _NOVA_WORKOUT_LIBRARY if isinstance(t,dict)
+               and str(t.get('goal') or '').upper() == g
+               and dim in set(t.get('dimensions') or ())
+               and not t.get('adaptive_only')]
+    if not library:
+        return None, {'schema':INC088_SCHEMA,'state':'WITHHELD',
+                      'reason':'NO_CANONICAL_GOAL_DIMENSION_TEMPLATE',
+                      'selector_calls':0,'rejected':[]}
+    exclusions = set(_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get())
+    rejected = []
+    seen = set()
+    for _ in range(min(len(library)+1, 173)):
+        token = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(exclusions))
+        try:
+            selected, selection_audit = _v19699_select_workout_template(
+                g,dim,evidence_ledger=copy.deepcopy(evidence_ledger or {}),
+                training_definitions=copy.deepcopy(training_definitions),slot={})
+        except (TypeError,ValueError,KeyError,AttributeError,IndexError,
+                OverflowError,ArithmeticError):
+            return None, {'schema':INC088_SCHEMA,'state':'WITHHELD',
+                'reason':'ORIGINAL_SELECTOR_EXCEPTION','selector_calls':len(rejected)+1,
+                'rejected':rejected}
+        finally:
+            _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
+        if not isinstance(selected,dict):
+            return None, {'schema':INC088_SCHEMA,'state':'WITHHELD',
+                'reason':'ORIGINAL_SELECTOR_EXHAUSTED','selector_calls':len(rejected)+1,
+                'rejected':rejected}
+        wid = str(selected.get('id') or '')
+        canonical = _R19696_LIBRARY_INDEX.get(wid)
+        if (not wid or wid in seen or not isinstance(canonical,dict)
+            or canonical.get('goal') != g or dim not in set(canonical.get('dimensions') or ())
+            or canonical.get('adaptive_only')):
+            return None, {'schema':INC088_SCHEMA,'state':'WITHHELD',
+                'reason':'SELECTOR_CANONICAL_IDENTITY_VIOLATION',
+                'selector_calls':len(rejected)+1,'rejected':rejected}
+        seen.add(wid)
+        try:
+            band = _v1943_band(canonical,evidence_ledger=evidence_ledger,
+                ftp_anchor=ftp_anchor,as_of_date=(today.isoformat() if today else None),
+                dimension=dim)
+            witness = _nova_inc083_science_replay(
+                {'nova_workout_id':wid,'nova_prescription_dimension':dim,
+                 'power_prescription':band},
+                evidence_ledger,ftp_anchor,road,today=today)
+        except (TypeError,ValueError,KeyError,AttributeError,IndexError,
+                OverflowError,ArithmeticError):
+            band = {}; witness = {'accepted':False,'reason':'WATT_REPLAY_EXCEPTION'}
+        if (witness.get('accepted') is True
+            and isinstance(band,dict)
+            and type(band.get('low_watts')) is int
+            and type(band.get('high_watts')) is int
+            and 0 < band['low_watts'] < band['high_watts']):
+            return canonical, {'schema':INC088_SCHEMA,'state':'COMPATIBLE_OFFLINE_ONLY',
+                'reason':'SELECTOR_AND_ORIGINAL_WATT_REPLAY_ALIGNED',
+                'selector_calls':len(rejected)+1,
+                'selected_workout_id':wid,
+                'rejected':rejected,
+                'raw_provenance_authenticated':False,
+                'source_origin_verified_for_production':False,
+                'workout_compiled':False,
+                'issued':False}
+        # Rejected candidates are removed via the existing scoped exclusions.
+        # No local hand-crafted ranking algorithm or automatic substitute.
+        rejected.append({'workout_id':wid,
+                         'reason':str(witness.get('reason') or 'NOT_SCIENTIFICALLY_PROVEN')})
+        exclusions.add(wid)
+    return None, {'schema':INC088_SCHEMA,'state':'WITHHELD',
+        'reason':'SELECTOR_BOUNDED_SEARCH_EXHAUSTED',
+        'selector_calls':len(rejected),'rejected':rejected}
+
+
+def _nova_inc056_plan_result(owner_user_id, decision, road, evidence_ledger,
+                             training_definitions, planning_context, training_state,
+                             active_offer):
+    """Replace ONLY an unsupported future structure using the original selector.
+
+    Preserves the original planning contract: workout=None, no offer,
+    no schedule, no user-facing Watt prescription and no invented slot.
+    """
+    plan = _INC088_PLAN_PREVIOUS(owner_user_id,decision,road,evidence_ledger,
+        training_definitions,planning_context,training_state,active_offer)
+    if not isinstance(plan,dict) or plan.get('status') != 'PLANNED_NOT_CLEARED':
+        return plan  # Existing authenticated offer, injury, other veto unchanged.
+    goal = str(plan.get('goal_key') or '').upper()
+    dim = str(plan.get('dimension') or '').upper()
+    candidate, proof = _nova_inc088_scientific_candidate(
+        goal,dim,evidence_ledger,training_definitions,road,ftp_anchor=None,
+        today=get_rome_now().date())
+    out = dict(plan,inc088_selector_preflight=proof)
+    if candidate is None:
+        # A structure-only recommendation is NOT a complete BD-001 quality.
+        out.update(status='PLANNING_BLOCKED',workout_id=None,
+            mechanics=None,template_digest=None,
+            reason_codes=['NUMERIC_REPEAT_DOSE_NOT_VERIFIED_FOR_CATALOGUE'],
+            dose_evidence_state='NOT_AUTHORIZED',
+            workout=None,personalized_watts=None)
+        return out
+    wid = str(candidate['id'])
+    mechanics = _nova_r1969102_catalogue_copy(wid,goal)
+    if not isinstance(mechanics,dict):
+        out.update(status='PLANNING_BLOCKED',workout_id=None,
+            mechanics=None,template_digest=None,
+            reason_codes=['CANONICAL_VIEW_UNAVAILABLE'],
+            workout=None,personalized_watts=None)
+        return out
+    digest = hashlib.sha256(_nova_inc051_canonical_json(candidate).encode()).hexdigest()
+    seconds = _nova_quality_template_required_seconds(candidate,dim)
+    if seconds is not None and not (0 < seconds <= 360*60):
+        out.update(status='PLANNING_BLOCKED',workout_id=None,
+            mechanics=None,template_digest=None,
+            reason_codes=['INVALID_CANONICAL_TIME_REQUIREMENT'],
+            workout=None,personalized_watts=None)
+        return out
+    out.update(workout_id=wid,
+        mechanics={'workout_id':wid,'title':mechanics['title'],
+             'structure':mechanics['structure'],'execution':mechanics['execution'],
+             'purpose':mechanics['purpose'],'template_digest':digest,
+             'minimum_session_minutes':round(seconds/60,1) if seconds else None},
+        template_digest=digest,
+        reason_codes=['COMPATIBLE_STRUCTURE_ONLY_NOT_A_QUALITY'],
+        dose_evidence_state='PERSONAL_POWER_NOT_COMPILED',
+        workout=None,personalized_watts=None)
+    return out
+
+
+APP_VERSION = ("THE LAB · INC088 SCIENCE SELECTOR PREFLIGHT · OFFLINE NO-GO")
+
+# INC091 / DTM BD-001..BD-009 · authorized 2026-11-02 · OFFLINE CANDIDATE.
+# Reuses the canonical selector, watt model, native raw renderer and interval
+# compiler. No Calendar writes, new science coefficients, changes to the DTM,
+# or second independent chooser. Live issuer is fail-closed on provenance.
+INC091_SCHEMA = 'NOVA-INC091-FUTURE-COMPILED-OWNER-BOUND-1'
+INC091_SOURCE = 'SINGLE_CANONICAL_SCIENCE_FUTURE_UNSCHEDULED'
+_INC091_FUTURE_BEFORE = _nova_inc050_future_quality
+_INC091_ATTEST_BEFORE = _nova_inc051_attest_future_snapshot
+_INC091_VIEW_BEFORE = _nova_r1969104_canonical_card3
+_INC091_UI_BEFORE = _v4891_prepare_snapshot_for_ui
+_INC091_DUPLICATE_BEFORE = _nova_r196993_card3_duplicate_index
+
+
+def _nova_inc091_truth(evidence_ledger, band, owner_user_id, producer_request=True):
+    """Live-only provenance at original server Activity Truth owner boundary.
+
+    An event's own source label or strong flag is not authority. The call must
+    occur in the authenticated Snapshot request, with an owner-matched server
+    built event and identical independent ledger summaries. The RAW FIT byte
+    hash/owner receipt is still a separate unverified external release gate.
+    """
+    if not owner_user_id or not has_request_context():
+        return None
+    actor = current_user(touch=False)
+    if (not isinstance(actor, dict) or str(actor.get('id') or '') != str(owner_user_id)
+        or (producer_request and getattr(request, 'endpoint', None) != 'analyze')
+        or (producer_request and str(getattr(request, 'form', {}).get('qa_mode') or '').upper() in {'LIVE','PYTHON'})
+        or getattr(g, 'r169_qa_target_user_id', None)):
+        return None
+    ev = evidence_ledger if isinstance(evidence_ledger, dict) else {}
+    rows = ev.get('events') or []
+    reps = ((ev.get('repeatability') or {}).get('events') or [])
+    aid = str((band or {}).get('activity_id') or '')
+    def is_truth(item):
+        return (isinstance(item, dict) and str(item.get('activity_id') or '') == aid
+            and str(item.get('activity_truth_status') or '').upper() == 'RESOLVED'
+            and str(item.get('activity_truth_source') or '').upper()
+                in {'DEVICE_LAPS','ICU_INTERVALS_CANONICAL'})
+    pairs = [row for row in rows if is_truth(row) and row.get('event_kind') == 'TRAINING']
+    rep_matches = [row for row in reps if is_truth(row) and row.get('strong') is True
+         and row.get('recovery_observation_complete') is True
+         and type(row.get('recovery_pair_count')) is int
+         and type(row.get('recovery_pair_expected')) is int
+         and row['recovery_pair_count'] == row['recovery_pair_expected']
+         and row['recovery_pair_count'] == row.get('reps',0) - 1]
+    if len(pairs) != 1 or len(rep_matches) != 1 or not aid:
+        return None
+    row, repeat = pairs[0], rep_matches[0]
+    if (str(row.get('date') or '')[:10] != str(repeat.get('date') or '')[:10]
+        or row.get('repeatability') != repeat
+        or any(repeat.get(x) != (band or {}).get(y) for x,y in (
+            ('interval_secs','evidence_interval_seconds'),
+            ('recovery_secs','observed_recovery_seconds')))):
+        return None
+    try:
+        digest = hashlib.sha256(_nova_inc051_canonical_json({
+            'owner_scope':_nova_inc050_owner_scope(owner_user_id),
+            'activity':row,'repeat':repeat}).encode()).hexdigest()
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return {'state':'SERVER_RESOLVED_TRUTH_REPLAYED',
+        'activity_id':aid,'event_digest':digest,
+        'owner_scope':_nova_inc050_owner_scope(owner_user_id),
+        'raw_fit_byte_receipt_verified':False}
+
+
+def _nova_inc091_compile_native(tpl, plan, ledger, ftp_anchor, road, power_model=None):
+    """Only the current canonical renderer and compiler mechanics; no slot.
+
+    The minimum time comes from the canonical template's time owner. Neither
+    this function nor its result states that the athlete has that time free.
+    """
+    goal = str(plan.get('goal_key') or '')
+    dim = str(plan.get('dimension') or '')
+    if not isinstance(tpl, dict) or tpl.get('id') != plan.get('workout_id'):
+        return None
+    wid = tpl['id']
+    band = _v1943_band(tpl, evidence_ledger=ledger, ftp_anchor=ftp_anchor,
+        as_of_date=get_rome_now().date().isoformat(),dimension=dim)
+    proof = _nova_inc083_science_replay({'nova_workout_id':wid,
+        'nova_prescription_dimension':dim,'power_prescription':band},
+        ledger, ftp_anchor, road)
+    if proof.get('accepted') is not True or band.get('state') != 'PRESCRIBED':
+        return None
+    raw = _v109_render_library_workout(tpl,goal,dim,
+        power_model=power_model,ftp_anchor=ftp_anchor,slot=None)
+    seconds = _nova_quality_template_required_seconds(tpl,dim)
+    if (not isinstance(raw,dict) or type(seconds) not in (int,float)
+        or not math.isfinite(seconds) or seconds <= 0 or seconds > 6*3600
+        or (seconds % 60) != 0):
+        return None
+    if not (type(band.get('low_watts')) is int
+        and type(band.get('high_watts')) is int
+        and 0 < band['low_watts'] < band['high_watts'] <= 2500):
+        return None
+    # Source text is rendered by the canonical library before watt replay;
+    # suppress its obsolete "no measured benchmark" sentence only when the
+    # original model's verified repeatability now proves a numeric range.
+    main = str(raw.get('main_set') or '')
+    main = main.replace('No measured same-duration benchmark or justified power target is available; use free/resistance mode and preserve the prescribed workout structure and purpose.',
+        'Completed comparable repetitions support the personal calculated work range below; use free/resistance mode and preserve the original repeat structure.')
+    main = main + (' Personal work range (calculated from comparable repeats, '
+        f'not an observed single-effort PB): {band["low_watts"]}–{band["high_watts"]} W; '
+        'not an execution clearance or pass/fail target.')
+    work = {
+        'nova_workout_id':wid,'goal_key':goal,'nova_prescription_dimension':dim,
+        'nova_workout_library_version':NOVA_WORKOUT_LIBRARY_VERSION,
+        'nova_template_signature':_v109_template_signature(tpl),
+        'title':str(raw.get('title') or ''),'main_set':main,
+        'why':str(raw.get('why') or ''),'intensity':str(raw.get('intensity') or ''),
+        'intensity_class':('threshold' if str(raw.get('intensity') or '').upper().find('THRESHOLD')>=0 else 'vo2'),
+        'stimulus_architecture_state':'NOVA_CANONICAL_LIBRARY',
+        'hard_spacing_relevant':True, 'nova_prescription_authority':False,
+        'restriction':'NONE', 'duration':f'{seconds/60:g} min',
+        'power_prescription':copy.deepcopy(band),
+        'prescribed_power_low':band['low_watts'],
+        'prescribed_power_high':band['high_watts'],
+        'session_duration_feasibility':{'state':'UNASSESSED',
+            'reason':'NO_ATHLETE_CONFIRMED_SLOT_OR_CALENDAR_DATE',
+            'actual_available_minutes':None},
+        'is_scheduled':False,'date':None,
+    }
+    complete,audit = _v19697_session_envelope(work)
+    if (not isinstance(complete,dict) or audit.get('state') != 'COMPLETE'
+        or not _nova_inc075_valid_compiled_duration(complete)
+        or not _v19696_execution_contract(complete).get('ready')
+        or complete.get('nova_workout_id') != wid):
+        return None
+    return complete
+
+
+def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
+        evidence_ledger=None, power_model=None, ftp_anchor=None,
+        aerobic_metabolic_range=None, training_definitions=None,
+        compiler_args=None, planning_context=None, training_state=None,
+        active_offer=None):
+    # First use the ORIGINAL final selector + protected R127/INC088 selection.
+    original = _INC091_FUTURE_BEFORE(owner_user_id,decision,clock,road,ledger,
+        evidence_ledger=evidence_ledger,power_model=power_model,
+        ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions,compiler_args=compiler_args,
+        planning_context=planning_context,training_state=training_state,
+        active_offer=active_offer)
+    if (not isinstance(original,dict) or original.get('status') != 'PLANNED_NOT_CLEARED'
+        or active_offer or _nova_inc079_explicit_injury_restriction(planning_context)):
+        return original
+    wid = str(original.get('workout_id') or '')
+    tpl = _R19696_LIBRARY_INDEX.get(wid)
+    if not isinstance(tpl,dict): return original
+    # Read the real actor and resolved activity from the same server-issued
+    # snapshot. No offline ZIP, user-supplied ledger or unscoped metadata can
+    # manufacture a live trust receipt or an athlete-facing quality.
+    band = _v1943_band(tpl,evidence_ledger=evidence_ledger,
+        ftp_anchor=ftp_anchor,as_of_date=get_rome_now().date().isoformat(),
+        dimension=original.get('dimension'))
+    origin = _nova_inc091_truth(evidence_ledger,band,owner_user_id)
+    if not origin:
+        return dict(original,inc091_integrity={
+            'schema':INC091_SCHEMA,'state':'ORIGIN_NOT_ATTESTED',
+            'reason':'LIVE_OWNER_BOUND_RESOLVED_SOURCE_REQUIRED',
+            'complete_quality':False})
+    work = _nova_inc091_compile_native(tpl,original,evidence_ledger,
+        ftp_anchor,road,power_model)
+    if work is None:
+        return dict(original,inc091_integrity={'schema':INC091_SCHEMA,
+            'state':'NATIVE_COMPILER_NOT_COMPLETE','complete_quality':False})
+    comp = work['session_composition']
+    output = dict(original, schema=INC091_SCHEMA, source=INC091_SOURCE,
+        status='COMPILED_UNSCHEDULED',workout=work,
+        personalized_watts={'low_watts':band['low_watts'],
+            'high_watts':band['high_watts'],'units':'W',
+            'phase':'CANONICAL_INTERVALS','source':band['source']},
+        compiled_workout_digest=_nova_inc050_workout_digest(work),
+        required_window_minutes=comp['total_seconds']/60,
+        actual_known_window_minutes=None,
+        dose_evidence_state='ORIGINAL_REPEATED_WORK_REPLAYED',
+        origin_proof=origin,reason_codes=['FUTURE_COMPLETE_DOSE_NOT_EXECUTION_CLEARANCE'],
+        execution_authorized=False,not_scheduled=True,not_issued=True,
+        adds_calendar_event=False,adds_ledger_row=False,
+        inc091_integrity={'schema':INC091_SCHEMA,'state':'PENDING_FINAL_SNAPSHOT_ATTESTATION',
+            'complete_quality':True,'raw_fit_byte_receipt_verified':False})
+    # Compute the versioned issuer input context once. Historical INC051 seals
+    # and the previous plan schema stay byte-for-byte unchanged.
+    output['producer_context_digest'] = _nova_inc091_context_digest({
+        'nova_decision':decision,'coach_clock':clock,'adaptive_roadmap':road,
+        'evidence_ledger':evidence_ledger,'power_model':power_model,
+        'ftp_anchor':ftp_anchor,'training_definitions':training_definitions,
+        'planning_context':planning_context,'training_state':training_state})
+    return output
+
+
+def _nova_inc091_context_digest(data):
+    """Normalize only empty UI-added signals, not physiological inputs."""
+    if not isinstance(data,dict): return None
+    selected=dict(data)
+    training=selected.get('training_state')
+    if isinstance(training,dict) and training.get('signals') == []:
+        selected['training_state']={k:v for k,v in training.items() if k!='signals'}
+    return _nova_inc051_context_digest(selected)
+
+
+def _nova_inc091_eligible(data,plan,owner_user_id,require_seal=True):
+    if not isinstance(data,dict) or not isinstance(plan,dict) or not owner_user_id:
+        return False
+    work = plan.get('workout')
+    goal = str(plan.get('goal_key') or '')
+    wid = str(plan.get('workout_id') or '')
+    tpl = _R19696_LIBRARY_INDEX.get(wid)
+    dose = plan.get('personalized_watts') or {}
+    origin = plan.get('origin_proof') or {}
+    if (plan.get('schema') != INC091_SCHEMA or plan.get('source') != INC091_SOURCE
+        or plan.get('status') != 'COMPILED_UNSCHEDULED'
+        or not isinstance(work,dict) or not isinstance(tpl,dict)
+        or str(tpl.get('goal') or '').upper() != goal
+        or str(work.get('nova_workout_id') or '') != wid
+        or plan.get('dimension') not in set(tpl.get('dimensions') or ())
+        or plan.get('template_digest') != hashlib.sha256(
+            _nova_inc051_canonical_json(tpl).encode()).hexdigest()
+        or plan.get('compiled_workout_digest') != _nova_inc050_workout_digest(work)
+        or not _nova_inc075_valid_compiled_duration(work)
+        or not _v19696_execution_contract(work).get('ready')
+        or not isinstance(dose,dict) or dose.get('units') != 'W'
+        or dose.get('phase') != 'CANONICAL_INTERVALS'
+        or not isinstance(origin,dict) or origin.get('state') != 'SERVER_RESOLVED_TRUTH_REPLAYED'
+        or origin.get('owner_scope') != _nova_inc050_owner_scope(owner_user_id)
+        or plan.get('owner_scope') != _nova_inc050_owner_scope(owner_user_id)
+        or data.get('future_quality_owner_scope') != plan.get('owner_scope')
+        or plan.get('execution_authorized') is not False
+        or plan.get('not_issued') is not True or plan.get('not_scheduled') is not True
+        or plan.get('adds_calendar_event') is not False
+        or plan.get('adds_ledger_row') is not False
+        or plan.get('producer_context_digest') != _nova_inc091_context_digest(data)
+        or data.get('next_quality_offer')
+        or _nova_inc079_explicit_injury_restriction(data.get('planning_context'))):
+        return False
+    band = work.get('power_prescription') or {}
+    if (dose.get('low_watts') != band.get('low_watts')
+        or dose.get('high_watts') != band.get('high_watts')
+        or dose.get('source') != band.get('source')
+        or _nova_inc083_science_replay(work,data.get('evidence_ledger'),
+             data.get('ftp_anchor'),data.get('adaptive_roadmap')).get('accepted') is not True):
+        return False
+    # An unmodified report is not proof of RAW FIT origins: repeat the native
+    # server owner+truth check at attestation and rendering time.
+    truth = _nova_inc091_truth(data.get('evidence_ledger'),band,owner_user_id,producer_request=False)
+    if (not truth or truth.get('event_digest') != origin.get('event_digest')):
+        return False
+    comp = work.get('session_composition') or {}
+    if (type(comp.get('total_seconds')) not in (int,float)
+        or comp['total_seconds']/60 != plan.get('required_window_minutes')
+        or work.get('date') is not None
+        or (work.get('session_duration_feasibility') or {}).get('state') != 'UNASSESSED'):
+        return False
+    if require_seal and (plan.get('contract_schema') != INC091_SCHEMA
+        or plan.get('context_digest') != _nova_inc091_context_digest(data)
+        or not isinstance(plan.get('fueling'),dict)
+        or not hmac.compare_digest(str(plan.get('authority_seal') or ''),
+             str(_nova_inc051_plan_seal(plan,owner_user_id) or ''))):
+        return False
+    return True
+
+
+def _nova_inc051_attest_future_snapshot(data,owner_user_id):
+    plan = (data or {}).get('future_quality_plan') if isinstance(data,dict) else None
+    if not isinstance(plan,dict) or plan.get('schema') != INC091_SCHEMA:
+        return _INC091_ATTEST_BEFORE(data,owner_user_id)
+    if not _nova_inc091_eligible(data,plan,owner_user_id,require_seal=False):
+        data['future_quality_plan'] = None
+        return False
+    comp = plan['workout']['session_composition']
+    goal = str(plan.get('goal_key') or '').upper()
+    kind = {'POWER_5':'VO2','VO2MAX':'VO2','POWER_20':'THRESHOLD',
+        'TIME_TRIAL':'THRESHOLD','POWER_1':'SPRINTS',
+        'SPRINTER':'SPRINTS','ENDURANCE_BASE':'ENDURANCE'}.get(goal)
+    minutes = comp['total_seconds']/60
+    metabolic = data.get('metabolic_context') or {}
+    if not kind or not isinstance(metabolic,dict) or not 20<=minutes<=360:
+        data['future_quality_plan'] = None
+        return False
+    try:
+        inside = _intra_fueling_strategy(kind,'INDOOR',kind,minutes,
+            glycogen_pressure=metabolic.get('glycogen_pressure'),
+            metabolic_context=metabolic)
+        outside = _intra_fueling_strategy(kind,'OUTDOOR',kind,minutes,
+            glycogen_pressure=metabolic.get('glycogen_pressure'),
+            metabolic_context=metabolic)
+        if not (isinstance(inside,dict) and isinstance(outside,dict)
+            and inside.get('display') and outside.get('display')):
+            raise ValueError('FUELING_UNAVAILABLE')
+        plan['fueling'] = {'source':'CANONICAL_COMPILED_FUTURE_DURATION',
+            'workout_id':plan['workout_id'],
+            'display':str(inside['display']),
+            'outdoor_display':str(outside['display']),
+            'total_minutes_example':minutes,
+            'read_only':True,'example':False,
+            'detail':f'Fueling for the {minutes:g}-minute complete unscheduled quality. Not day-of clearance.'}
+        plan['context_digest'] = plan['producer_context_digest']
+        plan['contract_schema'] = INC091_SCHEMA
+        plan['authority_seal'] = _nova_inc051_plan_seal(plan,owner_user_id)
+        if not plan['authority_seal'] or not _nova_inc091_eligible(data,plan,owner_user_id):
+            raise ValueError('FINAL_ATTESTATION_FAILED')
+        return True
+    except (TypeError,ValueError,KeyError,OverflowError):
+        data['future_quality_plan']=None
+        return False
+
+
+def _nova_r1969104_canonical_card3(data,expected_owner_user_id=None):
+    old = _INC091_VIEW_BEFORE(data,expected_owner_user_id)
+    plan = (data or {}).get('future_quality_plan') if isinstance(data,dict) else None
+    if not isinstance(old,dict) or old.get('verified_offer'):
+        return old
+    if not isinstance(plan,dict) or plan.get('schema') != INC091_SCHEMA:
+        return old
+    user_id = _nova_inc051_verified_owner_id(expected_owner_user_id)
+    if not _nova_inc091_eligible(data,plan,user_id):
+        return old
+    work = plan['workout']
+    power = work['power_prescription']
+    low,high = power['low_watts'],power['high_watts']
+    phases = _nova_r196999_phase_rows(work)
+    if not phases: return old
+    return dict(old,state='FUTURE_COMPLETE_OWNER_BOUND',
+        verified_offer=False,verified_future_plan=True,
+        planned_quality=False,offer_structure_only=False,
+        direction_only=False,is_scheduled=False,execution_authorized_by_preview=False,
+        workout_id=plan['workout_id'],title=work['title'],
+        structure=work['main_set'],execution=_nova_r1969102_catalogue_copy(
+            plan['workout_id'],plan['goal_key'])['execution'],
+        purpose=work['why'],goal_key=plan['goal_key'],
+        personalized_watts=f'{low}–{high} W (derived from comparable repeated work)',
+        power_source=power['source'],phases=phases,
+        execution_clearance=plan.get('execution_state'),
+        reason=('Complete minimum canonical session duration: '
+            f'{plan["required_window_minutes"]:g} min, including preparation and cool-down. '
+            'No calendar date, available time or day-of clearance has been asserted.'))
+
+
+def _nova_inc091_duplicate_index(data):
+    prior = _INC091_DUPLICATE_BEFORE(data)
+    if prior is not None: return prior
+    d = data if isinstance(data,dict) else {}
+    p = d.get('future_quality_plan') or {}
+    owner_id = _nova_inc051_verified_owner_id()
+    if not _nova_inc091_eligible(d,p,owner_id):return None
+    work = p['workout']
+    # The same full identity + watt dose + immutable compiler blocks must be
+    # actually VISIBLE in chronological Card 1/2. Mere matching names fail.
+    for i,row in enumerate((d.get('next_sessions') or [])[:2]):
+        if not isinstance(row,dict): continue
+        if (row.get('hidden') is True or row.get('visible') is False
+            or row.get('provisional_quality') is True
+            or row.get('is_race') is True
+            or row.get('nova_workout_id') != work.get('nova_workout_id')
+            or row.get('owner_user_id',str(owner_id)) != str(owner_id)
+            or row.get('power_prescription') != work.get('power_prescription')
+            or row.get('session_composition') != work.get('session_composition')
+            or row.get('main_set') != work.get('main_set')
+            or not _nova_inc075_valid_compiled_duration(row)):
+            continue
+        return i
+    return None
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    old = _INC091_UI_BEFORE(data)
+    if not isinstance(old,dict):return old
+    out=dict(old)
+    card=_nova_r1969104_canonical_card3(out)
+    if card.get('verified_future_plan') is not True:
+        return out
+    plan=out['future_quality_plan']
+    out['nova_card3_workout_view']=card
+    out['quality_direction_fuel']=copy.deepcopy(plan['fueling'])
+    q=dict(out.get('next_quality_direction') or {})
+    q.update(source=INC091_SOURCE,title=card['title'],
+        athlete_title=card['title'],athlete_explanation=card['reason'],
+        referenced_canonical_template_id=card['workout_id'],
+        direction_only=False,is_a_prescription=True,
+        is_scheduled=False,execution_authorized_by_preview=False,
+        suggested_date=None,suggested_time=None)
+    out['next_quality_direction']=q
+    return out
+
+app.jinja_env.globals['nova_quality_card3_duplicate_index']=_nova_inc091_duplicate_index
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · R196.9.129 · INC091 DTM BD-001 CANDIDATE '
+    'CANONICAL FUTURE DOSING + OWNER-SCOPED RECEIPT · OFFLINE NO-GO')
+
+
+# INC094 / R196.9.130 — BD-001 C07 + BD-005 chronological fueling alignment.
+# DTM v1.0.70 unchanged. No new scientific selector, watts, new user data,
+# appointment, injury restriction, or DB write. Only the existing verified
+# canonical fuel is made visible in Card 1/2 when exact C07 duplicate exists.
+INC094_SCHEMA = 'NOVA-INC094-CHRONOLOGICAL-QUALITY-FUEL-1'
+_INC094_PREVIOUS_UI = _v4891_prepare_snapshot_for_ui
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    old = _INC094_PREVIOUS_UI(data)
+    if not isinstance(old,dict):
+        return old
+    out = dict(old)
+    out['quality_fuel_chronological_card'] = None
+    fuel = out.get('quality_direction_fuel')
+    if not isinstance(fuel,dict) or not str(fuel.get('display') or '').strip():
+        return out
+    # C07 verification is owner-scoped, sealed, complete, and includes the
+    # same workout watt dose and compiled phase timeline in the visible row.
+    index = _nova_inc091_duplicate_index(out)
+    rows = out.get('next_sessions') or []
+    if (type(index) is not int or index not in (0,1)
+        or not isinstance(rows,list) or index >= len(rows)
+        or not isinstance(rows[index],dict)
+        or str(fuel.get('workout_id') or '') !=
+            str(rows[index].get('nova_workout_id') or '')):
+        return out
+    out['quality_fuel_chronological_card'] = index
+    return out
+
+
+# Presentation only. Generic nutrition remains for other chronological rows;
+# same-quality C07 replaces it with the canonical, compiled workout fuel.
+_INC094_FUEL_BODY = ('{% if n %}\n'
+    '<div class="v23-fuel-dose">{{ n.intra_cho }}</div>')
+assert HOME_PAGE.count(_INC094_FUEL_BODY) == 1, 'INC094_FUEL_ANCHOR_DRIFT'
+_INC094_FUEL_CHRONO = '''{% if not is_quality_slot and data.quality_fuel_chronological_card == loop.index0 and data.quality_direction_fuel %}
+{% set qfuel = data.quality_direction_fuel %}
+<div class="v23-fuel-dose">{{ qfuel.display|e }}</div>
+<div class="v23-fuel-copy">CANONICAL QUALITY FUEL · {{ qfuel.detail|e }}{% if qfuel.outdoor_display %}<p>OUTDOOR: {{ qfuel.outdoor_display|e }}</p>{% endif %}</div>
+{% elif n %}
+<div class="v23-fuel-dose">{{ n.intra_cho }}</div>'''
+HOME_PAGE = HOME_PAGE.replace(_INC094_FUEL_BODY, _INC094_FUEL_CHRONO, 1)
+assert HOME_PAGE.count('data.quality_fuel_chronological_card == loop.index0') == 1
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · R196.9.130 · INC094 VERIFIED C07 QUALITY FUEL '
+               'IN CARD 1/2 · OFFLINE CANDIDATE NO-GO')
+
+
+# INC095 / R196.9.131 — preserve ORIGINAL measured 30/15 float and set
+# recoveries and permit a SAME-PROTOCOL watt calculation ONLY for a complete
+# owner-scoped, resolved, non-race raw-power 2-set event. No FTP proxy, 5-minute
+# transfer, calendar, execution permission or new chooser is introduced.
+INC095_SCHEMA = 'NOVA-INC095-MEASURED-MICRO-30-15-1'
+_INC095_STATS_BEFORE = _v4879_repeatability_stats
+_INC095_LEDGER_BEFORE = build_evidence_ledger
+_INC095_BAND_BEFORE = _v1943_band
+_INC095_REPLAY_BEFORE = _nova_inc083_science_replay
+_INC095_TRUTH_BEFORE = _nova_inc091_truth
+
+
+def _v4879_repeatability_stats(intervals, source=None):
+    if str(source or '').upper() != 'ICU_RAW_WATTS_30_15':
+        return _INC095_STATS_BEFORE(intervals, source=source)
+    # Raw stream parsers may yield None/NaN in work OR float windows. Never
+    # crash a production Snapshot while trying to attest that incomplete data.
+    if not isinstance(intervals,list) or not intervals:
+        return None
+    for interval in intervals:
+        if not isinstance(interval,dict):return None
+        if str(interval.get('type') or '') in ('WORK','RECOVERY'):
+            watts=interval.get('average_watts')
+            if type(watts) not in (int,float) or not math.isfinite(watts):
+                return None
+    original = _INC095_STATS_BEFORE(intervals, source=source)
+    if not isinstance(original,dict):return original
+    rows = intervals if isinstance(intervals,list) else []
+    works = sorted((r for r in rows if isinstance(r,dict) and r.get('type')=='WORK'
+        and r.get('_v196910_observed') is True),key=lambda r:r.get('start_time',-1))
+    n = int(original.get('reps_per_set') or 0)
+    if not (8<=n<=24 and len(works)==2*n and original.get('sets')==2
+        and original.get('reps')==2*n and original.get('interval_secs')==30
+        and original.get('recovery_secs')==15):
+        return original
+    floats = [r for r in rows if isinstance(r,dict) and r.get('type')=='RECOVERY'
+        and r.get('between_sets') is not True]
+    bridges = [r for r in rows if isinstance(r,dict) and r.get('type')=='RECOVERY'
+        and r.get('between_sets') is True]
+    if len(floats)!=len(works) or len(bridges)!=1:
+        return original
+    for r in works:
+        if (r.get('moving_time')!=30 or r.get('elapsed_time')!=30
+            or r.get('_v196910_observed') is not True):return original
+        found = [f for f in floats if f.get('_v196910_observed') is True
+            and f.get('start_time')==r.get('end_time')
+            and f.get('end_time')==r.get('end_time')+15
+            and f.get('moving_time')==15 and f.get('set')==r.get('set')
+            and f.get('rep_in_set')==r.get('rep_in_set')
+            and type(f.get('average_watts')) in (int,float)
+            and math.isfinite(f['average_watts'])]
+        if len(found)!=1:return original
+    rest = bridges[0]
+    if (rest.get('_v196910_observed') is not True
+        or type(rest.get('moving_time')) not in (int,float)
+        or not 150<=rest['moving_time']<=540
+        or rest.get('end_time')!=works[n].get('start_time')
+        or rest.get('start_time')!=works[n-1].get('end_time')+15
+        or type(rest.get('average_watts')) not in (int,float)
+        or not math.isfinite(rest['average_watts'])):
+        return original
+    return dict(original,pattern='MICRO_30_15',float_s=15,work_s=30,
+        recovery_observation_complete=True,
+        recovery_pair_count=len(works)-1,
+        recovery_pair_expected=len(works)-1,
+        micro_recovery_proof_schema=INC095_SCHEMA)
+
+
+def _inc095_verified_micro_block(block):
+    b=block if isinstance(block,dict) else {}
+    truth=b.get('activity_truth') or {}
+    observed=b.get('micro_30_15_observed') or {}
+    rep=b.get('repeatability') or {}
+    n=observed.get('reps_per_set')
+    return bool(isinstance(truth,dict) and isinstance(observed,dict)
+        and isinstance(rep,dict) and b.get('quality_relevant') is True
+        and truth.get('status')=='RESOLVED'
+        and truth.get('source')=='ICU_RAW_WATTS_30_15'
+        and observed.get('source')=='ICU_RAW_WATTS_30_15'
+        and observed.get('complete_pattern_verified') is True
+        and observed.get('sets')==2 and type(n) is int and 8<=n<=24
+        and rep.get('source')=='ICU_RAW_WATTS_30_15'
+        and rep.get('micro_recovery_proof_schema')==INC095_SCHEMA
+        and rep.get('recovery_observation_complete') is True
+        and rep.get('recovery_pair_count')==rep.get('recovery_pair_expected')==2*n-1
+        and rep.get('reps')==2*n and rep.get('sets')==2
+        and rep.get('reps_per_set')==n and rep.get('recovery_secs')==15
+        and type(observed.get('set_recovery_s')) in (int,float)
+        and type(rep.get('set_recovery_secs')) in (int,float)
+        and abs(observed['set_recovery_s']-rep['set_recovery_secs'])<=1
+        and len(rep.get('watts') or [])==2*n)
+
+
+def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_key=None, scope_start=None):
+    result=_INC095_LEDGER_BEFORE(previous_training_blocks,overlay_blocks,
+        goal_key=goal_key,scope_start=scope_start)
+    if not isinstance(result,dict):return result
+    by_id={}
+    for b in list(previous_training_blocks or [])+list(overlay_blocks or []):
+        if _inc095_verified_micro_block(b):
+            by_id.setdefault(str(b.get('activity_id')),[]).append(b)
+    for row in ((result.get('repeatability') or {}).get('events') or []):
+        aid=str(row.get('activity_id') or '')
+        origin=by_id.get(aid) or []
+        if not origin or row.get('activity_truth_source')!='ICU_RAW_WATTS_30_15':
+            continue
+        # The prior blocks and the same-day overlay can legitimately contain
+        # the identical activity twice; accept ONLY byte-equivalent evidence.
+        # Any conflict with the same activity ID fails closed.
+        try:
+            fingerprints={hashlib.sha256(_nova_inc051_canonical_json({
+                'truth':b.get('activity_truth'),
+                'micro':b.get('micro_30_15_observed'),
+                'repeatability':b.get('repeatability')}).encode()).hexdigest()
+                for b in origin}
+        except (TypeError,ValueError,OverflowError):
+            continue
+        if len(fingerprints)!=1:continue
+        block=origin[0];rep=block['repeatability'];obs=block['micro_30_15_observed']
+        if (row.get('reps')!=rep.get('reps')
+            or row.get('recovery_secs')!=rep.get('recovery_secs')
+            or abs(float(row.get('avg_watts') or 0)-float(rep.get('avg_watts') or 0))>.11
+            or row.get('activity_truth_status')!='RESOLVED'):
+            continue
+        row.update(pattern='MICRO_30_15',sets=2,reps_per_set=rep['reps_per_set'],
+            float_s=15,set_recovery_s=obs['set_recovery_s'],
+            observed_work_watts=list(rep['watts']),
+            micro_recovery_proof_schema=INC095_SCHEMA)
+        # Attach the very SAME immutable evidence to the ordinary event list.
+        for ev in result.get('events') or []:
+            if (ev.get('activity_id')==row.get('activity_id')
+                and ev.get('repeatability') is not None):
+                ev['repeatability']=row
+    return result
+
+
+def _inc095_micro_band(template, evidence_ledger=None, as_of_date=None, dimension=None):
+    t=template if isinstance(template,dict) else {}
+    if str(t.get('pattern') or '').upper()!='MICRO_30_15':return None
+    count=int(t.get('reps_per_set') or 0)
+    if (t.get('sets')!=2 or count<8 or t.get('work_s')!=30
+        or t.get('float_s')!=15 or type(t.get('set_recovery_s')) is not int):
+        return None
+    events=(((evidence_ledger or {}).get('repeatability') or {}).get('events') or [])
+    supported=[]
+    for e in events:
+        if (not isinstance(e,dict) or e.get('strong') is not True
+            or e.get('activity_truth_status')!='RESOLVED'
+            or e.get('activity_truth_source')!='ICU_RAW_WATTS_30_15'
+            or e.get('micro_recovery_proof_schema')!=INC095_SCHEMA
+            or e.get('pattern')!='MICRO_30_15'
+            or e.get('sets')!=2 or e.get('reps_per_set')!=count
+            or e.get('reps')!=2*count or e.get('interval_secs')!=30
+            or e.get('float_s')!=15 or e.get('recovery_secs')!=15
+            or e.get('recovery_observation_complete') is not True
+            or e.get('recovery_pair_count')!=2*count-1
+            or e.get('recovery_pair_expected')!=2*count-1):
+            continue
+        if (type(e.get('set_recovery_s')) not in (int,float)
+            or abs(e['set_recovery_s']-t['set_recovery_s'])>90):continue
+        try:
+            day=date.fromisoformat(str(e['date'])[:10]);now=date.fromisoformat(str(as_of_date)[:10])
+            age=(now-day).days
+            avg=float(e['avg_watts']);cv=float(e['cv_pct'])
+            observed_watts=e.get('observed_work_watts') or []
+            repeated=[float(w) for w in observed_watts]
+            observed_mean=statistics.mean(repeated)
+            observed_cv=statistics.pstdev(repeated)/observed_mean*100
+        except (ValueError,KeyError,TypeError,OverflowError,statistics.StatisticsError,ZeroDivisionError):continue
+        if (not 0<=age<=42 or not 70<=avg<=1200 or not 0<=cv<=6
+            or len(repeated)!=2*count or any(not 70<=w<=1200 or not math.isfinite(w) for w in repeated)
+            or abs(observed_mean-avg)>.65 or abs(observed_cv-cv)>.6
+            or not str(e.get('activity_id') or '').strip()):continue
+        supported.append((age,str(e['activity_id']),e,avg))
+    supported.sort(key=lambda x:(x[0],x[1]))
+    if not supported:return None
+    age,aid,e,avg=supported[0]
+    if sum(str(x.get('activity_id') or '')==aid for x in events if isinstance(x,dict))!=1:
+        return None
+    target=int(round((avg*.98 if str(dimension or '').upper()=='RACE_TRANSFER' else avg)/5)*5)
+    return {'schema':R1943_SCHEMA,'state':'PRESCRIBED',
+        'confidence':'MODERATE','source':'COMPARABLE_VERIFIED_REPEATED_WORK',
+        'activity_id':aid,'activity_date':str(e['date'])[:10],
+        'observed_repeated_avg_watts':round(avg,1),
+        'target_watts':target,'low_watts':target-5,'high_watts':target+5,
+        'reps':2*count,'work_seconds':30,'evidence_interval_seconds':30,
+        'evidence_age_days':age,'observed_recovery_seconds':15,
+        'planned_recovery_seconds':15,'recovery_duration_comparable':True,
+        'repeatability_state':'VERIFIED_COMPARABLE_REPEATS',
+        'power_target_mode':'VERIFIED_REPEATED_TARGET',
+        'micro_recovery_proof_schema':INC095_SCHEMA,
+        'observed_set_recovery_seconds':e['set_recovery_s'],
+        'planned_set_recovery_seconds':t['set_recovery_s']}
+
+
+def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None, dimension=None):
+    if str((template or {}).get('pattern') or '').upper()=='MICRO_30_15':
+        return (_inc095_micro_band(template,evidence_ledger,as_of_date,dimension)
+            or {'schema':R1943_SCHEMA,'state':'NO_DEFENSIBLE_POWER_TARGET',
+                'reason':'NO_COMPLETE_MATCHED_MEASURED_MICRO_30_15'})
+    return _INC095_BAND_BEFORE(template,evidence_ledger=evidence_ledger,
+        ftp_anchor=ftp_anchor,as_of_date=as_of_date,dimension=dimension)
+
+
+def _nova_inc083_science_replay(work,evidence_ledger,ftp_anchor,road,today=None):
+    w=work if isinstance(work,dict) else {}
+    tpl=_R19696_LIBRARY_INDEX.get(str(w.get('nova_workout_id') or ''))
+    if str((tpl or {}).get('pattern') or '').upper()!='MICRO_30_15':
+        return _INC095_REPLAY_BEFORE(work,evidence_ledger,ftp_anchor,road,today=today)
+    reject=lambda why:{'schema':INC095_SCHEMA,'state':'FAIL','accepted':False,'reason':why}
+    dim=str(w.get('nova_prescription_dimension') or '').upper()
+    if (dim not in set(tpl.get('dimensions') or ())
+        or dim!=str(((road or {}).get('scientific_progression') or {}).get('dimension') or '').upper()):
+        return reject('WRONG_SCIENTIFIC_DIMENSION')
+    when=(today if isinstance(today,date) else get_rome_now().date())
+    band=_inc095_micro_band(tpl,evidence_ledger,when.isoformat(),dim)
+    issued=w.get('power_prescription') or {}
+    if not band or not isinstance(issued,dict):return reject('NO_MEASURED_MATCHED_MICRO_DOSE')
+    for field in ('activity_id','activity_date','observed_repeated_avg_watts',
+         'low_watts','high_watts','target_watts','source','reps',
+         'evidence_interval_seconds','observed_recovery_seconds',
+         'micro_recovery_proof_schema','observed_set_recovery_seconds'):
+        if band.get(field)!=issued.get(field):return reject('ISSUED_BAND_DIFFERS_'+field.upper())
+    return {'schema':INC095_SCHEMA,'state':'PASS','accepted':True,
+        'reason':'IDENTICAL_MEASURED_TWO_SET_MICRO_RECOVERIES_REPLAYED'}
+
+
+def _nova_inc091_truth(evidence_ledger,band,owner_user_id,producer_request=True):
+    # Preserve the original server actor / request / replay contract for all
+    # established numeric families. Micro source is the ONLY additional case.
+    if (not isinstance(band,dict) or
+        band.get('micro_recovery_proof_schema')!=INC095_SCHEMA):
+        return _INC095_TRUTH_BEFORE(evidence_ledger,band,owner_user_id,
+            producer_request=producer_request)
+    if not owner_user_id or not has_request_context():return None
+    actor=current_user(touch=False)
+    if (not isinstance(actor,dict) or str(actor.get('id') or '')!=str(owner_user_id)
+        or (producer_request and getattr(request,'endpoint',None)!='analyze')
+        or (producer_request and str(getattr(request,'form',{}).get('qa_mode') or '').upper() in {'LIVE','PYTHON'})
+        or getattr(g,'r169_qa_target_user_id',None)):
+        return None
+    ledger=evidence_ledger if isinstance(evidence_ledger,dict) else {}
+    aid=str(band.get('activity_id') or '')
+    rows=[x for x in (ledger.get('events') or []) if isinstance(x,dict)
+        and str(x.get('activity_id') or '')==aid and x.get('event_kind')=='TRAINING'
+        and x.get('activity_truth_status')=='RESOLVED'
+        and x.get('activity_truth_source')=='ICU_RAW_WATTS_30_15']
+    reps=[x for x in (((ledger.get('repeatability') or {}).get('events')) or [])
+        if isinstance(x,dict) and str(x.get('activity_id') or '')==aid
+        and x.get('micro_recovery_proof_schema')==INC095_SCHEMA
+        and x.get('recovery_observation_complete') is True
+        and x.get('recovery_pair_count')==x.get('recovery_pair_expected')==x.get('reps',0)-1
+        and x.get('activity_truth_source')=='ICU_RAW_WATTS_30_15']
+    if len(rows)!=1 or len(reps)!=1 or not aid or rows[0].get('repeatability')!=reps[0]:
+        return None
+    replay=_inc095_micro_band(_R19696_LIBRARY_INDEX.get(str(band.get('workout_id') or '')),
+        ledger,get_rome_now().date().isoformat(),None) if band.get('workout_id') else None
+    # The exact replay of science and identity is also enforced by
+    # _nova_inc091_eligible. Here prove the raw owner-bound ledger origin.
+    try:
+        digest=hashlib.sha256(_nova_inc051_canonical_json({
+            'owner_scope':_nova_inc050_owner_scope(owner_user_id),
+            'activity':rows[0],'repeat':reps[0]}).encode()).hexdigest()
+    except (TypeError,ValueError,OverflowError):return None
+    return {'state':'SERVER_RESOLVED_TRUTH_REPLAYED',
+        'activity_id':aid,'event_digest':digest,
+        'owner_scope':_nova_inc050_owner_scope(owner_user_id),
+        'raw_fit_byte_receipt_verified':False,
+        'micro_recovery_proof_schema':INC095_SCHEMA}
+
+
+
+_INC095_NATIVE_BEFORE = _nova_inc091_compile_native
+
+def _nova_inc091_compile_native(tpl, plan, ledger, ftp_anchor, road, power_model=None):
+    # The canonical MICRO 30/15 has a valid 55 min 30 s envelope: INC091's
+    # old `seconds % 60 == 0` validation mistakenly rejected every half-minute
+    # program even after a scientifically verified personal watt dose.
+    if str((tpl or {}).get('pattern') or '').upper()!='MICRO_30_15':
+        return _INC095_NATIVE_BEFORE(tpl,plan,ledger,ftp_anchor,road,power_model)
+    goal=str((plan or {}).get('goal_key') or '')
+    dim=str((plan or {}).get('dimension') or '')
+    if not isinstance(tpl,dict) or tpl.get('id')!=(plan or {}).get('workout_id'):
+        return None
+    wid=tpl['id']
+    band=_v1943_band(tpl,evidence_ledger=ledger,ftp_anchor=ftp_anchor,
+        as_of_date=get_rome_now().date().isoformat(),dimension=dim)
+    proof=_nova_inc083_science_replay({'nova_workout_id':wid,
+        'nova_prescription_dimension':dim,'power_prescription':band},
+        ledger,ftp_anchor,road)
+    if (proof.get('accepted') is not True or band.get('state')!='PRESCRIBED'):
+        return None
+    raw=_v109_render_library_workout(tpl,goal,dim,
+        power_model=power_model,ftp_anchor=ftp_anchor,slot=None)
+    seconds=_nova_quality_template_required_seconds(tpl,dim)
+    if (not isinstance(raw,dict) or type(seconds) not in (int,float)
+        or not math.isfinite(seconds) or seconds<=0 or seconds>6*3600
+        or abs(seconds*2-round(seconds*2))>1e-6):
+        return None
+    if (type(band.get('low_watts')) is not int
+        or type(band.get('high_watts')) is not int
+        or not 0<band['low_watts']<band['high_watts']<=2500):
+        return None
+    main=str(raw.get('main_set') or '')
+    main += (' Personal work range (calculated from directly measured complete '
+        '30/15 repeats and all floats, not an isolated power peak): '
+        f'{band["low_watts"]}–{band["high_watts"]} W. '
+        'Maintain 15 s very light floats; not a clearance to execute today.')
+    work={'nova_workout_id':wid,'goal_key':goal,
+        'nova_prescription_dimension':dim,
+        'nova_workout_library_version':NOVA_WORKOUT_LIBRARY_VERSION,
+        'nova_template_signature':_v109_template_signature(tpl),
+        'title':str(raw.get('title') or ''),'main_set':main,
+        'why':str(raw.get('why') or ''),'intensity':str(raw.get('intensity') or ''),
+        'intensity_class':'vo2',
+        'stimulus_architecture_state':'NOVA_CANONICAL_LIBRARY',
+        'hard_spacing_relevant':True,'nova_prescription_authority':False,
+        'restriction':'NONE','duration':f'{seconds/60:g} min',
+        'power_prescription':copy.deepcopy(band),
+        'prescribed_power_low':band['low_watts'],
+        'prescribed_power_high':band['high_watts'],
+        'session_duration_feasibility':{'state':'UNASSESSED',
+            'reason':'NO_ATHLETE_CONFIRMED_SLOT_OR_CALENDAR_DATE',
+            'actual_available_minutes':None},
+        'is_scheduled':False,'date':None}
+    complete,audit=_v19697_session_envelope(work)
+    if (not isinstance(complete,dict) or audit.get('state')!='COMPLETE'
+        or not _nova_inc075_valid_compiled_duration(complete)
+        or not _v19696_execution_contract(complete).get('ready')
+        or complete.get('nova_workout_id')!=wid):
+        return None
+    return complete
+
+
+
+_INC095_EXECUTION_BEFORE = _v19696_execution_contract
+
+def _v19696_execution_contract(session):
+    # INC095: R19696 classifies every MICRO_30_15 under generic effort-only.
+    # Work watts are now permitted only for the *same* exact measured protocol
+    # whose raw 2-set work/float provenance passed INC095. Other efforts and
+    # no-evidence workouts preserve the previous strict gate.
+    prior=_INC095_EXECUTION_BEFORE(session)
+    s=session if isinstance(session,dict) else {}
+    wid=str(s.get('nova_workout_id') or '')
+    tpl=_R19696_LIBRARY_INDEX.get(wid) or {}
+    band=s.get('power_prescription') or {}
+    if (str(tpl.get('pattern') or '').upper()!='MICRO_30_15'
+        or not isinstance(band,dict)
+        or band.get('micro_recovery_proof_schema')!=INC095_SCHEMA
+        or band.get('source')!='COMPARABLE_VERIFIED_REPEATED_WORK'
+        or band.get('schema')!=R1943_SCHEMA
+        or band.get('state')!='PRESCRIBED'
+        or band.get('repeatability_state')!='VERIFIED_COMPARABLE_REPEATS'
+        or not isinstance(prior,dict)
+        or prior.get('issues')!=['MISSING_ATTESTED_EFFORT_BASED_CONTRACT']):
+        return prior
+    lo=_v1943_finite(band.get('low_watts'),70,1200)
+    hi=_v1943_finite(band.get('high_watts'),70,1200)
+    n=tpl.get('reps_per_set')
+    if (lo is None or hi is None or not 0<lo<hi
+        or type(n) is not int
+        or band.get('reps')!=2*n
+        or band.get('work_seconds')!=tpl.get('work_s')==30
+        or band.get('observed_recovery_seconds')!=tpl.get('float_s')==15
+        or type(band.get('observed_set_recovery_seconds')) not in (int,float)
+        or abs(band['observed_set_recovery_seconds']-tpl.get('set_recovery_s',float('inf')))>90
+        or s.get('prescribed_power_low')!=int(lo)
+        or s.get('prescribed_power_high')!=int(hi)
+        or not str(band.get('activity_id') or '').strip()
+        or str(s.get('nova_prescription_dimension') or '').upper() not in set(tpl.get('dimensions') or ())
+        or 'Maintain 15 s very light floats' not in str(s.get('main_set') or '')):
+        return prior
+    return dict(prior,ready=True,issues=[],
+        power=f'{int(lo)}–{int(hi)} W directly observed 30/15 work range',
+        source=INC095_SCHEMA)
+
+
+# INC095: the inherited INC049 conditional Card3 HTML lost the ordinary
+# v150 clipboard button, despite F / DTM requiring it beside every title.
+# Restore the EXACT existing button class, attribute and listener used by
+# chronological Card 1/2. No new listener or UI decision path is introduced.
+_INC095_CARD3_H3 = '<h3>{{ card3.title|e }}</h3>'
+assert HOME_PAGE.count(_INC095_CARD3_H3)>=1, 'INC095_CARD3_TITLE_TEMPLATE_DRIFT'
+_INC095_CARD3_TITLE_ROW = ('<div class="v150-workout-title-row"><h3>{{ card3.title|e }}</h3>'
+    '<button class="v150-copy-workout" type="button" data-copy-workout="{{ card3.title|e }}" '
+    'aria-label="Copy workout name" title="Copy workout name">⧉<span>Copy</span></button></div>')
+HOME_PAGE=HOME_PAGE.replace(_INC095_CARD3_H3,_INC095_CARD3_TITLE_ROW)
+app.jinja_env.parse(HOME_PAGE)
+
+APP_VERSION = ('THE LAB · R196.9.132 · INC096 GENERAL RAW REPEAT OBSERVATIONS '
+               '+ R131 CANONICAL MICRO SCIENCE INTACT · CANDIDATE')
+
+
+# INC-098 / R196.9.133 — RECONCILE PERSISTED CANONICAL QUALITY / ISSUER SEAL.
+# Retain the original R132 RAW detector and the same scientific producer.
+# This wrapper runs IN THE PRODUCER during a fresh /analyze Snapshot, before
+# any ledger rows or a conditional future plan are computed. It never patches
+# persisted history, derives a watt value, chooses a template, or fixes a
+# failing digest by signing old data. An unverified offer must not suppress
+# the independent fully verified future-quality planner.
+INC098_SCHEMA = 'NOVA-R196.9.133-CANONICAL-OFFER-RECONCILIATION-1'
+_INC098_CANONICAL_BUILDER = _nova_r196956_build_offer
+_INC098_TERMINAL_HISTORY = frozenset({'FULFILLED','SUPERSEDED','CANCELLED'})
+
+
+def _nova_inc098_can_retain_issued(prior, offered, ledger, decision, road,
+                                    evidence_ledger, ftp_anchor, owner_id):
+    """An *unchanged* existing signed promise; never mint a new authority.
+
+    The source and all issuer/audit bytes stay exactly as they were. A past
+    digest is sufficient only together with current owner, goal, science and
+    lifecycle checks. Even a signed stale goal or completed workout is rejected.
+    """
+    old = (prior or {}).get('next_quality_offer') if isinstance(prior,dict) else None
+    att = (prior or {}).get('quality_offer_integrity') if isinstance(prior,dict) else None
+    if not isinstance(old,dict) or not isinstance(att,dict) or not isinstance(offered,dict):
+        return False
+    if (not owner_id or not has_request_context()
+        or str(getattr(request,'endpoint',None) or '')!='analyze'
+        or str(_nova_inc051_verified_owner_id() or '')!=str(owner_id)
+        or str((prior or {}).get('future_quality_owner_scope') or '') !=
+            _nova_inc050_owner_scope(owner_id)
+        or not _nova_inc076_seal_ok(old,att,owner_id)
+        or old.get('schema') != R196956_SCHEMA
+        or old.get('offer_status')!='OFFERED'
+        or att.get('state')!='PASS'
+        or offered.get('source')!='PRIOR_ISSUED_CANONICAL'
+        or old.get('offer_id')!=offered.get('offer_id')
+        or old.get('workout_id')!=offered.get('workout_id')
+        or old.get('dose_fingerprint')!=offered.get('dose_fingerprint')):
+        return False
+    work=old.get('workout')
+    proposed=offered.get('workout')
+    if (not isinstance(work,dict) or not isinstance(proposed,dict)
+        or not _nova_r196956_structural_ok(work)
+        or not _nova_inc075_valid_compiled_duration(work)
+        or not _nova_r196956_structural_ok(proposed)
+        or proposed != work  # no partial reissue under a surviving old seal
+        or _nova_r196956_ledger_status(ledger,work) in _INC098_TERMINAL_HISTORY):
+        return False
+    # Identity equality covers the entire immutable native dose, not a title.
+    old_fp = _v136_prescription_fingerprint(_v4840_ledger_session_summary(work))
+    new_fp = _v136_prescription_fingerprint(_v4840_ledger_session_summary(proposed))
+    if (not old_fp or old_fp != new_fp or old_fp != old.get('dose_fingerprint')
+        or old_fp != att.get('issued_workout_fingerprint')
+        or work.get('nova_workout_id') != old.get('workout_id')):
+        return False
+    dec=decision if isinstance(decision,dict) else {}
+    rd=road if isinstance(road,dict) else {}
+    sci=rd.get('scientific_progression') or {}
+    if not isinstance(sci,dict):
+        return False
+    goal=str(dec.get('goal_key') or '').upper()
+    dim=str(sci.get('dimension') or '').upper()
+    t=_R19696_LIBRARY_INDEX.get(str(old.get('workout_id') or ''))
+    if (not goal or not dim or not isinstance(t,dict)
+        or str(t.get('goal') or '').upper()!=goal
+        or dim not in set(t.get('dimensions') or ())
+        or work.get('nova_template_signature') != _v109_template_signature(t)
+        or str(work.get('goal_key') or work.get('goal') or '').upper()!=goal
+        or str(work.get('nova_prescription_dimension') or '').upper()!=dim):
+        return False
+    # Recheck against *this* Snapshot's resolved evidence. A valid old HMAC
+    # does not make a changed original power source valid in perpetuity.
+    replay=_nova_inc083_science_replay(work,evidence_ledger,ftp_anchor,rd)
+    return isinstance(replay,dict) and replay.get('accepted') is True
+
+
+def _nova_inc098_withheld(audit,reason,previous_source=None):
+    previous=audit if isinstance(audit,dict) else {}
+    return {'schema':INC098_SCHEMA,'state':'WITHHELD_FOR_SCIENCE',
+        'reason':reason,'previous_producer_state':previous.get('state'),
+        'previous_producer_reason':previous.get('reason'),
+        'previous_offer_source':previous_source,
+        'offer_present':False,'visible_in_card_3':False,
+        'can_show_as_executable_workout':False,
+        'needs_fresh_canonical_science':True,
+        'legacy_is_history_not_prescription':True,
+        'no_invented_watts':True,'no_calendar_or_ledger_mutation':True}
+
+
+def _nova_r196956_build_offer(rows,prescription,prior,decision,clock,road,
+        ledger,user_id,evidence_ledger=None,power_model=None,ftp_anchor=None,
+        aerobic_metabolic_range=None,training_definitions=None,
+        compile_arguments=None,planning_context=None,training_state=None):
+    args=(rows,prescription,prior,decision,clock,road,ledger,user_id)
+    kwargs=dict(evidence_ledger=evidence_ledger,power_model=power_model,
+        ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions,
+        compile_arguments=compile_arguments,planning_context=planning_context,
+        training_state=training_state)
+    # A report saved before the issuer MAC existed (or a changed/foreign
+    # predecessor) is never eligible to head the next scientific candidate
+    # list. Remove it from SELECTION INPUT, not from persisted history. This
+    # happens before the inherited engine runs so even its early alternation
+    # exits cannot let an invalid predecessor suppress fresh compilation.
+    stored=(prior or {}).get('next_quality_offer') if isinstance(prior,dict) else None
+    stored_audit=(prior or {}).get('quality_offer_integrity') if isinstance(prior,dict) else None
+    if isinstance(stored,dict) and not _nova_inc076_seal_ok(stored,stored_audit,user_id):
+        clean_prior=dict(prior)
+        clean_prior['next_quality_offer']=None
+        clean_prior['quality_offer_integrity']=None
+        offer,audit=_INC098_CANONICAL_BUILDER(rows,prescription,clean_prior,
+            decision,clock,road,ledger,user_id,**kwargs)
+        if isinstance(offer,dict) and isinstance(audit,dict) and _nova_inc076_seal_ok(offer,audit,user_id):
+            return offer,audit
+        if not isinstance(offer,dict) and isinstance(audit,dict) and audit.get('state')=='PLANNING_BLOCKED':
+            return offer,audit  # athlete's explicit injury restriction
+        return None,_nova_inc098_withheld(audit,
+            'HISTORICAL_UNSEALED_OFFER_REQUIRES_FRESH_CANONICAL_QUALITY',
+            stored.get('source'))
+    offer,audit=_INC098_CANONICAL_BUILDER(*args,**kwargs)
+    # The scientific producer itself may choose NO OFFER, e.g. injury,
+    # completed exposure or missing original evidence. Do not override it.
+    if not isinstance(offer,dict):
+        return offer,audit
+    if isinstance(audit,dict) and _nova_inc076_seal_ok(offer,audit,user_id):
+        return offer,audit
+    if str(offer.get('source') or '') != 'PRIOR_ISSUED_CANONICAL':
+        # A newly computed but unsealed dose is NOT a scientific offer. Let
+        # the already-existing future planner run without a phantom active
+        # offer suppressing it.
+        return None,_nova_inc098_withheld(audit,
+            'CURRENT_CANONICAL_OFFER_FAILED_ISSUER_ATTESTATION',offer.get('source'))
+    # A legacy producer frequently changes 'source' to PRIOR; issuer HMAC
+    # deliberately refuses to re-sign it. Keep exact signed predecessor,
+    # where present and STILL scientifically valid, instead of emitting a
+    # newly composed but unsigned copy that Card 3 always rejects.
+    if _nova_inc098_can_retain_issued(prior,offer,ledger,decision,road,
+                                      evidence_ledger,ftp_anchor,user_id):
+        return ((prior or {})['next_quality_offer'],
+                (prior or {})['quality_offer_integrity'])
+    # A legacy/changed predecessor never gets a fresh signature. Ask the
+    # *original* producer and original evidence/selector/compiler to create
+    # a genuinely new candidate, with the stale offer excluded from selection.
+    # Keep the rest of prior (history, owner state) intact.
+    fresh_prior=dict(prior or {})
+    fresh_prior['next_quality_offer']=None
+    fresh_prior['quality_offer_integrity']=None
+    fresh,fresh_audit=_INC098_CANONICAL_BUILDER(rows,prescription,fresh_prior,
+        decision,clock,road,ledger,user_id,**kwargs)
+    if (isinstance(fresh,dict) and isinstance(fresh_audit,dict)
+        and fresh.get('source')!='PRIOR_ISSUED_CANONICAL'
+        and _nova_inc076_seal_ok(fresh,fresh_audit,user_id)):
+        return fresh,fresh_audit
+    # Missing proof stays RED. Returning None is essential: the normal
+    # non-calendar future-quality producer then gets its chance to issue a
+    # separately attested plan, without an invalid active_offer veto.
+    return None,_nova_inc098_withheld(fresh_audit,
+        'LEGACY_CANONICAL_OFFER_REQUIRES_NEW_SCIENTIFIC_ISSUANCE',
+        offer.get('source'))
+
+
+# INC099 / R196.9.134 — AFTER OBSERVED TRANSFER, RANK THE NEXT OPEN QUESTION.
+# Producer-side scientific priority only. No workout selection, new watts,
+# scheduling, ledger mutation, injury gate or issuer/HMAC bypass.
+INC099_SCHEMA = 'NOVA-R196.9.134-RECENT-VERIFIED-TRANSFER-SCIENCE-RANK-1'
+
+def _nova_r134_rank_science_after_recent_transfer(scores, reasons, goal, evidence_ledger, roadmap):
+    """Bounded postponement of an already-observed variable-intensity dose.
+
+    The original science engine owns all open scientific questions and scores.
+    Server-resolved exposure merely avoids looping immediately on the same
+    question when another OPEN same-goal question is scientifically ranked.
+    It never marks an adaptation fulfilled or issues a watt prescription.
+    """
+    if not isinstance(scores, dict) or not isinstance(reasons, dict):
+        return
+    if 'RACE_TRANSFER' not in scores:
+        return
+    try:
+        current=float(scores['RACE_TRANSFER'])
+        if not math.isfinite(current) or current<=0:
+            return
+        eligible=[(d,float(s)) for d,s in scores.items()
+                  if d not in {'RACE_TRANSFER','NONE','REVALIDATION',
+                               'EXTENSION_OR_REVALIDATION','VALIDATE'}
+                  and isinstance(s,(int,float)) and not isinstance(s,bool)
+                  and math.isfinite(float(s)) and float(s)>=40]
+        if not eligible:
+            return
+        if any(isinstance(s,(int,float)) and not isinstance(s,bool)
+               and float(s)>current for d,s in scores.items() if d!='RACE_TRANSFER'):
+            return
+        quality_window=(roadmap or {}).get('quality_window') or {}
+        candidate_date=str(quality_window.get('preferred_iso') or '')[:10]
+        if not candidate_date:
+            return
+        excluded=_r196966_producer_exclusions(evidence_ledger,candidate_date,goal)
+        variable=[wid for wid in excluded if
+                  str((_R19696_LIBRARY_INDEX.get(str(wid)) or {}).get('pattern') or '').upper()
+                  in _R19693_TRANSFER_PATTERNS]
+        if not variable:
+            return
+        eligible.sort(key=lambda x:(-x[1],x[0]))
+        alternative,score=eligible[0]
+        new_score=min(current,max(0.0,score-1.0))
+        if new_score>=current:
+            return
+        scores['RACE_TRANSFER']=new_score
+        reasons['RACE_TRANSFER']=(str(reasons.get('RACE_TRANSFER') or '').rstrip()
+            + ' A recent independently resolved, variable-intensity canonical '
+              'structure has already been observed. Temporarily prioritize '
+              'the next existing open goal-specific question rather than '
+              'repeating that dose; transfer is NOT marked fulfilled.')
+    except (ValueError,TypeError,AttributeError,OverflowError,KeyError):
+        return
+
+# INC100 / R196.9.135 — Separate verified work/recovery dose from a new
+# preloaded execution context. Same scientific producer, no new watts or bypass.
+INC100_SCHEMA = 'NOVA-R196.9.135-INDEPENDENT-REPETITION-PROOF-1'
+
+def _nova_inc100_independent_numeric_repeats_for_new_preload(template, work,
+                                                            band, event):
+    """Recognize numerical *base reps*, never claim new-preload performance.
+
+    R196.7 marks every DURABILITY dose NOT_VERIFIED_FOR_THIS_WORKOUT because
+    the aerobic preload is novel. This is appropriate for grading/execution,
+    but the R127 original-science issuer incorrectly interprets the flag as
+    proof that exact previous *repetitions and recovery* are unmeasured.
+
+    Return True only when original independently resolved canonical repetitions
+    match the CURRENT template's work and recovery (not merely a same-duration
+    PB, an FTP estimate, a shorter rep, or an unverified RAW label). All later
+    replay/HMAC/owner/safety/phase and fueling gates continue to run unmodified.
+    """
+    t=template if isinstance(template,dict) else {}
+    w=work if isinstance(work,dict) else {}
+    b=band if isinstance(band,dict) else {}
+    e=event if isinstance(event,dict) else {}
+    try:
+        if (str(w.get('nova_prescription_dimension') or '').upper()!='DURABILITY'
+            or str(t.get('goal') or '').upper() not in {'POWER_5','POWER_20','VO2MAX','TIME_TRIAL','POWER_1'}
+            or str(t.get('pattern') or '').upper() not in {'STANDARD','SUSTAINED','SHORT_POWER'}
+            or str(w.get('nova_workout_id') or '') != str(t.get('id') or '')
+            or b.get('source')!='COMPARABLE_VERIFIED_REPEATED_WORK'
+            or b.get('state')!='PRESCRIBED'
+            or b.get('repeatability_state')!='NOT_VERIFIED_FOR_THIS_WORKOUT'
+            or b.get('repeatability_reason')!='NEW_PRIOR_LOAD_NOT_VERIFIED_LIKE_FOR_LIKE'
+            or b.get('power_target_mode')!='EXPLORATORY_RANGE'
+            or b.get('exploratory') is not True or b.get('non_punitive') is not True
+            or b.get('target_watts') is not None
+            or b.get('recovery_duration_comparable') is not True
+            or e.get('strong') is not True
+            or e.get('activity_truth_status')!='RESOLVED'
+            or str(e.get('activity_truth_source') or '').upper()
+                not in {'ICU_INTERVALS_CANONICAL','DEVICE_LAPS'}
+            or e.get('recovery_observation_complete') is not True
+            or not str(e.get('activity_id') or '').strip()
+            or str(e.get('activity_id') or '') != str(b.get('activity_id') or '')
+            or str(e.get('date') or '')[:10] != str(b.get('activity_date') or '')[:10]):
+            return False
+        numeric=lambda value: (float(value) if type(value) in (int,float)
+                               and math.isfinite(float(value)) else None)
+        template_work=numeric(t.get('work_s'))
+        template_reps=numeric(t.get('reps'))
+        template_recovery=numeric(t.get('recovery_s'))
+        actual_work=numeric(e.get('interval_secs'))
+        actual_reps=numeric(e.get('reps'))
+        actual_recovery=numeric(e.get('recovery_secs'))
+        pair_count=numeric(e.get('recovery_pair_count'))
+        expected_pairs=numeric(e.get('recovery_pair_expected'))
+        obs_watts=numeric(e.get('avg_watts'))
+        band_watts=numeric(b.get('observed_repeated_avg_watts'))
+        variation=numeric(e.get('cv_pct'))
+        low=numeric(b.get('low_watts'))
+        high=numeric(b.get('high_watts'))
+        if any(x is None for x in (template_work,template_reps,template_recovery,
+               actual_work,actual_reps,actual_recovery,pair_count,
+               expected_pairs,obs_watts,band_watts,variation,low,high)):
+            return False
+        if (template_reps<2 or actual_reps<template_reps
+            or abs(actual_work-template_work)>1.0
+            or abs(actual_work-numeric(b.get('evidence_interval_seconds') or -1))>0.1
+            or abs(numeric(b.get('work_seconds') or -1)-template_work)>0.1
+            or abs(actual_recovery-numeric(b.get('observed_recovery_seconds') or -1))>0.1
+            or abs(obs_watts-band_watts)>0.1
+            or pair_count != expected_pairs or expected_pairs!=actual_reps-1
+            or not 70<=obs_watts<=1200 or not 0<=variation<=6
+            or not 0<low<high<=1200):
+            return False
+        # Exact source recovery and observed recovery were already checked
+        # independently by R196.7, R127 and the owner-bound source receipt.
+        tol=min(20.0,max(5.0,template_recovery*.05))
+        if actual_recovery>template_recovery+tol:
+            return False
+        return True
+    except (TypeError,ValueError,KeyError,ArithmeticError,OverflowError,AttributeError):
+        return False
+
+
+# INC101 / R196.9.136 — ONE VERIFIED QUALITY IDENTITY FOR RECOVERY PRESENTATION.
+# The original scientific producer, final issuer, owner HMAC, future-plan
+# attestation, canonical nutrition mathematics, saved report, coach traces,
+# chronology, ledger and calendar are untouched. An unissued draft must not
+# appear as an athlete's hard recovery plan. Conditional fueling for a signed
+# future plan is distinctly unscheduled and derived from that same workout.
+INC101_SCHEMA = 'NOVA-R196.9.136-RECOVERY-CARD3-IDENTITY-1'
+_INC101_UI_BEFORE = _v4891_prepare_snapshot_for_ui
+
+
+def _nova_inc101_authoritative_quality(d):
+    """Only an owner-bound, still-verified Card-3 dose is a recovery source."""
+    if not isinstance(d, dict):
+        return None, None
+    card = d.get('nova_card3_workout_view') or {}
+    if not isinstance(card, dict) or not str(card.get('workout_id') or ''):
+        return None, None
+    owner = _nova_inc051_verified_owner_id()
+    if not owner:
+        return None, None
+    wid = str(card['workout_id'])
+    if card.get('verified_future_plan') is True and card.get('verified_offer') is not True:
+        plan = d.get('future_quality_plan') or {}
+        if (isinstance(plan, dict) and plan.get('workout_id') == wid
+                and _nova_inc091_eligible(d, plan, owner)):
+            fuel = plan.get('fueling') or {}
+            if (isinstance(fuel, dict) and fuel.get('workout_id') == wid
+                    and str(fuel.get('display') or '').strip()):
+                return plan.get('workout'), 'SEALED_FUTURE_UNSCHEDULED'
+    if card.get('verified_offer') is True and card.get('verified_future_plan') is not True:
+        offer = d.get('next_quality_offer') or {}
+        audit = d.get('quality_offer_integrity') or {}
+        if (isinstance(offer, dict) and isinstance(audit, dict)
+                and offer.get('workout_id') == wid
+                and audit.get('state') == 'PASS'
+                and _nova_inc076_seal_ok(offer, audit, owner)):
+            return offer.get('workout'), 'ISSUED_CANONICAL'
+    return None, None
+
+
+def _nova_inc101_is_unissued_nova_hard(row):
+    if not isinstance(row, dict) or str(row.get('intensity') or '').upper() != 'HARD':
+        return False
+    # Keep races and athlete-supplied sessions outside this narrow Nova guard.
+    if row.get('is_race') is True or str(row.get('session_kind') or '').upper() in {'RACE', 'EVENT'}:
+        return False
+    return bool(row.get('nova_workout_id') or row.get('nova_prescription_authority') is True)
+
+
+def _nova_inc101_same_compiled_dose(row, authority):
+    if not isinstance(row, dict) or not isinstance(authority, dict):
+        return False
+    if not (str(row.get('nova_workout_id') or '') and
+            row.get('nova_workout_id') == authority.get('nova_workout_id') and
+            row.get('nova_template_signature') == authority.get('nova_template_signature') and
+            row.get('session_composition') == authority.get('session_composition')):
+        return False
+    # Do not attach recovery to a same-named / same-template but changed dose.
+    actual = row.get('power_prescription') or {}
+    expected = authority.get('power_prescription') or {}
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return all(actual.get(k) == expected.get(k) for k in
+                   ('low_watts', 'high_watts', 'source'))
+    return False
+
+
+def _nova_inc101_recovery_projection(data):
+    """Paired display rows; never mutate a stored scientific/ledger field.
+
+    A failed issuer's RHYTHM quality may remain in next_sessions for forensic
+    traceability. It is not an issued workout and must not create a post-ride
+    hard nutrition directive. Display real unchanged easy/race rows plus one
+    *conditional* recovery estimate from the exact verified Card-3 workout.
+    """
+    d = data if isinstance(data, dict) else {}
+    rows = d.get('next_sessions') or []
+    nutrition = d.get('nutrition_plan') or []
+    work, authority_type = _nova_inc101_authoritative_quality(d)
+    selected_id = str(work.get('nova_workout_id') or '') if isinstance(work, dict) else ''
+    displayed = []
+    matched = False
+    withheld = []
+    for i, row in enumerate(rows if isinstance(rows, list) else []):
+        if not isinstance(row, dict):
+            continue
+        if _nova_inc101_is_unissued_nova_hard(row):
+            if not selected_id or not _nova_inc101_same_compiled_dose(row, work):
+                withheld.append(str(row.get('nova_workout_id') or 'UNIDENTIFIED'))
+                continue
+            matched = True
+        n = nutrition[i] if isinstance(nutrition, list) and i < len(nutrition) else None
+        if not isinstance(n, dict):
+            # A missing original nutrition plan is NOT a license to invent it.
+            continue
+        displayed.append({'session': row, 'nutrition': n,
+            'workout_id': str(row.get('nova_workout_id') or ''),
+            'source': 'VERIFIED_CANONICAL' if _nova_inc101_is_unissued_nova_hard(row)
+                      else 'ORIGINAL_CHRONOLOGICAL',
+            'conditional': False})
+    if selected_id and not matched:
+        # The signed future or issuer's full compilation owns these mechanics.
+        # This estimates recovery if/when performed; it is NOT a date, booking
+        # or day-of permission. The original algorithm does the dose math.
+        only = dict(work)
+        only['date'] = None
+        only['slot'] = 'UNSCHEDULED QUALITY · if completed'
+        only['is_scheduled'] = False
+        try:
+            derived = build_nutrition_plan([only], d.get('metabolic_context') or {})
+        except (ValueError, TypeError, KeyError, AttributeError, ArithmeticError):
+            derived = []
+        if (isinstance(derived, list) and len(derived) == 1
+                and isinstance(derived[0], dict)
+                and derived[0].get('title') == work.get('title')
+                and derived[0].get('post_cho')):
+            nr = dict(derived[0])
+            nr['slot'] = 'UNSCHEDULED QUALITY · conditional recovery'
+            nr['guidance'] = ('IF this exact quality is completed: '
+                + str(nr.get('guidance') or 'Follow normal recovery guidance.'))
+            nr['timing'] = ('AFTER completing this workout, not at a forecast date. '
+                + str(nr.get('timing') or ''))
+            displayed.append({'session': {'date': None},
+                'nutrition': nr, 'workout_id': selected_id,
+                'source': authority_type, 'conditional': True})
+    audit = {'schema': INC101_SCHEMA, 'read_only': True,
+        'issuer_authority': authority_type or 'NO_VERIFIED_QUALITY',
+        'canonical_workout_id': selected_id or None,
+        'suppressed_unissued_workout_ids': withheld,
+        'displayed_quality_ids': [r['workout_id'] for r in displayed
+                                  if r['workout_id'] and
+                                  r['source'] != 'ORIGINAL_CHRONOLOGICAL'],
+        'conditional_recovery': any(r['conditional'] for r in displayed),
+        'changed_persisted_prescription': False,
+        'changed_calendar_or_ledger': False}
+    return displayed, audit
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui = _INC101_UI_BEFORE(data)
+    if not isinstance(ui, dict):
+        return ui
+    # Existing adapters may have added Card-3 UI context. Copy ONLY display.
+    out = dict(ui)
+    out['nova_recovery_display_rows'], out['nova_recovery_alignment'] = (
+        _nova_inc101_recovery_projection(out))
+    return out
+
+# The page now displays aligned nutrition+session pairs, not positional joins
+# against the still-persisted but possibly unissued canonical draft list.
+assert HOME_PAGE.count('for recovery_row in data.nova_recovery_display_rows') == 1, 'INC101_RECOVERY_LOOP_DRIFT'
+assert HOME_PAGE.count('data-nova-recovery-source=') == 1, 'INC101_RECOVERY_IDENTITY_DRIFT'
+app.jinja_env.parse(HOME_PAGE)
+
+APP_VERSION = ('THE LAB · R196.9.136 · INC101 RECOVERY-CARD3 ONE VERIFIED WORKOUT IDENTITY '
+               '· R135 DOSE + R134 SCIENCE + R133 ISSUER + R132 RAW PRESERVED · OFFLINE CANDIDATE')
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
