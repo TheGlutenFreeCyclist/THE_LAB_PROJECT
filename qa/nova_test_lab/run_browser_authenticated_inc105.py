@@ -116,7 +116,8 @@ def run():
             print(json.dumps({"suite":"INC105_BROWSER_AUTH","status":"PASS",
                               "real_flask_cookie":True,"real_csrf":True,
                               "db_backed_hmac":True,"revocation":True,
-                              "real_owner_scoped_sql_load":True,"synthetic_report_payload":True,\n                              "real_issuer_hmac":False,
+                              "real_owner_scoped_sql_load":True,"synthetic_report_payload":True,
+                              "real_issuer_hmac":False,
                               "production_secrets":False},sort_keys=True))
             return 0
         except Exception as exc:
