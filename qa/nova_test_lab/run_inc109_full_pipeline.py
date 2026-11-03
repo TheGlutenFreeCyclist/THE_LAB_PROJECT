@@ -36,6 +36,8 @@ def public_reason(val):
     return "UNCLASSIFIED_OR_ABSENT"
 
 def run():
+    global current_phase
+    current_phase='BASE_FIXTURE'
     base=empty_evidence_fixture()
     data=copy.deepcopy(base["core_inputs"])
     evidence,_=original_repetition_fixture()
@@ -48,8 +50,10 @@ def run():
                        "period":"EVENING","window":"EVENING"}],
     }
     data["training_direction"]={"primary_goal":"POWER_5"}
+    current_phase="BUILD_REPLAY_FIXTURE"
     base=nova._v115_build_nova_replay_fixture(now_local=NOW,core_inputs=data)
     with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()),patch.object(nova,"SECRET_KEY",FAKE_SECRET):
+        current_phase="R115_REPLAY_CORE"
         actual=nova._v115_replay_nova_core(base)
         view=nova._v115_replay_expected(actual)
         rows=copy.deepcopy(actual.get("next_sessions") or [])
@@ -73,6 +77,7 @@ def run():
             "planning_context":copy.deepcopy(core_data.get("planning_context") or {}),
             "training_state":copy.deepcopy(core_data.get("training_state") or {})
         }
+        current_phase="FINAL_R136_ISSUER"
         offer,audit=nova._nova_r196956_build_offer(
             rows,copy.deepcopy(actual.get("nova_prescription") or {}),{},
             copy.deepcopy(actual.get("nova_decision") or {}),
@@ -83,6 +88,7 @@ def run():
         signed=bool(isinstance(offer,dict) and nova._nova_inc076_seal_ok(
             offer,audit,FAKE_OWNER))
         scheduled=bool((offer or {}).get("suggested_start_confirmed"))
+    current_phase="VERDICT"
     res={
         "suite":"INC109_PUBLIC_SYNTHETIC_FULL_PIPELINE",
         "status":"PASS" if not scheduled else "FAIL",
@@ -100,8 +106,10 @@ def run():
     return 0 if not scheduled else 1
 
 if __name__=="__main__":
+    current_phase="ENTRY"
     try:raise SystemExit(run())
     except Exception as exc:
         print(json.dumps({"suite":"INC109_PUBLIC_SYNTHETIC_FULL_PIPELINE",
-                          "status":"BLOCKED","exception_class":type(exc).__name__}))
+                          "status":"BLOCKED","phase":current_phase,
+                          "exception_class":type(exc).__name__}))
         raise SystemExit(2)
