@@ -2,7 +2,7 @@
 
 Real browser -> localhost Flask -> actual /login + CSRF -> DB-backed
 auth_sessions token HMAC -> /last-report. The report data itself is synthetic
-and read via a mocked storage boundary. Real production/Neon credentials and
+and read from real owner-scoped SQLite using an explicitly SEEDED synthetic\nreport row (not the producer save path). Real production/Neon credentials and
 the actual issuer chain are not used. No personal screenshots or logs.
 """
 import contextlib
@@ -54,14 +54,16 @@ def run():
                  now, now))
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 data = nova.build_preview_data()
-            report = {
-                "data": data, "app_version": "INC105 SYNTHETIC STAGING",
-                "generated_at_local": "2026-11-03T09:00:00+01:00",
-                "generated_at_local_display": "synthetic",
-                "payload_bytes": 0, "payload_human": "synthetic"
-            }
-            with (patch.object(nova,"load_latest_report",return_value=report),
-                  patch.object(nova,"get_clock_preview",return_value={})):
+            # INC106 upgrades the prior mocked report read into the genuine
+            # owner-scoped load_latest_report() SQL path. Only seed is synthetic.
+            payload = json.dumps(data,ensure_ascii=False,
+                                 default=nova._report_json_default)
+            nova._db_execute(
+                "INSERT INTO latest_report (singleton_id,user_id,generated_at_utc,"
+                "generated_at_local,app_version,payload_json) VALUES (?,?,?,?,?,?)",
+                ("inc105-browser-admin","inc105-browser-admin",now,
+                 "2026-11-03T09:00:00+01:00","INC106 SYNTHETIC STAGING",payload))
+            with patch.object(nova,"get_clock_preview",return_value={}):
                 server = make_server("127.0.0.1",0,nova.app,threaded=True)
                 thread = threading.Thread(target=server.serve_forever,daemon=True)
                 thread.start()
@@ -114,7 +116,7 @@ def run():
             print(json.dumps({"suite":"INC105_BROWSER_AUTH","status":"PASS",
                               "real_flask_cookie":True,"real_csrf":True,
                               "db_backed_hmac":True,"revocation":True,
-                              "real_report_payload":False,"real_issuer_hmac":False,
+                              "real_owner_scoped_sql_load":True,"synthetic_report_payload":True,\n                              "real_issuer_hmac":False,
                               "production_secrets":False},sort_keys=True))
             return 0
         except Exception as exc:
