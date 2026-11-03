@@ -3720,15 +3720,16 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 </div>
 <div class="v23-recovery-head"><span>🍚</span><div><strong>POST-WORKOUT RECOVERY</strong><small>Your first recovery meal is scaled to the exercise and the time available before the next demand. Carbs and protein get specific targets when useful; fat stays at normal meal intake because there is no robust recovery-specific gram target.</small></div>{% if ir.get('active') %}<div class="v4864-recovery-now" title="Just-completed demanding activity · {{ ir.get('family') or ir.get('kind') }}"><span class="v4864-recovery-now-label">RECOVERY NOW</span><span class="v4863-protein-dose"><em>CARBS</em><b>{{ ir.get('post_cho') }}</b></span><span class="v4863-protein-dose" title="{{ ir.get('post_protein_basis') or 'Post-workout protein target' }}"><em>PROTEIN</em><b>{{ ir.get('post_protein') }}</b></span><span class="v4863-protein-dose" title="{{ ir.get('post_fat_basis') or 'No recovery-specific fat gram target' }}"><em>FAT</em><b>{{ ir.get('post_fat') or 'Normal meal' }}</b></span><small class="v4864-recovery-now-name">{{ ir.get('activity_name') }}{% if ir.get('metabolic_demand') %} · metabolic {{ ir.get('metabolic_demand') }} · glycogen {{ ir.get('glycogen_pressure') }}{% endif %}</small></div>{% endif %}</div>
 <div class="v23-recovery-grid">
-{% for n in data.nutrition_plan %}
-{% set dated_session = data.next_sessions[loop.index0] if data.next_sessions and loop.index0 < (data.next_sessions|length) else none %}
-<div class="v23-recovery-card">
+{% for recovery_row in data.nova_recovery_display_rows %}
+{% set n = recovery_row.nutrition %}
+{% set dated_session = recovery_row.session %}
+<div class="v23-recovery-card" data-nova-recovery-source="{{ recovery_row.source|e }}" data-nova-workout-id="{{ recovery_row.workout_id|e }}">
 <div class="v23-recovery-slot">{% if dated_session and dated_session.date %}{{ dated_session.date[8:10] }}/{{ dated_session.date[5:7] }}/{{ dated_session.date[:4] }} · {% endif %}{{ n.slot }}</div>
 <h3>{{ n.title }}</h3>
 <div class="v23-recovery-demand"><span>SESSION DEMAND</span><b>{{ n.session_demand }}</b></div>
 <div class="v4863-recovery-macros"><span class="v4863-protein-dose"><em>CARBS</em><b>{{ n.post_cho }}</b></span><span class="v4863-protein-dose" title="{{ n.get('post_protein_basis') or 'No dedicated protein dose is needed for this session' }}"><em>PROTEIN</em><b>{{ n.get('post_protein') or 'Normal meal' }}</b></span><span class="v4863-protein-dose" title="{{ n.get('post_fat_basis') or 'No recovery-specific fat gram target' }}"><em>FAT</em><b>{{ n.get('post_fat') or 'Normal meal' }}</b></span></div>
 <div class="v23-recovery-label">{{ n.post_label }} · NEED {{ n.recovery_need }}</div>
-<small class="v26-first-feed-note">First recovery feeding — not total ride replacement.</small>
+{% if recovery_row.conditional %}<small class="v26-first-feed-note">UNSCHEDULED QUALITY · recovery guidance applies only after this exact workout is completed. No calendar booking or execution clearance.</small>{% else %}<small class="v26-first-feed-note">First recovery feeding — not total ride replacement.</small>{% endif %}
 <p>{{ n.guidance }}</p>
 <div class="v26-replenishment"><div class="v26-replenishment-head"><span>DAILY REPLENISHMENT</span><b>{{ n.daily_replenishment_priority }}</b></div><p>{{ n.replenishment_guidance }}</p></div>
 <div class="v23-recovery-timing">⏱️ {{ n.timing }}</div>
@@ -66937,8 +66938,162 @@ def _nova_inc100_independent_numeric_repeats_for_new_preload(template, work,
     except (TypeError,ValueError,KeyError,ArithmeticError,OverflowError,AttributeError):
         return False
 
-APP_VERSION = ('THE LAB · R196.9.135 · INC100 INDEPENDENT REPEATED WORK PROOF '
-               '· R134 SCIENCE + R133 ISSUER + R132 RAW PRESERVED · OFFLINE CANDIDATE')
+
+# INC101 / R196.9.136 — ONE VERIFIED QUALITY IDENTITY FOR RECOVERY PRESENTATION.
+# The original scientific producer, final issuer, owner HMAC, future-plan
+# attestation, canonical nutrition mathematics, saved report, coach traces,
+# chronology, ledger and calendar are untouched. An unissued draft must not
+# appear as an athlete's hard recovery plan. Conditional fueling for a signed
+# future plan is distinctly unscheduled and derived from that same workout.
+INC101_SCHEMA = 'NOVA-R196.9.136-RECOVERY-CARD3-IDENTITY-1'
+_INC101_UI_BEFORE = _v4891_prepare_snapshot_for_ui
+
+
+def _nova_inc101_authoritative_quality(d):
+    """Only an owner-bound, still-verified Card-3 dose is a recovery source."""
+    if not isinstance(d, dict):
+        return None, None
+    card = d.get('nova_card3_workout_view') or {}
+    if not isinstance(card, dict) or not str(card.get('workout_id') or ''):
+        return None, None
+    owner = _nova_inc051_verified_owner_id()
+    if not owner:
+        return None, None
+    wid = str(card['workout_id'])
+    if card.get('verified_future_plan') is True and card.get('verified_offer') is not True:
+        plan = d.get('future_quality_plan') or {}
+        if (isinstance(plan, dict) and plan.get('workout_id') == wid
+                and _nova_inc091_eligible(d, plan, owner)):
+            fuel = plan.get('fueling') or {}
+            if (isinstance(fuel, dict) and fuel.get('workout_id') == wid
+                    and str(fuel.get('display') or '').strip()):
+                return plan.get('workout'), 'SEALED_FUTURE_UNSCHEDULED'
+    if card.get('verified_offer') is True and card.get('verified_future_plan') is not True:
+        offer = d.get('next_quality_offer') or {}
+        audit = d.get('quality_offer_integrity') or {}
+        if (isinstance(offer, dict) and isinstance(audit, dict)
+                and offer.get('workout_id') == wid
+                and audit.get('state') == 'PASS'
+                and _nova_inc076_seal_ok(offer, audit, owner)):
+            return offer.get('workout'), 'ISSUED_CANONICAL'
+    return None, None
+
+
+def _nova_inc101_is_unissued_nova_hard(row):
+    if not isinstance(row, dict) or str(row.get('intensity') or '').upper() != 'HARD':
+        return False
+    # Keep races and athlete-supplied sessions outside this narrow Nova guard.
+    if row.get('is_race') is True or str(row.get('session_kind') or '').upper() in {'RACE', 'EVENT'}:
+        return False
+    return bool(row.get('nova_workout_id') or row.get('nova_prescription_authority') is True)
+
+
+def _nova_inc101_same_compiled_dose(row, authority):
+    if not isinstance(row, dict) or not isinstance(authority, dict):
+        return False
+    if not (str(row.get('nova_workout_id') or '') and
+            row.get('nova_workout_id') == authority.get('nova_workout_id') and
+            row.get('nova_template_signature') == authority.get('nova_template_signature') and
+            row.get('session_composition') == authority.get('session_composition')):
+        return False
+    # Do not attach recovery to a same-named / same-template but changed dose.
+    actual = row.get('power_prescription') or {}
+    expected = authority.get('power_prescription') or {}
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return all(actual.get(k) == expected.get(k) for k in
+                   ('low_watts', 'high_watts', 'source'))
+    return False
+
+
+def _nova_inc101_recovery_projection(data):
+    """Paired display rows; never mutate a stored scientific/ledger field.
+
+    A failed issuer's RHYTHM quality may remain in next_sessions for forensic
+    traceability. It is not an issued workout and must not create a post-ride
+    hard nutrition directive. Display real unchanged easy/race rows plus one
+    *conditional* recovery estimate from the exact verified Card-3 workout.
+    """
+    d = data if isinstance(data, dict) else {}
+    rows = d.get('next_sessions') or []
+    nutrition = d.get('nutrition_plan') or []
+    work, authority_type = _nova_inc101_authoritative_quality(d)
+    selected_id = str(work.get('nova_workout_id') or '') if isinstance(work, dict) else ''
+    displayed = []
+    matched = False
+    withheld = []
+    for i, row in enumerate(rows if isinstance(rows, list) else []):
+        if not isinstance(row, dict):
+            continue
+        if _nova_inc101_is_unissued_nova_hard(row):
+            if not selected_id or not _nova_inc101_same_compiled_dose(row, work):
+                withheld.append(str(row.get('nova_workout_id') or 'UNIDENTIFIED'))
+                continue
+            matched = True
+        n = nutrition[i] if isinstance(nutrition, list) and i < len(nutrition) else None
+        if not isinstance(n, dict):
+            # A missing original nutrition plan is NOT a license to invent it.
+            continue
+        displayed.append({'session': row, 'nutrition': n,
+            'workout_id': str(row.get('nova_workout_id') or ''),
+            'source': 'VERIFIED_CANONICAL' if _nova_inc101_is_unissued_nova_hard(row)
+                      else 'ORIGINAL_CHRONOLOGICAL',
+            'conditional': False})
+    if selected_id and not matched:
+        # The signed future or issuer's full compilation owns these mechanics.
+        # This estimates recovery if/when performed; it is NOT a date, booking
+        # or day-of permission. The original algorithm does the dose math.
+        only = dict(work)
+        only['date'] = None
+        only['slot'] = 'UNSCHEDULED QUALITY · if completed'
+        only['is_scheduled'] = False
+        try:
+            derived = build_nutrition_plan([only], d.get('metabolic_context') or {})
+        except (ValueError, TypeError, KeyError, AttributeError, ArithmeticError):
+            derived = []
+        if (isinstance(derived, list) and len(derived) == 1
+                and isinstance(derived[0], dict)
+                and derived[0].get('title') == work.get('title')
+                and derived[0].get('post_cho')):
+            nr = dict(derived[0])
+            nr['slot'] = 'UNSCHEDULED QUALITY · conditional recovery'
+            nr['guidance'] = ('IF this exact quality is completed: '
+                + str(nr.get('guidance') or 'Follow normal recovery guidance.'))
+            nr['timing'] = ('AFTER completing this workout, not at a forecast date. '
+                + str(nr.get('timing') or ''))
+            displayed.append({'session': {'date': None},
+                'nutrition': nr, 'workout_id': selected_id,
+                'source': authority_type, 'conditional': True})
+    audit = {'schema': INC101_SCHEMA, 'read_only': True,
+        'issuer_authority': authority_type or 'NO_VERIFIED_QUALITY',
+        'canonical_workout_id': selected_id or None,
+        'suppressed_unissued_workout_ids': withheld,
+        'displayed_quality_ids': [r['workout_id'] for r in displayed
+                                  if r['workout_id'] and
+                                  r['source'] != 'ORIGINAL_CHRONOLOGICAL'],
+        'conditional_recovery': any(r['conditional'] for r in displayed),
+        'changed_persisted_prescription': False,
+        'changed_calendar_or_ledger': False}
+    return displayed, audit
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui = _INC101_UI_BEFORE(data)
+    if not isinstance(ui, dict):
+        return ui
+    # Existing adapters may have added Card-3 UI context. Copy ONLY display.
+    out = dict(ui)
+    out['nova_recovery_display_rows'], out['nova_recovery_alignment'] = (
+        _nova_inc101_recovery_projection(out))
+    return out
+
+# The page now displays aligned nutrition+session pairs, not positional joins
+# against the still-persisted but possibly unissued canonical draft list.
+assert HOME_PAGE.count('for recovery_row in data.nova_recovery_display_rows') == 1, 'INC101_RECOVERY_LOOP_DRIFT'
+assert HOME_PAGE.count('data-nova-recovery-source=') == 1, 'INC101_RECOVERY_IDENTITY_DRIFT'
+app.jinja_env.parse(HOME_PAGE)
+
+APP_VERSION = ('THE LAB · R196.9.136 · INC101 RECOVERY-CARD3 ONE VERIFIED WORKOUT IDENTITY '
+               '· R135 DOSE + R134 SCIENCE + R133 ISSUER + R132 RAW PRESERVED · OFFLINE CANDIDATE')
 
 
 if __name__ == "__main__":
