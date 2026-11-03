@@ -133,6 +133,9 @@ jobs:
       - name: Editorial reference approval gate (honest NOT_VERIFIED)
         run: python qa/nova_test_lab/run_visual_diff_inc105.py --mode preview --width 390
 
+      - name: INC107 synthetic owner editorial approval pack
+        run: python qa/nova_test_lab/run_inc107_editorial_review.py --out inc107-ui-review
+
       - name: Publish non-personal UI verdict and screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -142,5 +145,6 @@ jobs:
             ui-audit.json
             ui-quality-audit.json
             ui-synthetic-screenshots/
+            inc107-ui-review/
           retention-days: 3
           if-no-files-found: warn
