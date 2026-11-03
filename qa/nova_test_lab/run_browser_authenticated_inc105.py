@@ -81,7 +81,7 @@ def run():
                         csrf=page.locator('input[name="csrf_token"]').input_value()
                         if not csrf:
                             raise AssertionError("missing_csrf")
-                        r=ctx.request.post(root+"/login",data={
+                        r=ctx.request.post(root+"/login",form={
                             "username":"inc105browser","password":TEST_PASSWORD,
                             "csrf_token":csrf},max_redirects=0)
                         if r.status not in (302,303):
