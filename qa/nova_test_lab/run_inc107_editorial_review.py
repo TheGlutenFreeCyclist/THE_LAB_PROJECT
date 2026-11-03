@@ -41,7 +41,7 @@ def run(outdir):
                 page.goto(SAFE_BROWSER_ORIGIN,wait_until="domcontentloaded")
                 page.wait_for_timeout(250)
                 # Expand accordion panels; all screenshots remain synthetic.
-                if width==390:
+                if width in (320,390):
                     for name in ("fuel","physiology","performance","science"):
                         panel=page.locator('[data-v4865-macro="'+name+'"]')
                         if panel.count() and panel.get_attribute("data-open")!="true":
@@ -72,17 +72,43 @@ def run(outdir):
                 if card.count()==1 and card.is_visible():
                     card.screenshot(path=str(dest/f"inc107_card3_{width}.png"),
                                     animations="disabled",timeout=20000)
-                metrics.append({"width":width,**browser_state})
+                # INC109: capture individual synthetic panels and fuel/recovery
+                # at phone and desktop sizes for an actual human signoff pack.
+                captured=[]
+                for name in ("training","fuel","physiology","performance","science"):
+                    section=page.locator('[data-v4865-macro="'+name+'"]')
+                    panel=page.locator("#v4865-"+name+"-panel")
+                    if section.count()==1 and panel.count()==1:
+                        if not panel.is_visible():
+                            head=section.locator(".v4865-macro-head").first
+                            if head.is_visible():
+                                head.click(timeout=5000)
+                        if panel.is_visible():
+                            section.screenshot(
+                                path=str(dest/f"inc109_{name}_{width}.png"),
+                                animations="disabled",timeout=20000)
+                            captured.append(name)
+                recovery=page.locator(".v23-recovery-card").first
+                if recovery.count() and recovery.is_visible():
+                    recovery.screenshot(
+                        path=str(dest/f"inc109_recovery_{width}.png"),
+                        animations="disabled",timeout=20000)
+                    captured.append("recovery")
+                metrics.append({"width":width,"screens_captured":captured,
+                                "review_status":"AWAITING_HUMAN_APPROVAL",
+                                **browser_state})
                 ctx.close()
         finally:
             browser.close()
     (dest/"review_metrics.json").write_text(json.dumps({
-        "schema":"INC107_VISUAL_REVIEW_V1",
+        "schema":"INC109_VISUAL_REVIEW_V2",
         "content_source":"R136_REAL_FLASK_SYNTHETIC_PREVIEW_ONLY",
         "owner_review_status":"NOT_VERIFIED",
         "aesthetic_harmony":"NOT_VERIFIED",
         "text_usefulness":"NOT_VERIFIED",
         "comparison_reference_approved":False,
+        "required_individual_screens":["training","fuel","physiology",
+                                       "performance","science","recovery"],
         "mechanical_observations":metrics},indent=2),encoding="utf-8")
     if any(x["horizontal_overflow"] for x in metrics):
         print(json.dumps({"suite":"INC107_EDITORIAL","mechanical_status":"FAIL",
