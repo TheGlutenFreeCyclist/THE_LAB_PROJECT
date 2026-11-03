@@ -9,6 +9,8 @@ import contextlib
 import io
 import json
 import os
+import sys
+from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from unittest.mock import patch
@@ -19,6 +21,7 @@ for name in ("DATABASE_URL", "THE_LAB_OWNER_DATABASE_URL", "ICU_API_KEY",
              "THE_LAB_PLATFORM_AI_API_KEY"):
     os.environ[name]=""
 os.environ["PRODUCT_SECURITY_STRICT"]="0"
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 import the_lab_app as nova
 from test_core_replay import empty_evidence_fixture
 from test_inc108_origins import original_repetition_fixture
