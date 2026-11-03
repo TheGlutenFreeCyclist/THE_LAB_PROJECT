@@ -50,7 +50,10 @@ class Inc105RealAuthSqlite(unittest.TestCase):
 
     def login(self, username):
         c = nova.app.test_client()
-        r = c.post("/login", data={"username": username, "password": PASSWORD},
+        c.get("/login")
+        with c.session_transaction() as sess:
+            csrf = sess["csrf_token"]
+        r = c.post("/login", data={"username": username, "password": PASSWORD, "csrf_token":csrf},
                    follow_redirects=False)
         self.assertIn(r.status_code, (302, 303), "Real /login failed")
         auth = c.get("/session/csrf")
@@ -86,8 +89,12 @@ class Inc105RealAuthSqlite(unittest.TestCase):
 
     def test_bad_password_does_not_issue_session(self):
         client = nova.app.test_client()
+        client.get("/login")
+        with client.session_transaction() as sess:
+            csrf = sess["csrf_token"]
         r = client.post("/login", data={"username":"inc105alpha",
-                                        "password":"synthetic-wrong-passphrase"})
+                                        "password":"synthetic-wrong-passphrase",
+                                        "csrf_token":csrf})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(client.get("/session/csrf").status_code, 401)
         self.assertFalse(nova._db_execute(
