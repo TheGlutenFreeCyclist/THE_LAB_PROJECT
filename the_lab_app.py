@@ -65579,8 +65579,10 @@ def _nova_inc083_science_replay(work, evidence_ledger, ftp_anchor,
         or finite(event.get('reps'))<finite(band.get('reps'))
         or str(event.get('date') or '')[:10] != str(band.get('activity_date') or '')[:10]
         or band.get('recovery_duration_comparable') is not True
-        or band.get('repeatability_state') not in {'VERIFIED_COMPARABLE_REPEATS',
-                                                   'SUPPORTED_BY_LONGER_REPEATS'}):
+        or (band.get('repeatability_state') not in {'VERIFIED_COMPARABLE_REPEATS',
+                                                   'SUPPORTED_BY_LONGER_REPEATS'}
+            and not _nova_inc100_independent_numeric_repeats_for_new_preload(
+                t, w, band, event))):
         return failure('ORIGINAL_REPETITION_STRUCTURE_OR_DATE_NOT_VERIFIED')
     try:
         clock_day=(today if isinstance(today,date) else get_rome_now().date())
@@ -65605,9 +65607,14 @@ def _nova_inc083_science_replay(work, evidence_ledger, ftp_anchor,
         or replay.get('observed_recovery_seconds')!=band.get('observed_recovery_seconds')
         or replay.get('recovery_duration_comparable') is not True):
         return failure('CANONICAL_WATT_REPLAY_DIFFERS_FROM_ISSUED_BAND')
+    separate_preload = _nova_inc100_independent_numeric_repeats_for_new_preload(
+        t, w, band, event)
     return {'schema':INC083_ISSUER_SCHEMA,'state':'PASS','accepted':True,
             'reason':'ORIGINAL_COMPLETED_REPETITION_LEDGER_REPLAY_MATCHED',
-            'source':'ORIGINAL_CANONICAL_WATT_MODEL_REPLAY'}
+            'source':'ORIGINAL_CANONICAL_WATT_MODEL_REPLAY',
+            'inc100_numeric_repeat_dose':('VERIFIED_BASE_REPEATS_NEW_PRELOAD_EXPLORATORY'
+                 if separate_preload else 'INHERITED_VERIFIED_REPEATABILITY'),
+            'inc100_new_preload_execution_preverified':False if separate_preload else None}
 
 
 def _nova_inc083_build_offer(*args,**kwargs):
@@ -66848,8 +66855,90 @@ def _nova_r134_rank_science_after_recent_transfer(scores, reasons, goal, evidenc
     except (ValueError,TypeError,AttributeError,OverflowError,KeyError):
         return
 
-APP_VERSION = ('THE LAB · R196.9.134 · INC099 RECENT TRANSFER SCIENCE RANK '
-               '· R133 ISSUER + R132 RAW PRESERVED · OFFLINE CANDIDATE')
+# INC100 / R196.9.135 — Separate verified work/recovery dose from a new
+# preloaded execution context. Same scientific producer, no new watts or bypass.
+INC100_SCHEMA = 'NOVA-R196.9.135-INDEPENDENT-REPETITION-PROOF-1'
+
+def _nova_inc100_independent_numeric_repeats_for_new_preload(template, work,
+                                                            band, event):
+    """Recognize numerical *base reps*, never claim new-preload performance.
+
+    R196.7 marks every DURABILITY dose NOT_VERIFIED_FOR_THIS_WORKOUT because
+    the aerobic preload is novel. This is appropriate for grading/execution,
+    but the R127 original-science issuer incorrectly interprets the flag as
+    proof that exact previous *repetitions and recovery* are unmeasured.
+
+    Return True only when original independently resolved canonical repetitions
+    match the CURRENT template's work and recovery (not merely a same-duration
+    PB, an FTP estimate, a shorter rep, or an unverified RAW label). All later
+    replay/HMAC/owner/safety/phase and fueling gates continue to run unmodified.
+    """
+    t=template if isinstance(template,dict) else {}
+    w=work if isinstance(work,dict) else {}
+    b=band if isinstance(band,dict) else {}
+    e=event if isinstance(event,dict) else {}
+    try:
+        if (str(w.get('nova_prescription_dimension') or '').upper()!='DURABILITY'
+            or str(t.get('goal') or '').upper() not in {'POWER_5','POWER_20','VO2MAX','TIME_TRIAL','POWER_1'}
+            or str(t.get('pattern') or '').upper() not in {'STANDARD','SUSTAINED','SHORT_POWER'}
+            or str(w.get('nova_workout_id') or '') != str(t.get('id') or '')
+            or b.get('source')!='COMPARABLE_VERIFIED_REPEATED_WORK'
+            or b.get('state')!='PRESCRIBED'
+            or b.get('repeatability_state')!='NOT_VERIFIED_FOR_THIS_WORKOUT'
+            or b.get('repeatability_reason')!='NEW_PRIOR_LOAD_NOT_VERIFIED_LIKE_FOR_LIKE'
+            or b.get('power_target_mode')!='EXPLORATORY_RANGE'
+            or b.get('exploratory') is not True or b.get('non_punitive') is not True
+            or b.get('target_watts') is not None
+            or b.get('recovery_duration_comparable') is not True
+            or e.get('strong') is not True
+            or e.get('activity_truth_status')!='RESOLVED'
+            or str(e.get('activity_truth_source') or '').upper()
+                not in {'ICU_INTERVALS_CANONICAL','DEVICE_LAPS'}
+            or e.get('recovery_observation_complete') is not True
+            or not str(e.get('activity_id') or '').strip()
+            or str(e.get('activity_id') or '') != str(b.get('activity_id') or '')
+            or str(e.get('date') or '')[:10] != str(b.get('activity_date') or '')[:10]):
+            return False
+        numeric=lambda value: (float(value) if type(value) in (int,float)
+                               and math.isfinite(float(value)) else None)
+        template_work=numeric(t.get('work_s'))
+        template_reps=numeric(t.get('reps'))
+        template_recovery=numeric(t.get('recovery_s'))
+        actual_work=numeric(e.get('interval_secs'))
+        actual_reps=numeric(e.get('reps'))
+        actual_recovery=numeric(e.get('recovery_secs'))
+        pair_count=numeric(e.get('recovery_pair_count'))
+        expected_pairs=numeric(e.get('recovery_pair_expected'))
+        obs_watts=numeric(e.get('avg_watts'))
+        band_watts=numeric(b.get('observed_repeated_avg_watts'))
+        variation=numeric(e.get('cv_pct'))
+        low=numeric(b.get('low_watts'))
+        high=numeric(b.get('high_watts'))
+        if any(x is None for x in (template_work,template_reps,template_recovery,
+               actual_work,actual_reps,actual_recovery,pair_count,
+               expected_pairs,obs_watts,band_watts,variation,low,high)):
+            return False
+        if (template_reps<2 or actual_reps<template_reps
+            or abs(actual_work-template_work)>1.0
+            or abs(actual_work-numeric(b.get('evidence_interval_seconds') or -1))>0.1
+            or abs(numeric(b.get('work_seconds') or -1)-template_work)>0.1
+            or abs(actual_recovery-numeric(b.get('observed_recovery_seconds') or -1))>0.1
+            or abs(obs_watts-band_watts)>0.1
+            or pair_count != expected_pairs or expected_pairs!=actual_reps-1
+            or not 70<=obs_watts<=1200 or not 0<=variation<=6
+            or not 0<low<high<=1200):
+            return False
+        # Exact source recovery and observed recovery were already checked
+        # independently by R196.7, R127 and the owner-bound source receipt.
+        tol=min(20.0,max(5.0,template_recovery*.05))
+        if actual_recovery>template_recovery+tol:
+            return False
+        return True
+    except (TypeError,ValueError,KeyError,ArithmeticError,OverflowError,AttributeError):
+        return False
+
+APP_VERSION = ('THE LAB · R196.9.135 · INC100 INDEPENDENT REPEATED WORK PROOF '
+               '· R134 SCIENCE + R133 ISSUER + R132 RAW PRESERVED · OFFLINE CANDIDATE')
 
 
 if __name__ == "__main__":
