@@ -99,13 +99,18 @@ def render_real_flask(mode, report_path):
     client = nova.app.test_client()
     if mode == "synthetic_quality":
         prior=nova._v4891_prepare_snapshot_for_ui
-        with (
-            patch.object(nova,"_v4891_prepare_snapshot_for_ui",
-                         side_effect=lambda d: _make_quality_presentation(prior(d))),
-            contextlib.redirect_stdout(io.StringIO()),
-            contextlib.redirect_stderr(io.StringIO()),
-        ):
-            result=client.get("/preview")
+        testing_before=nova.app.testing
+        nova.app.testing=True
+        try:
+            with (
+                patch.object(nova,"_v4891_prepare_snapshot_for_ui",
+                             side_effect=lambda d: _make_quality_presentation(prior(d))),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                result=client.get("/preview")
+        finally:
+            nova.app.testing=testing_before
         if result.status_code!=200:
             raise RuntimeError("synthetic_quality_preview_http_non200")
         return result.get_data(as_text=True), None
