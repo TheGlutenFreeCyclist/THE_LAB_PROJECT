@@ -69,6 +69,9 @@ jobs:
           set -o pipefail
           python -m unittest discover -s qa/nova_test_lab -p "test_*.py" -v 2>&1 | tee nova-lab-results.txt
 
+      - name: INC109 full producer to issuer synthetic diagnostic (fail closed)
+        run: python qa/nova_test_lab/run_inc109_full_pipeline.py
+
       - name: Keep sanitized test logs
         if: always()
         uses: actions/upload-artifact@v4
