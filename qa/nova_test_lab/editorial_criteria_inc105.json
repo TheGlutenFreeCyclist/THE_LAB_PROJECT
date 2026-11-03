@@ -1,0 +1,70 @@
+{
+  "schema": "NOVA_INC105_EDITORIAL_VISUAL_V1",
+  "status": "DRAFT_AWAITING_OWNER_APPROVAL",
+  "approval": {
+    "owner": null,
+    "approved_at": null,
+    "review_reference": null
+  },
+  "review_viewports": [
+    320,
+    390,
+    768,
+    1280
+  ],
+  "required_screens": [
+    "preview_training",
+    "preview_fuel",
+    "preview_physiology",
+    "preview_performance",
+    "preview_science",
+    "card3_quality",
+    "recovery"
+  ],
+  "editorial_criteria": [
+    {
+      "id": "E01",
+      "requirement": "Card 3 communicates the next meaningful quality or a precise evidence-based reason it is withheld",
+      "decision": "MANUAL_PASS_FAIL"
+    },
+    {
+      "id": "E02",
+      "requirement": "No unverified booking date or execution authority is attached to conditional quality",
+      "decision": "AUTOMATABLE_WITH_REPLAY"
+    },
+    {
+      "id": "E03",
+      "requirement": "Fueling quantities include unit, workout context, and timing where applicable, without contradictory figures",
+      "decision": "MANUAL_PLUS_NUMERIC"
+    },
+    {
+      "id": "E04",
+      "requirement": "Remove repetitions and generic disclaimers that do not change athlete action or safety; retain safety-critical caveats",
+      "decision": "MANUAL_PASS_FAIL"
+    },
+    {
+      "id": "E05",
+      "requirement": "One glance should reveal prescribed action, duration/steps/watts, why, and any important condition",
+      "decision": "MANUAL_PASS_FAIL"
+    }
+  ],
+  "typography_criteria": [
+    {
+      "id": "T01",
+      "requirement": "Consistent display/body families and clear hierarchy between page/card/metric/microcopy",
+      "decision": "MANUAL_PASS_FAIL"
+    },
+    {
+      "id": "T02",
+      "requirement": "No clipped glyphs, overflow, unreadable contrast, or broken text wrapping",
+      "decision": "MECHANICAL_PLUS_MANUAL"
+    },
+    {
+      "id": "T03",
+      "requirement": "Compare weights, line-height and contrast to owner-approved screenshot baseline",
+      "decision": "VISUAL_APPROVAL_REQUIRED"
+    }
+  ],
+  "baseline_screenshots": [],
+  "caution": "Numeric text-length and font-size thresholds are REVIEW signals, never automatic editorial/esthetic acceptance. Keep private-report screenshots out of public artifacts."
+}
