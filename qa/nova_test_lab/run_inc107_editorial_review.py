@@ -45,7 +45,7 @@ def run(outdir):
                     for name in ("fuel","physiology","performance","science"):
                         panel=page.locator('[data-v4865-macro="'+name+'"]')
                         if panel.count() and panel.get_attribute("data-open")!="true":
-                            panel.locator("> .v4865-macro-head").click()
+                            panel.locator(".v4865-macro-head").first.click()
                 browser_state=page.evaluate("""() => {
                   const targets=[...document.querySelectorAll(
                     '.v1962-quality-card,.v23-recovery-card,.v4865-macro-copy,.v23-session-card')];
