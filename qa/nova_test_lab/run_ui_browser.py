@@ -14,6 +14,7 @@ import copy
 import io
 import json
 import os
+import hashlib
 from pathlib import Path
 import sys
 from unittest.mock import patch
@@ -97,7 +98,7 @@ def browser_audit(html, source_data, mode, screenshot_directory):
                     reduced_motion="reduce",
                 )
                 page = context.new_page()
-                page.on("pageerror", lambda err: js_errors.append(type(err).__name__))
+                page.on("pageerror", lambda err: js_errors.append({"kind": ("NETWORK_BLOCKED" if "Failed to fetch" in str(err) else "SECURITY" if "SecurityError" in str(err) else "REFERENCE" if "ReferenceError" in str(err) else "TYPE" if "TypeError" in str(err) else "OTHER"), "fingerprint": hashlib.sha256(str(err).encode("utf-8")).hexdigest()[:12]}))
                 def route_handler(route):
                     if route.request.url == SAFE_BROWSER_ORIGIN:
                         route.fulfill(status=200, body=html, content_type="text/html; charset=utf-8")
@@ -158,6 +159,11 @@ def browser_audit(html, source_data, mode, screenshot_directory):
                       detail={"count":state["sessionCount"]})
                 check(prefix+"-QUALITY-CARD-CONTENT",
                       state["qualityPresent"] and state["qualityInformative"] and state["qualityExplicit"])
+                if state["qualityHasStructure"]:
+                    check(prefix+"-QUALITY-PRESCRIPTION-COMPLETE",
+                          page.locator('.v1962-quality-card').evaluate(
+                              "(el) => /work and recovery/i.test(el.innerText) && /personalized work target/i.test(el.innerText) && /\\bW\\b/i.test(el.innerText)"
+                          ))
                 check(prefix+"-RECOVERY-CARDS",
                       state["recoveryCount"]>0 and state["recoveryComplete"],
                       detail={"count":state["recoveryCount"]})
@@ -226,13 +232,20 @@ def browser_audit(html, source_data, mode, screenshot_directory):
               not rows or len(source_data.get("nutrition_plan") or [])>=len(rows),
               important=False,detail={"sessions":len(rows),"nutrition_rows":len(source_data.get("nutrition_plan") or [])})
     if js_errors:
-        warnings.append({"id":"LAB-UI-JAVASCRIPT-ERROR-REVIEW","count":len(js_errors)})
+        signatures={}
+        for item in js_errors:
+            tag=item["kind"]+":"+item["fingerprint"]
+            signatures[tag]=signatures.get(tag,0)+1
+        warnings.append({"id":"LAB-UI-JAVASCRIPT-ERROR-REVIEW","count":len(js_errors),
+                         "signatures":signatures})
     failures=[x["id"] for x in audits if x["status"]=="FAIL"]
     return {"mode":"ACTUAL_R136_CHROMIUM_BROWSER",
             "scenario":"SYNTHETIC_PREVIEW" if mode=="preview" else "PRIVATE_FROZEN_R135_STORED_REPORT",
             "viewport_widths":list(WIDTHS),"check_count":len(audits),
             "pass_count":sum(x["status"]=="PASS" for x in audits),
             "hard_failures":failures,"warnings":warnings,
+            "check_results": [{"id":x["id"],"status":x["status"]} for x in audits],
+            "review_required":bool(warnings or any(x["status"]=="WARN" for x in audits)),
             "status":"PASS" if not failures else "FAIL",
             "no_external_calls":True,"new_snapshots":0,
             "report_saved_to_neon":False}
