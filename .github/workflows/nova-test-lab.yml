@@ -127,6 +127,12 @@ jobs:
             --mode synthetic_quality \
             --json ui-quality-audit.json
 
+      - name: Real Chromium staging login and signed cookie (synthetic only)
+        run: python qa/nova_test_lab/run_browser_authenticated_inc105.py
+
+      - name: Editorial reference approval gate (honest NOT_VERIFIED)
+        run: python qa/nova_test_lab/run_visual_diff_inc105.py --mode preview --width 390
+
       - name: Publish non-personal UI verdict and screenshots
         if: always()
         uses: actions/upload-artifact@v4
