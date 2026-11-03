@@ -77,3 +77,56 @@ jobs:
           path: nova-lab-results.txt
           retention-days: 7
           if-no-files-found: warn
+
+  browser-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ""
+      THE_LAB_OWNER_DATABASE_URL: ""
+      PRODUCT_SECURITY_STRICT: "0"
+      SESSION_COOKIE_SECURE: "0"
+      ICU_API_KEY: ""
+      ICU_ATHLETE_ID: ""
+      GARMIN_EMAIL: ""
+      GARMIN_PASSWORD: ""
+      ANTHROPIC_API_KEY: ""
+      THE_LAB_STANDARD_AI_API_KEY: ""
+      THE_LAB_PLATFORM_AI_API_KEY: ""
+      THE_LAB_TEST_LAB_MODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout isolated lab
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install real NOVA and Chromium browser dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt playwright==1.56.0
+          python -m playwright install --with-deps chromium
+
+      - name: Browser suite against real Flask synthetic Preview
+        shell: bash
+        run: |
+          python qa/nova_test_lab/run_ui_browser.py \
+            --mode preview \
+            --json ui-audit.json \
+            --screenshots ui-synthetic-screenshots
+
+      - name: Publish non-personal UI verdict and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-ui-synthetic-${{ github.run_id }}
+          path: |
+            ui-audit.json
+            ui-synthetic-screenshots/
+          retention-days: 3
+          if-no-files-found: warn
