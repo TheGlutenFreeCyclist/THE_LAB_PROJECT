@@ -71,7 +71,7 @@ def _make_quality_presentation(ui):
         "slot":"Next day",
         "why":"Laboratory negative test: insufficient verified original repeated work.",
     }
-    view["next_sessions"]=first+[demo_hard]
+    view["next_sessions"]=[first[0],demo_hard,first[1]]
     view["nutrition_plan"]=nova.build_nutrition_plan(view["next_sessions"],view.get("metabolic_context") or {})
     view["future_quality_plan"]=evidence["future_quality_plan"]
     view["next_quality_offer"]=None
@@ -96,8 +96,13 @@ def _make_quality_presentation(ui):
         patch.object(nova,"_nova_inc091_eligible",return_value=True),
     ):
         display_rows, alignment=nova._nova_inc101_recovery_projection(view)
+        card12, card12_audit=nova._nova_inc110_chronological_projection(view)
     if alignment["canonical_workout_id"] != canonical["nova_workout_id"]:
         raise RuntimeError("synthetic_alignment_not_calculated")
+    if len(card12_audit["suppressed_chronological_hard"]) != 1:
+        raise RuntimeError("inc110_chronological_rejection_missing")
+    view["nova_inc110_chronological_cards"]=card12
+    view["nova_inc110_chronological_audit"]=card12_audit
     view["nova_recovery_display_rows"]=display_rows
     view["nova_recovery_alignment"]=alignment
     return view
@@ -249,6 +254,9 @@ def browser_audit(html, source_data, mode, screenshot_directory):
                     recovery_ids=recovery.evaluate_all(
                         "(els)=>els.map(e=>e.getAttribute('data-nova-workout-id')).filter(Boolean)"
                     )
+                    chrono2=page.locator(".v23-session-card.v23-col-2").inner_text()
+                    check(prefix+"-REJECTED-2X7-WITHHELD-FROM-CARD2",
+                          "2×7 min" not in chrono2 and "not yet scheduled" in chrono2.lower())
                     check(prefix+"-QUALITY-5X3-NOT-REJECTED-2X7",
                           ("5×3 min" in card_text and "350–370 W" in card_text
                            and "2×7 min" not in card_text))
@@ -260,6 +268,10 @@ def browser_audit(html, source_data, mode, screenshot_directory):
                           "5×3 min" in page.locator('.v23-recovery-card[data-nova-workout-id="P5_5X3_EASYREC"]').inner_text()
                           and "UNSCHEDULED QUALITY" in page.locator('.v23-recovery-card[data-nova-workout-id="P5_5X3_EASYREC"]').inner_text()
                     )
+                if mode == "private":
+                    chrono2=page.locator(".v23-session-card.v23-col-2").inner_text()
+                    check(prefix+"-R135-REJECTED-2X7-NOT-IN-CARD2",
+                          "2×7 min" not in chrono2)
                 if state["qualityHasStructure"]:
                     check(prefix+"-QUALITY-PRESCRIPTION-COMPLETE",
                           page.locator('.v1962-quality-card').evaluate(
@@ -347,7 +359,7 @@ def browser_audit(html, source_data, mode, screenshot_directory):
                          "synthetic_examples":[v["synthetic_excerpt"] for v in unexpected_js[:2]
                                                if v["synthetic_excerpt"]]})
     failures=[x["id"] for x in audits if x["status"]=="FAIL"]
-    return {"mode":"ACTUAL_R136_CHROMIUM_BROWSER",
+    return {"mode":"ACTUAL_R137_CHROMIUM_BROWSER",
             "scenario":("SYNTHETIC_PREVIEW" if mode=="preview" else "SYNTHETIC_5X3_2X7_UI" if mode=="synthetic_quality" else "PRIVATE_FROZEN_R135_STORED_REPORT"),
             "viewport_widths":list(WIDTHS),"check_count":len(audits),
             "pass_count":sum(x["status"]=="PASS" for x in audits),
@@ -372,7 +384,7 @@ def main():
     except BaseException as exc:
         result={"status":"BLOCKED","reason_class":type(exc).__name__,
                 "synthetic_reason":str(exc)[:160] if args.mode!="private" else None,
-                "mode":"ACTUAL_R136_CHROMIUM_BROWSER",
+                "mode":"ACTUAL_R137_CHROMIUM_BROWSER",
                 "scenario":("SYNTHETIC_PREVIEW" if args.mode=="preview" else "SYNTHETIC_5X3_2X7_UI" if args.mode=="synthetic_quality" else "PRIVATE_FROZEN_R135_STORED_REPORT")}
     Path(args.json).write_text(json.dumps(result,indent=2,ensure_ascii=False),encoding="utf-8")
     print(json.dumps(result,ensure_ascii=False))

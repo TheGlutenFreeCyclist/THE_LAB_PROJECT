@@ -63,6 +63,9 @@ jobs:
           print("ISOLATION PASS: no Neon, Intervals.icu or AI credentials")
           PY
 
+      - name: Assemble SHA-pinned R137 on isolated lab runner
+        run: python qa/nova_test_lab/apply_inc110.py
+
       - name: Real Flask and scientific regression suite
         shell: bash
         run: |
@@ -114,6 +117,9 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check -r requirements.txt playwright==1.56.0
           python -m playwright install --with-deps chromium
+
+      - name: Assemble SHA-pinned R137 on isolated lab runner
+        run: python qa/nova_test_lab/apply_inc110.py
 
       - name: Browser suite against real Flask synthetic Preview
         shell: bash

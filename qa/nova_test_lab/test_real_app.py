@@ -77,7 +77,7 @@ def scenario(issued=False):
 
 class RealFlaskAndScienceTests(unittest.TestCase):
     def test_exact_release_and_real_module_loaded(self):
-        self.assertIn("R196.9.136", nova.APP_VERSION)
+        self.assertIn("R196.9.137", nova.APP_VERSION)
         self.assertTrue(callable(nova._v115_replay_nova_core))
         self.assertEqual(nova.R115_REPLAY_SCHEMA, "V4.8.91-R115-NOVA-REPLAY-1")
         self.assertTrue(callable(nova.build_nutrition_plan))
