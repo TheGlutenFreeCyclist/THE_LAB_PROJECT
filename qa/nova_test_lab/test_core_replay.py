@@ -5,8 +5,17 @@ This proves real producer execution and its fail-closed baseline, not the
 correctness of a fully evidenced POWER_5 or POWER_20 prescription.
 """
 import unittest
+import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+for name in ("DATABASE_URL", "THE_LAB_OWNER_DATABASE_URL", "ICU_API_KEY",
+             "ICU_ATHLETE_ID", "GARMIN_EMAIL", "GARMIN_PASSWORD",
+             "ANTHROPIC_API_KEY", "THE_LAB_STANDARD_AI_API_KEY",
+             "THE_LAB_PLATFORM_AI_API_KEY"):
+    os.environ[name] = ""
+os.environ["PRODUCT_SECURITY_STRICT"] = "0"
+os.environ["SESSION_COOKIE_SECURE"] = "0"
 import the_lab_app as nova
 
 
