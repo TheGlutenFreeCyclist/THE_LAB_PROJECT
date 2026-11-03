@@ -11,6 +11,8 @@ import json
 import os
 import tempfile
 import threading
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 for key in ("DATABASE_URL", "THE_LAB_OWNER_DATABASE_URL", "ICU_API_KEY",
@@ -21,6 +23,7 @@ for key in ("DATABASE_URL", "THE_LAB_OWNER_DATABASE_URL", "ICU_API_KEY",
 os.environ["PRODUCT_SECURITY_STRICT"] = "0"
 os.environ["SESSION_COOKIE_SECURE"] = "0"
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import the_lab_app as nova
 from playwright.sync_api import sync_playwright
 from werkzeug.serving import make_server
