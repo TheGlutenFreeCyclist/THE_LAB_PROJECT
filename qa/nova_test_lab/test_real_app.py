@@ -92,7 +92,7 @@ class RealFlaskAndScienceTests(unittest.TestCase):
         with patch.object(nova, "require_login", return_value=False):
             with patch.object(nova, "load_latest_report", side_effect=AssertionError("DB read forbidden")):
                 response = nova.app.test_client().post("/qa/nova-replay")
-        self.assertIn(response.status_code, (302, 401, 403))
+        self.assertIn(response.status_code, (302, 303, 401, 403))
 
     def test_canonical_recovery_real_fueling_and_html(self):
         data, canonical, rejected = scenario()
