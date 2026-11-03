@@ -44,15 +44,23 @@ def _make_quality_presentation(ui):
     view=copy.deepcopy(ui)
     from test_real_app import scenario
     evidence, canonical, rejected = scenario()
-    preview_rows=copy.deepcopy(view.get("next_sessions") or [])
-    if len(preview_rows)<2:
-        raise RuntimeError("preview_missing_chronology_for_card3")
-    first=preview_rows[:2]
-    for item in first:
-        item["nova_workout_id"]=None
-        item["nova_prescription_authority"]=False
+    first=[]
+    for index, base in enumerate(evidence["next_sessions"][:2]):
+        row=copy.deepcopy(base)
+        row.update({
+            "slot":"Today · morning" if index==0 else "Tomorrow · evening",
+            "duration":"45 min" if index==0 else "60 min",
+            "intensity_class":"recovery" if index==0 else "endurance",
+            "main_set":"Easy aerobic riding only; no hard repetitions.",
+            "why":"Preserve recovery and tomorrow's high quality.",
+            "environment":"INDOOR",
+            "hard_spacing_relevant":False,
+            "provisional_quality":False,
+            "nova_workout_id":None,
+            "nova_prescription_authority":False,
+        })
+        first.append(row)
     demo_hard={
-        **(copy.deepcopy(preview_rows[2]) if len(preview_rows)>2 else {}),
         **rejected,
         "intensity_class":"vo2",
         "hard_spacing_relevant":True,
