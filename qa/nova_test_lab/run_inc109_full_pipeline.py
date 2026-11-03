@@ -44,7 +44,7 @@ def run():
     data["evidence_ledger"]=evidence
     data["coach_clock"]={
         "iso":NOW.isoformat(),"time_period":"MORNING",
-        "next_slots":[{"date":"2026-11-04","start_minute":1110,
+        "next_slots":[{"date":"2026-11-04","label":"Synthetic evening available", "start_minute":1110,
                        "duration_hint_min":75,"restriction":"NONE",
                        "is_planned_training":False,"is_race":False,
                        "period":"EVENING","window":"EVENING"}],
