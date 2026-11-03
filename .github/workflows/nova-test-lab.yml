@@ -120,6 +120,13 @@ jobs:
             --json ui-audit.json \
             --screenshots ui-synthetic-screenshots
 
+      - name: Browser synthetic 5x3 vs rejected 2x7 quality + fueling
+        shell: bash
+        run: |
+          python qa/nova_test_lab/run_ui_browser.py \
+            --mode synthetic_quality \
+            --json ui-quality-audit.json
+
       - name: Publish non-personal UI verdict and screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -127,6 +134,7 @@ jobs:
           name: nova-ui-synthetic-${{ github.run_id }}
           path: |
             ui-audit.json
+            ui-quality-audit.json
             ui-synthetic-screenshots/
           retention-days: 3
           if-no-files-found: warn
