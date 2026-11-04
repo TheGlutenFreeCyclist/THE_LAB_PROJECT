@@ -1,4 +1,4 @@
-name: NOVA Test Lab (isolated, no Neon)
+name: NOVA Test Lab (isolated; private Neon fixture read-only)
 
 on:
   push:
@@ -63,10 +63,12 @@ jobs:
           print("ISOLATION PASS: no Neon, Intervals.icu or AI credentials")
           PY
 
-      - name: Assemble byte-identical R139 candidate (fail closed)
+      - name: Assemble byte-identical R140 candidate from R139 (fail closed)
         run: |
           python qa/nova_test_lab/apply_inc114_r139.py
           echo "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4  the_lab_app.py" | sha256sum -c -
+          python qa/nova_test_lab/apply_inc120.py
+          echo "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871  the_lab_app.py" | sha256sum -c -
           python -m py_compile the_lab_app.py
 
       - name: Real Flask and scientific regression suite
@@ -121,10 +123,12 @@ jobs:
           python -m pip install --disable-pip-version-check -r requirements.txt playwright==1.56.0
           python -m playwright install --with-deps chromium
 
-      - name: Assemble byte-identical R139 candidate (fail closed)
+      - name: Assemble byte-identical R140 candidate from R139 (fail closed)
         run: |
           python qa/nova_test_lab/apply_inc114_r139.py
           echo "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4  the_lab_app.py" | sha256sum -c -
+          python qa/nova_test_lab/apply_inc120.py
+          echo "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871  the_lab_app.py" | sha256sum -c -
           python -m py_compile the_lab_app.py
 
       - name: Browser suite against real Flask synthetic Preview
@@ -165,7 +169,7 @@ jobs:
           if-no-files-found: warn
 
   materialize-exact-r139-on-official-lab:
-    name: Materialize tested R139 on the existing authorized LAB branch
+    name: Materialize tested R140 on the existing authorized LAB branch
     runs-on: ubuntu-latest
     needs:
       - scientific-and-flask
@@ -189,12 +193,14 @@ jobs:
         shell: bash
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Build byte-identical complete R139 in checkout
+      - name: Build byte-identical complete R140 in checkout
         shell: bash
         run: |
           set -euo pipefail
           python qa/nova_test_lab/apply_inc114_r139.py
           echo "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4  the_lab_app.py" | sha256sum -c -
+          python qa/nova_test_lab/apply_inc120.py
+          echo "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871  the_lab_app.py" | sha256sum -c -
           python -m py_compile the_lab_app.py
       - name: Commit only the Python on LAB, never main or a new branch
         shell: bash
@@ -204,17 +210,17 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- the_lab_app.py
           if git diff --cached --quiet; then
-            echo "Exact R139 is already committed on the official LAB branch"
+            echo "Exact R140 is already committed on the official LAB branch"
           else
-            git commit -m "test(lab): materialize CI-verified NOVA R196.9.139"
+            git commit -m "test(lab): materialize CI-verified NOVA R196.9.140"
             git push origin HEAD:refs/heads/fix/neon-report-egress-r196999
           fi
-      - name: Confirm remote branch contains the exact R139
+      - name: Confirm remote branch contains the exact R140
         shell: bash
         run: |
           set -euo pipefail
           git fetch origin fix/neon-report-egress-r196999
-          git show FETCH_HEAD:the_lab_app.py | sha256sum | grep -F "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4"
+          git show FETCH_HEAD:the_lab_app.py | sha256sum | grep -F "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871"
 
   personal-r136-private-gate:
     name: Personal POWER_5 R136 to exact R139 private replay (REQUIRED)
@@ -246,7 +252,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Compile R139 owner replay runner before private credential gate
+      - name: Compile R140 owner replay runner before private credential gate
         run: python -m py_compile qa/nova_test_lab/run_personal_r136_r139_replay.py
       - name: Assert private read-only Neon LAB secret (fail closed)
         shell: bash
@@ -257,10 +263,12 @@ jobs:
           fi
       - name: Install real application dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
-      - name: Verify byte-identical R139 and run owner POWER_5 replay (no output files)
+      - name: Verify byte-identical R140 and run owner POWER_5 replay (no output files)
         shell: bash
         run: |
           set -euo pipefail
           python qa/nova_test_lab/apply_inc114_r139.py
           echo "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4  the_lab_app.py" | sha256sum -c -
+          python qa/nova_test_lab/apply_inc120.py
+          echo "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871  the_lab_app.py" | sha256sum -c -
           python qa/nova_test_lab/run_personal_r136_r139_replay.py
