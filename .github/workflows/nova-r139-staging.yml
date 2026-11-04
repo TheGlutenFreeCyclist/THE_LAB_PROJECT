@@ -1,0 +1,128 @@
+name: NOVA R139 isolated QA (INC114)
+on:
+  push:
+    branches:
+      - qa/inc114-r139
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nova-r139-inc114-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  science-and-flask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ""
+      THE_LAB_OWNER_DATABASE_URL: ""
+      PRODUCT_SECURITY_STRICT: "0"
+      SESSION_COOKIE_SECURE: "0"
+      ICU_API_KEY: ""
+      ICU_ATHLETE_ID: ""
+      GARMIN_EMAIL: ""
+      GARMIN_PASSWORD: ""
+      ANTHROPIC_API_KEY: ""
+      THE_LAB_STANDARD_AI_API_KEY: ""
+      THE_LAB_PLATFORM_AI_API_KEY: ""
+      THE_LAB_TEST_LAB_MODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout isolated branch only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install actual app dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Assert empty external credentials
+        run: |
+          python - <<'PY'
+          import os
+          for key in ["DATABASE_URL","THE_LAB_OWNER_DATABASE_URL","ICU_API_KEY","THE_LAB_PLATFORM_AI_API_KEY","THE_LAB_STANDARD_AI_API_KEY","ANTHROPIC_API_KEY"]:
+              assert not os.environ.get(key), f"Unexpected credential {key}"
+          print("ISOLATION PASS")
+          PY
+      - name: Assemble byte-identical R139 and fail closed on SHA mismatch
+        run: |
+          python qa/nova_test_lab/apply_inc114_r139.py
+          echo "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4  the_lab_app.py" | sha256sum -c -
+          python -m py_compile the_lab_app.py
+      - name: Real Flask and scientific regression suite
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s qa/nova_test_lab -p "test_*.py" -v 2>&1 | tee nova-r139-flask-tests.log
+      - name: Producer to issuer full pipeline diagnostic
+        shell: bash
+        run: |
+          set -o pipefail
+          python qa/nova_test_lab/run_inc109_full_pipeline.py 2>&1 | tee nova-r139-pipeline.log
+      - name: Save sanitized scientific logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r139-science-${{ github.run_id }}
+          path: |
+            nova-r139-flask-tests.log
+            nova-r139-pipeline.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  flask-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      DATABASE_URL: ""
+      THE_LAB_OWNER_DATABASE_URL: ""
+      PRODUCT_SECURITY_STRICT: "0"
+      SESSION_COOKIE_SECURE: "0"
+      ICU_API_KEY: ""
+      ICU_ATHLETE_ID: ""
+      GARMIN_EMAIL: ""
+      GARMIN_PASSWORD: ""
+      ANTHROPIC_API_KEY: ""
+      THE_LAB_STANDARD_AI_API_KEY: ""
+      THE_LAB_PLATFORM_AI_API_KEY: ""
+      THE_LAB_TEST_LAB_MODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Flask and Chromium
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt playwright==1.56.0
+          python -m playwright install --with-deps chromium
+      - name: Assemble the exact R139 candidate
+        run: |
+          python qa/nova_test_lab/apply_inc114_r139.py
+          echo "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4  the_lab_app.py" | sha256sum -c -
+      - name: Browser UI synthetic preview
+        run: python qa/nova_test_lab/run_ui_browser.py --mode preview --json r139-preview-ui.json --screenshots r139-screenshots
+      - name: Browser rejected 2x7 versus verified quality and fueling
+        run: python qa/nova_test_lab/run_ui_browser.py --mode synthetic_quality --json r139-quality-ui.json
+      - name: Real Chromium staging login with signed synthetic cookie
+        run: python qa/nova_test_lab/run_browser_authenticated_inc105.py
+      - name: Preserve sanitized browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r139-browser-${{ github.run_id }}
+          path: |
+            r139-preview-ui.json
+            r139-quality-ui.json
+            r139-screenshots/
+          retention-days: 3
+          if-no-files-found: ignore
