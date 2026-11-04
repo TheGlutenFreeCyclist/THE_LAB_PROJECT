@@ -1,0 +1,116 @@
+name: NOVA R145 Observed Quality Reconciliation — TEST only
+
+on:
+  push:
+    branches:
+      - fix/neon-report-egress-r196999
+    paths:
+      - .github/workflows/nova-r145-quality-reconcile.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nova-r145-reconcile-materialize
+  cancel-in-progress: false
+
+jobs:
+  commit-then-verify-r145:
+    if: github.ref == 'refs/heads/fix/neon-report-egress-r196999'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ""
+      THE_LAB_OWNER_DATABASE_URL: ""
+      ICU_API_KEY: ""
+      ICU_ATHLETE_ID: ""
+      GARMIN_EMAIL: ""
+      GARMIN_PASSWORD: ""
+      ANTHROPIC_API_KEY: ""
+      THE_LAB_STANDARD_AI_API_KEY: ""
+      THE_LAB_PLATFORM_AI_API_KEY: ""
+      PRODUCT_SECURITY_STRICT: "0"
+      SESSION_COOKIE_SECURE: "0"
+      THE_LAB_TEST_LAB_MODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout only the existing authorized TEST branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/neon-report-egress-r196999
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Assert exact triggering ref and isolated credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_REF" = "refs/heads/fix/neon-report-egress-r196999"
+          test -z "$DATABASE_URL"
+          test -z "$THE_LAB_OWNER_DATABASE_URL"
+          test -z "$ICU_API_KEY"
+          test -z "$THE_LAB_PLATFORM_AI_API_KEY"
+          echo '7fa531e1439816d112054e3cba9fbc1bf27ccecf4d56141c28326db65529f3fb  the_lab_app.py' | sha256sum -c -
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Assemble R145 exactly and compile before commit
+        run: |
+          set -euo pipefail
+          python qa/apply_r145_lab.py
+          echo 'b088cbb962d2a5d2a8fdef9a3cdb3bd23d8e89b539ede63b0b1c2c5c9dab7474  the_lab_app.py' | sha256sum -c -
+          python -m py_compile the_lab_app.py
+
+      - name: Commit only the verified full Python to TEST branch, never main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- the_lab_app.py
+          git commit -m 'fix(lab): R145 observed quality vs saved athlete intent [skip ci]'
+          git push origin HEAD:refs/heads/fix/neon-report-egress-r196999
+          echo "R145_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Install actual Flask and NOVA runtime dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: AFTER COMMIT — execute R145 synthetic regression and rendered Jinja
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$R145_COMMIT_SHA"
+          echo 'b088cbb962d2a5d2a8fdef9a3cdb3bd23d8e89b539ede63b0b1c2c5c9dab7474  the_lab_app.py' | sha256sum -c -
+          python qa/r145_reconciliation_regression.py 2>&1 | tee r145-post-commit-results.txt
+
+      - name: AFTER COMMIT — boot genuine Flask app (no external integrations)
+        run: |
+          python - <<'PY'
+          import the_lab_app as nova
+          assert 'R196.9.145' in nova.APP_VERSION
+          nova.app.jinja_env.parse(nova.HOME_PAGE)
+          print('REAL FLASK/JINJA IMPORT PASS',nova.APP_VERSION)
+          PY
+
+      - name: Confirm exact TEST branch remote Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin fix/neon-report-egress-r196999
+          test "$(git rev-parse FETCH_HEAD)" = "$R145_COMMIT_SHA"
+          git show FETCH_HEAD:the_lab_app.py | sha256sum | grep -F b088cbb962d2a5d2a8fdef9a3cdb3bd23d8e89b539ede63b0b1c2c5c9dab7474
+
+      - name: Publish only synthetic post-commit test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r145-synthetic-post-commit-qa
+          path: r145-post-commit-results.txt
+          retention-days: 7
+          if-no-files-found: warn
