@@ -55,12 +55,18 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None):
             actual_part = _r142_slot_daypart({'start_minute': activity_at.hour * 60 + activity_at.minute})
             if actual_part != entry.get('daypart'):
                 continue
-            rep = block.get('repeatability') or {}
-            if (rep.get('activity_truth_status') != 'RESOLVED'
-                    or rep.get('activity_truth_source') != 'ICU_INTERVALS_CANONICAL'
-                    or int(rep.get('reps') or 0) != int(template.get('reps') or 0)
-                    or int(rep.get('interval_secs') or 0) != int(template.get('work_s') or 0)
-                    or int(rep.get('recovery_secs') or 0) != int(template.get('recovery_s') or 0)):
+            rep = block.get('repeatability')
+            if not isinstance(rep, dict):
+                continue
+            try:
+                mechanics_ok = (rep.get('activity_truth_status') == 'RESOLVED'
+                    and rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL'
+                    and int(rep.get('reps') or 0) == int(template.get('reps') or 0)
+                    and int(rep.get('interval_secs') or 0) == int(template.get('work_s') or 0)
+                    and int(rep.get('recovery_secs') or 0) == int(template.get('recovery_s') or 0))
+            except (TypeError, ValueError):
+                mechanics_ok = False
+            if not mechanics_ok:
                 continue
             try:
                 duration = float(block.get('duration_min'))
