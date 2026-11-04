@@ -1,0 +1,87 @@
+name: NOVA R142 materialize verified Python on TEST branch
+
+on:
+  push:
+    branches:
+      - fix/neon-report-egress-r196999
+    paths:
+      - .github/workflows/nova-r142-materialize.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nova-r142-materialization-test-branch
+  cancel-in-progress: false
+
+jobs:
+  commit-r142-on-lab-only:
+    if: github.ref == 'refs/heads/fix/neon-report-egress-r196999'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact triggering TEST head
+        uses: actions/checkout@v4
+        with:
+          ref: fix/neon-report-egress-r196999
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Assert no concurrent update
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Assemble R142 from verified R141 baseline and committed INC122 fragment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import py_compile
+          before = "27ff5e828b848d2341c556b0357f496943e6c54a9c2b196eceb2c52f73a2e42c"
+          after = "0fdd92a3d0b5226bfc48dd73fcaa1f9f586db6303190e1dbb67f238da8c42b04"
+          fragment_sha = "b32fbfeb8b94ee3db80a0a9fee6e8b6882440389f07bd21f1ef04ed4b5625b9a"
+          app = Path("the_lab_app.py")
+          fragment = Path("docs/r142/inc122_quality_availability.pyfrag").read_bytes()
+          digest = lambda b: hashlib.sha256(b).hexdigest()
+          assert digest(fragment) == fragment_sha, "R142 fragment integrity failed"
+          assert fragment.startswith(b"# INC122 / R196.9.142"), "R142 fragment anchor"
+          assert fragment.endswith(b"\n\n"), "R142 fragment ending"
+          original = app.read_bytes()
+          if digest(original) == after:
+              print("R142 already committed, verified")
+          else:
+              assert digest(original) == before, "FAIL CLOSED: unexpected Python baseline"
+              lines = original.splitlines(keepends=True)
+              assert len(lines) == 67611, "R141 line-count drift"
+              assert lines[67607] == b"\n" and lines[67608] == b"\n", "R141 insertion drift"
+              assert lines[67609].startswith(b'if __name__ == "__main__":'), "R141 footer drift"
+              assembled = b"".join(lines[:67608]) + fragment + b"".join(lines[67608:])
+              assert digest(assembled) == after, "R142 assembled SHA256 mismatch"
+              app.write_bytes(assembled)
+              print("R142 exact assembly verified", digest(assembled))
+          py_compile.compile(str(app), doraise=True)
+          PY
+
+      - name: Commit Python R142 to authorized TEST branch, never main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- the_lab_app.py
+          if git diff --cached --quiet; then
+            echo "R142 Python already committed"
+          else
+            git commit -m "test(lab): commit verified NOVA R196.9.142 INC122 Python"
+            git push origin HEAD:refs/heads/fix/neon-report-egress-r196999
+          fi
+
+      - name: Verify committed Python on remote LAB branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin fix/neon-report-egress-r196999
+          git show FETCH_HEAD:the_lab_app.py | sha256sum | grep -F '0fdd92a3d0b5226bfc48dd73fcaa1f9f586db6303190e1dbb67f238da8c42b04'
