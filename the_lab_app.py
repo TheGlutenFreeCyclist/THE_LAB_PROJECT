@@ -68102,7 +68102,7 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
   <p class="r143-planning-notice" role="status">Availability saved: {{ nova_r142_state.latest_intent.minutes|e }} min · pending next Snapshot.</p>
   {% endif %}
   <button type="button" class="r143-open-dialog" data-r143-open="r143-quality-dialog" aria-haspopup="dialog" aria-controls="r143-quality-dialog">
-    <span class="r143-cta-icon" aria-hidden="true">＋</span>
+    <span class="r143-cta-icon" aria-hidden="true">📅</span>
     <span>Plan your next quality</span>
     <span class="r143-cta-arrow" aria-hidden="true">↗</span>
   </button>
@@ -68167,7 +68167,7 @@ _R143_STYLE = '''<style>
 .r143-quality-entry{margin:12px 0 8px;color:var(--text,#dce8ef)}
 .r143-open-dialog{appearance:none;width:100%;display:flex;align-items:center;gap:11px;padding:13px 15px;cursor:pointer;text-align:left;border:1px solid rgba(61,196,227,.62);border-radius:11px;background:rgba(25,105,137,.13);color:inherit;font:inherit;font-weight:700;transition:border-color .17s,background .17s}
 .r143-open-dialog:hover{background:rgba(31,145,185,.23);border-color:#37c9ea}
-.r143-cta-icon{display:grid;place-items:center;font-size:20px;font-weight:400;width:27px;height:27px;border-radius:9px;background:rgba(35,185,224,.15);color:#44ddff}
+.r143-cta-icon{display:grid;place-items:center;font-size:19px;font-weight:400;width:27px;height:27px;border-radius:9px;background:rgba(35,185,224,.15);color:#44ddff}
 .r143-cta-arrow{font-size:17px;margin-left:auto;color:#65cde3}
 .r143-duration-hint{margin:7px 3px 0!important;font-size:11px!important;line-height:1.4!important;opacity:.79}
 .r143-planning-notice{border-left:3px solid #37bfe2;padding:7px 10px;margin:0 0 10px;font-size:12px;line-height:1.45;background:rgba(37,160,200,.1)}
@@ -68262,8 +68262,8 @@ if HOME_PAGE.count('</body>') != 1:
     raise RuntimeError('R143_MODAL_SCRIPT_ANCHOR_DRIFT')
 HOME_PAGE = HOME_PAGE.replace('</body>', _R143_SCRIPT + '\n</body>', 1)
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION = ('THE LAB · R196.9.143 · INC123 COMPACT QUALITY AVAILABILITY DIALOG '
-               '· R142 TRAINING ENGINE UNCHANGED · HEALTH OBSERVATIONAL · LAB TEST CANDIDATE')
+APP_VERSION = ('THE LAB · R196.9.144 · INC124 CALENDAR ICON IN QUALITY DIALOG CTA '
+               '· R143/R142 UI AND TRAINING LOGIC UNCHANGED · LAB TEST CANDIDATE')
 
 
 if __name__ == "__main__":
