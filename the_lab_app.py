@@ -67376,6 +67376,212 @@ def _nova_inc101_is_unissued_nova_hard(row):
 APP_VERSION = ('THE LAB · R196.9.139 · INC113 SCIENTIFIC PRODUCER PRESELECTION '
                '· INC113 HARD-INTENSITY CONSUMER GUARD · LAB CANDIDATE · NO AUTO-DEPLOY')
 
+# INC120 / R196.9.140 — PLANNED QUALITY AND CHRONOLOGICAL PRECEDENCE.
+# The existing scientific issuer remains sovereign. If it cannot authorize a
+# HARD session, preserve a concrete library-based NEXT quality proposal as
+# non-executable direction, never as a substitute prescription. A real quality
+# already visible in chronological Card 1 or 2 takes precedence over Card 3.
+INC120_SCHEMA = 'NOVA-R196.9.140-CARD3-QUALITY-PLACEMENT-1'
+_INC120_BEFORE_PRODUCER = build_nova_prescription
+_INC120_BEFORE_COMPILER = compile_nova_prescription
+_INC120_BEFORE_UI = _v4891_prepare_snapshot_for_ui
+_INC120_BEFORE_DUPLICATE = app.jinja_env.globals['nova_quality_card3_duplicate_index']
+
+
+def _nova_inc120_intent(decision, roadmap, evidence_ledger=None,
+                        training_definitions=None, rejected=None):
+    """Existing canonical ranker, planning ONLY. Never approve HARD or watts."""
+    dec = decision if isinstance(decision, dict) else {}
+    road = roadmap if isinstance(roadmap, dict) else {}
+    science = road.get('scientific_progression') or {}
+    goal = str(dec.get('goal_key') or road.get('goal_key') or '').upper()
+    dim = str((science if isinstance(science, dict) else {}).get('dimension')
+              or dec.get('dimension') or '').upper()
+    # A missing scientific dimension or non-canonical goal does NOT permit a
+    # default workout; no arbitrary 5x3, prior PB or FTP extrapolation.
+    if not goal or not dim:
+        return None
+    refused = {str(r.get('workout_id') or '') for r in (rejected or [])
+               if isinstance(r, dict)}
+    blocked = set(_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()) | refused
+    token = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(blocked))
+    try:
+        template, selector_audit = _v19699_select_workout_template(
+            goal, dim, evidence_ledger=evidence_ledger,
+            training_definitions=training_definitions, slot={})
+    except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError,
+            OverflowError, IndexError):
+        return None
+    finally:
+        _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
+    if not isinstance(template, dict):
+        return None
+    wid = str(template.get('id') or '')
+    if (not wid or wid in blocked
+        or _R19696_LIBRARY_INDEX.get(wid) is None
+        or str(template.get('goal') or '').upper() != goal
+        or dim not in set(template.get('dimensions') or ())
+        or template.get('adaptive_only')):
+        return None
+    mechanics = _nova_r1969102_catalogue_copy(wid, goal)
+    if not isinstance(mechanics, dict) or not mechanics.get('structure'):
+        return None
+    # The selector's ranking is not watt-source approval, nor is it a safe
+    # scheduled duration. A planning contract must never be consumed as a
+    # quality_offer, prescription, automatic Calendar entry or fueling plan.
+    return {'schema': INC120_SCHEMA, 'status': 'DEFERRED_NOT_CLEARED',
+            'source': 'EXISTING_CANONICAL_SELECTOR_STRUCTURE_ONLY',
+            'goal_key': goal, 'dimension': dim, 'workout_id': wid,
+            'title': mechanics.get('title'),
+            'structure': mechanics.get('structure'),
+            'purpose': mechanics.get('purpose'),
+            'execution': mechanics.get('execution'),
+            'selector_reason': (selector_audit or {}).get('reason'),
+            'personalized_watts': None, 'execution_authorized': False,
+            'hard_prescription_available': False, 'is_scheduled': False,
+            'suggested_date': None, 'suggested_time': None,
+            'adds_calendar_event': False, 'adds_ledger_row': False,
+            'fueling': None, 'is_a_prescription': False,
+            'reason': ('A concrete next-quality structure has been selected by '
+                       'Nova’s existing canonical library and goal direction. '
+                       'Personalized dose, scientific clearance and a suitable '
+                       'training window are NOT established. Do not execute as '
+                       'a hard session until separately cleared.')}
+
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None,
+        microcycle_ledger=None, evidence_ledger=None, power_model=None,
+        ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    result = _INC120_BEFORE_PRODUCER(nova_decision, coach_clock,
+        adaptive_roadmap=adaptive_roadmap, microcycle_ledger=microcycle_ledger,
+        evidence_ledger=evidence_ledger, power_model=power_model,
+        ftp_anchor=ftp_anchor, aerobic_metabolic_range=aerobic_metabolic_range,
+        training_definitions=training_definitions)
+    if not isinstance(result, dict) or result.get('status') == 'PRESCRIBED':
+        return result
+    intent = _nova_inc120_intent(nova_decision, adaptive_roadmap,
+        evidence_ledger=evidence_ledger,
+        training_definitions=training_definitions,
+        rejected=result.get('inc111_rejected_candidates'))
+    return dict(result, inc120_planned_quality=intent,
+                inc120_quality_placement_schema=INC120_SCHEMA)
+
+
+def compile_nova_prescription(nova_prescription, *args, **kwargs):
+    output = _INC120_BEFORE_COMPILER(nova_prescription, *args, **kwargs)
+    if (isinstance(output, dict) and isinstance(nova_prescription, dict)
+        and nova_prescription.get('inc120_quality_placement_schema') == INC120_SCHEMA
+        and output.get('status') != 'PRESCRIBED'):
+        return dict(output,
+            inc120_planned_quality=nova_prescription.get('inc120_planned_quality'),
+            inc120_quality_placement_schema=INC120_SCHEMA)
+    return output
+
+
+def _nova_inc120_duplicate_index(data):
+    """Card 3 is grey only if a real quality is visible in Card 1 or 2."""
+    d = data if isinstance(data, dict) else {}
+    index = _INC120_BEFORE_DUPLICATE(d)
+    if type(index) is int and index in (0, 1):
+        return index
+    cards = d.get('nova_inc110_chronological_cards') or []
+    if not isinstance(cards, list):
+        return None
+    audit = d.get('nova_inc110_chronological_audit') or {}
+    retained = set(audit.get('retained_identical_hard_workout_ids') or [])
+    for index, row in enumerate(cards[:2]):
+        if (not isinstance(row, dict) or row.get('hidden') is True
+            or row.get('visible') is False or row.get('provisional_quality') is True
+            or row.get('is_race') is True):
+            continue
+        hard = str(row.get('intensity') or '').strip().upper().split(' ', 1)[0] == 'HARD'
+        hard = hard or str(row.get('intensity_class') or '').strip().lower() in {
+            'vo2', 'threshold', 'tempo', 'sprint', 'hard', 'high'}
+        if not hard:
+            continue
+        if _nova_inc101_is_unissued_nova_hard(row):
+            if str(row.get('nova_workout_id') or '') in retained:
+                return index
+            continue
+        # Athlete/calendar-entered HARD must be an explicit upcoming session,
+        # not a synthetic RHYTHM draft: a genuine calendar quality occupies
+        # its own chronological surface and Card 3 must not advertise a second.
+        if (str(row.get('source') or '').upper() == 'CALENDAR'
+            and (row.get('date') or row.get('is_planned_training') is True)):
+            return index
+    return None
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    prepared = _INC120_BEFORE_UI(data)
+    if not isinstance(prepared, dict):
+        return prepared
+    out = dict(prepared)
+    duplicate = _nova_inc120_duplicate_index(out)
+    out['inc120_quality_duplicate_card'] = duplicate + 1 if duplicate is not None else None
+    if duplicate is not None:
+        out['inc120_quality_placement'] = 'CARD12_OWNS_QUALITY_CARD3_GREY'
+        return out
+    card = out.get('nova_card3_workout_view') or {}
+    if not isinstance(card, dict):
+        return out
+    if (card.get('verified_offer') is True or
+        card.get('verified_future_plan') is True or
+        card.get('offer_structure_only') is True or
+        card.get('planned_quality') is True):
+        out['inc120_quality_placement'] = 'EXISTING_VERIFIED_CARD3_QUALITY'
+        return out
+    prescription = out.get('nova_prescription') or {}
+    planned = prescription.get('inc120_planned_quality') if isinstance(prescription, dict) else None
+    if not isinstance(planned, dict):
+        planned = _nova_inc120_intent(out.get('nova_decision'),
+            out.get('adaptive_roadmap'),
+            evidence_ledger=out.get('evidence_ledger'),
+            training_definitions=out.get('training_definitions'),
+            rejected=(prescription.get('inc111_rejected_candidates')
+                      if isinstance(prescription, dict) else None))
+    if not isinstance(planned, dict) or not planned.get('workout_id'):
+        out['inc120_quality_placement'] = 'NO_CANONICAL_QUALITY_AVAILABLE'
+        return out
+    # Reusing the original non-executable planned-quality rendering contract:
+    # no prescribed Watts, permissions, date, calendar, ledger, or fuel.
+    view = dict(card, planned_quality=True,
+        state='PLANNED_AWAITING_SCIENTIFIC_CLEARANCE',
+        workout_id=planned['workout_id'], title=planned['title'],
+        structure=planned['structure'], purpose=planned['purpose'],
+        execution=planned.get('execution'),
+        verified_offer=False, verified_future_plan=False,
+        offer_structure_only=False, direction_only=True,
+        personalized_watts=None, power_source=None, phases=[],
+        execution_clearance='NOT_CLEARED_FOR_EXECUTION',
+        execution_authorized_by_preview=False, is_scheduled=False,
+        reason=planned['reason'], minimum_session_minutes=None,
+        inc120_quality_intent=True)
+    direction = dict(out.get('next_quality_direction') or {})
+    direction.update(title=planned['title'], athlete_title=planned['title'],
+        athlete_explanation=planned['reason'],
+        referenced_canonical_template_id=planned['workout_id'],
+        source='CANONICAL_LIBRARY_DEFERRED_DIRECTION', direction_only=True,
+        is_a_prescription=False, is_scheduled=False,
+        execution_authorized_by_preview=False,
+        suggested_date=None, suggested_time=None)
+    out['nova_card3_workout_view'] = view
+    out['next_quality_direction'] = direction
+    out['quality_direction_fuel'] = None
+    out['inc120_quality_placement'] = 'CARD3_PLANNED_UNCLEARED'
+    out['inc120_canonical_quality_id'] = planned['workout_id']
+    return out
+
+
+app.jinja_env.globals['nova_quality_card3_duplicate_index'] = _nova_inc120_duplicate_index
+_INC120_TEMPLATE_PREVIOUS = 'NEXT QUALITY · SCIENTIFIC FUTURE PLAN'
+assert HOME_PAGE.count(_INC120_TEMPLATE_PREVIOUS) == 1, 'INC120_PLANNED_LABEL_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC120_TEMPLATE_PREVIOUS,
+    'NEXT QUALITY · PROPOSED STRUCTURE · NOT CLEARED', 1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · R196.9.140 · INC120 CARD3 DEFERRED QUALITY + '
+               'CARD1/2 PRECEDENCE · LAB CANDIDATE · NO AUTO-DEPLOY')
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
