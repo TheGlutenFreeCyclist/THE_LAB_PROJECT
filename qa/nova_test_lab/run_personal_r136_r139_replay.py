@@ -26,8 +26,10 @@ def emit(status, **fields):
 
 def main():
     dsn = os.environ.get("NOVA_TEST_LAB_DATABASE_URL", "")
-    if not dsn:
-        return emit("BLOCKED", reason="TEST_LAB_DSN_MISSING")
+    fixture_file = Path("qa/nova_test_lab/personal_r136_replay.json")
+    use_uploaded_file = fixture_file.is_file() and not dsn
+    if not dsn and not use_uploaded_file:
+        return emit("BLOCKED", reason="TEST_LAB_DSN_OR_OWNER_FIXTURE_MISSING")
     if hashlib.sha256((ROOT / "the_lab_app.py").read_bytes()).hexdigest() != SOURCE_SHA:
         return emit("BLOCKED", reason="WRONG_R139_SOURCE")
     # Never inherit production credentials when importing the actual Flask app.
@@ -41,8 +43,14 @@ def main():
     os.environ["THE_LAB_TEST_LAB_MODE"] = "1"
     sys.path.insert(0, str(ROOT))
     try:
-        import psycopg2
-        with psycopg2.connect(dsn, connect_timeout=10,
+        if use_uploaded_file:
+            if not 100_000 <= fixture_file.stat().st_size <= 1_500_000:
+                return emit("BLOCKED", reason="OWNER_FIXTURE_INVALID_SIZE")
+            fixture = json.loads(fixture_file.read_text(encoding="utf-8"))
+            fixture_source = "OWNER_EXPLICIT_TEMPORARY_GITHUB_UPLOAD"
+        else:
+            import psycopg2
+            with psycopg2.connect(dsn, connect_timeout=10,
                               options="-c default_transaction_read_only=on") as conn:
             with conn.cursor() as cur:
                 cur.execute("""SELECT current_user,current_database(),
@@ -61,9 +69,11 @@ def main():
                          AND consent_scope='owner_authorized' AND is_active=TRUE""",
                             (FIXTURE_ID,))
                 row = cur.fetchone()
-        if row is None or row[1] != FIXTURE_MD5:
-            return emit("BLOCKED", reason="SOURCE_FIXTURE_MD5_NOT_ATTESTED")
-        fixture = json.loads(row[0])
+        if not use_uploaded_file:
+            if row is None or row[1] != FIXTURE_MD5:
+                return emit("BLOCKED", reason="SOURCE_FIXTURE_MD5_NOT_ATTESTED")
+            fixture = json.loads(row[0])
+            fixture_source = "NEON_TEST_LAB_READ_ONLY"
         if (fixture.get("schema") != "V4.8.91-R115-NOVA-REPLAY-1"
             or fixture.get("input_fingerprint") != FINGERPRINT
             or fixture.get("core_inputs",{}).get("training_direction",{}).get("primary_goal") != "POWER_5"
@@ -71,6 +81,8 @@ def main():
             or not str(fixture.get("generated_at_local") or "").startswith("2026-11-03T19:46:48")):
             return emit("BLOCKED", reason="REAL_CA_IDENTITY_MISMATCH")
         import the_lab_app as nova
+        if nova._v115_replay_fingerprint(fixture.get("core_inputs") or {}) != FINGERPRINT:
+            return emit("BLOCKED", reason="ORIGINAL_INPUT_FINGERPRINT_NOT_VERIFIED")
         snapshot_clock = datetime.fromisoformat(fixture["generated_at_local"])
         with patch.object(nova, "get_rome_now", return_value=snapshot_clock):
             result = nova._v115_replay_nova_core(fixture)
@@ -80,7 +92,7 @@ def main():
                      or str(s.get("intensity_class") or "").lower() in ("tempo","threshold","vo2"))]
         ids = [s.get("nova_workout_id") for s in hard if s.get("nova_workout_id")]
         unexpected = REJECTED == prescription.get("workout_id") or REJECTED in ids
-        output = dict(fingerprint=FINGERPRINT, source_version="R196.9.136",
+        output = dict(fingerprint=FINGERPRINT, fixture_source=fixture_source, source_version="R196.9.136",
                       tested_version="R196.9.139", original_card3=CARD3,
                       selected_id=prescription.get("workout_id"),
                       producer_status=prescription.get("status"), output_hard_ids=ids,
