@@ -1,0 +1,76 @@
+name: NOVA R142 Quality Availability Stress (isolated branch)
+
+on:
+  push:
+    branches:
+      - fix/neon-report-egress-r196999
+    paths:
+      - qa/r142_quality_stress.py
+      - .github/workflows/nova-r142-stress.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nova-r142-stress-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  committed-python-stress:
+    if: github.ref == 'refs/heads/fix/neon-report-egress-r196999'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ""
+      THE_LAB_OWNER_DATABASE_URL: ""
+      ICU_API_KEY: ""
+      ICU_ATHLETE_ID: ""
+      GARMIN_EMAIL: ""
+      GARMIN_PASSWORD: ""
+      ANTHROPIC_API_KEY: ""
+      THE_LAB_STANDARD_AI_API_KEY: ""
+      THE_LAB_PLATFORM_AI_API_KEY: ""
+      PRODUCT_SECURITY_STRICT: "0"
+      SESSION_COOKIE_SECURE: "0"
+      THE_LAB_TEST_LAB_MODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout exact branch commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Assert isolated and no live integration credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/fix/neon-report-egress-r196999"
+          test -z "$DATABASE_URL"
+          test -z "$THE_LAB_OWNER_DATABASE_URL"
+          test -z "$ICU_API_KEY"
+          test -z "$THE_LAB_PLATFORM_AI_API_KEY"
+          echo "ISOLATION PASS"
+      - name: Install actual app dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Prove committed Python byte identity and syntax
+        run: |
+          echo '0fdd92a3d0b5226bfc48dd73fcaa1f9f586db6303190e1dbb67f238da8c42b04  the_lab_app.py' | sha256sum -c -
+          python -m py_compile the_lab_app.py
+      - name: Run 14 target tests and 40000 stress operations on committed Python
+        shell: bash
+        run: |
+          set -o pipefail
+          python qa/r142_quality_stress.py 2>&1 | tee r142-quality-stress.log
+      - name: Preserve sanitized test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r142-quality-stress-${{ github.run_id }}
+          path: r142-quality-stress.log
+          retention-days: 7
+          if-no-files-found: warn
