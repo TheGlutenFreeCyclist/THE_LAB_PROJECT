@@ -63,10 +63,8 @@ jobs:
           print("ISOLATION PASS: no Neon, Intervals.icu or AI credentials")
           PY
 
-      - name: Assemble byte-identical R140 candidate from R139 (fail closed)
+      - name: Verify or assemble byte-identical R140 candidate (fail closed)
         run: |
-          python qa/nova_test_lab/apply_inc114_r139.py
-          echo "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4  the_lab_app.py" | sha256sum -c -
           python qa/nova_test_lab/apply_inc120.py
           echo "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871  the_lab_app.py" | sha256sum -c -
           python -m py_compile the_lab_app.py
@@ -123,10 +121,8 @@ jobs:
           python -m pip install --disable-pip-version-check -r requirements.txt playwright==1.56.0
           python -m playwright install --with-deps chromium
 
-      - name: Assemble byte-identical R140 candidate from R139 (fail closed)
+      - name: Verify or assemble byte-identical R140 candidate (fail closed)
         run: |
-          python qa/nova_test_lab/apply_inc114_r139.py
-          echo "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4  the_lab_app.py" | sha256sum -c -
           python qa/nova_test_lab/apply_inc120.py
           echo "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871  the_lab_app.py" | sha256sum -c -
           python -m py_compile the_lab_app.py
@@ -197,8 +193,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python qa/nova_test_lab/apply_inc114_r139.py
-          echo "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4  the_lab_app.py" | sha256sum -c -
           python qa/nova_test_lab/apply_inc120.py
           echo "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871  the_lab_app.py" | sha256sum -c -
           python -m py_compile the_lab_app.py
@@ -267,8 +261,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python qa/nova_test_lab/apply_inc114_r139.py
-          echo "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4  the_lab_app.py" | sha256sum -c -
           python qa/nova_test_lab/apply_inc120.py
           echo "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871  the_lab_app.py" | sha256sum -c -
           python qa/nova_test_lab/run_personal_r136_r139_replay.py
