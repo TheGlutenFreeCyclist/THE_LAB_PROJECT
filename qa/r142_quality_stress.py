@@ -13,7 +13,9 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import the_lab_app as n
 
 TARGET_SHA = "0fdd92a3d0b5226bfc48dd73fcaa1f9f586db6303190e1dbb67f238da8c42b04"
