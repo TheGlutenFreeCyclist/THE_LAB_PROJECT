@@ -94,16 +94,33 @@ def main():
             and planned.get("personalized_watts") is None
             and planned.get("fueling") is None
             and planned.get("adds_calendar_event") is False)
+        # Evaluate the real Flask UI projection of the PRIVATE R136 replay;
+        # no network calls, writes, screenshots or athlete values leave the job.
+        # The real HMAC owner/browser E2E remains a separate gate.
+        with nova.app.test_request_context("/"):
+            with patch.object(nova, "_nova_inc051_verified_owner_id", return_value=None):
+                rendered = nova._v4891_prepare_snapshot_for_ui(result)
+        card3 = rendered.get("nova_card3_workout_view") or {}
+        quality_visible = bool(
+            isinstance(card3, dict)
+            and card3.get("planned_quality") is True
+            and card3.get("workout_id") == planned.get("workout_id")
+            and card3.get("structure")
+            and card3.get("execution_authorized_by_preview") is False
+            and card3.get("personalized_watts") is None
+            and rendered.get("inc120_quality_placement") == "CARD3_PLANNED_UNCLEARED"
+            and rendered.get("inc120_quality_duplicate_card") is None)
         output = dict(fingerprint=FINGERPRINT, source_version="R196.9.136",
                       tested_version="R196.9.140", original_card3=CARD3,
                       selected_id=prescription.get("workout_id"),
                       producer_status=prescription.get("status"), output_hard_ids=ids,
                       quality_plan_ok=quality_plan_ok,
+                      private_ca_card3_projection_ok=quality_visible,
                       quality_plan_id=planned.get("workout_id"),
                       inc111_rejected_candidate_ids=[x.get("workout_id") for x in (prescription.get("inc111_rejected_candidates") or []) if isinstance(x,dict)],
                       issuer_hmac_authenticated=False, no_db_writes=True,
                       no_external_provider_calls=True)
-        return emit("FAIL" if unexpected or not quality_plan_ok else "PASS_PRIVATE_QUALITY_PRODUCER", **output)
+        return emit("FAIL" if unexpected or not quality_plan_ok or not quality_visible else "PASS_PRIVATE_QUALITY_PRODUCER", **output)
     except Exception as e:
         # Do not print exception messages; database driver messages may include secrets.
         return emit("BLOCKED", reason="EXCEPTION_"+type(e).__name__)
