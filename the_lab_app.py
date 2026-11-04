@@ -67095,6 +67095,287 @@ app.jinja_env.parse(HOME_PAGE)
 APP_VERSION = ('THE LAB · R196.9.136 · INC101 RECOVERY-CARD3 ONE VERIFIED WORKOUT IDENTITY '
                '· R135 DOSE + R134 SCIENCE + R133 ISSUER + R132 RAW PRESERVED · OFFLINE CANDIDATE')
 
+# INC110 / R196.9.137 — CLOSE THE REJECTED-QUALITY CHRONOLOGICAL DISPLAY GAP.
+# The R136 Recovery guard was correct but the Card-1/2 Jinja selector still
+# read next_sessions directly. That let an issuer-FAIL RHYTHM draft (2x7)
+# look like an upcoming hard workout alongside a different, verified
+# unscheduled Card-3 plan (5x3). Preserve ALL saved/scientific objects;
+# only an attested, dose-identical canonical workout can occupy an athlete-
+# facing chronological HARD card. Races and independent easy work are untouched.
+INC110_SCHEMA = 'NOVA-R196.9.137-CHRONOLOGICAL-ISSUER-ALIGNMENT-1'
+_INC110_PRIOR_UI = _v4891_prepare_snapshot_for_ui
+_INC110_CHRONO_ANCHOR = '{% set upcoming.rows=upcoming.rows+[(si,data.next_sessions[si])] %}'
+assert HOME_PAGE.count(_INC110_CHRONO_ANCHOR) == 1, 'INC110_CHRONO_TEMPLATE_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(
+    _INC110_CHRONO_ANCHOR,
+    '{% set upcoming.rows=upcoming.rows+[(si,data.nova_inc110_chronological_cards[si])] %}',
+    1)
+
+
+def _nova_inc110_attested_chronological_authority(data):
+    """Use existing original issuers, NEVER pick or synthesize a workout."""
+    d = data if isinstance(data, dict) else {}
+    owner = _nova_inc051_verified_owner_id()
+    if not owner:
+        return None, None
+    work, origin = _nova_inc101_authoritative_quality(d)
+    if isinstance(work, dict) and work.get('nova_workout_id'):
+        return work, origin
+    # C07 can intentionally hide Card 3 when the exact same complete quality
+    # is already displayed in Card 1/2. Verify its original authority directly.
+    offer = d.get('next_quality_offer') or {}
+    audit = d.get('quality_offer_integrity') or {}
+    if (isinstance(offer, dict) and isinstance(audit, dict)
+        and audit.get('state') == 'PASS'
+        and _nova_inc076_seal_ok(offer, audit, owner)):
+        source = offer.get('workout')
+        if (isinstance(source, dict)
+            and offer.get('workout_id') == source.get('nova_workout_id')):
+            return source, 'ISSUED_CANONICAL'
+    future = d.get('future_quality_plan') or {}
+    if (isinstance(future, dict)
+        and _nova_inc091_eligible(d, future, owner)):
+        source = future.get('workout')
+        if (isinstance(source, dict)
+            and future.get('workout_id') == source.get('nova_workout_id')):
+            return source, 'SEALED_FUTURE_UNSCHEDULED'
+    return None, None
+
+
+def _nova_inc110_identical_chronological_dose(row, authority):
+    """C07 is equality of full canonical dose, never of goal or title alone."""
+    if not _nova_inc101_same_compiled_dose(row, authority):
+        return False
+    return all(row.get(key) == authority.get(key) for key in (
+        'main_set', 'duration', 'nova_canonical_plan_id',
+        'nova_prescription_dimension', 'goal_key', 'why'))
+
+
+def _nova_inc110_chronological_projection(data):
+    """Read-only Card-1/2 projection; don't erase audit, schedule or ledger."""
+    d = data if isinstance(data, dict) else {}
+    originals = d.get('next_sessions') or []
+    if not isinstance(originals, list):
+        originals = []
+    display = list(originals)
+    authority, authority_source = _nova_inc110_attested_chronological_authority(d)
+    excluded = []
+    kept = []
+    for index, row in enumerate(originals[:2]):
+        # No new safety veto on EASY, independently supplied training, races.
+        if not _nova_inc101_is_unissued_nova_hard(row):
+            continue
+        if (_nova_inc110_identical_chronological_dose(row, authority)
+            and authority_source in {'ISSUED_CANONICAL',
+                                     'SEALED_FUTURE_UNSCHEDULED'}):
+            kept.append(str(row.get('nova_workout_id')))
+            continue
+        display[index] = None  # An unissued slot is not a substitute EASY ride.
+        excluded.append({'card': index + 1,
+                         'workout_id': str(row.get('nova_workout_id') or ''),
+                         'reason': 'NO_ATTESTED_IDENTICAL_CANONICAL_QUALITY'})
+    return display, {
+        'schema': INC110_SCHEMA, 'read_only': True,
+        'authority': authority_source or 'NONE',
+        'authority_workout_id': (
+            authority.get('nova_workout_id') if isinstance(authority, dict) else None),
+        'suppressed_chronological_hard': excluded,
+        'retained_identical_hard_workout_ids': kept,
+        'saved_next_sessions_unchanged': True,
+        'saved_nutrition_plan_unchanged': True,
+        'changed_calendar_ledger_or_science': False,
+    }
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    ui = _INC110_PRIOR_UI(data)
+    if not isinstance(ui, dict):
+        return ui
+    out = dict(ui)
+    out['nova_inc110_chronological_cards'], out['nova_inc110_chronological_audit'] = (
+        _nova_inc110_chronological_projection(out))
+    return out
+
+assert HOME_PAGE.count('data.nova_inc110_chronological_cards[si]') == 1, \
+    'INC110_CHRONO_SLOT_MISSING'
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · R196.9.137 · INC110 CHRONOLOGICAL-ISSUER QUALITY ALIGNMENT '
+               '· R136 RECOVERY + R135 DOSE + R134 SCIENCE + R133 ISSUER PRESERVED '
+               '· LAB CANDIDATE · NO AUTO-DEPLOY')
+
+
+
+# INC113 / R196.9.139 LAB CANDIDATE — ORIGINAL SCIENCE BEFORE SELECTION.
+# The canonical selector already searches another original-library template
+# when its watt source is NO_DEFENSIBLE_POWER_TARGET. The previous producer
+# labelled a shorter or otherwise unverified repeated-work source PRESCRIBED
+# and therefore admitted it, even though INC083's final issuer rejected the
+# identical scientific dose. Move the SAME original replay predicate upstream.
+# No new templates, source records, science coefficients, watt estimates,
+# HMAC, owner authority, calendar, nutrition or UI workaround are introduced.
+INC111_SCHEMA = 'NOVA-R196.9.139-PRESELECT-ORIGINAL-SCIENCE-2'
+_INC111_BAND_BEFORE = _v1943_band
+_INC111_ORIGINAL_REPLAY_ACTIVE = ContextVar('nova_inc111_original_replay_active', default=False)
+
+
+def _v1943_band(template, evidence_ledger=None, ftp_anchor=None,
+                as_of_date=None, dimension=None):
+    band = _INC111_BAND_BEFORE(template, evidence_ledger=evidence_ledger,
+        ftp_anchor=ftp_anchor, as_of_date=as_of_date, dimension=dimension)
+    # Nested call by INC083 to independently replay the original watt model:
+    # invoke the exact original band, never recurse or change the issuer.
+    if _INC111_ORIGINAL_REPLAY_ACTIVE.get():
+        return band
+    t = template if isinstance(template, dict) else {}
+    if (not isinstance(band, dict) or band.get('state') != 'PRESCRIBED'
+        or band.get('source') != 'COMPARABLE_VERIFIED_REPEATED_WORK'
+        or str(t.get('pattern') or '').upper() not in {'STANDARD', 'SUSTAINED', 'SHORT_POWER'}):
+        return band
+    dim = str(dimension or '').upper()
+    # Validate the specific candidate with the very same original science
+    # replay the final issuer will use, rather than an approximate seconds
+    # comparison. Its independent repeated-work and preloaded-dose guards
+    # remain authoritative, including exact dates/source/recovery.
+    witness = {'accepted': False, 'reason': 'REPLAY_NOT_PERFORMED'}
+    token = _INC111_ORIGINAL_REPLAY_ACTIVE.set(True)
+    try:
+        work = {'nova_workout_id': t.get('id'),
+            'nova_prescription_dimension': dim,
+            'power_prescription': band}
+        roadmap = {'scientific_progression': {'dimension': dim}}
+        replay_day = (date.fromisoformat(str(as_of_date)[:10]) if as_of_date
+                      else datetime.now(ROME_TZ).date())
+        witness = _nova_inc083_science_replay(
+            work, evidence_ledger, ftp_anchor, roadmap, today=replay_day)
+    except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError,
+            IndexError, OverflowError, RecursionError):
+        witness = {'accepted': False, 'reason': 'ORIGINAL_REPLAY_EXCEPTION'}
+    finally:
+        _INC111_ORIGINAL_REPLAY_ACTIVE.reset(token)
+    if isinstance(witness, dict) and witness.get('accepted') is True:
+        return band
+    # A canonical alternative is now selected by the original producer,
+    # not by the frontend. If none can pass, the ordinary NO_CANDIDATE path
+    # withholds hard work. Keep the original observations for diagnostics;
+    # never display unproven watts as a runnable prescription.
+    out = dict(band)
+    out.update(state='NO_DEFENSIBLE_POWER_TARGET', confidence='NONE',
+        reason='ORIGINAL_SCIENCE_PRESELECTION_REPLAY_FAILED',
+        inc111_schema=INC111_SCHEMA,
+        inc111_science_replay_reason=(witness.get('reason') if isinstance(witness, dict)
+                                     else 'REPLAY_RESULT_INVALID'),
+        inc111_rejected_repeated_work_source=True,
+        target_watts=None, low_watts=None, high_watts=None,
+        permission_granted=False)
+    return out
+
+# INC111 / producer admission guard: watt-model guard alone is insufficient
+# because the canonical producer also admits SELF_PACED quality. Each new
+# candidate must survive issuer ORIGINAL science before normal compilation.
+# Bounded retries use the unmodified selector and scoped exclusions.
+_INC111_PRODUCER_BEFORE = build_nova_prescription
+
+
+def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None,
+        microcycle_ledger=None, evidence_ledger=None, power_model=None,
+        ftp_anchor=None, aerobic_metabolic_range=None, training_definitions=None):
+    decision = nova_decision if isinstance(nova_decision, dict) else {}
+    clock = coach_clock if isinstance(coach_clock, dict) else {}
+    roadmap = adaptive_roadmap if isinstance(adaptive_roadmap, dict) else {}
+    goal = str(decision.get('goal_key') or '').upper()
+    dimensions = str(((roadmap.get('scientific_progression') or {})
+                      .get('dimension') or decision.get('dimension') or '')).upper()
+    initial_exclusions = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()
+    refused = []
+    exclusions = set(initial_exclusions)
+    # Include every template of the selected goal: earlier producer wrappers may
+    # legitimately change the effective scientific dimension during fallback.
+    # Filtering by roadmap dimension here would silently bypass the issuer
+    # replay for a library quality chosen under another dimension.
+    candidate_ids = {str(t.get('id')) for t in _NOVA_WORKOUT_LIBRARY
+                     if isinstance(t, dict) and str(t.get('goal') or '').upper() == goal}
+    # Bounded replay: no changed catalog, rank, source observation or coefficient.
+    for _ in range(len(candidate_ids) + 1):
+        token = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(exclusions))
+        try:
+            result = _INC111_PRODUCER_BEFORE(decision, clock,
+                adaptive_roadmap=adaptive_roadmap,
+                microcycle_ledger=microcycle_ledger,
+                evidence_ledger=evidence_ledger, power_model=power_model,
+                ftp_anchor=ftp_anchor,
+                aerobic_metabolic_range=aerobic_metabolic_range,
+                training_definitions=training_definitions)
+        finally:
+            _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
+        if not isinstance(result, dict):
+            return result
+        if result.get('status') != 'PRESCRIBED':
+            return (dict(result, inc111_science_gate=INC111_SCHEMA,
+                         inc111_rejected_candidates=refused)
+                    if refused else result)
+        wid = str(result.get('workout_id') or '')
+        # Non-library re-entry contracts have independent scientific authority.
+        if wid not in candidate_ids:
+            return result
+        raw = next((r for r in result.get('raw_sessions') or []
+                    if isinstance(r, dict) and r.get('_tl_nova_workout_id') == wid
+                    and str(r.get('intensity') or '').strip().upper().split(' ', 1)[0] == 'HARD'), None)
+        band = raw.get('_tl_v1943_power_band') if isinstance(raw,dict) else None
+        witness = {'accepted': False, 'reason': 'MISSING_CANONICAL_HARD_POWER_BAND'}
+        if isinstance(band, dict):
+            test_work = {'nova_workout_id': wid,
+                'nova_prescription_dimension': result.get('dimension'),
+                'power_prescription': band}
+            try:
+                witness = _nova_inc083_science_replay(test_work,
+                    evidence_ledger, ftp_anchor, roadmap,
+                    today=get_rome_now().date())
+            except (TypeError, ValueError, KeyError, AttributeError,
+                    ArithmeticError, IndexError, OverflowError, RecursionError):
+                witness = {'accepted': False, 'reason': 'ORIGINAL_REPLAY_EXCEPTION'}
+        if isinstance(witness, dict) and witness.get('accepted') is True:
+            if refused:
+                return dict(result, inc111_science_gate=INC111_SCHEMA,
+                            inc111_rejected_candidates=refused,
+                            inc111_accepted_candidate=wid)
+            return result
+        refused.append({'workout_id': wid,
+            'reason': (witness.get('reason') if isinstance(witness, dict)
+                       else 'ORIGINAL_REPLAY_INVALID_RESULT')})
+        exclusions.add(wid)
+    # Ordinary producer normally supplies EASY_ONLY on catalog exhaustion.
+    # Never resurrect an unverified HARD in a bounded-search edge case.
+    return {'schema': INC111_SCHEMA, 'available': True, 'authority': 'NOVA',
+            'action': decision.get('action'), 'dimension': dimensions,
+            'goal_key': goal, 'status': 'EASY_ONLY', 'workout_id': None,
+            'hard_prescription_available': False,
+            'fail_closed_reason': 'ORIGINAL_SCIENCE_ALL_CANDIDATES_REJECTED',
+            'selected_slot_index': None, 'raw_sessions': [], 'sessions': [],
+            'inc111_science_gate': INC111_SCHEMA,
+            'inc111_rejected_candidates': refused}
+
+
+# INC113 / protect the existing Card1/2 + Recovery authority guards for
+# canonical intensity variants such as "HARD · THRESHOLD" and
+# "HARD · ANAEROBIC".  The old guard recognized only literal "HARD".
+# Delegate every race and independent-session exemption to its original
+# implementation; never rewrite the source row or its saved dose.
+_INC113_PRIOR_UNISSUED_HARD = _nova_inc101_is_unissued_nova_hard
+
+def _nova_inc101_is_unissued_nova_hard(row):
+    if not isinstance(row, dict):
+        return False
+    intensity = str(row.get('intensity') or '').strip().upper()
+    if intensity.split(' ', 1)[0] != 'HARD':
+        return _INC113_PRIOR_UNISSUED_HARD(row)
+    canonical = (row if intensity == 'HARD'
+                 else dict(row, intensity='HARD'))
+    return _INC113_PRIOR_UNISSUED_HARD(canonical)
+
+
+APP_VERSION = ('THE LAB · R196.9.139 · INC113 SCIENTIFIC PRODUCER PRESELECTION '
+               '· INC113 HARD-INTENSITY CONSUMER GUARD · LAB CANDIDATE · NO AUTO-DEPLOY')
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
