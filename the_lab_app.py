@@ -29444,6 +29444,11 @@ def analyze():
             "science_insights": science_context,
             "science_kb_version": SCIENCE_KB.get("version", 1),
         }
+        # INC125: observe a saved athlete window versus verified completed work.
+        # This sidecar is built AFTER all hard decisions, without modifying them.
+        data['quality_intent_reconciliation'] = _r145_quality_intent_observation(
+            user['id'], previous_training_blocks, now=get_rome_now(),
+            latest_feedback=latest_activity_feedback)
         # R196.9.16 shadow-only exact references in the already-fetched history.
         try:
             data['execution_reference_coverage'] = _v196916_execution_reference_coverage(
@@ -68101,6 +68106,10 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
   {% elif nova_r142_state.latest_intent %}
   <p class="r143-planning-notice" role="status">Availability saved: {{ nova_r142_state.latest_intent.minutes|e }} min · pending next Snapshot.</p>
   {% endif %}
+  {% set r145_observation = data.quality_intent_reconciliation or {} %}
+  {% if r145_observation.state == 'OBSERVED_AFTER_SAVED_AVAILABILITY' %}
+  <p class="r143-planning-notice" role="status">Your {{ r145_observation.observed_duration_min|e }} min quality was recorded on {{ r145_observation.intent_local_date|e }} at {{ r145_observation.observed_local_time|e }}. Your earlier availability was saved; it was not Nova execution clearance. Your next quality is a separate coaching decision.</p>
+  {% endif %}
   <button type="button" class="r143-open-dialog" data-r143-open="r143-quality-dialog" aria-haspopup="dialog" aria-controls="r143-quality-dialog">
     <span class="r143-cta-icon" aria-hidden="true">📅</span>
     <span>Plan your next quality</span>
@@ -68261,9 +68270,111 @@ HOME_PAGE = HOME_PAGE.replace(_R142_STYLE, _R143_STYLE)
 if HOME_PAGE.count('</body>') != 1:
     raise RuntimeError('R143_MODAL_SCRIPT_ANCHOR_DRIFT')
 HOME_PAGE = HOME_PAGE.replace('</body>', _R143_SCRIPT + '\n</body>', 1)
+# INC125 / R196.9.145 — OBSERVED QUALITY VS SAVED AVAILABILITY (READ-ONLY).
+# A PLAN intent is permission to consider a time window, never an issued
+# prescription. Even when observed work matches exactly, retain R139 causal
+# adherence guard, the original hard clearance, and all future science gates.
+R145_INTENT_OBSERVATION_SCHEMA = 'NOVA-R196.9.145-INTENT-OBSERVATION-1'
+
+
+def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback=None):
+    base = {'schema': R145_INTENT_OBSERVATION_SCHEMA,
+            'state': 'NO_RECENT_INTENT', 'observational_only': True,
+            'not_a_nova_prescription': True, 'execution_authorized': False,
+            'adherence_created': False, 'changes_workout_selection': False}
+    if not owner_id:
+        return base
+    try:
+        intents = _r142_intents(owner_id)
+    except Exception:
+        return {**base, 'state': 'INTENT_READ_UNAVAILABLE'}
+    today = (now or get_rome_now()).date()
+    recent = []
+    for entry in intents:
+        if not isinstance(entry, dict) or entry.get('kind') != 'PLAN' or entry.get('scope') != 'ONCE':
+            continue
+        try:
+            day = date.fromisoformat(str(entry.get('local_date') or '')[:10])
+        except (TypeError, ValueError):
+            continue
+        if 0 <= (today - day).days <= 2:
+            recent.append(entry)
+    if not recent:
+        return base
+    recent.sort(key=lambda e: str(e.get('saved_at_utc') or ''), reverse=True)
+    for entry in recent:
+        wid = str(entry.get('workout_id') or '')
+        goal = str(entry.get('goal_key') or '').upper()
+        template = next((t for t in _NOVA_WORKOUT_LIBRARY
+                         if t.get('id') == wid and t.get('goal') == goal
+                         and t.get('pattern') == 'STANDARD'), None)
+        saved = _v139_parse_local_dt(entry.get('saved_at_utc'))
+        try:
+            declared = float(entry.get('minutes'))
+        except (ValueError, TypeError):
+            continue
+        if template is None or saved is None or not (15 <= declared <= 360):
+            continue
+        for block in blocks or []:
+            if not isinstance(block, dict) or str(block.get('event_kind') or '').upper() == 'RACE':
+                continue
+            activity_id = str(block.get('activity_id') or '').strip()
+            activity_at = _v139_activity_dt(block)
+            if not activity_id or activity_at is None or activity_at < saved:
+                continue
+            if activity_at.date().isoformat() != str(entry.get('local_date') or '')[:10]:
+                continue
+            actual_part = _r142_slot_daypart({'start_minute': activity_at.hour * 60 + activity_at.minute})
+            if actual_part != entry.get('daypart'):
+                continue
+            rep = block.get('repeatability')
+            if not isinstance(rep, dict):
+                continue
+            try:
+                # Earlier block surfaces expose provenance directly, whereas
+                # the latest completed-quality audit independently attests
+                # the canonical interval structure for the SAME activity ID.
+                verified = (rep.get('activity_truth_status') == 'RESOLVED'
+                    and rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL')
+                attested = (isinstance(latest_feedback, dict)
+                    and latest_feedback.get('activity_id') == activity_id
+                    and latest_feedback.get('structure_status') == 'VERIFIED'
+                    and block.get('quality_relevant') is True)
+                mechanics_ok = ((verified or attested)
+                    and (rep.get('source') == 'ICU_INTERVALS_CANONICAL'
+                         or rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL')
+                    and int(rep.get('reps') or 0) == int(template.get('reps') or 0)
+                    and int(rep.get('interval_secs') or 0) == int(template.get('work_s') or 0)
+                    and int(rep.get('recovery_secs') or 0) == int(template.get('recovery_s') or 0))
+            except (TypeError, ValueError):
+                mechanics_ok = False
+            if not mechanics_ok:
+                continue
+            try:
+                duration = float(block.get('duration_min'))
+            except (ValueError, TypeError):
+                continue
+            if not (0 < duration <= declared + 0.5):
+                continue
+            return {**base, 'state': 'OBSERVED_AFTER_SAVED_AVAILABILITY',
+                    'intent_local_date': entry['local_date'],
+                    'intent_daypart': entry['daypart'],
+                    'declared_minutes': round(declared, 1),
+                    'workout_id': wid,
+                    'activity_id': activity_id,
+                    'observed_local_time': activity_at.strftime('%H:%M'),
+                    'observed_duration_min': round(duration, 1),
+                    'observed_reps': int(rep['reps']),
+                    'observed_interval_seconds': int(rep['interval_secs']),
+                    'observed_recovery_seconds': int(rep['recovery_secs']),
+                    'source': 'ICU_INTERVALS_CANONICAL + OWNER_SCOPED_SAVED_INTENT',
+                    'meaning': 'OBSERVED_EXECUTION_NOT_RETROACTIVE_CLEARANCE'}
+    return {**base, 'state': 'NO_VERIFIED_OBSERVED_MATCH',
+            'latest_intent_date': recent[0].get('local_date')}
+
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION = ('THE LAB · R196.9.144 · INC124 CALENDAR ICON IN QUALITY DIALOG CTA '
-               '· R143/R142 UI AND TRAINING LOGIC UNCHANGED · LAB TEST CANDIDATE')
+APP_VERSION = ('THE LAB · R196.9.146 · INC126 VERIFIED SAME-ACTIVITY INTENT RECONCILIATION '
+               '· R144 CALENDAR ICON · SCIENCE AND CLEARANCE UNCHANGED · LAB CANDIDATE')
 
 
 if __name__ == "__main__":
