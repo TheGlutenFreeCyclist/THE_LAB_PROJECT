@@ -1,0 +1,139 @@
+name: NOVA R143 Compact Quality Dialog — Verified LAB candidate
+
+on:
+  push:
+    branches:
+      - fix/neon-report-egress-r196999
+    paths:
+      - .github/workflows/nova-r143-compact-dialog.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nova-r143-quality-dialog-materialize
+  cancel-in-progress: false
+
+jobs:
+  verify-and-commit-r143:
+    if: github.ref == 'refs/heads/fix/neon-report-egress-r196999'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ""
+      THE_LAB_OWNER_DATABASE_URL: ""
+      ICU_API_KEY: ""
+      ICU_ATHLETE_ID: ""
+      GARMIN_EMAIL: ""
+      GARMIN_PASSWORD: ""
+      ANTHROPIC_API_KEY: ""
+      THE_LAB_STANDARD_AI_API_KEY: ""
+      THE_LAB_PLATFORM_AI_API_KEY: ""
+      PRODUCT_SECURITY_STRICT: "0"
+      SESSION_COOKIE_SECURE: "0"
+      THE_LAB_TEST_LAB_MODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout existing authorized TEST branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/neon-report-egress-r196999
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Assert same triggering commit and isolated credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_REF" = "refs/heads/fix/neon-report-egress-r196999"
+          test -z "$DATABASE_URL"
+          test -z "$THE_LAB_OWNER_DATABASE_URL"
+          test -z "$ICU_API_KEY"
+          test -z "$THE_LAB_PLATFORM_AI_API_KEY"
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Assemble the exact R143 Python, fail closed on drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          base_sha='0fdd92a3d0b5226bfc48dd73fcaa1f9f586db6303190e1dbb67f238da8c42b04'
+          fragment_sha='1c8d05c11daf5d7e7e3c8e2efe21c39dd5e96db18f9336fd63ac9d7f3645a2a3'
+          target_sha='7fa531e1439816d112054e3cba9fbc1bf27ccecf4d56141c28326db65529f3fb'
+          digest=lambda b:hashlib.sha256(b).hexdigest()
+          app=Path('the_lab_app.py')
+          source=app.read_bytes()
+          fragment=Path('docs/r143/inc123_compact_quality_dialog.pyfrag').read_bytes()
+          foot=b'if __name__ == "__main__":\n    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)\n'
+          assert digest(source)==base_sha, 'FAIL CLOSED: unexpected branch R142 baseline'
+          assert digest(fragment)==fragment_sha, 'FAIL CLOSED: fragment differs from locally verified R143'
+          assert source.count(foot)==1,'FAIL CLOSED: footer anchor drift'
+          candidate=source.replace(foot,fragment+b'\n\n'+foot,1)
+          assert digest(candidate)==target_sha,'FAIL CLOSED: R143 complete Python differs from local candidate'
+          app.write_bytes(candidate)
+          print('R143 SHA256 VERIFIED',digest(candidate))
+          PY
+          echo '7fa531e1439816d112054e3cba9fbc1bf27ccecf4d56141c28326db65529f3fb  the_lab_app.py' | sha256sum -c -
+          python -m py_compile the_lab_app.py
+
+      - name: Install real Flask/producer dependencies and Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -r requirements.txt playwright==1.56.0
+          python -m playwright install --with-deps chromium
+
+      - name: R143 UI, old R142 science and persistence stress tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python qa/r143_modal_regression.py 2>&1 | tee r143-regression.log
+
+      - name: Real Chromium responsive dialog and form interaction tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python qa/r143_dialog_browser.py 2>&1 | tee r143-browser.log
+
+      - name: Commit only SHA-verified complete Python on TEST branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- the_lab_app.py
+          if git diff --cached --quiet; then
+            echo 'Python already matches R143'
+          else
+            git commit -m 'test(lab): materialize QA-verified NOVA R196.9.143 dialog [skip ci]'
+            git push origin HEAD:refs/heads/fix/neon-report-egress-r196999
+          fi
+
+      - name: Validate committed remote Python exact R143
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin fix/neon-report-egress-r196999
+          git show FETCH_HEAD:the_lab_app.py | sha256sum | grep -F '7fa531e1439816d112054e3cba9fbc1bf27ccecf4d56141c28326db65529f3fb'
+
+      - name: Preserve synthetic test outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r143-compact-dialog-lab-evidence
+          path: |
+            r143-regression.log
+            r143-browser.log
+            r143-browser-evidence/
+          retention-days: 7
+          if-no-files-found: warn
