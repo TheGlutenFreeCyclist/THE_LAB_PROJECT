@@ -52,7 +52,7 @@ def main():
                        has_table_privilege(current_user,'science_lab.fixtures','DELETE')""")
                 identity = cur.fetchone()
                 if (not identity or identity[0] != 'nova_r139_qa_reader'
-                    or identity[1] != 'neondb' or identity[2] is not True
+                    or identity[1] != 'nova_lab' or identity[2] is not True
                     or any(identity[i] is True for i in (3,4,5))):
                     return emit("BLOCKED",reason="TEST_LAB_ROLE_MUST_BE_SCOPED_READ_ONLY")
                 cur.execute("""SELECT fixture_json::text,md5(fixture_json::text)
