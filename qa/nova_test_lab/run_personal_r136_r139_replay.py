@@ -85,7 +85,7 @@ def main():
         # plan; simply suppressing the wrong 2x7 is not sufficient.
         quality_plan_ok = bool(
             isinstance(planned, dict)
-            and planned.get("schema") == "NOVA-R196.9.141-CARD3-QUALITY-PLACEMENT-1"
+            and planned.get("schema") == "NOVA-R196.9.140-CARD3-QUALITY-PLACEMENT-1"
             and planned.get("status") == "DEFERRED_NOT_CLEARED"
             and planned.get("workout_id") in nova._R19696_LIBRARY_INDEX
             and planned.get("workout_id") != REJECTED
