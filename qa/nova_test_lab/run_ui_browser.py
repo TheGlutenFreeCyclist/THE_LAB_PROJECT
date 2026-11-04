@@ -359,7 +359,7 @@ def browser_audit(html, source_data, mode, screenshot_directory):
                          "synthetic_examples":[v["synthetic_excerpt"] for v in unexpected_js[:2]
                                                if v["synthetic_excerpt"]]})
     failures=[x["id"] for x in audits if x["status"]=="FAIL"]
-    return {"mode":"ACTUAL_R137_CHROMIUM_BROWSER",
+    return {"mode":"ACTUAL_R139_CHROMIUM_BROWSER",
             "scenario":("SYNTHETIC_PREVIEW" if mode=="preview" else "SYNTHETIC_5X3_2X7_UI" if mode=="synthetic_quality" else "PRIVATE_FROZEN_R135_STORED_REPORT"),
             "viewport_widths":list(WIDTHS),"check_count":len(audits),
             "pass_count":sum(x["status"]=="PASS" for x in audits),
@@ -384,7 +384,7 @@ def main():
     except BaseException as exc:
         result={"status":"BLOCKED","reason_class":type(exc).__name__,
                 "synthetic_reason":str(exc)[:160] if args.mode!="private" else None,
-                "mode":"ACTUAL_R137_CHROMIUM_BROWSER",
+                "mode":"ACTUAL_R139_CHROMIUM_BROWSER",
                 "scenario":("SYNTHETIC_PREVIEW" if args.mode=="preview" else "SYNTHETIC_5X3_2X7_UI" if args.mode=="synthetic_quality" else "PRIVATE_FROZEN_R135_STORED_REPORT")}
     Path(args.json).write_text(json.dumps(result,indent=2,ensure_ascii=False),encoding="utf-8")
     print(json.dumps(result,ensure_ascii=False))
