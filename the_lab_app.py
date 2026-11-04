@@ -68088,5 +68088,183 @@ APP_VERSION = ('THE LAB · R196.9.142 · INC122 QUALITY AVAILABILITY REQUEST '
                '· TRAINING ENGINE CANONICAL · HEALTH OBSERVATIONAL · TEST CANDIDATE')
 
 
+# INC123 / R196.9.143 — COMPACT QUALITY AVAILABILITY DIALOG (UI ONLY).
+# Replaces the verbose R142 planning block with one accessible dialog trigger.
+# Does not alter training decisions, availability writes, owner binding, science,
+# workout canonical intervals, training rhythm, Nova Health or R141 card ownership.
+_R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download_mode
+  and nova_r142_state.active and data.nova_r142_plan_ui
+  and data.nova_r142_plan_ui.workout_id == nova_r142_state.workout_id %}
+<section id="r142-plan-your-quality" class="r143-quality-entry" aria-label="Plan your next quality workout">
+  {% if nova_r142_state.feedback %}
+  <p class="r143-planning-notice" role="status">{{ nova_r142_state.feedback|e }}</p>
+  {% elif nova_r142_state.latest_intent %}
+  <p class="r143-planning-notice" role="status">Availability saved: {{ nova_r142_state.latest_intent.minutes|e }} min · pending next Snapshot.</p>
+  {% endif %}
+  <button type="button" class="r143-open-dialog" data-r143-open="r143-quality-dialog" aria-haspopup="dialog" aria-controls="r143-quality-dialog">
+    <span class="r143-cta-icon" aria-hidden="true">＋</span>
+    <span>Plan your next quality</span>
+    <span class="r143-cta-arrow" aria-hidden="true">↗</span>
+  </button>
+  {% if data.nova_r142_plan_ui.required_minutes %}
+  <p class="r143-duration-hint">{{ data.nova_r142_plan_ui.required_minutes }} min complete workout{% if data.nova_r142_plan_ui.learned_minutes %} · {{ data.nova_r142_plan_ui.learned_minutes }} min estimated usual window{% endif %} · <strong>Not cleared</strong></p>
+  {% endif %}
+  <dialog id="r143-quality-dialog" class="r143-quality-dialog" aria-labelledby="r143-dialog-title" aria-describedby="r143-dialog-description">
+    <div class="r143-dialog-content">
+      <header class="r143-dialog-header">
+        <div><p class="r143-dialog-kicker">YOUR NEXT QUALITY · AVAILABILITY</p><h3 id="r143-dialog-title">Plan your next quality</h3></div>
+        <button type="button" class="r143-close-dialog" data-r143-close aria-label="Close planning dialog">×</button>
+      </header>
+      <p id="r143-dialog-description" class="r143-dialog-summary">{% if data.nova_r142_plan_ui.card in (1, 2) %}This quality is already displayed in Card {{ data.nova_r142_plan_ui.card }}. Card 3 remains inactive. {% endif %}Your workout requires <strong>{{ data.nova_r142_plan_ui.required_minutes or 'a full canonical session' }}{% if data.nova_r142_plan_ui.required_minutes %} min{% endif %}</strong>{% if data.nova_r142_plan_ui.learned_minutes %}; Nova currently estimates <strong>{{ data.nova_r142_plan_ui.learned_minutes }} min</strong> from your usual training{% endif %}. Changing your availability does not book or approve it.</p>
+      <fieldset class="r143-choice-group" aria-label="Choose an availability request">
+        <legend>What would you like to tell Nova?</legend>
+        <label class="r143-choice"><input type="radio" name="r143_intent_mode" value="PLAN" checked><span><strong>I can make time for this workout</strong><small>Tell Nova when you have a suitable training window.</small></span></label>
+        <label class="r143-choice"><input type="radio" name="r143_intent_mode" value="TOO_LONG"><span><strong>This workout is too long for me</strong><small>Tell Nova your available duration instead.</small></span></label>
+      </fieldset>
+      <div class="r143-plan-fields" data-r143-section="PLAN">
+        <form method="post" action="{{ url_for('r142_quality_intent') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="offer_binding" value="{{ nova_r142_state.token|e }}">
+          <input type="hidden" name="intent_kind" value="PLAN"><input type="hidden" name="scope" value="ONCE">
+          <div class="r143-fields-grid">
+            <label>Day <input type="date" name="local_date" min="{{ today_iso }}" value="{{ today_iso }}" required></label>
+            <label>Time of day <select name="daypart" required><option value="MORNING">Morning</option><option value="AFTERNOON">Afternoon</option><option value="EVENING" selected>Evening</option></select></label>
+          </div>
+          <label>Available minutes <input type="number" inputmode="numeric" name="minutes" min="15" max="360" value="{{ data.nova_r142_plan_ui.required_minutes|round|int if data.nova_r142_plan_ui.required_minutes else 75 }}" required></label>
+          <button type="submit" class="r143-submit">Save availability request</button>
+        </form>
+      </div>
+      <div class="r143-short-fields" data-r143-section="TOO_LONG" hidden>
+        <form method="post" action="{{ url_for('r142_quality_intent') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="offer_binding" value="{{ nova_r142_state.token|e }}">
+          <input type="hidden" name="intent_kind" value="TOO_LONG">
+          <label>My maximum available minutes <input type="number" inputmode="numeric" name="minutes" min="15" max="360" value="60" required></label>
+          <label>Apply this limit <select name="scope" data-r143-short-scope><option value="ONCE">Only this session</option><option value="USUAL">My usual availability</option></select></label>
+          <div data-r143-once-fields>
+            <div class="r143-fields-grid">
+              <label>Day <input type="date" name="local_date" min="{{ today_iso }}" value="{{ today_iso }}" required></label>
+              <label>Time of day <select name="daypart" required><option value="MORNING">Morning</option><option value="AFTERNOON">Afternoon</option><option value="EVENING" selected>Evening</option></select></label>
+            </div>
+          </div>
+          <button type="submit" class="r143-submit">Save duration limit</button>
+        </form>
+      </div>
+      {% if nova_r142_state.usual_limit %}
+      <form method="post" action="{{ url_for('r142_quality_clear_usual') }}" class="r143-remove-usual">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="offer_binding" value="{{ nova_r142_state.token|e }}">
+        <button type="submit">Remove my usual duration limit</button>
+      </form>
+      {% endif %}
+      <p class="r143-disclaimer">Nova will reassess this request during the <strong>next Snapshot</strong>. The current report stays unchanged. The training engine alone decides; Nova Health cannot approve or veto the workout. This request never shortens canonical intervals, recoveries or the durability preload, and is <strong>not permission to perform a hard session</strong>.</p>
+    </div>
+  </dialog>
+</section>
+{% endif %}'''
+
+_R143_STYLE = '''<style>
+.r143-quality-entry{margin:12px 0 8px;color:var(--text,#dce8ef)}
+.r143-open-dialog{appearance:none;width:100%;display:flex;align-items:center;gap:11px;padding:13px 15px;cursor:pointer;text-align:left;border:1px solid rgba(61,196,227,.62);border-radius:11px;background:rgba(25,105,137,.13);color:inherit;font:inherit;font-weight:700;transition:border-color .17s,background .17s}
+.r143-open-dialog:hover{background:rgba(31,145,185,.23);border-color:#37c9ea}
+.r143-cta-icon{display:grid;place-items:center;font-size:20px;font-weight:400;width:27px;height:27px;border-radius:9px;background:rgba(35,185,224,.15);color:#44ddff}
+.r143-cta-arrow{font-size:17px;margin-left:auto;color:#65cde3}
+.r143-duration-hint{margin:7px 3px 0!important;font-size:11px!important;line-height:1.4!important;opacity:.79}
+.r143-planning-notice{border-left:3px solid #37bfe2;padding:7px 10px;margin:0 0 10px;font-size:12px;line-height:1.45;background:rgba(37,160,200,.1)}
+.r143-quality-dialog{width:min(94vw,490px);max-width:490px;max-height:min(88dvh,810px);margin:auto;padding:0;overflow:auto;border-radius:17px;border:1px solid rgba(90,184,210,.54);box-shadow:0 24px 90px rgba(0,0,0,.65);background:#081d2a;color:#e7f3fa;position:fixed;inset:0;box-sizing:border-box}
+.r143-quality-dialog::backdrop{background:rgba(0,8,15,.76);backdrop-filter:blur(3px)}
+.r143-dialog-content{padding:21px;box-sizing:border-box}
+.r143-dialog-header{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.r143-dialog-header h3{margin:4px 0 10px;font-size:20px;line-height:1.2;color:inherit}
+.r143-dialog-kicker{margin:0;font-size:10px;color:#73d0e5;letter-spacing:.12em;font-weight:800}
+.r143-close-dialog{flex:none;border:1px solid rgba(149,172,190,.35);background:rgba(255,255,255,.055);color:inherit;width:36px;height:36px;line-height:1;border-radius:9px;font-size:23px;cursor:pointer}
+.r143-dialog-summary{margin:0 0 19px;line-height:1.55;font-size:13px;color:#c9dce7}
+.r143-choice-group{border:0;padding:0;margin:0 0 16px;min-width:0}
+.r143-choice-group legend{font-weight:700;font-size:13px;margin-bottom:9px}
+.r143-choice{display:flex;gap:11px;align-items:flex-start;padding:11px;margin:0 0 9px;border:1px solid rgba(120,159,181,.38);border-radius:10px;cursor:pointer;background:rgba(255,255,255,.018);line-height:1.35}
+.r143-choice:has(input:checked){border-color:#3bc0e2;background:rgba(39,159,204,.13)}
+.r143-choice input{accent-color:#22bade;flex:none;margin:2px 0 0;width:16px;height:16px}
+.r143-choice span{display:block;min-width:0;font-size:13px}
+.r143-choice small{display:block;margin-top:4px;color:#aac8d7;font-size:11px;line-height:1.4}
+.r143-plan-fields form,.r143-short-fields form{display:grid;gap:12px}
+.r143-plan-fields label,.r143-short-fields label{display:grid;gap:6px;font-size:12px;font-weight:600}
+.r143-fields-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+.r143-plan-fields input,.r143-short-fields input,.r143-plan-fields select,.r143-short-fields select{box-sizing:border-box;max-width:100%;min-width:0;width:100%;height:42px;border:1px solid rgba(120,159,181,.55);border-radius:8px;padding:8px 9px;background:#102d3d;color:#f1f9ff;font-size:14px}
+.r143-submit{min-height:45px;border:0;border-radius:9px;background:#34c1df;color:#051720;font-size:13px;font-weight:800;cursor:pointer;margin-top:5px}
+.r143-remove-usual{margin-top:12px}
+.r143-remove-usual button{border:0;background:transparent;color:#94dce9;text-decoration:underline;cursor:pointer;padding:8px 0;font-size:12px}
+.r143-disclaimer{border-top:1px solid rgba(125,174,193,.25);padding-top:13px;margin:16px 0 0;font-size:11px;line-height:1.55;color:#aecbd8}
+.r143-open-dialog:focus-visible,.r143-quality-dialog button:focus-visible,.r143-quality-dialog input:focus-visible,.r143-quality-dialog select:focus-visible{outline:3px solid #6fe4ff;outline-offset:3px}
+.r143-quality-dialog [hidden]{display:none!important}
+@media(max-width:620px){.r143-quality-dialog{inset:auto 0 0;max-width:none;width:100%;max-height:90dvh;margin:0;border-radius:19px 19px 0 0;border-bottom:0}.r143-dialog-content{padding:18px 16px 23px}.r143-fields-grid{grid-template-columns:1fr}.r143-open-dialog{min-height:48px}}
+@media(prefers-reduced-motion:reduce){.r143-open-dialog{transition:none}}
+</style>'''
+
+_R143_SCRIPT = r'''<script>
+(function(){
+  'use strict';
+  function init(){
+    var root=document.getElementById('r142-plan-your-quality');
+    if(!root)return;
+    var open=root.querySelector('[data-r143-open]');
+    var dlg=root.querySelector('#r143-quality-dialog');
+    if(!open||!dlg)return;
+    var close=dlg.querySelector('[data-r143-close]');
+    var choices=dlg.querySelectorAll('input[name="r143_intent_mode"]');
+    var sections=dlg.querySelectorAll('[data-r143-section]');
+    var shortScope=dlg.querySelector('[data-r143-short-scope]');
+    var onceFields=dlg.querySelector('[data-r143-once-fields]');
+    function syncScope(){
+      if(!shortScope||!onceFields)return;
+      var once=shortScope.value==='ONCE';
+      onceFields.hidden=!once;
+      onceFields.querySelectorAll('input,select').forEach(function(input){input.disabled=!once;});
+    }
+    function syncMode(){
+      var selected=dlg.querySelector('input[name="r143_intent_mode"]:checked');
+      var mode=selected?selected.value:'PLAN';
+      sections.forEach(function(node){
+        var active=node.getAttribute('data-r143-section')===mode;
+        node.hidden=!active;
+        node.querySelectorAll('input,select,button').forEach(function(control){control.disabled=!active;});
+      });
+      if(mode==='TOO_LONG')syncScope();
+    }
+    choices.forEach(function(choice){choice.addEventListener('change',syncMode);});
+    if(shortScope)shortScope.addEventListener('change',syncScope);
+    open.addEventListener('click',function(){
+      syncMode();
+      if(typeof dlg.showModal==='function')dlg.showModal();
+      else{dlg.setAttribute('open','');dlg.classList.add('r143-fallback-open');}
+      var first=dlg.querySelector('input[name="r143_intent_mode"]:checked');
+      if(first)first.focus();
+    });
+    function dismiss(){
+      if(typeof dlg.close==='function')dlg.close();
+      else{dlg.removeAttribute('open');dlg.classList.remove('r143-fallback-open');}
+      open.focus();
+    }
+    if(close)close.addEventListener('click',dismiss);
+    dlg.addEventListener('click',function(event){if(event.target===dlg)dismiss();});
+    dlg.addEventListener('close',function(){open.focus();});
+    syncMode();
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});
+  else init();
+})();
+</script>'''
+
+if HOME_PAGE.count(_R142_PANEL) != 2 or HOME_PAGE.count(_R142_STYLE) != 1:
+    raise RuntimeError('R143_MODAL_UI_ANCHOR_DRIFT')
+HOME_PAGE = HOME_PAGE.replace(_R142_PANEL, _R143_PANEL)
+HOME_PAGE = HOME_PAGE.replace(_R142_STYLE, _R143_STYLE)
+if HOME_PAGE.count('</body>') != 1:
+    raise RuntimeError('R143_MODAL_SCRIPT_ANCHOR_DRIFT')
+HOME_PAGE = HOME_PAGE.replace('</body>', _R143_SCRIPT + '\n</body>', 1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · R196.9.143 · INC123 COMPACT QUALITY AVAILABILITY DIALOG '
+               '· R142 TRAINING ENGINE UNCHANGED · HEALTH OBSERVATIONAL · LAB TEST CANDIDATE')
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
