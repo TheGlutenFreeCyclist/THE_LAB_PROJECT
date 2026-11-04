@@ -246,6 +246,8 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      - name: Compile R139 owner replay runner before private credential gate
+        run: python -m py_compile qa/nova_test_lab/run_personal_r136_r139_replay.py
       - name: Assert private read-only Neon LAB secret (fail closed)
         shell: bash
         run: |
