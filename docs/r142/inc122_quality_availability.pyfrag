@@ -1,0 +1,481 @@
+# INC122 / R196.9.142 — ATHLETE QUALITY AVAILABILITY INTENT (TRAINING ONLY).
+# The UI records a request, NEVER an issued workout. At the NEXT real Snapshot
+# the existing Coach Clock passes confirmed athlete duration to the SAME
+# canonical producer/issuer. Neither Health nor Training Rhythm learning changes.
+# Reuses the existing owner-scoped planning_items store; no new database schema.
+R142_AVAILABILITY_SCHEMA = 'NOVA-R196.9.142-QUALITY-AVAILABILITY-INTENT-1'
+_R142_PREFIX = 'NOVA_QUALITY_INTENT_V1:'
+_R142_CLOCK_BEFORE = build_coach_clock
+_R142_PLANNING_ITEMS_BEFORE = load_planning_items
+_R142_UI_BEFORE = _v4891_prepare_snapshot_for_ui
+
+
+def _r142_quality_identity(data):
+    d = data if isinstance(data, dict) else {}
+    index = d.get('inc120_quality_duplicate_card')
+    if index in (1, 2):
+        cards = d.get('nova_inc110_chronological_cards') or []
+        if len(cards) >= index and isinstance(cards[index-1], dict):
+            c = cards[index-1]
+            wid = str(c.get('nova_workout_id') or '')
+            if wid:
+                return wid, index
+        # Fail closed: never claim a grey placeholder is a distinct offer.
+        return None, index
+    view = d.get('nova_card3_workout_view') or {}
+    if isinstance(view, dict):
+        wid = str(view.get('workout_id') or '')
+        if wid:
+            return wid, 3
+    return None, None
+
+
+def _r142_report_binding(report, owner_id):
+    raw = (report or {}).get('data') or {}
+    d = _v4891_prepare_snapshot_for_ui(raw)
+    wid, card = _r142_quality_identity(d)
+    goal = str(((d.get('nova_decision') or {}).get('goal_key') or
+                (d.get('adaptive_roadmap') or {}).get('goal_key') or '')).upper()
+    stamp = str(report.get('generated_at_utc') or report.get('generated_at_local') or '')
+    if not wid or not stamp or not owner_id or not goal:
+        return None
+    raw_key = '|'.join((R142_AVAILABILITY_SCHEMA, str(owner_id), stamp, goal, wid, str(card)))
+    token = hmac.new(str(SECRET_KEY).encode('utf-8'), raw_key.encode('utf-8'),
+                     hashlib.sha256).hexdigest()
+    return {'token': token, 'workout_id': wid, 'card': card, 'goal': goal,
+            'report_stamp': stamp}
+
+
+def _r142_intents(owner_id):
+    if not owner_id:
+        return []
+    rows = _data_execute(owner_id,
+        'SELECT id, note, start_date, created_at_utc FROM planning_items '
+        'WHERE user_id=? AND kind=? AND active=1 AND note LIKE ? '
+        'ORDER BY created_at_utc DESC LIMIT 100',
+        (str(owner_id), 'OTHER', _R142_PREFIX + '%'), fetch=True)
+    intents = []
+    for row in rows or []:
+        try:
+            note = str(row.get('note') or '')
+            obj = json.loads(note[len(_R142_PREFIX):])
+            if (note.startswith(_R142_PREFIX) and isinstance(obj, dict)
+                and obj.get('schema') == R142_AVAILABILITY_SCHEMA
+                and obj.get('kind') in ('PLAN', 'TOO_LONG')
+                and obj.get('scope') in ('ONCE', 'USUAL')):
+                obj = dict(obj)
+                obj['id'] = row['id']
+                intents.append(obj)
+        except (TypeError, ValueError, KeyError):
+            continue
+    return intents
+
+
+def load_planning_items(active_only=True, limit=100, owner_user_id=None):
+    # Planning-intent rows are NOT Calendar events, activity observations or
+    # user training commitments. Keep them entirely out of existing consumers.
+    # Fetch a slightly larger page, then filter before any legacy caller sees it.
+    rows = _R142_PLANNING_ITEMS_BEFORE(active_only=active_only,
+        limit=max(int(limit), 500), owner_user_id=owner_user_id)
+    ordinary = [r for r in rows if not str(r.get('note') or '').startswith(_R142_PREFIX)]
+    return ordinary[:int(limit)]
+
+
+def _r142_intent_record_id(owner_id, kind, scope, workout_id):
+    identity = ('R142|%s|%s|%s|%s' %
+                (owner_id, kind, scope, workout_id if scope == 'ONCE' else 'GLOBAL'))
+    return hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]
+
+
+def _r142_write_intent(owner_id, obj):
+    kind, scope = obj['kind'], obj['scope']
+    wid = obj['workout_id']
+    item_id = _r142_intent_record_id(owner_id, kind, scope, wid)
+    target = obj.get('local_date') or get_rome_now().date().isoformat()
+    note = _R142_PREFIX + json.dumps(obj, ensure_ascii=False, sort_keys=True,
+                                     separators=(',', ':'))
+    if len(note) > 2100:
+        raise ValueError('The request is too long')
+    # Upsert by stable key with an owner check: retries/back/refresh cannot
+    # multiply intents; the original planning_items schema remains intact.
+    # The admin's dedicated Personal Neon schema intentionally does not have
+    # user_id on planning_items; _legacy_owner_storage_sql removes that INSERT
+    # column/parameter. Product Neon does have it and requires ownership CAS.
+    # Never reference excluded.user_id on the owner-personal bridge.
+    owner_guard = ('' if _owner_personal_data_enabled(owner_id)
+                   else ' WHERE planning_items.user_id=excluded.user_id')
+    _data_execute(owner_id,
+        'INSERT INTO planning_items '
+        '(id,user_id,created_at_utc,kind,title,note,start_date,end_date,'
+        'restriction_type,active) VALUES (?,?,?,?,?,?,?,?,?,1) '
+        'ON CONFLICT(id) DO UPDATE SET note=excluded.note, '
+        'start_date=excluded.start_date,end_date=excluded.end_date,active=1' + owner_guard,
+        (item_id,str(owner_id),_now_utc_text(),'OTHER',
+         'NOVA quality availability (not Calendar)',note,target,target,'NONE'))
+    return item_id
+
+
+def _r142_slot_daypart(slot):
+    minute = slot.get('start_minute')
+    try:
+        m = int(minute)
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= m < 1440:
+        return None
+    return 'MORNING' if m < 12*60 else ('AFTERNOON' if m < 17*60 else 'EVENING')
+
+
+def _r142_adjust_slots(clock, intents, now=None):
+    if not isinstance(clock, dict):
+        return clock
+    today = (now or get_rome_now()).date()
+    recent = sorted((i for i in intents if isinstance(i, dict)),
+                    key=lambda i: str(i.get('saved_at_utc') or ''), reverse=True)
+    usual = next((i for i in recent if i['kind']=='TOO_LONG' and i['scope']=='USUAL'), None)
+    once = [i for i in recent if i['scope']=='ONCE']
+    out = dict(clock)
+    trace = []
+    slots = []
+    consumed_windows = set()
+    for original in clock.get('next_slots') or []:
+        if not isinstance(original, dict):
+            slots.append(original)
+            continue
+        s = dict(original)
+        day = str(s.get('date') or '')[:10]
+        part = _r142_slot_daypart(s)
+        rule = next((i for i in once if i.get('local_date') == day
+                     and i.get('daypart') == part
+                     and (day, part) not in consumed_windows), None)
+        # Do not add a slot, move its start, override a Calendar commitment,
+        # relax blackout / injury restrictions, or manufacture confidence.
+        if not rule:
+            rule = usual
+        if rule and day and day >= today.isoformat() and str(s.get('restriction') or 'NONE').upper() == 'NONE':
+            old = _v19699_number(s.get('duration_hint_min'), 1, 360)
+            requested = _v19699_number(rule.get('minutes'), 15, 360)
+            if requested is not None and s.get('is_planned_training') is not True:
+                if rule['kind'] == 'TOO_LONG':
+                    # Strict declared maximum, never turn an inferred mean into
+                    # a completed observation or silently enlarge an easy slot.
+                    new = min(float(requested), old) if old is not None else float(requested)
+                else:
+                    new = float(requested)
+                s['duration_hint_min'] = round(new, 1)
+                s['duration_hint_label'] = '%s min (athlete-confirmed intent)' % round(new, 1)
+                s['r142_availability_source'] = 'ATHLETE_INTENT_NOT_ACTIVITY'
+                s['r142_intent_kind'] = rule['kind']
+                s['r142_confirmed_availability_minutes'] = round(new, 1)
+                s['duration_estimate_not_availability'] = False
+                if rule.get('scope') == 'ONCE':
+                    consumed_windows.add((day, part))
+                trace.append({'date': day, 'daypart': part, 'kind': rule['kind'],
+                              'minutes': round(new, 1), 'scope': rule['scope'],
+                              'scientific_clearance': False})
+        slots.append(s)
+    out['next_slots'] = slots
+    out['r142_availability_intent_audit'] = {
+        'schema': R142_AVAILABILITY_SCHEMA, 'training_engine_only': True,
+        'rhythm_learning_unchanged': True, 'observed_activity_created': False,
+        'slots_adjusted': trace, 'issued_quality_by_intent': False}
+    return out
+
+
+def build_coach_clock(season_activities, now=None, planning_context=None, training_rhythm=None):
+    original = _R142_CLOCK_BEFORE(season_activities, now=now,
+        planning_context=planning_context, training_rhythm=training_rhythm)
+    if not has_request_context() or str(getattr(request, 'endpoint', '') or '') != 'analyze':
+        return original
+    owner = _nova_inc051_verified_owner_id()
+    if not owner:
+        return original
+    # The snapshot may change goal in preflight. Never transfer a former
+    # goal's one-session request to the new Training direction. The usual
+    # duration cap is expressly athlete-wide and remains valid across goals.
+    active = get_active_training_strategy_plan(owner) or {}
+    goal = str(active.get('primary_goal') or '').upper()
+    if not goal:
+        return original
+    intents = [i for i in _r142_intents(owner) if i.get('scope') == 'USUAL'
+               or str(i.get('goal_key') or '').upper() == goal]
+    return _r142_adjust_slots(original, intents, now=now)
+
+
+def _r142_card_copy(data):
+    d = data if isinstance(data, dict) else {}
+    wid, card = _r142_quality_identity(d)
+    if not wid:
+        return None
+    p = d.get('nova_prescription') or {}
+    planned = p.get('inc120_planned_quality') or {}
+    science = (d.get('adaptive_roadmap') or {}).get('scientific_progression') or {}
+    dim = str(planned.get('dimension') or science.get('dimension') or
+              (d.get('nova_decision') or {}).get('dimension') or '').upper()
+    templ = _R19696_LIBRARY_INDEX.get(wid)
+    required = _nova_quality_template_required_seconds(templ, dim) if templ else None
+    required_min = round(required / 60, 1) if required else None
+    clock = d.get('coach_clock') or {}
+    slots = [s for s in clock.get('next_slots') or [] if isinstance(s, dict)]
+    learned = _v19699_number(slots[0].get('original_weekday_duration_hint_min'), 1, 360) if slots else None
+    if learned is None and slots:
+        learned = _v19699_number(slots[0].get('duration_hint_min'), 1, 360)
+    fail = str(p.get('fail_closed_reason') or '')
+    qi = d.get('quality_offer_integrity') or {}
+    attempts = qi.get('slot_attempts') or []
+    codes = set([fail, str(qi.get('producer_failure_reason') or ''),
+                 str(qi.get('reason') or '')])
+    codes.update(str(a.get('reason') or '') for a in attempts if isinstance(a, dict))
+    duration_reason = any('TIME' in c or 'DURATION' in c or 'EXCEEDS_SLOT' in c
+                          or 'COMPLETE_TEMPLATE' in c for c in codes)
+    alternation = (str(qi.get('state') or '') == 'WITHHELD_FOR_ALTERNATION'
+                   and not qi.get('offer_present'))
+    time_proven = (duration_reason and required_min is not None and learned is not None
+                   and required_min > learned and card == 3)
+    if time_proven:
+        explanation = ('Your next quality workout needs %s minutes, while Nova estimates %s minutes '
+                       'from your usual training pattern. Nova kept this slot easy rather than '
+                       'assuming you have more time.' % (required_min, round(learned,1)))
+        if alternation:
+            explanation += (' Nova is also reviewing recent quality work; more time alone '
+                            'does not guarantee another hard workout.')
+    elif alternation and card == 3:
+        explanation = ('Nova is reviewing recent quality work before issuing another hard session. '
+                       'A different schedule does not bypass scientific progression.')
+    else:
+        explanation = None
+    return {'workout_id':wid,'card':card,'required_minutes':required_min,
+            'learned_minutes':round(learned,1) if learned else None,
+            'easy_explanation':explanation,
+            'has_proven_time_conflict':bool(time_proven),
+            'alternation_also_present':bool(alternation)}
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    out = _R142_UI_BEFORE(data)
+    if not isinstance(out, dict):
+        return out
+    displayed = dict(out)
+    displayed['nova_r142_plan_ui'] = _r142_card_copy(displayed)
+    return displayed
+
+
+def _r142_page_state():
+    if (not has_request_context() or request.endpoint not in ('home', 'last_report')
+        or not session.get('auth_token') or not session.get('user_id')):
+        return {'active': False}
+    try:
+        owner = str(session['user_id'])
+        report = load_latest_report(include_payload=True, owner_user_id=owner)
+        binding = _r142_report_binding(report, owner) if report else None
+        if not binding:
+            return {'active': False}
+        binding['active'] = True
+        items = _r142_intents(owner)
+        items = [i for i in items if i.get('scope') == 'USUAL' or
+                 i.get('workout_id') == binding['workout_id']]
+        items.sort(key=lambda i: str(i.get('saved_at_utc') or ''), reverse=True)
+        binding['latest_intent'] = items[0] if items else None
+        binding['usual_limit'] = next((i for i in items if i.get('kind') == 'TOO_LONG'
+                                       and i.get('scope') == 'USUAL'), None)
+        binding['feedback'] = session.pop('r142_quality_notice', None)
+        return binding
+    except Exception:
+        app.logger.exception('R142 availability context unavailable')
+        return {'active': False}
+
+
+@app.context_processor
+def _r142_template_context():
+    return {'nova_r142_state': _r142_page_state()}
+
+
+@app.route('/quality/intent', methods=['POST'])
+def r142_quality_intent():
+    if not require_login():
+        return redirect(url_for('login'))
+    owner = str(session.get('user_id') or '')
+    feedback = 'Request was not saved. Please review your latest Snapshot.'
+    try:
+        report = load_latest_report(include_payload=True, owner_user_id=owner)
+        binding = _r142_report_binding(report, owner) if report else None
+        posted = str(request.form.get('offer_binding') or '')
+        if (not binding or len(posted) != 64 or
+            not hmac.compare_digest(posted, binding['token'])):
+            raise ValueError('The quality offer has changed. Reload your last report before editing it.')
+        active_goal = str((get_active_training_strategy_plan(owner) or {}).get('primary_goal') or '').upper()
+        if not active_goal or active_goal != binding['goal']:
+            raise ValueError('Your Training goal has changed. Create a new Snapshot to plan the current quality.')
+        kind = str(request.form.get('intent_kind') or '').upper()
+        scope = str(request.form.get('scope') or 'ONCE').upper()
+        if kind not in ('PLAN','TOO_LONG') or scope not in ('ONCE','USUAL'):
+            raise ValueError('Choose a valid planning request.')
+        if kind == 'PLAN' and scope != 'ONCE':
+            raise ValueError('Planning one workout requires a specific day and period.')
+        raw_minutes = str(request.form.get('minutes') or '').strip()
+        if not re.fullmatch(r'\d{2,3}', raw_minutes):
+            raise ValueError('Enter an available duration between 15 and 360 minutes.')
+        minutes = int(raw_minutes)
+        if not 15 <= minutes <= 360:
+            raise ValueError('Enter an available duration between 15 and 360 minutes.')
+        day = str(request.form.get('local_date') or '').strip()
+        part = str(request.form.get('daypart') or '').strip().upper()
+        if scope == 'ONCE':
+            try:
+                requested_day = date.fromisoformat(day)
+            except (ValueError, TypeError):
+                raise ValueError('Choose a valid local date.')
+            today = get_rome_now().date()
+            if not today <= requested_day <= today + timedelta(days=90):
+                raise ValueError('Choose a date within the next 90 days.')
+            if part not in ('MORNING','AFTERNOON','EVENING'):
+                raise ValueError('Choose morning, afternoon or evening.')
+            existing = _R142_PLANNING_ITEMS_BEFORE(active_only=True, limit=300,
+                                                   owner_user_id=owner)
+            for item in existing:
+                if not _date_in_item(item, requested_day):
+                    continue
+                if (str(item.get('restriction_type') or '').upper() in
+                        ('NO_TRAINING','NO_INTENSITY') or
+                    str(item.get('kind') or '').upper() == 'RACE'):
+                    raise ValueError('This day conflicts with an explicit restriction or race.')
+        else:
+            day = None
+            part = None
+        now = _now_utc_text()
+        obj = {'schema':R142_AVAILABILITY_SCHEMA, 'kind':kind, 'scope':scope,
+               'workout_id':binding['workout_id'], 'goal_key':binding['goal'],
+               'source_report':binding['report_stamp'],
+               'minutes':minutes, 'local_date':day, 'daypart':part,
+               'saved_at_utc':now, 'status':'REQUEST_SAVED_PENDING_NEXT_SNAPSHOT',
+               'not_an_execution_authorization':True,
+               'not_a_calendar_event':True, 'not_an_observed_activity':True}
+        _r142_write_intent(owner, obj)
+        feedback = ('Your availability request was saved. The existing Training engine will '
+                    'reassess it in the next Snapshot. Your current report is unchanged; '
+                    'this is not permission to execute a hard session.')
+    except ValueError as exc:
+        feedback = str(exc)[:240]
+    except Exception:
+        app.logger.exception('R142 quality planning request save failed')
+        feedback = 'Your request could not be saved. Please retry from the latest report.'
+    session['r142_quality_notice'] = feedback
+    return redirect(url_for('last_report'), code=303)
+
+
+
+
+@app.route('/quality/intent/clear-usual', methods=['POST'])
+def r142_quality_clear_usual():
+    if not require_login():
+        return redirect(url_for('login'))
+    owner = str(session.get('user_id') or '')
+    msg = 'The usual limit was not changed. Please reload your latest report.'
+    try:
+        report = load_latest_report(include_payload=True, owner_user_id=owner)
+        binding = _r142_report_binding(report, owner) if report else None
+        posted = str(request.form.get('offer_binding') or '')
+        if not binding or not hmac.compare_digest(posted, binding['token']):
+            raise ValueError('The quality offer has changed. Reload the latest report.')
+        # Revocation is always safe for this owner, even after a goal switch;
+        # a stale report cannot create or authorize a new prescription.
+        item_id = _r142_intent_record_id(owner, 'TOO_LONG', 'USUAL', binding['workout_id'])
+        _data_execute(owner, 'UPDATE planning_items SET active=0 WHERE id=? AND user_id=? '
+                      'AND kind=? AND note LIKE ?',
+                      (item_id, owner, 'OTHER', _R142_PREFIX + '%'))
+        msg = ('Your usual duration limit was removed. The next Snapshot will '
+               'again use the existing Training Rhythm estimates.')
+    except ValueError as exc:
+        msg = str(exc)[:240]
+    except Exception:
+        app.logger.exception('R142 usual limit revocation failed')
+        msg = 'The usual limit could not be removed. Please retry.'
+    session['r142_quality_notice'] = msg
+    return redirect(url_for('last_report'), code=303)
+
+_R142_PANEL = r'''{% if data and not is_preview and not qa_mode and not download_mode
+  and nova_r142_state.active and data.nova_r142_plan_ui
+  and data.nova_r142_plan_ui.workout_id == nova_r142_state.workout_id %}
+<section id="r142-plan-your-quality" class="r142-quality-planning" aria-label="Plan your next quality workout">
+<h3>PLAN YOUR NEXT QUALITY</h3>
+{% if data.nova_r142_plan_ui.card in (1, 2) %}
+<p>This quality is already shown in Card {{ data.nova_r142_plan_ui.card }}. Card 3 remains inactive. Manage your availability here without duplicating the workout.</p>
+{% else %}<p>Your next quality is a proposal, not an automatically booked or approved hard session.</p>{% endif %}
+{% if data.nova_r142_plan_ui.required_minutes %}<p>Complete canonical workout: <strong>{{ data.nova_r142_plan_ui.required_minutes }} min</strong>{% if data.nova_r142_plan_ui.learned_minutes %} · usual session estimate: {{ data.nova_r142_plan_ui.learned_minutes }} min{% endif %}.</p>{% endif %}
+{% if data.nova_r142_plan_ui.easy_explanation %}<p class="r142-quality-reason"><strong>Why easy endurance today?</strong> {{ data.nova_r142_plan_ui.easy_explanation|e }} <strong>Review your next quality here.</strong></p>{% endif %}
+{% if nova_r142_state.feedback %}<p role="status" class="r142-quality-feedback">{{ nova_r142_state.feedback|e }}</p>{% endif %}
+{% if nova_r142_state.latest_intent %}<p role="status" class="r142-quality-pending">Latest request: {{ nova_r142_state.latest_intent.kind|replace('_',' ')|e }} · {{ nova_r142_state.latest_intent.minutes }} min · {{ nova_r142_state.latest_intent.scope|e }} · saved, pending the next scientific Snapshot. It did not change the stored report.</p>{% endif %}
+{% if nova_r142_state.usual_limit %}<form method="post" action="{{ url_for('r142_quality_clear_usual') }}" class="r142-usual-clear"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="offer_binding" value="{{ nova_r142_state.token|e }}"><button type="submit">Remove my usual duration limit</button></form>{% endif %}
+<div class="r142-quality-actions">
+<details><summary>Plan this workout</summary>
+<form method="post" action="{{ url_for('r142_quality_intent') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="offer_binding" value="{{ nova_r142_state.token|e }}">
+<input type="hidden" name="intent_kind" value="PLAN"><input type="hidden" name="scope" value="ONCE">
+<label>Day <input type="date" name="local_date" min="{{ today_iso }}" required></label>
+<label>Time of day <select name="daypart" required><option value="MORNING">Morning</option><option value="AFTERNOON">Afternoon</option><option value="EVENING">Evening</option></select></label>
+<label>Available minutes <input type="number" name="minutes" min="15" max="360" value="{{ data.nova_r142_plan_ui.required_minutes|round|int if data.nova_r142_plan_ui.required_minutes else 75 }}" required></label>
+<button type="submit">Save planning request</button></form></details>
+<details><summary>This workout is too long</summary>
+<form method="post" action="{{ url_for('r142_quality_intent') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="offer_binding" value="{{ nova_r142_state.token|e }}">
+<input type="hidden" name="intent_kind" value="TOO_LONG">
+<label>My maximum minutes <input type="number" name="minutes" min="15" max="360" value="60" required></label>
+<label>Apply limit <select name="scope"><option value="ONCE">Only this session</option><option value="USUAL">My usual limit</option></select></label>
+<label>Date for a one-session limit <input type="date" name="local_date" min="{{ today_iso }}"></label>
+<label>Time of day for a one-session limit <select name="daypart"><option value="AFTERNOON">Afternoon</option><option value="MORNING">Morning</option><option value="EVENING">Evening</option></select></label>
+<button type="submit">Save duration limit</button></form></details>
+</div>
+<small>Changing availability does not shorten the canonical intervals, recoveries or durability preload. Nova Health has no approval or veto role. Saving this request is not clearance to perform a hard session.</small>
+</section>
+{% endif %}'''
+_R142_STYLE = '''<style>
+.r142-quality-planning{margin:16px 0 24px;padding:18px;border:1px solid rgba(32,181,214,.32);border-radius:17px;background:rgba(28,86,111,.07);color:var(--text,#dce8ef)}
+.r142-quality-planning h3{margin:0 0 10px;letter-spacing:.08em;font-size:14px}
+.r142-quality-planning p{font-size:13px;line-height:1.55}
+.r142-quality-reason,.r142-quality-feedback{border-left:3px solid #29b4ce;padding:9px 12px;background:rgba(41,180,206,.07)}
+.r142-quality-pending{opacity:.85}
+.r142-quality-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:12px;margin:13px 0}
+.r142-quality-actions details{padding:13px;border-radius:12px;border:1px solid rgba(120,150,170,.4)}
+.r142-quality-actions summary{cursor:pointer;font-weight:700;min-height:28px;color:inherit}
+.r142-quality-actions form{display:grid;gap:12px;margin-top:14px}
+.r142-quality-actions label{display:grid;gap:5px;font-size:12px}
+.r142-quality-actions input,.r142-quality-actions select{width:100%;min-width:0;padding:10px;border:1px solid rgba(120,150,170,.5);border-radius:8px;background:var(--card,#122b39);color:inherit;box-sizing:border-box}
+.r142-quality-actions button{padding:11px;border:0;border-radius:9px;background:#21a2c1;color:#081b24;font-weight:700;cursor:pointer}
+
+.r142-usual-clear button{padding:8px 11px;border-radius:8px;border:1px solid currentColor;background:transparent;color:inherit;cursor:pointer}
+.r142-quality-card-reason{margin:12px 0;padding:11px;border-left:3px solid #21a2c1;background:rgba(41,180,206,.08);font-size:12px;line-height:1.5}
+.r142-quality-card-reason p{margin:6px 0}
+.r142-quality-card-reason a{font-weight:700;text-decoration:underline}
+.r142-quality-actions button:focus-visible,.r142-quality-actions summary:focus-visible{outline:3px solid #5acdf4;outline-offset:2px}
+.r142-quality-planning small{display:block;line-height:1.5;opacity:.8}
+</style>'''
+# Card-3 controls live inside the third article when it owns the quality.
+# If R141 has made Card3 grey, the SAME panel instead lives just outside the
+# card group; no interactive descendant is inserted in aria-disabled Card3.
+_R142_CARD_ARTICLE_END = '</article>\n{% endif %}\n{% if not is_quality_slot or'
+if HOME_PAGE.count(_R142_CARD_ARTICLE_END) != 1:
+    raise RuntimeError('R142_CARD_ARTICLE_DRIFT')
+_R142_EASY_NOTE = r'''{% if not is_quality_slot and s and data.nova_r142_plan_ui
+  and data.nova_r142_plan_ui.card == 3
+  and data.nova_r142_plan_ui.easy_explanation
+  and (s.intensity or '')|upper != 'HARD' %}
+<div class="r142-quality-card-reason" role="note"><strong>Why easy endurance today?</strong>
+<p>{{ data.nova_r142_plan_ui.easy_explanation|e }}</p>
+<a href="#r142-plan-your-quality">Open Card 3 · plan your next quality</a></div>
+{% endif %}'''
+HOME_PAGE = HOME_PAGE.replace(_R142_CARD_ARTICLE_END,
+    _R142_EASY_NOTE + '\n{% if is_quality_slot and not quality_already_shown %}' +
+    _R142_PANEL + '{% endif %}\n' + _R142_CARD_ARTICLE_END, 1)
+_R142_PANEL_ANCHOR = '{% endfor %}\n</div>\n<style>'
+if HOME_PAGE.count(_R142_PANEL_ANCHOR) != 1:
+    raise RuntimeError('R142_CARD_GROUP_ANCHOR_DRIFT')
+HOME_PAGE = HOME_PAGE.replace(_R142_PANEL_ANCHOR,
+    '{% endfor %}\n</div>\n{% if data and data.nova_r142_plan_ui and '
+    'data.nova_r142_plan_ui.card in (1,2) %}' + _R142_PANEL +
+    '{% endif %}\n' + _R142_STYLE + '\n<style>', 1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · R196.9.142 · INC122 QUALITY AVAILABILITY REQUEST '
+               '· TRAINING ENGINE CANONICAL · HEALTH OBSERVATIONAL · TEST CANDIDATE')
+
