@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE_SHA = "20b3164c075b658ec7814988db5d28b7c48409294a18935caa5cbc22a5d669a4"
+SOURCE_SHA = "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871"
 FIXTURE_ID = "personal-r136-last-ca-lossless"
 FIXTURE_MD5 = "6f98d1c7553270622810c23fd3d37bc9"
 FINGERPRINT = "b113f0515f2897bbb7e1"
@@ -20,9 +20,9 @@ REJECTED = "P5X_2X420_R300"
 CARD3 = "P5_5X3_EASYREC"
 
 def emit(status, **fields):
-    print(json.dumps(dict(gate="R136_OWNER_5MIN_ON_R139", status=status, **fields),
+    print(json.dumps(dict(gate="R136_OWNER_5MIN_ON_R140", status=status, **fields),
                      ensure_ascii=False, default=str))
-    return 0 if status == "PASS_PRIVATE_PRODUCER" else (1 if status == "FAIL" else 2)
+    return 0 if status == "PASS_PRIVATE_QUALITY_PRODUCER" else (1 if status == "FAIL" else 2)
 
 def main():
     dsn = os.environ.get("NOVA_TEST_LAB_DATABASE_URL", "")
@@ -80,14 +80,30 @@ def main():
                      or str(s.get("intensity_class") or "").lower() in ("tempo","threshold","vo2"))]
         ids = [s.get("nova_workout_id") for s in hard if s.get("nova_workout_id")]
         unexpected = REJECTED == prescription.get("workout_id") or REJECTED in ids
+        planned = prescription.get("inc120_planned_quality") or {}
+        # A science-withheld HARD must leave a concrete non-executable quality
+        # plan; simply suppressing the wrong 2x7 is not sufficient.
+        quality_plan_ok = bool(
+            isinstance(planned, dict)
+            and planned.get("schema") == "NOVA-R196.9.140-CARD3-QUALITY-PLACEMENT-1"
+            and planned.get("status") == "DEFERRED_NOT_CLEARED"
+            and planned.get("workout_id") in nova._R19696_LIBRARY_INDEX
+            and planned.get("workout_id") != REJECTED
+            and planned.get("structure")
+            and planned.get("execution_authorized") is False
+            and planned.get("personalized_watts") is None
+            and planned.get("fueling") is None
+            and planned.get("adds_calendar_event") is False)
         output = dict(fingerprint=FINGERPRINT, source_version="R196.9.136",
-                      tested_version="R196.9.139", original_card3=CARD3,
+                      tested_version="R196.9.140", original_card3=CARD3,
                       selected_id=prescription.get("workout_id"),
                       producer_status=prescription.get("status"), output_hard_ids=ids,
+                      quality_plan_ok=quality_plan_ok,
+                      quality_plan_id=planned.get("workout_id"),
                       inc111_rejected_candidate_ids=[x.get("workout_id") for x in (prescription.get("inc111_rejected_candidates") or []) if isinstance(x,dict)],
                       issuer_hmac_authenticated=False, no_db_writes=True,
                       no_external_provider_calls=True)
-        return emit("FAIL" if unexpected else "PASS_PRIVATE_PRODUCER", **output)
+        return emit("FAIL" if unexpected or not quality_plan_ok else "PASS_PRIVATE_QUALITY_PRODUCER", **output)
     except Exception as e:
         # Do not print exception messages; database driver messages may include secrets.
         return emit("BLOCKED", reason="EXCEPTION_"+type(e).__name__)
