@@ -29447,7 +29447,8 @@ def analyze():
         # INC125: observe a saved athlete window versus verified completed work.
         # This sidecar is built AFTER all hard decisions, without modifying them.
         data['quality_intent_reconciliation'] = _r145_quality_intent_observation(
-            user['id'], previous_training_blocks, now=get_rome_now())
+            user['id'], previous_training_blocks, now=get_rome_now(),
+            latest_feedback=latest_activity_feedback)
         # R196.9.16 shadow-only exact references in the already-fetched history.
         try:
             data['execution_reference_coverage'] = _v196916_execution_reference_coverage(
@@ -68276,7 +68277,7 @@ HOME_PAGE = HOME_PAGE.replace('</body>', _R143_SCRIPT + '\n</body>', 1)
 R145_INTENT_OBSERVATION_SCHEMA = 'NOVA-R196.9.145-INTENT-OBSERVATION-1'
 
 
-def _r145_quality_intent_observation(owner_id, blocks, now=None):
+def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback=None):
     base = {'schema': R145_INTENT_OBSERVATION_SCHEMA,
             'state': 'NO_RECENT_INTENT', 'observational_only': True,
             'not_a_nova_prescription': True, 'execution_authorized': False,
@@ -68330,8 +68331,18 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None):
             if not isinstance(rep, dict):
                 continue
             try:
-                mechanics_ok = (rep.get('activity_truth_status') == 'RESOLVED'
-                    and rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL'
+                # Earlier block surfaces expose provenance directly, whereas
+                # the latest completed-quality audit independently attests
+                # the canonical interval structure for the SAME activity ID.
+                verified = (rep.get('activity_truth_status') == 'RESOLVED'
+                    and rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL')
+                attested = (isinstance(latest_feedback, dict)
+                    and latest_feedback.get('activity_id') == activity_id
+                    and latest_feedback.get('structure_status') == 'VERIFIED'
+                    and block.get('quality_relevant') is True)
+                mechanics_ok = ((verified or attested)
+                    and (rep.get('source') == 'ICU_INTERVALS_CANONICAL'
+                         or rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL')
                     and int(rep.get('reps') or 0) == int(template.get('reps') or 0)
                     and int(rep.get('interval_secs') or 0) == int(template.get('work_s') or 0)
                     and int(rep.get('recovery_secs') or 0) == int(template.get('recovery_s') or 0))
@@ -68362,7 +68373,7 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None):
             'latest_intent_date': recent[0].get('local_date')}
 
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION = ('THE LAB · R196.9.145 · INC125 SAVED INTENT VS VERIFIED QUALITY AUDIT '
+APP_VERSION = ('THE LAB · R196.9.146 · INC126 VERIFIED SAME-ACTIVITY INTENT RECONCILIATION '
                '· R144 CALENDAR ICON · SCIENCE AND CLEARANCE UNCHANGED · LAB CANDIDATE')
 
 
