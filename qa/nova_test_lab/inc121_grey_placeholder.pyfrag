@@ -1,0 +1,24 @@
+
+# INC121 / R196.9.141 — FINAL CARD3 GRAY PLACEHOLDER (NO DUPLICATE).
+# INC079 hid the entire third card when a genuine Card1/2 quality existed.
+# Product contract: keep a clearly grey, inactive third card instead; NEVER
+# duplicate the quality, prescribe new work, invent fueling or calendar data.
+INC121_SCHEMA = 'NOVA-R196.9.141-CARD3-GREY-PLACEHOLDER-1'
+_INC121_OLD_HIDE = '{% if not (is_quality_slot and quality_already_shown) %}\n'
+assert HOME_PAGE.count(_INC121_OLD_HIDE) == 1, 'INC121_GREY_HIDE_ANCHOR_DRIFT'
+_INC121_GREY_CARD = '''{% if is_quality_slot and quality_already_shown %}
+<article class="v4-card v4-session recovery v23-session-card v23-col-{{ loop.index }} v1962-quality-card nova-card3-grey-placeholder"
+         aria-label="Next quality already in your plan" aria-disabled="true"
+         style="background:rgba(110,110,110,.09)!important;border-color:rgba(145,145,145,.35)!important;opacity:.58!important;filter:grayscale(1)!important">
+  <div class="v4-session-slot"><span class="v1962-quality-eyebrow">NEXT QUALITY · ALREADY IN YOUR PLAN</span></div>
+  <h3>Already shown in Card {{ upcoming.quality_index + 1 }}</h3>
+  <div class="v4-session-meta"><span class="v4-session-pill">SEE CARD {{ upcoming.quality_index + 1 }}</span></div>
+  <div class="v4-session-main">Your next quality is already shown in Card {{ upcoming.quality_index + 1 }}. Card 3 is intentionally inactive; no second quality, training authorization, date or fueling is added here.</div>
+</article>
+{% else %}
+'''
+HOME_PAGE = HOME_PAGE.replace(_INC121_OLD_HIDE, _INC121_GREY_CARD, 1)
+assert HOME_PAGE.count('nova-card3-grey-placeholder') == 1, 'INC121_PLACEHOLDER_MULTIPLICITY'
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION = ('THE LAB · R196.9.141 · INC121 CARD3 GREY-ON-DUPLICATE '
+               '+ R140 CANONICAL QUALITY PLACEMENT PRESERVED · LAB ONLY · NO AUTO-DEPLOY')

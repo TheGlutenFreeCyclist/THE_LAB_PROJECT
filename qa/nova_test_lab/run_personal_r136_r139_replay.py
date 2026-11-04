@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE_SHA = "b16d99be3181d6423457c0b0a1f681315f279b1b0b99eb62f8913c747dd67871"
+SOURCE_SHA = "27ff5e828b848d2341c556b0357f496943e6c54a9c2b196eceb2c52f73a2e42c"
 FIXTURE_ID = "personal-r136-last-ca-lossless"
 FIXTURE_MD5 = "6f98d1c7553270622810c23fd3d37bc9"
 FINGERPRINT = "b113f0515f2897bbb7e1"
@@ -85,7 +85,7 @@ def main():
         # plan; simply suppressing the wrong 2x7 is not sufficient.
         quality_plan_ok = bool(
             isinstance(planned, dict)
-            and planned.get("schema") == "NOVA-R196.9.140-CARD3-QUALITY-PLACEMENT-1"
+            and planned.get("schema") == "NOVA-R196.9.141-CARD3-QUALITY-PLACEMENT-1"
             and planned.get("status") == "DEFERRED_NOT_CLEARED"
             and planned.get("workout_id") in nova._R19696_LIBRARY_INDEX
             and planned.get("workout_id") != REJECTED
@@ -111,7 +111,7 @@ def main():
             and rendered.get("inc120_quality_placement") == "CARD3_PLANNED_UNCLEARED"
             and rendered.get("inc120_quality_duplicate_card") is None)
         output = dict(fingerprint=FINGERPRINT, source_version="R196.9.136",
-                      tested_version="R196.9.140", original_card3=CARD3,
+                      tested_version="R196.9.141", original_card3=CARD3,
                       selected_id=prescription.get("workout_id"),
                       producer_status=prescription.get("status"), output_hard_ids=ids,
                       quality_plan_ok=quality_plan_ok,
