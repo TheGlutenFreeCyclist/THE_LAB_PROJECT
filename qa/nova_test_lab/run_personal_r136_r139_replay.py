@@ -45,6 +45,16 @@ def main():
         with psycopg2.connect(dsn, connect_timeout=10,
                               options="-c default_transaction_read_only=on") as conn:
             with conn.cursor() as cur:
+                cur.execute("""SELECT current_user,current_database(),
+                       has_table_privilege(current_user,'science_lab.fixtures','SELECT'),
+                       has_table_privilege(current_user,'science_lab.fixtures','INSERT'),
+                       has_table_privilege(current_user,'science_lab.fixtures','UPDATE'),
+                       has_table_privilege(current_user,'science_lab.fixtures','DELETE')""")
+                identity = cur.fetchone()
+                if (not identity or identity[0] != 'nova_r139_qa_reader'
+                    or identity[1] != 'neondb' or identity[2] is not True
+                    or any(identity[i] is True for i in (3,4,5))):
+                    return emit("BLOCKED",reason="TEST_LAB_ROLE_MUST_BE_SCOPED_READ_ONLY")
                 cur.execute("""SELECT fixture_json::text,md5(fixture_json::text)
                        FROM science_lab.fixtures
                        WHERE fixture_id=%s AND source_kind='personal'
@@ -57,7 +67,8 @@ def main():
         if (fixture.get("schema") != "V4.8.91-R115-NOVA-REPLAY-1"
             or fixture.get("input_fingerprint") != FINGERPRINT
             or fixture.get("core_inputs",{}).get("training_direction",{}).get("primary_goal") != "POWER_5"
-            or REJECTED not in fixture.get("expected",{}).get("workout_ids",[])):
+            or REJECTED not in fixture.get("expected",{}).get("workout_ids",[])
+            or not str(fixture.get("generated_at_local") or "").startswith("2026-11-03T19:46:48")):
             return emit("BLOCKED", reason="REAL_CA_IDENTITY_MISMATCH")
         import the_lab_app as nova
         snapshot_clock = datetime.fromisoformat(fixture["generated_at_local"])
@@ -73,7 +84,7 @@ def main():
                       tested_version="R196.9.139", original_card3=CARD3,
                       selected_id=prescription.get("workout_id"),
                       producer_status=prescription.get("status"), output_hard_ids=ids,
-                      inc111_rejected_candidates=prescription.get("inc111_rejected_candidates") or [],
+                      inc111_rejected_candidate_ids=[x.get("workout_id") for x in (prescription.get("inc111_rejected_candidates") or []) if isinstance(x,dict)],
                       issuer_hmac_authenticated=False, no_db_writes=True,
                       no_external_provider_calls=True)
         return emit("FAIL" if unexpected else "PASS_PRIVATE_PRODUCER", **output)
