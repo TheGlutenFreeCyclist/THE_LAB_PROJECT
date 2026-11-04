@@ -68,7 +68,7 @@ def main():
             or fixture.get("input_fingerprint") != FINGERPRINT
             or fixture.get("core_inputs",{}).get("training_direction",{}).get("primary_goal") != "POWER_5"
             or REJECTED not in fixture.get("expected",{}).get("workout_ids",[])
-            or not str(fixture.get("generated_at_local") or "").startswith("2026-11-03T19:46:48")):
+            or not str(fixture.get("generated_at_local") or "").startswith("2026-11-03T19:46:40")):
             return emit("BLOCKED", reason="REAL_CA_IDENTITY_MISMATCH")
         import the_lab_app as nova
         snapshot_clock = datetime.fromisoformat(fixture["generated_at_local"])
