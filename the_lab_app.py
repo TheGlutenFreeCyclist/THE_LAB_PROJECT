@@ -29444,6 +29444,10 @@ def analyze():
             "science_insights": science_context,
             "science_kb_version": SCIENCE_KB.get("version", 1),
         }
+        # INC125: observe a saved athlete window versus verified completed work.
+        # This sidecar is built AFTER all hard decisions, without modifying them.
+        data['quality_intent_reconciliation'] = _r145_quality_intent_observation(
+            user['id'], previous_training_blocks, now=get_rome_now())
         # R196.9.16 shadow-only exact references in the already-fetched history.
         try:
             data['execution_reference_coverage'] = _v196916_execution_reference_coverage(
@@ -68101,8 +68105,12 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
   {% elif nova_r142_state.latest_intent %}
   <p class="r143-planning-notice" role="status">Availability saved: {{ nova_r142_state.latest_intent.minutes|e }} min · pending next Snapshot.</p>
   {% endif %}
+  {% set r145_observation = data.quality_intent_reconciliation or {} %}
+  {% if r145_observation.state == 'OBSERVED_AFTER_SAVED_AVAILABILITY' %}
+  <p class="r143-planning-notice" role="status">Your {{ r145_observation.observed_duration_min|e }} min quality was recorded on {{ r145_observation.intent_local_date|e }} at {{ r145_observation.observed_local_time|e }}. Your earlier availability was saved; it was not Nova execution clearance. Your next quality is a separate coaching decision.</p>
+  {% endif %}
   <button type="button" class="r143-open-dialog" data-r143-open="r143-quality-dialog" aria-haspopup="dialog" aria-controls="r143-quality-dialog">
-    <span class="r143-cta-icon" aria-hidden="true">＋</span>
+    <span class="r143-cta-icon" aria-hidden="true">📅</span>
     <span>Plan your next quality</span>
     <span class="r143-cta-arrow" aria-hidden="true">↗</span>
   </button>
@@ -68167,7 +68175,7 @@ _R143_STYLE = '''<style>
 .r143-quality-entry{margin:12px 0 8px;color:var(--text,#dce8ef)}
 .r143-open-dialog{appearance:none;width:100%;display:flex;align-items:center;gap:11px;padding:13px 15px;cursor:pointer;text-align:left;border:1px solid rgba(61,196,227,.62);border-radius:11px;background:rgba(25,105,137,.13);color:inherit;font:inherit;font-weight:700;transition:border-color .17s,background .17s}
 .r143-open-dialog:hover{background:rgba(31,145,185,.23);border-color:#37c9ea}
-.r143-cta-icon{display:grid;place-items:center;font-size:20px;font-weight:400;width:27px;height:27px;border-radius:9px;background:rgba(35,185,224,.15);color:#44ddff}
+.r143-cta-icon{display:grid;place-items:center;font-size:19px;font-weight:400;width:27px;height:27px;border-radius:9px;background:rgba(35,185,224,.15);color:#44ddff}
 .r143-cta-arrow{font-size:17px;margin-left:auto;color:#65cde3}
 .r143-duration-hint{margin:7px 3px 0!important;font-size:11px!important;line-height:1.4!important;opacity:.79}
 .r143-planning-notice{border-left:3px solid #37bfe2;padding:7px 10px;margin:0 0 10px;font-size:12px;line-height:1.45;background:rgba(37,160,200,.1)}
@@ -68261,9 +68269,101 @@ HOME_PAGE = HOME_PAGE.replace(_R142_STYLE, _R143_STYLE)
 if HOME_PAGE.count('</body>') != 1:
     raise RuntimeError('R143_MODAL_SCRIPT_ANCHOR_DRIFT')
 HOME_PAGE = HOME_PAGE.replace('</body>', _R143_SCRIPT + '\n</body>', 1)
+# INC125 / R196.9.145 — OBSERVED QUALITY VS SAVED AVAILABILITY (READ-ONLY).
+# A PLAN intent is permission to consider a time window, never an issued
+# prescription. Even when observed work matches exactly, retain R139 causal
+# adherence guard, the original hard clearance, and all future science gates.
+R145_INTENT_OBSERVATION_SCHEMA = 'NOVA-R196.9.145-INTENT-OBSERVATION-1'
+
+
+def _r145_quality_intent_observation(owner_id, blocks, now=None):
+    base = {'schema': R145_INTENT_OBSERVATION_SCHEMA,
+            'state': 'NO_RECENT_INTENT', 'observational_only': True,
+            'not_a_nova_prescription': True, 'execution_authorized': False,
+            'adherence_created': False, 'changes_workout_selection': False}
+    if not owner_id:
+        return base
+    try:
+        intents = _r142_intents(owner_id)
+    except Exception:
+        return {**base, 'state': 'INTENT_READ_UNAVAILABLE'}
+    today = (now or get_rome_now()).date()
+    recent = []
+    for entry in intents:
+        if not isinstance(entry, dict) or entry.get('kind') != 'PLAN' or entry.get('scope') != 'ONCE':
+            continue
+        try:
+            day = date.fromisoformat(str(entry.get('local_date') or '')[:10])
+        except (TypeError, ValueError):
+            continue
+        if 0 <= (today - day).days <= 2:
+            recent.append(entry)
+    if not recent:
+        return base
+    recent.sort(key=lambda e: str(e.get('saved_at_utc') or ''), reverse=True)
+    for entry in recent:
+        wid = str(entry.get('workout_id') or '')
+        goal = str(entry.get('goal_key') or '').upper()
+        template = next((t for t in _NOVA_WORKOUT_LIBRARY
+                         if t.get('id') == wid and t.get('goal') == goal
+                         and t.get('pattern') == 'STANDARD'), None)
+        saved = _v139_parse_local_dt(entry.get('saved_at_utc'))
+        try:
+            declared = float(entry.get('minutes'))
+        except (ValueError, TypeError):
+            continue
+        if template is None or saved is None or not (15 <= declared <= 360):
+            continue
+        for block in blocks or []:
+            if not isinstance(block, dict) or str(block.get('event_kind') or '').upper() == 'RACE':
+                continue
+            activity_id = str(block.get('activity_id') or '').strip()
+            activity_at = _v139_activity_dt(block)
+            if not activity_id or activity_at is None or activity_at < saved:
+                continue
+            if activity_at.date().isoformat() != str(entry.get('local_date') or '')[:10]:
+                continue
+            actual_part = _r142_slot_daypart({'start_minute': activity_at.hour * 60 + activity_at.minute})
+            if actual_part != entry.get('daypart'):
+                continue
+            rep = block.get('repeatability')
+            if not isinstance(rep, dict):
+                continue
+            try:
+                mechanics_ok = (rep.get('activity_truth_status') == 'RESOLVED'
+                    and rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL'
+                    and int(rep.get('reps') or 0) == int(template.get('reps') or 0)
+                    and int(rep.get('interval_secs') or 0) == int(template.get('work_s') or 0)
+                    and int(rep.get('recovery_secs') or 0) == int(template.get('recovery_s') or 0))
+            except (TypeError, ValueError):
+                mechanics_ok = False
+            if not mechanics_ok:
+                continue
+            try:
+                duration = float(block.get('duration_min'))
+            except (ValueError, TypeError):
+                continue
+            if not (0 < duration <= declared + 0.5):
+                continue
+            return {**base, 'state': 'OBSERVED_AFTER_SAVED_AVAILABILITY',
+                    'intent_local_date': entry['local_date'],
+                    'intent_daypart': entry['daypart'],
+                    'declared_minutes': round(declared, 1),
+                    'workout_id': wid,
+                    'activity_id': activity_id,
+                    'observed_local_time': activity_at.strftime('%H:%M'),
+                    'observed_duration_min': round(duration, 1),
+                    'observed_reps': int(rep['reps']),
+                    'observed_interval_seconds': int(rep['interval_secs']),
+                    'observed_recovery_seconds': int(rep['recovery_secs']),
+                    'source': 'ICU_INTERVALS_CANONICAL + OWNER_SCOPED_SAVED_INTENT',
+                    'meaning': 'OBSERVED_EXECUTION_NOT_RETROACTIVE_CLEARANCE'}
+    return {**base, 'state': 'NO_VERIFIED_OBSERVED_MATCH',
+            'latest_intent_date': recent[0].get('local_date')}
+
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION = ('THE LAB · R196.9.143 · INC123 COMPACT QUALITY AVAILABILITY DIALOG '
-               '· R142 TRAINING ENGINE UNCHANGED · HEALTH OBSERVATIONAL · LAB TEST CANDIDATE')
+APP_VERSION = ('THE LAB · R196.9.145 · INC125 SAVED INTENT VS VERIFIED QUALITY AUDIT '
+               '· R144 CALENDAR ICON · SCIENCE AND CLEARANCE UNCHANGED · LAB CANDIDATE')
 
 
 if __name__ == "__main__":
