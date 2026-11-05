@@ -1110,7 +1110,8 @@ def build_advanced_physiology_metrics(season_activities, season_wellness, metric
     if planning_context.get('health_override'):
         strain_secondary += ' · health restriction remains authoritative'
     cards.append(_v40_card('multisignal_strain', '🧠', 'MULTISIGNAL STRAIN', strain_status, strain_class, f'{nflags}/4 signals', strain_secondary, "Cross-checks HRV, resting HR, sleep and subjective recovery so one abnormal metric cannot create an 'overtraining' diagnosis. Consensus literature does not support a single diagnostic OTS marker, so this remains a context signal.", 'If the same aligned pattern repeats across several mornings, THE LAB can learn the difference between a transient disturbance and persistent strain.', group='capacity', evidence='Meeusen et al. · ECSS/ACSM 2013'))
-    cards = _v4826_enforce_learning_contract(cards)
+    cards = [card for card in _v4826_enforce_learning_contract(cards)
+             if card.get('key') != 'functional_capacity']
     si_current_ref = si_series[-1][1] if si_series and (today - si_series[-1][0]).days <= 7 else None
     poincare_current_ref = poincare[-1][3] if poincare and (today - poincare[-1][0]).days <= 7 else None
     rpp_current_ref = rpp[-1][1] if rpp and (today - rpp[-1][0]).days <= 7 else None
@@ -3880,30 +3881,11 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 {% if data.aerobic_efficiency.latest_sessions %}<div class="v35-aero-sessions">{% for x in data.aerobic_efficiency.latest_sessions %}<span class="v35-aero-session">{{ x.date|ui_date }} · {{ x.watts }} W / {{ x.hr }} bpm{% if x.decoupling is not none %} · drift {{ x.decoupling }}%{% endif %}</span>{% endfor %}</div>{% endif %}
 <p class="v35-aero-note">{{ data.aerobic_efficiency.note }}{% if data.aerobic_efficiency.eligibility_note %} {{ data.aerobic_efficiency.eligibility_note }}.{% endif %} Confidence · {{ data.aerobic_efficiency.confidence }}.</p>
 </div>{% endif %}
-<div class="v21-vo2">
-<div class="v21-vo2-head">
-<div class="v21-vo2-title"><span class="v21-vo2-icon" aria-hidden="true">🫁</span><div><h3>VO₂ &amp; RACE REPEATABILITY</h3><p>Aerobic-capacity trend + observed repeated-effort retention</p></div></div>
-<span class="v21-vo2-agreement {{ data.vo2_trend.agreement_class if data.vo2_trend else 'grey' }}">VO₂ · {{ data.vo2_trend.agreement if data.vo2_trend else 'INSUFFICIENT DATA' }}</span>
-</div>
-{% if data.vo2_trend and data.vo2_trend.available %}
+<div class="v21-vo2 v147-repeatability-only">
+<div class="v21-vo2-head"><div class="v21-vo2-title"><span class="v21-vo2-icon" aria-hidden="true">🔁</span><div><h3>RACE REPEATABILITY</h3><p>Verified repeated-effort retention from your riding history</p></div></div></div>
 <div class="v21-vo2-summary">
-<div class="wearable"><span>{{ data.vo2_trend.wearable_label or 'Wearable VO₂' }}</span><strong>{% if data.vo2_trend.wearable_display_current is not none %}{{ data.vo2_trend.wearable_display_current }}{% else %}—{% endif %}</strong><small>{% if data.vo2_trend.wearable_display_current is not none %}ml/kg/min{% if data.vo2_trend.wearable_delta28 is not none %} · {{ '+' if data.vo2_trend.wearable_delta28 > 0 else '' }}{{ data.vo2_trend.wearable_delta28 }} / 28d{% endif %}{% elif data.vo2_trend.wearable_history_latest is not none %}latest history {{ data.vo2_trend.wearable_history_latest }} ml/kg/min{% endif %}{% if data.vo2_trend.wearable_source_detail %} · {{ data.vo2_trend.wearable_source_detail }}{% endif %}{% if data.vo2_trend.wearable_last_date %} · last received {{ data.vo2_trend.wearable_last_date|ui_date }}{% endif %}{% if data.vo2_trend.wearable_fallback %} · history retained{% endif %}</small></div>
-<div class="performance"><span>{{ data.vo2_trend.performance_label or 'Intervals VO₂ estimate' }}</span><strong>{% if data.vo2_trend.performance_current is not none %}{{ data.vo2_trend.performance_current }}{% else %}—{% endif %}</strong><small>ml/kg/min · latest performance-derived value returned by Intervals{% if data.vo2_trend.performance_delta28 is not none %} · {{ '+' if data.vo2_trend.performance_delta28 > 0 else '' }}{{ data.vo2_trend.performance_delta28 }} / 28d{% endif %}{% if data.vo2_trend.performance_fallback %} · history retained{% endif %}</small></div>
 <div class="repeatability"><span>Race repeatability · total</span>{% if data.race_repeatability and data.race_repeatability.available %}<div class="v21-repeat-main"><strong>{{ data.race_repeatability.value_label }}</strong><span class="v21-repeat-trend {{ data.race_repeatability.trend_class or 'grey' }}" role="img" aria-label="{{ data.race_repeatability.trend }}">{{ data.race_repeatability.trend_icon or '➡️' }}</span></div><small>{{ data.race_repeatability.ui_detail or data.race_repeatability.context }}</small>{% else %}<strong>Learning</strong><small>Needs repeated-effort evidence</small>{% endif %}</div>
 </div>
-<div class="v21-vo2-chart-wrap">
-<svg class="v21-vo2-chart" viewBox="0 0 1000 240" role="img" aria-label="VO2max estimate trend">
-{% for t in data.vo2_trend.ticks %}<line class="v21-vo2-grid" x1="58" y1="{{ t.y }}" x2="942" y2="{{ t.y }}"/><text class="v21-vo2-axistext" x="12" y="{{ t.y + 3 }}">{{ t.value }}</text>{% endfor %}
-{% for t in data.vo2_trend.date_ticks %}<text class="v21-vo2-axistext" text-anchor="middle" x="{{ t.x }}" y="228">{{ t.label }}</text>{% endfor %}
-{% if data.vo2_trend.wearable_path %}<path class="v21-vo2-wearable" d="{{ data.vo2_trend.wearable_path }}"/>{% endif %}
-{% if data.vo2_trend.performance_path %}<path class="v21-vo2-performance" d="{{ data.vo2_trend.performance_path }}"/>{% endif %}
-{% for p in data.vo2_trend.wearable %}<circle class="v21-vo2-dot-w" cx="{{ p.x }}" cy="{{ p.y }}" r="5"/><text class="v21-vo2-value-w" text-anchor="middle" x="{{ p.x }}" y="{{ p.label_y }}">{{ p.value_label }}</text>{% endfor %}
-{% for p in data.vo2_trend.performance %}<circle class="v21-vo2-dot-p" cx="{{ p.x }}" cy="{{ p.y }}" r="5"/><text class="v21-vo2-value-p" text-anchor="middle" x="{{ p.x }}" y="{{ p.label_y }}">{{ p.value_label }}</text>{% endfor %}
-</svg>
-</div>
-<div class="v21-vo2-legend"><span class="v21-vo2-key"><i class="v21-vo2-swatch"></i>Wearable VO₂</span><span class="v21-vo2-key"><i class="v21-vo2-swatch performance"></i>Intervals VO₂ estimate</span></div>
-<div class="v21-vo2-disclaimer"><strong>Two different signals.</strong> Wearable VO₂ comes from the connected wearable ecosystem; Intervals VO₂ estimate is the separate performance-derived value returned by Intervals when THE LAB refreshes.</div>
-{% else %}<div class="v21-vo2-empty">No usable Wearable VO₂ or Intervals VO₂ estimate is available yet. THE LAB will show each signal independently as soon as the connected data sources expose it.</div>{% endif %}
 </div>
 <section class="lab-accordion v4-details" data-lab-accordion data-open="false"><div class="lab-accordion-trigger" role="button" tabindex="0" aria-expanded="false">Training Load<span class="lab-accordion-sign" aria-hidden="true">+</span></div><div class="lab-accordion-panel" hidden><p>{{ data.training_load }}</p></div></section>
 </article>
@@ -18875,15 +18857,7 @@ def build_data_text(recent_activities, wellness, season_stats, notes=None, feeli
         lines.append('\nREAL POWER CURVE (actual best efforts, last 42 days - use these as athlete-relative calibration. For ordinary training, do not casually prescribe sustained targets above the observed same-duration best. A roadmap-authorized maximal field test is the exception: the existing best is a pacing/reference anchor, not a ceiling, and the athlete must be free to beat it):')
         for p in best_watts:
             if p.get('watts') is not None: lines.append('- {}: {}W'.format(p.get('label','—'), p.get('watts')))
-    if vo2_trend and vo2_trend.get('available'):
-        lines.append('\nVO2MAX TREND (MODEL ESTIMATES ONLY - longitudinal context, NOT a measured VO2max and NOT a primary readiness signal):')
-        if vo2_trend.get('wearable_current_fresh') and vo2_trend.get('wearable_current') is not None:
-            lines.append('- {}: {} ml/kg/min | 28d delta {}'.format(vo2_trend.get('wearable_label') or 'Wearable / Intervals', vo2_trend.get('wearable_current'), vo2_trend.get('wearable_delta28') if vo2_trend.get('wearable_delta28') is not None else 'n/a'))
-        elif vo2_trend.get('wearable_history_latest') is not None:
-            lines.append('- {}: latest historical activity value {} ml/kg/min | last received {}'.format(vo2_trend.get('wearable_label') or 'Wearable / Intervals', vo2_trend.get('wearable_history_latest'), vo2_trend.get('wearable_last_date') or 'n/a'))
-        if vo2_trend.get('performance_current') is not None:
-            lines.append('- Intervals 5-min-power estimate: {} ml/kg/min | 28d delta {}'.format(vo2_trend.get('performance_current'), vo2_trend.get('performance_delta28') if vo2_trend.get('performance_delta28') is not None else 'n/a'))
-        lines.append('- Trend agreement: {}. Use only as longitudinal performance context; do not let it override health, recovery, availability or recent training.'.format(vo2_trend.get('agreement', 'n/a')))
+    # R147: device VO2max is not used as AI context. Real power data above remain.
     lines.append('\nWELLNESS (last {} days):'.format(DAYS_BACK))
     for w in sorted(wellness, key=lambda x: x.get('id', '')):
         line = '- {date} | RHR {rhr} | HRV {hrv} | sleep {sleep}h | CTL {ctl} | ATL {atl}'.format(date=w.get('id', ''), rhr=str(w.get('restingHR', 'n/a')) + (' [carried forward by Intervals]' if _intervals_temp_flag(w, 'tempRestingHR') else ''), hrv=w.get('hrv', 'n/a'), sleep=round(w['sleepSecs'] / 3600, 1) if w.get('sleepSecs') else 'n/a', ctl=round(w['ctl'], 1) if w.get('ctl') is not None else 'n/a', atl=round(w['atl'], 1) if w.get('atl') is not None else 'n/a') + ' | sleepQ {} | sleepScore {} | sleepingHR {} | SpO2 {} | wearableReadiness {}'.format('Q' + str(w.get('sleepQuality')) if w.get('sleepQuality') is not None else 'n/a', round(w.get('sleepScore')) if w.get('sleepScore') is not None else 'n/a', round(w.get('avgSleepingHR')) if w.get('avgSleepingHR') is not None else 'n/a', round(w.get('spO2'), 1) if w.get('spO2') is not None else 'n/a', round(w.get('readiness')) if w.get('readiness') is not None else 'n/a')
@@ -18940,16 +18914,7 @@ def _v4876_compact_ai_base_evidence(recent_activities, wellness, season_stats, n
         points=" | ".join(f"{p.get('label','—')}={p.get('watts')}W" for p in best_watts if p.get('watts') is not None)
         t=("REAL POWER CURVE · actual 42d bests: "+points+". Use as athlete-relative calibration; a roadmap-authorized maximal field test uses the same-duration best as a reference, not a ceiling.")
         sections.append(t); profile["base_power_curve_chars"]=len(t)
-    if vo2_trend and vo2_trend.get("available"):
-        bits=[]
-        if vo2_trend.get("wearable_current_fresh") and vo2_trend.get("wearable_current") is not None:
-            bits.append(f"wearable-current={vo2_trend.get('wearable_current')} Δ28={_v4876_prompt_scalar(vo2_trend.get('wearable_delta28'))}")
-        elif vo2_trend.get("wearable_history_latest") is not None:
-            bits.append(f"wearable-history-last={vo2_trend.get('wearable_history_latest')} dated={vo2_trend.get('wearable_last_date') or 'n/a'} (not current)")
-        if vo2_trend.get("performance_current") is not None: bits.append(f"5min-est={vo2_trend.get('performance_current')} Δ28={_v4876_prompt_scalar(vo2_trend.get('performance_delta28'))}")
-        bits.append(f"agreement={vo2_trend.get('agreement','n/a')}")
-        t="VO2MAX TREND · MODEL ESTIMATES ONLY: "+" | ".join(bits)+". Longitudinal context only; not measured VO2max."
-        sections.append(t); profile["base_vo2_trend_chars"]=len(t)
+    # R147: do not send wearable VO2 or inferred VO2 agreement to AI.
     wellness_lines=[f"WELLNESS {DAYS_BACK}d · ALL ROWS · date|RHR|HRV|sleep_h|CTL|ATL|sleepQ|sleepScore|SpO2|readiness · CF=carried-forward · -=missing:"]
     comments=[]
     for w in sorted(wellness or [], key=lambda x:x.get("id","")):
@@ -27828,13 +27793,7 @@ def build_ai_coach_chat_context(snapshot):
             lines.append("\nSUBJECTIVE TREND:\n" + subjective_context_text(snapshot.get("feeling_trend"), logs=[], activity_context=snapshot.get("subjective_activity_context")))
         except Exception:
             pass
-    vo2 = snapshot.get("vo2_trend") or {}
-    if isinstance(vo2, dict) and vo2:
-        lines.append(
-            "\nVO2MAX TREND (estimated, not measured): wearable {w}, performance {p}, agreement {a}.".format(
-                w=(vo2.get("wearable_current") if vo2.get("wearable_current_fresh") else "stale-history"), p=vo2.get("performance_current", "n/a"), a=vo2.get("agreement", "n/a")
-            )
-        )
+    # R147: no device-dependent VO2 summary is injected into coach chat.
     return "\n".join(lines)
 def _normalize_chat_history(raw_history, max_messages=10):
     clean = []
@@ -68058,9 +68017,13 @@ _R142_STYLE = '''<style>
 .r142-quality-actions button{padding:11px;border:0;border-radius:9px;background:#21a2c1;color:#081b24;font-weight:700;cursor:pointer}
 
 .r142-usual-clear button{padding:8px 11px;border-radius:8px;border:1px solid currentColor;background:transparent;color:inherit;cursor:pointer}
-.r142-quality-card-reason{margin:12px 0;padding:11px;border-left:3px solid #21a2c1;background:rgba(41,180,206,.08);font-size:12px;line-height:1.5}
-.r142-quality-card-reason p{margin:6px 0}
-.r142-quality-card-reason a{font-weight:700;text-decoration:underline}
+.r142-quality-card-reason{margin:13px 0;padding:12px 13px;border:1px solid rgba(62,147,187,.28);border-left:3px solid #3aafce;border-radius:12px;background:rgba(23,70,99,.12);font-size:12px;line-height:1.55}
+.r147-quality-status{display:inline-flex;max-width:100%;align-items:center;min-height:22px;padding:3px 9px;border:1px solid rgba(57,121,160,.43);border-radius:999px;background:#091b2a;color:#b4dcfa;font-size:10px;font-weight:750;line-height:1.3;letter-spacing:.075em;text-transform:uppercase;white-space:normal}
+.r147-easy-heading{display:block;margin:9px 0 4px;color:#ffbc61;font-size:12px;font-weight:850;line-height:1.4;letter-spacing:.075em;text-transform:uppercase}
+.r142-quality-card-reason p{margin:7px 0;color:inherit;line-height:1.6}
+.r142-quality-card-reason a{display:inline-flex;margin-top:5px;color:#88dcff;font-size:11px;font-weight:750;letter-spacing:.025em;text-decoration:underline;text-underline-offset:3px}
+.r142-quality-card-reason a:focus-visible{outline:3px solid #82e6ff;outline-offset:3px}
+.v147-repeatability-only .v21-vo2-summary{display:grid;grid-template-columns:minmax(0,1fr)}
 .r142-quality-actions button:focus-visible,.r142-quality-actions summary:focus-visible{outline:3px solid #5acdf4;outline-offset:2px}
 .r142-quality-planning small{display:block;line-height:1.5;opacity:.8}
 </style>'''
@@ -68074,9 +68037,11 @@ _R142_EASY_NOTE = r'''{% if not is_quality_slot and s and data.nova_r142_plan_ui
   and data.nova_r142_plan_ui.card == 3
   and data.nova_r142_plan_ui.easy_explanation
   and (s.intensity or '')|upper != 'HARD' %}
-<div class="r142-quality-card-reason" role="note"><strong>Why easy endurance today?</strong>
+<div class="r142-quality-card-reason" role="note">
+<span class="r147-quality-status">NEXT QUALITY · NOT CLEARED</span>
+<strong class="r147-easy-heading">WHY EASY ENDURANCE TODAY?</strong>
 <p>{{ data.nova_r142_plan_ui.easy_explanation|e }}</p>
-<a href="#r142-plan-your-quality">Open Card 3 · plan your next quality</a></div>
+<a href="#r142-plan-your-quality">📅 PLAN YOUR NEXT QUALITY</a></div>
 {% endif %}'''
 HOME_PAGE = HOME_PAGE.replace(_R142_CARD_ARTICLE_END,
     _R142_EASY_NOTE + '\n{% if is_quality_slot and not quality_already_shown %}' +
@@ -68373,8 +68338,8 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
             'latest_intent_date': recent[0].get('local_date')}
 
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION = ('THE LAB · R196.9.146 · INC126 VERIFIED SAME-ACTIVITY INTENT RECONCILIATION '
-               '· R144 CALENDAR ICON · SCIENCE AND CLEARANCE UNCHANGED · LAB CANDIDATE')
+APP_VERSION = ('THE LAB · R196.9.147 · INC127 QUALITY EXPLANATION PILL + DEVICE VO2 UI RETIREMENT '
+               '· R146 INTENT RECONCILIATION · TRAINING SCIENCE UNCHANGED · TEST CANDIDATE')
 
 
 if __name__ == "__main__":
