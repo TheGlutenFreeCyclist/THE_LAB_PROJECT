@@ -68037,11 +68037,14 @@ _R142_EASY_NOTE = r'''{% if not is_quality_slot and s and data.nova_r142_plan_ui
   and data.nova_r142_plan_ui.card == 3
   and data.nova_r142_plan_ui.easy_explanation
   and (s.intensity or '')|upper != 'HARD' %}
-<div class="r142-quality-card-reason" role="note">
-<span class="r147-quality-status">NEXT QUALITY · NOT CLEARED</span>
-<strong class="r147-easy-heading">WHY EASY ENDURANCE TODAY?</strong>
-<p>{{ data.nova_r142_plan_ui.easy_explanation|e }}</p>
-<a href="#r142-plan-your-quality">📅 PLAN YOUR NEXT QUALITY</a></div>
+<section class="r142-quality-card-reason r148-quality-note" role="note" aria-label="Next quality explanation">
+  <div class="r148-quality-note-status"><span class="r148-quality-status">NEXT QUALITY · NOT CLEARED</span></div>
+  <div class="r148-quality-why-box">
+    <h4 class="r148-quality-why-heading">WHY EASY ENDURANCE TODAY?</h4>
+    <p class="r148-quality-why-copy">{{ data.nova_r142_plan_ui.easy_explanation|upper|e }}</p>
+  </div>
+  <a class="r148-quality-note-action" href="#r142-plan-your-quality"><span aria-hidden="true">📅</span> PLAN YOUR NEXT QUALITY</a>
+</section>
 {% endif %}'''
 HOME_PAGE = HOME_PAGE.replace(_R142_CARD_ARTICLE_END,
     _R142_EASY_NOTE + '\n{% if is_quality_slot and not quality_already_shown %}' +
@@ -68138,6 +68141,44 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
 {% endif %}'''
 
 _R143_STYLE = '''<style>
+/* INC128: inset explanation card, deliberately located in the ACTUAL R143 live stylesheet.
+   The older R142 stylesheet is removed by the R143 dialog transformation. */
+.r142-quality-card-reason.r148-quality-note{
+  display:block;box-sizing:border-box;min-width:0;width:100%;
+  margin:14px 0 12px;padding:12px;border:1px solid rgba(63,163,206,.52);
+  border-radius:13px;background:linear-gradient(155deg,rgba(18,51,71,.80),rgba(8,29,44,.82));
+  box-shadow:inset 0 1px 0 rgba(165,221,249,.045);color:#d9e8ef;
+}
+.r148-quality-note-status{display:flex;align-items:center;margin:0 0 11px;gap:8px}
+.r148-quality-status{display:inline-flex;align-items:center;box-sizing:border-box;max-width:100%;
+  min-height:23px;padding:4px 9px;border:1px solid rgba(56,136,187,.65);border-radius:999px;
+  background:#092337;color:#b8e5fb;font-size:10px;font-weight:800;line-height:1.3;
+  letter-spacing:.045em;text-transform:uppercase;white-space:normal}
+.r148-quality-why-box{display:block;box-sizing:border-box;min-width:0;
+  padding:12px 12px 11px;border:1px solid rgba(255,184,98,.43);
+  border-left:3px solid #ffc16f;border-radius:9px;
+  background:linear-gradient(110deg,rgba(112,76,31,.20),rgba(43,54,62,.14));}
+.r148-quality-why-heading{display:block;margin:0 0 9px!important;padding:0!important;
+  color:#ffc577!important;font-size:12px!important;font-weight:850!important;
+  line-height:1.4!important;letter-spacing:.052em!important;text-transform:uppercase!important;
+  background:linear-gradient(90deg,#ffb75d,#ffe3a8 48%,#ffb65e);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
+.r148-quality-why-copy{display:block;margin:0!important;padding:0!important;
+  color:#d4e2e9!important;font-size:10.7px!important;font-weight:500!important;
+  line-height:1.65!important;letter-spacing:.022em!important;text-transform:uppercase!important;
+  overflow-wrap:break-word;word-break:normal;}
+.r148-quality-note-action{display:inline-flex;gap:7px;align-items:center;max-width:100%;
+  margin:11px 1px 0;color:#8edfff!important;font-size:10.5px!important;
+  font-weight:800!important;line-height:1.45;letter-spacing:.055em;
+  text-decoration:none!important;text-transform:uppercase;}
+.r148-quality-note-action:hover{text-decoration:underline!important;text-underline-offset:3px}
+.r148-quality-note-action:focus-visible{outline:3px solid #82e6ff;outline-offset:3px;border-radius:3px}
+@media(max-width:420px){
+  .r142-quality-card-reason.r148-quality-note{padding:10px;margin:12px 0}
+  .r148-quality-why-box{padding:10px}
+  .r148-quality-why-heading{font-size:11.3px!important}
+  .r148-quality-why-copy{font-size:10.5px!important;line-height:1.62!important}
+}
 .r143-quality-entry{margin:12px 0 8px;color:var(--text,#dce8ef)}
 .r143-open-dialog{appearance:none;width:100%;display:flex;align-items:center;gap:11px;padding:13px 15px;cursor:pointer;text-align:left;border:1px solid rgba(61,196,227,.62);border-radius:11px;background:rgba(25,105,137,.13);color:inherit;font:inherit;font-weight:700;transition:border-color .17s,background .17s}
 .r143-open-dialog:hover{background:rgba(31,145,185,.23);border-color:#37c9ea}
@@ -68338,8 +68379,8 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
             'latest_intent_date': recent[0].get('local_date')}
 
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION = ('THE LAB · R196.9.147 · INC127 QUALITY EXPLANATION PILL + DEVICE VO2 UI RETIREMENT '
-               '· R146 INTENT RECONCILIATION · TRAINING SCIENCE UNCHANGED · TEST CANDIDATE')
+APP_VERSION = ('THE LAB · R196.9.148 · INC128 NESTED QUALITY EXPLANATION BOX + LIVE R143 CSS '
+               '· R147 DEVICE VO2 UI RETIREMENT · R146 SCIENCE UNCHANGED · TEST CANDIDATE')
 
 
 if __name__ == "__main__":
