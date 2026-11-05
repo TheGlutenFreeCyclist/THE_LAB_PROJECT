@@ -68383,5 +68383,73 @@ APP_VERSION = ('THE LAB · R196.9.148 · INC128 NESTED QUALITY EXPLANATION BOX +
                '· R147 DEVICE VO2 UI RETIREMENT · R146 SCIENCE UNCHANGED · TEST CANDIDATE')
 
 
+# INC130 / R196.9.150 — CARD 3 DTM BD-001..BD-006 COPY CLARITY ONLY.
+# Source of truth: authenticated owner-bound canonical producer and saved snapshot.
+# No change to science/producer, selection, issuer, auth, HMAC, fueling, timing,
+# injury boundaries, Calendar, next_sessions, Card 1/2 or persistence.
+# Display labels cannot turn a conditional future workout into day-of clearance.
+_R150_FUTURE_EYEBROW = "'FUTURE QUALITY · CONDITIONAL PLAN'"
+_R150_FUTURE_EYEBROW_NEW = "'NEXT QUALITY · COMPLETE FUTURE PLAN'"
+assert HOME_PAGE.count(_R150_FUTURE_EYEBROW)==1, 'INC130_FUTURE_EYEBROW_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R150_FUTURE_EYEBROW,_R150_FUTURE_EYEBROW_NEW,1)
+
+_R150_FUTURE_PILL = "'NEEDS A SUITABLE WINDOW · NOT CLEARED'"
+_R150_FUTURE_PILL_NEW = "'NOT SCHEDULED · EXECUTION RECHECK REQUIRED'"
+assert HOME_PAGE.count(_R150_FUTURE_PILL)==1, 'INC130_FUTURE_PILL_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R150_FUTURE_PILL,_R150_FUTURE_PILL_NEW,1)
+
+_R150_WORKOUT_HEADER = '<strong>YOUR WORKOUT</strong>'
+_R150_WORKOUT_HEADER_NEW = '<strong>{{ "YOUR WORKOUT" if card3.verified_offer else "YOUR NEXT QUALITY · FUTURE WORKOUT" }}</strong>'
+assert HOME_PAGE.count(_R150_WORKOUT_HEADER)==1,'INC130_SINGLE_WORKOUT_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R150_WORKOUT_HEADER,_R150_WORKOUT_HEADER_NEW,1)
+
+_R150_WATT_LABEL='<p><b>Personalized work target:</b> <span class="r1969102-power">{{ card3.personalized_watts|e }}</span></p>'
+_R150_WATT_LABEL_NEW='''<p><b>{{ "Personalized work target:" if card3.verified_offer else "Personalized work range (future plan; not day-of clearance):" }}</b> <span class="r1969102-power">{{ card3.personalized_watts|e }}</span></p>'''
+assert HOME_PAGE.count(_R150_WATT_LABEL)==1,'INC130_WATT_LABEL_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R150_WATT_LABEL,_R150_WATT_LABEL_NEW,1)
+
+# The complete 3x10 source remains the SAME owner-bound plan. The explanatory
+# text is not a new selector, another workout or a data/authority check.
+_R150_END='''<small>{{ card3.reason|e }}{% if card3.verified_future_plan %} The target is a conditional scientific plan, not permission to execute today. Recheck current recovery, future time availability and Nova clearance before attempting this workout.{% endif %}</small>
+</div>
+{% elif card3.offer_structure_only %}'''
+_R150_END_NEW='''<small>{{ card3.reason|e }}</small>
+</div>
+{% if card3.verified_future_plan %}
+<div class="r150-card3-clarity" role="note" aria-label="Future quality, not an execution authorization">
+  <strong class="r150-card3-clarity-head">WHY IS THIS QUALITY NOT CLEARED YET?</strong>
+  <p>THIS IS YOUR COMPLETE NEXT QUALITY, BUT IT IS NOT BOOKED OR CLEARED FOR TODAY. CURRENT SESSION GUIDANCE IS SEPARATE FROM THIS FUTURE PLAN. CONFIRM YOUR AVAILABLE TIME AND RECHECK THE EXECUTION CONDITIONS BEFORE HARD INTERVALS.</p>
+</div>
+{% endif %}
+{% elif card3.offer_structure_only %}'''
+assert HOME_PAGE.count(_R150_END)==1,'INC130_FUTURE_BRANCH_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R150_END,_R150_END_NEW,1)
+
+# A structure-only legacy fallback is NEVER described as a complete BD-001
+# quality. It carries no invented personal watts; the product gate remains FAIL.
+_R150_INCOMPLETE_LABEL='NEXT QUALITY · PROPOSED STRUCTURE · NOT CLEARED'
+_R150_INCOMPLETE_LABEL_NEW='QUALITY STRUCTURE ONLY · INCOMPLETE'
+assert HOME_PAGE.count(_R150_INCOMPLETE_LABEL)==1,'INC130_INCOMPLETE_BRANCH_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R150_INCOMPLETE_LABEL,_R150_INCOMPLETE_LABEL_NEW,1)
+_R150_INCOMPLETE_PILL='PLANNED STRUCTURE · NOT CLEARED FOR EXECUTION'
+_R150_INCOMPLETE_PILL_NEW='NO VERIFIED PERSONAL DOSE · NOT EXECUTABLE'
+assert HOME_PAGE.count(_R150_INCOMPLETE_PILL)==1,'INC130_INCOMPLETE_PILL_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_R150_INCOMPLETE_PILL,_R150_INCOMPLETE_PILL_NEW,1)
+
+_R150_CSS='''<style id="r150-card3-clarity-style">
+.r150-card3-clarity{box-sizing:border-box;min-width:0;margin:13px 0 0;padding:12px 13px;border:1px solid rgba(232,174,93,.67);border-left:3px solid #e8ae5d;border-radius:10px;background:rgba(232,174,93,.07);overflow-wrap:anywhere}
+.r150-card3-clarity-head{display:block;margin:0 0 7px;color:#f5ca91;font-size:12px;font-weight:800;line-height:1.4;letter-spacing:.04em;text-transform:uppercase}
+.r150-card3-clarity p{display:block;margin:0;font-size:10.7px;line-height:1.57;color:#dbe6ed;letter-spacing:.018em;text-transform:uppercase}
+@media(max-width:420px){.r150-card3-clarity{padding:10px}.r150-card3-clarity-head{font-size:11.4px}.r150-card3-clarity p{font-size:10.5px}}
+</style>'''
+assert HOME_PAGE.count('</head>')==1,'INC130_HEAD_DRIFT'
+HOME_PAGE=HOME_PAGE.replace('</head>',_R150_CSS+'\n</head>',1)
+assert HOME_PAGE.count('class="r150-card3-clarity"')==1,'INC130_ONLY_COMPLETE_FUTURE'
+assert HOME_PAGE.count('r148-quality-why-box')>=1,'INC130_R148_CARD12_STYLES_MISSING'
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION=('THE LAB · R196.9.150 · INC130 DTM BD001 CARD3 FUTURE PLAN CLARITY '
+             '· R148 CARD12 UX PRESERVED · R146 SCIENCE UNCHANGED · OFFLINE NO-GO')
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
