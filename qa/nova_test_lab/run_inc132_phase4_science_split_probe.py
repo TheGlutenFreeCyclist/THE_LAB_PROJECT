@@ -46,6 +46,22 @@ def run():
     if bad_proof.get("accepted") is True:
         raise AssertionError("EMPTY_EVIDENCE_GRANTED_NUMERIC_DOSE")
 
+    # Exact root cause observed in two authorized private R135/R136 replays:
+    # an exploratory FTP-derived candidate is NOT a verified repetition dose.
+    # The synthetic control MUST reject it even if the numeric fields remain.
+    exploratory = copy.deepcopy(good_band)
+    exploratory["source"] = "INTERVALS_DATED_FTP_EXPLORATORY"
+    exploratory["repeatability_state"] = "NOT_VERIFIED_FOR_THIS_WORKOUT"
+    exploratory["activity_id"] = None
+    exploratory["recovery_duration_comparable"] = False
+    unproven = nova._nova_inc083_science_replay(
+        {"nova_workout_id": WID, "nova_prescription_dimension": DIM,
+         "power_prescription": exploratory},
+        ledger, None, {"scientific_progression": {"dimension": DIM}})
+    if (unproven.get("accepted") is True
+        or unproven.get("reason") != "CURRENT_NUMERIC_SOURCE_NOT_REPEATED_WORK_PROVEN"):
+        raise AssertionError("EXPLORATORY_FTP_WATTS_WRONGLY_AUTHORIZED")
+
     # Replaying a modified power result must not silently accept a new W range.
     altered = copy.deepcopy(good_band)
     altered["high_watts"] += 15
@@ -83,6 +99,9 @@ def run():
             ArithmeticError, OverflowError) as exc:
         native_state = "NATIVE_COMPILER_BLOCKED_" + type(exc).__name__
 
+    if native_state != "NUMERIC_COMPILED_NOT_AUTHENTICATED":
+        raise AssertionError("ORIGINAL_NATIVE_COMPILER_NUMERIC_POSITIVE_NOT_PROVEN")
+
     # R150 INC121 duplicate placeholder is documented as a BH-001 conflict;
     # detecting it is a RED product observation, not a passing UI acceptance.
     legacy_placeholder = "nova-card3-grey-placeholder" in nova.HOME_PAGE
@@ -93,6 +112,7 @@ def run():
         "synthetic_numeric_positive": True,
         "empty_evidence_numeric_denied": True,
         "tampered_watts_denied": True,
+        "exploratory_ftp_numeric_source_denied": True,
         "unauthenticated_provenance_denied": True,
         "native_compiler_observation": native_state,
         "live_raw_fit_byte_receipt": "NOT_VERIFIED",
