@@ -65,3 +65,15 @@ _Nessun dato privato, scrittura ledger, calendario, deploy o cambio R150 in ques
 - Il workflow storico R141 non è stato riparato né escluso. Nessun cambiamento al sorgente `the_lab_app.py`.
 
 **Prossimo gate obbligato:** test autenticato del percorso `INC091` con sorgente realmente attestata e intera catena owner→compiled future→fueling→seal→Jinja, mantenendo indipendente il veto HARD day-of. In assenza di provenienza verificata, segnare RED/NOT_VERIFIED, non creare una falsa fixture positiva.
+
+## 6. Fase 4 / BH-001 — correzione C07 candidata, integrazione reale SOLO nella CI TEST (06/11/2026)
+
+**DTM normativo fermo:** v1.0.74 SHA256 `7ebd387abee2ef1479e26000c0244928c9bdfb1689882cb77ff567c6fabc3a27`. Fonte: pacchetto di handover Fase 4, BH-000–BH-008. La parte C07 non può rendere grigia Card3; Card2 deve essere diversa e scientificamente validata.
+
+- RED baseline R150: presenza del placeholder INC121; un HARD di calendario anche differente può bloccare il display Card 3.
+- GREEN **solo renderer isolato**: `qa/nova_test_lab/inc132_card3_mirror.py` trasforma il template, senza nuova selezione/issuer/ledger/calendario, e `run_inc132_card3_mirror_probe.py` renderizza il vero Jinja con (1) stesso workout ID, (2) altro HARD calendario, (3) Card3 non attestate, (4) drift guard. CI [42199698880](https://github.com/TheGlutenFreeCyclist/THE_LAB_PROJECT/actions/runs/42199698880): SUCCESS.
+- GREEN **app sorgente candidata transitoria**, senza commit app: `build_inc132_c07_candidate.py` deriva R151 dal R150 con SHA-256 attestato. Artefatto effimero Git blob `1203822a8ffe5e1879e6ddd3a65e795b8211ff35`, SHA256 `e4ba3cbc34dec545f7ffc0c5b44950f5bb1178e6a801b397527118b174e02d7d`. La [CI 42200521995](https://github.com/TheGlutenFreeCyclist/THE_LAB_PROJECT/actions/runs/42200521995) ha verificato sorgente, `py_compile`, Flask import, Jinja, `/healthz`, rendering ID uguale / HARD estranea e stato incompleto fail-closed: SUCCESS.
+- Nessuna modifica di `the_lab_app.py` persistentemente nel branch GitHub: resta il blob `ca07e9f135328c5c7e4aa1c4a5be9711a53cd714` (R150). Nessun deploy, nessuna scrittura database/ledger/calendario, e nessun accesso alla provenienza privata.
+- **Restano RED/NOT_VERIFIED:** C3 sempre completa per tutti sette goal e ogni Snapshot; dose attesa da prova vera autenticata RAW, completa fino al fueling; Card2 Tempo individualizzata; arbitro/priority; E2E reale owner-bound, browser/mobile; matrice Q01–Q24. L'app candidata R151 non è una release.
+
+**Sequenza successiva:** preservare la sorgente R150 finché non esistono prove end-to-end e rollback; diagnosticare i sette goal sul vero catalogo canonico, separare l'ammissibilità scientifica dalla selezione della priorità e non riempire C2 con template `RESEARCH_ONLY`. Nessun GO.
