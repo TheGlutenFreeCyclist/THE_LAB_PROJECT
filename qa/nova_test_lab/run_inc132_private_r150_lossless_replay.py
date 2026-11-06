@@ -76,6 +76,84 @@ def _inc132_stage_summary(row):
     }
 
 
+def _inc132_alternative_numeric_scan(fixture, result, nova, clock):
+    """Aggregate ORIGINAL catalog/model/replay only; no IDs, doses or timing.
+    It cannot prove owner/RAW provenance or issue any workout. Diagnostic only.
+    """
+    inputs = fixture.get("core_inputs") or {}
+    decision = result.get("nova_decision") or {}
+    roadmap = result.get("adaptive_roadmap") or {}
+    sci = roadmap.get("scientific_progression") or {}
+    goal = str(decision.get("goal_key") or "")
+    dim = str(sci.get("dimension") or decision.get("dimension") or "")
+    ledger = inputs.get("evidence_ledger") or {}
+    ftp = inputs.get("ftp_anchor") or {}
+    rawclock = inputs.get("coach_clock") or {}
+    slots = rawclock.get("next_slots") or []
+    slots = slots if isinstance(slots, list) else []
+    limits = []
+    for slot in slots:
+        if not isinstance(slot, dict) or slot.get("is_race") is True:
+            continue
+        if str(slot.get("restriction") or "NONE").upper() != "NONE":
+            continue
+        val = nova._nova_quality_slot_declared_seconds(slot)
+        if type(val) in (int, float) and val > 0:
+            limits.append(val)
+    templates = [t for t in nova._NOVA_WORKOUT_LIBRARY
+                 if isinstance(t, dict) and t.get("goal") == goal
+                 and dim in set(t.get("dimensions") or ())
+                 and not t.get("adaptive_only")]
+    if len(templates) > 250:
+        raise ValueError("CATALOGUE_SCAN_SIZE_UNEXPECTED")
+    tally = {"goal_dimension_catalogue_count": len(templates),
+             "eligible_declared_slot_count": len(limits),
+             "numeric_bands_prescribed": 0,
+             "bands_with_repeated_work_source": 0,
+             "original_science_replay_accepted": 0,
+             "replay_accepted_and_declared_time_feasible": 0,
+             "original_science_replay_checked": 0,
+             "science_model_exceptions": 0,
+             "unassessable_template_duration": 0}
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        with patch.object(nova, "get_rome_now", return_value=clock):
+            for t in templates:
+                try:
+                    band = nova._v1943_band(t,
+                        evidence_ledger=ledger, ftp_anchor=ftp,
+                        as_of_date=clock.date().isoformat(), dimension=dim)
+                    if not isinstance(band, dict) or band.get("state") != "PRESCRIBED":
+                        continue
+                    tally["numeric_bands_prescribed"] += 1
+                    if band.get("source") != "COMPARABLE_VERIFIED_REPEATED_WORK":
+                        continue
+                    tally["bands_with_repeated_work_source"] += 1
+                    tally["original_science_replay_checked"] += 1
+                    science = nova._nova_inc083_science_replay(
+                        {"nova_workout_id": t.get("id"),
+                         "nova_prescription_dimension": dim,
+                         "power_prescription": band},
+                        ledger, ftp, {"scientific_progression": {"dimension": dim}},
+                        today=clock.date())
+                    if not isinstance(science, dict) or science.get("accepted") is not True:
+                        continue
+                    tally["original_science_replay_accepted"] += 1
+                    required = nova._nova_quality_template_required_seconds(t, dim)
+                    if type(required) not in (int, float):
+                        tally["unassessable_template_duration"] += 1
+                    elif any(required <= limit for limit in limits):
+                        tally["replay_accepted_and_declared_time_feasible"] += 1
+                except (TypeError, ValueError, KeyError, ArithmeticError, OverflowError,
+                        IndexError, AttributeError, RecursionError):
+                    tally["science_model_exceptions"] += 1
+    tally["interpretation"] = (
+        "POTENTIAL_SELECTION_GAP" if tally["replay_accepted_and_declared_time_feasible"]
+        else "ORIGINAL_REPLAYED_BUT_NO_DECLARED_SLOT" if tally["original_science_replay_accepted"]
+        else "NO_ORIGINAL_REPLAY_APPROVED_NUMERIC_CANDIDATE")
+    tally["raw_fit_owner_provenance"] = "NOT_VERIFIED"
+    return tally
+
+
 def verify_fixture(fixture, nova):
     if (not isinstance(fixture, dict) or fixture.get("schema") != nova.R115_REPLAY_SCHEMA
         or not isinstance(fixture.get("core_inputs"), dict)
@@ -130,6 +208,7 @@ def verify_fixture(fixture, nova):
                 result = nova._v115_replay_nova_core(fixture)
             view = nova._v115_replay_expected(result)
             mutations = nova._v115_replay_mutation_suite(fixture)
+    alternatives = _inc132_alternative_numeric_scan(fixture, result, nova, clock)
     mismatched = sorted(k for k, value in fixture["expected"].items()
                         if view.get(k) != value)
     # Privacy-safe R135/R136 -> R150 diagnostic: categories only. Never log
@@ -181,6 +260,7 @@ def verify_fixture(fixture, nova):
         "hard_loss_stage": hard_loss_stage,
         "stage_trace": stages,
         "upstream_producer_observations": upstream,
+        "original_catalogue_alternative_scan": alternatives,
         "prescription_status_class": str(pres.get("status")) if pres.get("status") in {"PRESCRIBED","BLOCKED","EASY_ONLY","HOLD"} else "OTHER",
         "execution_status_class": str(pres.get("execution_status")) if pres.get("execution_status") in {"READY","EASY_ONLY","BLOCKED_BY_FINAL_SAFETY_GATE"} else "OTHER",
         "authority_final_pass": result.get("authority_final_pass") is True,
