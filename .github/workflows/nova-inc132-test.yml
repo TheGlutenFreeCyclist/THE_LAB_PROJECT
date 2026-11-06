@@ -63,3 +63,47 @@ jobs:
           echo "NOT VERIFIED = Flask/auth/issuer/real dose/browser/Neon and Q01-Q24."
           echo "R141 legacy workflow is not superseded by this QA workflow."
           echo "PRODUCTION NO-GO."
+
+  flask-boot-inert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    env:
+      DATABASE_URL: ""
+      THE_LAB_OWNER_DATABASE_URL: ""
+      THE_LAB_TEST_LAB_MODE: "1"
+      PRODUCT_SECURITY_STRICT: "0"
+      SESSION_COOKIE_SECURE: "0"
+      ICU_API_KEY: ""
+      GARMIN_EMAIL: ""
+      GARMIN_PASSWORD: ""
+      ANTHROPIC_API_KEY: ""
+      THE_LAB_STANDARD_AI_API_KEY: ""
+      THE_LAB_PLATFORM_AI_API_KEY: ""
+    steps:
+      - name: Checkout isolated TEST source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install actual app dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Import real Flask application without live integrations
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          for key in ("DATABASE_URL","THE_LAB_OWNER_DATABASE_URL","ICU_API_KEY","GARMIN_EMAIL","GARMIN_PASSWORD","ANTHROPIC_API_KEY","THE_LAB_STANDARD_AI_API_KEY","THE_LAB_PLATFORM_AI_API_KEY"):
+              assert os.getenv(key,"")=="", key
+          import the_lab_app as runtime
+          runtime.app.jinja_env.parse(runtime.HOME_PAGE)
+          with runtime.app.test_client() as c:
+              response=c.get("/healthz")
+              assert response.status_code==204, response.status_code
+              assert response.headers.get("Cache-Control")=="no-store, max-age=0"
+          print("INC132 TEST Flask import, Jinja and inert healthz PASS.")
+          print("No authentication, producer or real data checked; PRODUCTION NO-GO.")
+          PY
