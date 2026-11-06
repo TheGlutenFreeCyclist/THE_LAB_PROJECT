@@ -48,8 +48,19 @@ class INC132ScaffoldTests(unittest.TestCase):
                     out=study(goal,"Z2",aerobic(),OWNER,DAY,mode)
                     self.assertEqual(out["intensity"],"EASY")
                     self.assertTrue(out["study_screened"])
-                    self.assertEqual(out["potential_power_watts"],(145,188))
+                    self.assertEqual(out["potential_power_watts"],(145,187))
+                    self.assertLess(out["potential_power_watts"][1],188)
                     self.assertFalse(out["executable"])
+    def test_decimal_lt1_upper_is_strictly_below_real_threshold(self):
+        ev=aerobic(z2_lower_watts=145.2,lt1_ceiling_watts=188.2)
+        out=study("POWER_5","Z2",ev,OWNER,DAY)
+        self.assertEqual(out["potential_power_watts"],(146,188))
+        self.assertLess(out["potential_power_watts"][1],188.2)
+    def test_narrow_lt1_range_not_round_up_to_threshold(self):
+        ev=aerobic(z2_lower_watts=187.7,lt1_ceiling_watts=188.0)
+        out=study("POWER_5","Z2",ev,OWNER,DAY)
+        self.assertIn("LT1_RANGE_NOT_ATTESTED",out["blockers"])
+        self.assertIsNone(out["potential_power_watts"])
     def test_missing_lt1_rejects_ftp_substitution(self):
         out=study("POWER_5","Z2",aerobic(lt1_ceiling_watts=None,ftp_watts=300),OWNER,DAY)
         self.assertIn("LT1_RANGE_NOT_ATTESTED",out["blockers"])
