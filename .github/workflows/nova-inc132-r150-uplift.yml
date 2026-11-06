@@ -1,0 +1,48 @@
+name: INC132 single-use guarded R150 TEST source uplift
+
+on:
+  push:
+    branches:
+      - fix/neon-report-egress-r196999
+    paths:
+      - .github/workflows/nova-inc132-r150-uplift.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: inc132-r150-uplift-test-only
+  cancel-in-progress: false
+
+jobs:
+  guarded-test-uplift:
+    if: github.repository == 'TheGlutenFreeCyclist/THE_LAB_PROJECT' && github.ref == 'refs/heads/fix/neon-report-egress-r196999'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exactly the authorized TEST branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/neon-report-egress-r196999
+          persist-credentials: true
+      - name: Validate source hashes and commit R150 only to TEST
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/fix/neon-report-egress-r196999"
+          test "$(git branch --show-current)" = "fix/neon-report-egress-r196999"
+          test "$(git hash-object the_lab_app.py)" = "ec8a147b6dce5170467e9d47caf1d415cea7988b"
+          git diff --exit-code
+          git diff --cached --exit-code
+          git apply --check qa/nova_test_lab/inc132_r146_to_r150.diff
+          git apply qa/nova_test_lab/inc132_r146_to_r150.diff
+          test "$(git hash-object the_lab_app.py)" = "ca07e9f135328c5c7e4aa1c4a5be9711a53cd714"
+          echo "6db176875fdc6b60b9ce437aae2046774bca9495f2864005f4c45d61f355ca73  the_lab_app.py" | sha256sum --check
+          python -m py_compile the_lab_app.py
+          git add the_lab_app.py
+          test "$(git diff --cached --name-only)" = "the_lab_app.py"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(inc132): uplift authorized TEST app source to audited exact R150"
+          git push origin HEAD:refs/heads/fix/neon-report-egress-r196999
+          echo "ONLY TEST BRANCH UPLIFT COMPLETE. NO DEPLOY. NO DATABASE OR PROD WRITE."
