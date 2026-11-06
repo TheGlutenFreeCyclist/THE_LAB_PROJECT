@@ -33,6 +33,40 @@ def emit(status, **data):
     return 0 if status=="TEST_EXECUTED" else (1 if status=="SCIENTIFIC_DRIFT" else 2)
 
 
+def _inc132_safe_code(value):
+    """Only published code-shaped enums, never free text / IDs / watt values."""
+    import re
+    val = value if isinstance(value, str) else ""
+    return val if re.fullmatch(r"[A-Z][A-Z0-9_]{2,95}", val) else "UNCLASSIFIED"
+
+
+def _inc132_stage_summary(row):
+    if not isinstance(row, dict):
+        return {"status": "NON_DICT"}
+    review = row.get("inc111_rejected_candidates")
+    review = review if isinstance(review, list) else []
+    counts = {}
+    for item in review:
+        reason = _inc132_safe_code(item.get("reason")) if isinstance(item, dict) else "UNCLASSIFIED"
+        counts[reason] = counts.get(reason, 0) + 1
+    library = row.get("workout_library") or {}
+    library = library if isinstance(library, dict) else {}
+    cc = row.get("coach_compiler_contract") or {}
+    cc = cc if isinstance(cc, dict) else {}
+    return {
+        "status": _inc132_safe_code(row.get("status")),
+        "hard": row.get("hard_prescription_available") is True,
+        "requested_hard": row.get("requested_hard_prescription_available") is True,
+        "raw_hard_count": sum(1 for x in (row.get("raw_sessions") or [])
+            if isinstance(x, dict) and str(x.get("intensity") or "").upper().startswith("HARD")),
+        "closed_reason": _inc132_safe_code(row.get("fail_closed_reason")),
+        "workout_library_reason": _inc132_safe_code(library.get("reason")),
+        "inc111_rejected_count": len(review),
+        "inc111_rejected_reason_counts": counts,
+        "compiler_state": _inc132_safe_code(cc.get("state")),
+    }
+
+
 def verify_fixture(fixture, nova):
     if (not isinstance(fixture, dict) or fixture.get("schema") != nova.R115_REPLAY_SCHEMA
         or not isinstance(fixture.get("core_inputs"), dict)
@@ -43,10 +77,42 @@ def verify_fixture(fixture, nova):
     if fixture.get("input_fingerprint") != actual_fp:
         raise ValueError("FINGERPRINT_MISMATCH")
     clock = datetime.fromisoformat(fixture["generated_at_local"])
-    # Suppress any unexpected private diagnostics written by old app internals.
+    # Snapshot the ORIGINAL function boundaries, never substitute a producer,
+    # scientific decision, compiler, fake owner, or fabricated FIT receipt.
+    monitored = ("_INC111_PRODUCER_BEFORE", "build_nova_prescription",
+                 "_v196920_guard_native_r27", "compile_nova_prescription",
+                 "_v1953_adapt_prescription")
+    originals = {name: getattr(nova, name) for name in monitored}
+    stages = {}
+    upstream = {"calls": 0, "hard_candidates": 0, "statuses": {},
+                "closed_reasons": {}}
+
+    def spy(name, original):
+        def wrapped(*args, **kwargs):
+            if name == "compile_nova_prescription" and args:
+                stages["compiler_input"] = _inc132_stage_summary(args[0])
+            response = original(*args, **kwargs)
+            row = response[0] if name == "_v196920_guard_native_r27" and isinstance(response, tuple) else response
+            summary = _inc132_stage_summary(row)
+            if name == "_INC111_PRODUCER_BEFORE":
+                upstream["calls"] += 1
+                upstream["hard_candidates"] += int(summary["hard"])
+                state = summary["status"]
+                upstream["statuses"][state] = upstream["statuses"].get(state, 0) + 1
+                cause = summary["closed_reason"]
+                upstream["closed_reasons"][cause] = upstream["closed_reasons"].get(cause, 0) + 1
+            else:
+                stages[name] = summary
+            return response
+        return wrapped
+
+    # All private input/output and legacy diagnostics stay in memory only.
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        with patch.object(nova,"get_rome_now",return_value=clock):
-            result = nova._v115_replay_nova_core(fixture)
+        with patch.object(nova, "get_rome_now", return_value=clock):
+            with contextlib.ExitStack() as stack:
+                for name, original in originals.items():
+                    stack.enter_context(patch.object(nova, name, spy(name, original)))
+                result = nova._v115_replay_nova_core(fixture)
             view = nova._v115_replay_expected(result)
             mutations = nova._v115_replay_mutation_suite(fixture)
     mismatched = sorted(k for k, value in fixture["expected"].items()
@@ -98,6 +164,8 @@ def verify_fixture(fixture, nova):
         "r150_hard_present": bool(new_hard > 0) if new_hard_ok else None,
         "hard_count_changed": old_hard != new_hard,
         "hard_loss_stage": hard_loss_stage,
+        "stage_trace": stages,
+        "upstream_producer_observations": upstream,
         "prescription_status_class": str(pres.get("status")) if pres.get("status") in {"PRESCRIBED","BLOCKED","EASY_ONLY","HOLD"} else "OTHER",
         "execution_status_class": str(pres.get("execution_status")) if pres.get("execution_status") in {"READY","EASY_ONLY","BLOCKED_BY_FINAL_SAFETY_GATE"} else "OTHER",
         "authority_final_pass": result.get("authority_final_pass") is True,
