@@ -69,17 +69,17 @@ HOME_PAGE = HOME_PAGE.replace(_INC132_FTP_BLOCK_CLASS,
     '<article class="v4825-ftp-anchor grey">\n'
     '{% set fr = data.get("nova_inc132_ftp_reference") or {} %}', 1)
 
-_INC132_FTP_HEAD_OLD = '<div class="v4825-ftp-anchor-head"><div><span>📌 CURRENT FTP ANCHOR</span><strong>{% if fa.anchor_watts %}{{ fa.anchor_watts }} W{% else %}NO VALIDATED ANCHOR{% endif %}</strong></div><b>{{ fa.status }}</b></div>'
+_INC132_FTP_HEAD_OLD = '<div class="v4825-ftp-anchor-head"><div><span>📌 FTP TEST REFERENCE</span><strong>{% if fa.anchor_watts %}{{ fa.anchor_watts }} W{% else %}NO TEST-BACKED ESTIMATE{% endif %}</strong></div><b>{{ fa.status }}</b></div>'
 _INC132_FTP_HEAD_NEW = '<div class="v4825-ftp-anchor-head"><div><span>📌 FTP REFERENCE · INTERVALS</span><strong>{% if fr.get("state") == "AVAILABLE" %}{{ fr.get("watts") }} W{% else %}NO DATED REFERENCE{% endif %}</strong></div><b>{{ "COACHING REFERENCE" if fr.get("state") == "AVAILABLE" else "SOURCE UNAVAILABLE" }}</b></div>'
 assert HOME_PAGE.count(_INC132_FTP_HEAD_OLD) == 1, "INC132_FTP_HEAD_DRIFT"
 HOME_PAGE = HOME_PAGE.replace(_INC132_FTP_HEAD_OLD, _INC132_FTP_HEAD_NEW, 1)
 
-_INC132_FTP_DATE_OLD = "<div><span>LAST VALIDATED</span><strong>{{ fa.anchor_date_display or '—' }}</strong><small>{% if fa.age_days is not none %}{{ fa.age_days }} days ago{% else %}No persisted FTP_UP yet{% endif %}</small></div>"
+_INC132_FTP_DATE_OLD = "<div><span>LATEST QUALIFYING EFFORT</span><strong>{{ fa.anchor_date_display or '—' }}</strong><small>{% if fa.age_days is not none %}{{ fa.age_days }} days ago{% else %}No qualifying effort of at least 20 minutes{% endif %}</small></div>"
 _INC132_FTP_DATE_NEW = '<div><span>REFERENCE DATE</span><strong>{{ fr.get("date") or "—" }}</strong><small>{{ "Earlier estimate: use as orientation" if fr.get("older_reference") else "Current recorded source context" }}</small></div>'
 assert HOME_PAGE.count(_INC132_FTP_DATE_OLD) == 1, "INC132_FTP_DATE_DRIFT"
 HOME_PAGE = HOME_PAGE.replace(_INC132_FTP_DATE_OLD, _INC132_FTP_DATE_NEW, 1)
 
-_INC132_FTP_PARAGRAPH_OLD = "<p>{% if fa.retest_due %}<strong>REFRESH DUE.</strong> This threshold reference has become stale and should be refreshed before it is treated as a precise workout anchor.{% elif fa.status == 'AGING' %}This threshold reference is still useful, but its confidence is declining as it ages.{% else %}This is the threshold reference THE LAB currently trusts for workout context; it is not changed by a single weaker signal.{% endif %}</p>"
+_INC132_FTP_PARAGRAPH_OLD = "<p>{% if fa.retest_due %}<strong>REFRESH DUE.</strong> This threshold reference has become stale and should be refreshed before it is treated as a precise workout anchor.{% elif fa.status in ('AGING','TEST ESTIMATE') %}This threshold reference is still useful, but its confidence is declining as it ages.{% else %}Test-derived estimate only. Short efforts and rolling activity estimates never reset it.{% endif %}</p>"
 _INC132_FTP_PARAGRAPH_NEW = '<p>Nova uses the dated Intervals FTP for coaching context, not as a pass/fail exam. {% if fr.get("state") == "AVAILABLE" %}This reference informs a broad pacing range, not a guaranteed workout watt target.{% else %}No dated usable reading was available for this Snapshot; Nova does not invent one.{% endif %} Workout-specific repeatability and today\'s intensity clearance are independent. An FTP test is not automatically required.</p>'
 assert HOME_PAGE.count(_INC132_FTP_PARAGRAPH_OLD) == 1, "INC132_FTP_PARAGRAPH_DRIFT"
 HOME_PAGE = HOME_PAGE.replace(_INC132_FTP_PARAGRAPH_OLD, _INC132_FTP_PARAGRAPH_NEW, 1)
