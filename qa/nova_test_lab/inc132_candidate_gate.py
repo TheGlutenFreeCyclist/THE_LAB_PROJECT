@@ -56,9 +56,15 @@ def study(goal, kind, athlete, owner, today, mode="STEADY"):
         phases=Z2_STUDY_FORMATS[mode]
         low=_watts(athlete.get("z2_lower_watts"))
         ceiling=_watts(athlete.get("lt1_ceiling_watts"))
-        if low is None or ceiling is None or low>=ceiling or athlete.get("lt1_verified") is not True:
+        # A measured LT1 limit is a ceiling, not an allowable work target:
+        # integer-watt mock upper must be strictly BELOW it. This is numerical
+        # screening only, not an individual uncertainty margin or prescription.
+        lower_watt=int(math.ceil(low)) if low is not None else None
+        upper_watt=int(math.ceil(ceiling))-1 if ceiling is not None else None
+        if (low is None or ceiling is None or low>=ceiling
+                or lower_watt>upper_watt or athlete.get("lt1_verified") is not True):
             fail.append("LT1_RANGE_NOT_ATTESTED")
-        power=(round(low),round(ceiling)) if low and ceiling and low<ceiling else None
+        power=(lower_watt,upper_watt) if low is not None and ceiling is not None and lower_watt<=upper_watt else None
         intensity="EASY"
     return {
         "schema":"INC132-TEST-ONLY-1","goal":goal,"research_id":workout,
