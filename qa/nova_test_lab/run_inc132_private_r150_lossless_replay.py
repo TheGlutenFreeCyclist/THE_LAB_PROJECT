@@ -81,12 +81,28 @@ def run():
     os.environ["SESSION_COOKIE_SECURE"]="0"
 
     import psycopg2
+    from psycopg2.extensions import parse_dsn
+    # Only safe classifications may enter public logs. Never echo a DSN/host/password.
+    parsed = parse_dsn(dsn)
+    if parsed.get("user") != READER or parsed.get("dbname") != DATABASE:
+        return emit("BLOCKED",reason="CI_SECRET_POINTS_TO_WRONG_READER_OR_DATABASE")
     sys.path.insert(0,str(ROOT))
     import the_lab_app as nova
 
     out={}
-    with psycopg2.connect(dsn,connect_timeout=10,
-                          options="-c default_transaction_read_only=on -c statement_timeout=12000") as conn:
+    try:
+        db_connection = psycopg2.connect(dsn,connect_timeout=10,
+                          options="-c default_transaction_read_only=on -c statement_timeout=12000")
+    except psycopg2.OperationalError as exc:
+        s = str(exc).lower()  # deliberately NOT printed
+        category = ("AUTH_REJECTED" if "password authentication failed" in s
+          else "DNS_FAILED" if "translate host" in s or "name resolution" in s
+          else "TIMEOUT_OR_NETWORK" if "timeout" in s or "timed out" in s or "network is unreachable" in s
+          else "CONNECTION_REFUSED" if "connection refused" in s
+          else "TLS_FAILURE" if "ssl" in s or "certificate" in s
+          else "OTHER_DB_CONNECT_FAILURE")
+        return emit("BLOCKED",reason=category)
+    with db_connection as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT current_user,current_database(),
                 current_setting('transaction_read_only'),
