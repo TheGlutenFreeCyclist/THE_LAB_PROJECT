@@ -53,3 +53,15 @@ La via INC091 *può teoricamente* arrivare a `COMPILED_UNSCHEDULED` con watt e f
 - `PRODUCTION=NO_GO`. Il workflow storico R141 è ancora da migrare con controllo indipendente; NON disattivare i test.
 
 _Nessun dato privato, scrittura ledger, calendario, deploy o cambio R150 in questa tracciatura._
+
+## 5. Evidenza nuova Fase 4, CI 42197108259 (06/11/2026)
+
+[CI TEST](https://github.com/TheGlutenFreeCyclist/THE_LAB_PROJECT/actions/runs/42197108259), commit `1208fc40e97fc6c05a919e657fd28f5a350bb6db`: **SUCCESS di probe isolato**; sono stati eseguiti sul vero R150 i due script `run_inc132_issuer_gate_diagnostic.py` e `run_inc132_phase4_science_split_probe.py`.
+
+- Riproduzione legacy: `EASY_ONLY`, due slot HARD respinti, planner `PLANNED_NOT_CLEARED`, sola `mechanics`, nessun workout futuro, nessuna offerta issuer.
+- Nuovo contrasto controllato: fixture di ripetizioni sintetiche → `synthetic_numeric_positive=true`, `native_compiler_observation=NUMERIC_COMPILED_NOT_AUTHENTICATED`. La matematica di watt e il compilatore *possono* funzionare in isolamento.
+- Evidenza assente / watt alterati → rifiutati; accesso alla provenance fuori dalla request autenticata → rifiutato. Non è stata simulata una ricevuta RAW FIT né costruito un owner autenticato fittizio.
+- `live_authenticated_quality_full=NOT_VERIFIED`; `live_raw_fit_byte_receipt=NOT_VERIFIED`; `card3_bh001=RED`; `card2_runtime=NOT_IMPLEMENTED`; `production=NO_GO`.
+- Il workflow storico R141 non è stato riparato né escluso. Nessun cambiamento al sorgente `the_lab_app.py`.
+
+**Prossimo gate obbligato:** test autenticato del percorso `INC091` con sorgente realmente attestata e intera catena owner→compiled future→fueling→seal→Jinja, mantenendo indipendente il veto HARD day-of. In assenza di provenienza verificata, segnare RED/NOT_VERIFIED, non creare una falsa fixture positiva.
