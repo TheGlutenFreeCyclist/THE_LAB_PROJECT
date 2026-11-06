@@ -51,8 +51,42 @@ def verify_fixture(fixture, nova):
             mutations = nova._v115_replay_mutation_suite(fixture)
     mismatched = sorted(k for k, value in fixture["expected"].items()
                         if view.get(k) != value)
+    # Privacy-safe R135/R136 -> R150 diagnostic: categories only. Never log
+    # watt values, workout/plan IDs, athlete identifiers or fixture payloads.
+    old_hard = fixture["expected"].get("hard_session_count")
+    new_hard = view.get("hard_session_count")
+    old_hard_ok = type(old_hard) is int and old_hard >= 0
+    new_hard_ok = type(new_hard) is int and new_hard >= 0
+    replay = result.get("r115_replay") if isinstance(result, dict) else {}
+    replay = replay if isinstance(replay, dict) else {}
+    raw_r27 = str(replay.get("native_r27_gate_state") or "")
+    r27_category = raw_r27 if raw_r27 in {
+        "R27_COACH_TEST_SAFETY_BLOCKED",
+        "R27_COACH_TEST_PENDING_CANONICAL_COMPILER",
+        "R27_COMPILED_SLOT_MISSING",
+        "R27_COMPILED_AVAILABILITY_MISMATCH",
+        "R27_MULTIPLE_HARD_EXPOSURES",
+        "R27_MAXIMAL_NOT_READY",
+        "R27_CANONICAL_PLAN_COMPILED",
+        "FINAL_COMPILATION_REJECTED",
+    } else ("NOT_APPLICABLE" if not raw_r27 else "OTHER_R27_STATE")
+    tests = mutations.get("tests") if isinstance(mutations, dict) else None
+    tests = tests if isinstance(tests, list) else []
+    base_tests = [x for x in tests if isinstance(x, dict) and x.get("name") == "BASELINE_IDENTITY"]
+    other_failed = sum(1 for x in tests if isinstance(x, dict)
+                       and x.get("name") != "BASELINE_IDENTITY" and x.get("pass") is not True)
+    realistic = mutations.get("realistic_completion_suite") if isinstance(mutations, dict) else {}
+    realistic = realistic if isinstance(realistic, dict) else {}
     # Compare expected canonical keys only, never print private values/workout IDs.
     return {
+        "r27_gate_state_class": r27_category,
+        "r27_gate_applied": bool(replay.get("native_r27_gate_applied")),
+        "legacy_hard_present": bool(old_hard > 0) if old_hard_ok else None,
+        "r150_hard_present": bool(new_hard > 0) if new_hard_ok else None,
+        "hard_count_changed": old_hard != new_hard,
+        "mutation_baseline_identity_pass": (base_tests[0].get("pass") is True) if base_tests else None,
+        "mutation_other_failed_count": other_failed,
+        "mutation_realistic_completion_pass": realistic.get("pass") is True if realistic else None,
         "expected_invariant_count":len(fixture["expected"]),
         "expected_invariant_drift_count":len(mismatched),
         "expected_invariant_drift_names":mismatched,
