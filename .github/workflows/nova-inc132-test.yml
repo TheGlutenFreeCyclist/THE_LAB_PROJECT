@@ -107,3 +107,23 @@ jobs:
           print("INC132 TEST Flask import, Jinja and inert healthz PASS.")
           print("No authentication, producer or real data checked; PRODUCTION NO-GO.")
           PY
+
+  r150-patch-dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout isolated TEST repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate R146 and audit R150 patch without pushing
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object the_lab_app.py)" = "ec8a147b6dce5170467e9d47caf1d415cea7988b"
+          git apply --check qa/nova_test_lab/inc132_r146_to_r150.diff
+          git apply qa/nova_test_lab/inc132_r146_to_r150.diff
+          test "$(git hash-object the_lab_app.py)" = "ca07e9f135328c5c7e4aa1c4a5be9711a53cd714"
+          echo "6db176875fdc6b60b9ce437aae2046774bca9495f2864005f4c45d61f355ca73  the_lab_app.py" | sha256sum --check
+          python -m py_compile the_lab_app.py
+          echo "R146->R150 incremental patch verified in ephemeral runner. No push."
