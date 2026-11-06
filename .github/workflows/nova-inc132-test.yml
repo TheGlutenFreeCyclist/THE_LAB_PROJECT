@@ -1,0 +1,65 @@
+name: INC132 isolated scientific scaffold and rendering contract (TEST only)
+
+on:
+  push:
+    branches:
+      - fix/neon-report-egress-r196999
+    paths:
+      - .github/workflows/nova-inc132-test.yml
+      - qa/nova_test_lab/inc132_*
+      - qa/nova_test_lab/test_inc132_*
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inc132-isolated-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  inc132-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      DATABASE_URL: ""
+      THE_LAB_OWNER_DATABASE_URL: ""
+      THE_LAB_TEST_LAB_MODE: "1"
+      ICU_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      THE_LAB_STANDARD_AI_API_KEY: ""
+      THE_LAB_PLATFORM_AI_API_KEY: ""
+    steps:
+      - name: Checkout the authorized TEST branch only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Fail closed if application baseline changed under QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object the_lab_app.py)" = "ec8a147b6dce5170467e9d47caf1d415cea7988b"
+          python -m py_compile the_lab_app.py
+          python - <<'PY'
+          import os
+          for key in ("DATABASE_URL","THE_LAB_OWNER_DATABASE_URL","ICU_API_KEY","ANTHROPIC_API_KEY",
+                      "THE_LAB_STANDARD_AI_API_KEY","THE_LAB_PLATFORM_AI_API_KEY"):
+              assert not os.environ.get(key), "NON-ISOLATED ENV: "+key
+          print("INC132 ISOLATION PASS / APP SOURCE R146 UNCHANGED")
+          PY
+
+      - name: Execute INC132-only synthetic tests
+        run: python -m unittest discover -s qa/nova_test_lab -p 'test_inc132*.py' -v
+
+      - name: Maintain explicit release distinction
+        run: |
+          echo "PASS = only INC132 synthetic schema and catalog screening."
+          echo "NOT VERIFIED = Flask/auth/issuer/real dose/browser/Neon and Q01-Q24."
+          echo "R141 legacy workflow is not superseded by this QA workflow."
+          echo "PRODUCTION NO-GO."
