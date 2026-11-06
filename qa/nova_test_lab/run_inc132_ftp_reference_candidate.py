@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Isolated regression for R151 FTP reference presentation, never a release gate."""
 import json
+import sys
+from pathlib import Path
 from datetime import timedelta
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import the_lab_app as nova
 
 
