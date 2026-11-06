@@ -56,12 +56,42 @@ def run():
         print(json.dumps({"suite":"INC132_NEON_EGRESS",
             "status":"BLOCKED_SECRET_SCHEMA_INVALID"}))
         return 2
+    # The TCP probe does not certify SSL or a PostgreSQL session.
+    # Test a short, read-only-role session without logging libpq messages.
+    session_state="NOT_ATTEMPTED"
+    try:
+        import psycopg2
+        with psycopg2.connect(ds, sslmode="require", connect_timeout=12,
+                              application_name="inc132-neon-lab-egress-only") as probe_conn:
+            with probe_conn.cursor() as cursor:
+                cursor.execute("SELECT current_user,current_database()")
+                row=cursor.fetchone()
+                session_state=("SQL_SESSION_VERIFIED" if row==(NEON_TEST_ROLE,NEON_TEST_DB)
+                    else "SESSION_WRONG_IDENTITY")
+    except Exception as exc:
+        # No server error strings or endpoint addresses in public output.
+        msg=str(exc).lower()
+        if "password authentication failed" in msg:
+            session_state="AUTH_REJECTED"
+        elif "certificate" in msg or "ssl" in msg or "tls" in msg:
+            session_state="SSL_OR_TLS_FAILED"
+        elif "timeout" in msg or "timed out" in msg:
+            session_state="PSQL_TIMEOUT"
+        elif "no pg_hba" in msg or "not allowed" in msg:
+            session_state="PG_GATE_REJECTED"
+        elif "could not translate host" in msg:
+            session_state="DNS_FAILED"
+        else:
+            session_state="PSQL_OTHER_FAILURE_"+type(exc).__name__
     print(json.dumps({"suite":"INC132_NEON_EGRESS","status":"DIAGNOSTIC_ONLY",
        "expected_endpoint_tcp":connectivity(NEON_TEST_HOST,5432),
        "secret_endpoint_tcp":connectivity(secret_host,secret_port),
        "secret_host_matches_neon_test":safe_host,
        "port_5432":secret_port==5432,
+       "secret_sslmode_is_require_or_stricter":conn.get("sslmode") in ("require","verify-ca","verify-full"),
+       "secret_password_present":bool(conn.get("password")),
        "role_and_database_correct":role_ok and db_ok,
+       "postgres_session_with_explicit_sslmode_require":session_state,
        "production":"UNTOUCHED",
        "read_only_replay":"SEPARATE_GATE"},sort_keys=True))
     return 0
