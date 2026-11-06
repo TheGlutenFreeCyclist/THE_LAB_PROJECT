@@ -6,6 +6,7 @@ on:
       - fix/neon-report-egress-r196999
     paths:
       - .github/workflows/nova-inc132-producer-probe.yml
+      - qa/nova_test_lab/run_inc132_issuer_gate_diagnostic.py
   workflow_dispatch:
 
 permissions:
@@ -46,6 +47,7 @@ jobs:
           set -euo pipefail
           test "$(git hash-object the_lab_app.py)" = "ca07e9f135328c5c7e4aa1c4a5be9711a53cd714"
           python qa/nova_test_lab/run_inc109_full_pipeline.py
+          python qa/nova_test_lab/run_inc132_issuer_gate_diagnostic.py
       - name: State scientific limitations
         if: always()
         run: |
