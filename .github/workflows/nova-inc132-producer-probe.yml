@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/nova-inc132-producer-probe.yml
       - qa/nova_test_lab/run_inc132_issuer_gate_diagnostic.py
+      - qa/nova_test_lab/run_inc132_phase4_science_split_probe.py
   workflow_dispatch:
 
 permissions:
@@ -48,9 +49,10 @@ jobs:
           test "$(git hash-object the_lab_app.py)" = "ca07e9f135328c5c7e4aa1c4a5be9711a53cd714"
           python qa/nova_test_lab/run_inc109_full_pipeline.py
           python qa/nova_test_lab/run_inc132_issuer_gate_diagnostic.py
+          python qa/nova_test_lab/run_inc132_phase4_science_split_probe.py
       - name: State scientific limitations
         if: always()
         run: |
-          echo "Even PASS here covers only an isolated synthetic replay."
+          echo "Even PASS here covers only an isolated synthetic replay; Phase4 numeric proof is NOT owner-authenticated."
           echo "Does not attest athlete-specific Tempo/Z3, cadence, verified real activity or authenticated Snapshot."
           echo "Release gate INC132 Q01-Q24 NOT VERIFIED. PRODUCTION NO-GO."
