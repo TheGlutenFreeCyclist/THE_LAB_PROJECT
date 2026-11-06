@@ -5,13 +5,13 @@ from inc132_render_contract import project
 
 def row(role,wid,plan,domain=None):
     return dict(role=role,goal="POWER_5",workout_id=wid,plan_id=plan,
-        owner_id="synthetic-owner",snapshot_id="snapshot-A",
+        owner_id="synthetic-owner",snapshot_id="snapshot-A",as_of="2026-11-06",decision_digest="digest-A",
         compiled=True,issuer_verified=True,dose_attested=True,fueling_attested=True,
         intensity_class="HARD",blocks=[dict(seconds=720,domain=domain or "SPECIFIC")],
         **({"domain":domain} if domain else {}))
 
 def fixture():
-    return dict(owner_id="synthetic-owner",snapshot_id="snapshot-A",decision_digest="digest-A",
+    return dict(owner_id="synthetic-owner",snapshot_id="snapshot-A",decision_digest="digest-A",as_of="2026-11-06",producer_version="R146_TEST_MOCK",
         issuer_signature_verified=True,goal="POWER_5",injury=None,day_decision="HOLD",
         card1=dict(role="CARD1",owner_id="synthetic-owner",snapshot_id="snapshot-A",intensity_class="EASY"),
         card2=row("CARD2","P5_TEMPO_2X12","tempo-plan","TEMPO_Z3"),
@@ -19,8 +19,12 @@ def fixture():
         recommended_priority="CARD3",priority_reason_code="WITNESSED_SPECIFIC_FIRST",
         priority_evidence_ids=["synthetic-witness"])
 
-def screen(a=None,owner="synthetic-owner",sid="snapshot-A",digest="digest-A"):
-    return project(a or fixture(),owner,sid,digest)
+def screen(a=None,owner="synthetic-owner",sid="snapshot-A",digest="digest-A",
+           day="2026-11-06",goal="POWER_5",c2_id="P5_TEMPO_2X12",c3_id="P5_SPECIFIC_4X4"):
+    if isinstance(a,dict) and a.get("card2") is None: c2_id=None
+    return project(a if a is not None else fixture(),owner,sid,digest,
+        live_as_of=day,live_goal=goal,live_card2_workout_id=c2_id,
+        live_card3_workout_id=c3_id)
 
 class Inc132RenderBoundary(unittest.TestCase):
     def test_current_snapshot_one_priority(self):
@@ -84,5 +88,44 @@ class Inc132RenderBoundary(unittest.TestCase):
         for bad in ("720",None,float("nan"),-3,False):
             a=fixture();a["card3"]["blocks"][0]["seconds"]=bad
             self.assertIn("CARD3_MISSING",screen(a)["errors"])
+
+    def test_report_day_changed_no_active_highlight(self):
+        result=screen(day="2026-11-07")
+        self.assertTrue(result["valid"]);self.assertIsNone(result["highlight"])
+    def test_goal_changed_no_sticky_border(self):
+        self.assertIsNone(screen(goal="VO2MAX")["highlight"])
+    def test_live_c2_id_changed_no_sticky_border(self):
+        self.assertIsNone(screen(c2_id="P5_TEMPO_2X15")["highlight"])
+    def test_live_c3_id_changed_no_sticky_border(self):
+        self.assertIsNone(screen(c3_id="different")["highlight"])
+    def test_missing_trusted_live_context_never_highlights(self):
+        a=fixture()
+        self.assertIsNone(project(a,"synthetic-owner","snapshot-A","digest-A")["highlight"])
+    def test_missing_report_day_fails(self):
+        a=fixture();a["as_of"]=None
+        self.assertIn("DATE_MISSING_OR_INVALID",screen(a)["errors"])
+    def test_malformed_calendar_day_fails(self):
+        a=fixture();a["as_of"]="2026-02-29"
+        self.assertIn("DATE_MISSING_OR_INVALID",screen(a)["errors"])
+    def test_missing_producer_version_fails(self):
+        a=fixture();a.pop("producer_version")
+        self.assertIn("PRODUCER_VERSION_MISSING",screen(a)["errors"])
+    def test_offer_attestation_digest_must_match(self):
+        a=fixture();a["card2"]["decision_digest"]="different"
+        self.assertIn("CARD2_ATTESTATION_MISMATCH",screen(a)["errors"])
+    def test_specific_offer_as_of_must_match(self):
+        a=fixture();a["card3"]["as_of"]="2026-11-05"
+        self.assertIn("CARD3_ATTESTATION_MISMATCH",screen(a)["errors"])
+    def test_malformed_payload_is_not_exception(self):
+        self.assertIn("PAYLOAD_INVALID",screen(False)["errors"])
+    def test_blank_phase_domain_fails(self):
+        a=fixture();a["card2"]["blocks"][0]["domain"]="  "
+        self.assertIn("CARD2_BAD",screen(a)["errors"])
+    def test_priority_witness_must_be_a_list(self):
+        a=fixture();a["priority_evidence_ids"]="unverified"
+        self.assertIn("WITNESS_MISSING",screen(a)["errors"])
+    def test_card3_easy_is_not_a_specific_quality(self):
+        a=fixture();a["card3"]["intensity_class"]="EASY"
+        self.assertIn("CARD3_MISSING",screen(a)["errors"])
 
 if __name__ == "__main__":unittest.main()
