@@ -64,10 +64,16 @@ def run():
         with psycopg2.connect(ds, sslmode="require", connect_timeout=12,
                               application_name="inc132-neon-lab-egress-only") as probe_conn:
             with probe_conn.cursor() as cursor:
-                cursor.execute("SELECT current_user,current_database()")
+                cursor.execute("""SELECT current_user,current_database(),
+                    has_table_privilege(current_user,'science_lab.fixtures','SELECT'),
+                    has_table_privilege(current_user,'science_lab.fixtures','INSERT'),
+                    has_table_privilege(current_user,'science_lab.fixtures','UPDATE'),
+                    has_table_privilege(current_user,'science_lab.fixtures','DELETE')""")
                 row=cursor.fetchone()
-                session_state=("SQL_SESSION_VERIFIED" if row==(NEON_TEST_ROLE,NEON_TEST_DB)
-                    else "SESSION_WRONG_IDENTITY")
+                session_state=("SQL_SESSION_READ_ONLY_ROLE_VERIFIED"
+                    if (row and row[0]==NEON_TEST_ROLE and row[1]==NEON_TEST_DB
+                        and row[2] is True and all(v is False for v in row[3:]))
+                    else "SESSION_ROLE_PERMISSION_MISMATCH")
     except Exception as exc:
         # No server error strings or endpoint addresses in public output.
         msg=str(exc).lower()
@@ -94,6 +100,7 @@ def run():
        "postgres_session_with_explicit_sslmode_require":session_state,
        "production":"UNTOUCHED",
        "read_only_replay":"SEPARATE_GATE"},sort_keys=True))
-    return 0
+    return 0 if (session_state=="SQL_SESSION_READ_ONLY_ROLE_VERIFIED"
+                 and safe_host and role_ok and db_ok and secret_port==5432) else 2
 if __name__=="__main__":
     raise SystemExit(run())
