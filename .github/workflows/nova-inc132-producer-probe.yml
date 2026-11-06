@@ -10,6 +10,7 @@ on:
       - qa/nova_test_lab/run_inc132_phase4_science_split_probe.py
       - qa/nova_test_lab/inc132_card3_mirror.py
       - qa/nova_test_lab/run_inc132_card3_mirror_probe.py
+      - qa/nova_test_lab/build_inc132_c07_candidate.py
   workflow_dispatch:
 
 permissions:
@@ -53,6 +54,59 @@ jobs:
           python qa/nova_test_lab/run_inc132_issuer_gate_diagnostic.py
           python qa/nova_test_lab/run_inc132_phase4_science_split_probe.py
           python qa/nova_test_lab/run_inc132_card3_mirror_probe.py
+      - name: Build and import ephemeral R151 Card3 candidate from exact R150 (no commit)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object the_lab_app.py)" = "ca07e9f135328c5c7e4aa1c4a5be9711a53cd714"
+          python qa/nova_test_lab/build_inc132_c07_candidate.py \
+            the_lab_app.py qa/nova_test_lab/inc132_card3_mirror.py \
+            /tmp/inc132-r151-test-candidate/the_lab_app.py
+          test "$(git hash-object /tmp/inc132-r151-test-candidate/the_lab_app.py)" = "1203822a8ffe5e1879e6ddd3a65e795b8211ff35"
+          echo "e4ba3cbc34dec545f7ffc0c5b44950f5bb1178e6a801b397527118b174e02d7d  /tmp/inc132-r151-test-candidate/the_lab_app.py" | sha256sum -c
+          cp /tmp/inc132-r151-test-candidate/the_lab_app.py the_lab_app.py
+          python -m py_compile the_lab_app.py
+          python - <<'PY'
+          import json
+          import the_lab_app as nova
+          assert 'R196.9.151' in nova.APP_VERSION
+          assert 'nova-card3-grey-placeholder' not in nova.HOME_PAGE
+          assert nova.HOME_PAGE.count('inc132-shared-id') >= 1
+          nova.app.jinja_env.parse(nova.HOME_PAGE)
+          with nova.app.test_client() as client:
+              response = client.get('/healthz')
+              assert response.status_code == 204, response.status_code
+          start_text = '{% if is_quality_slot %}\n{% set card3 = data.nova_card3_workout_view or {} %}'
+          start = nova.HOME_PAGE.index(start_text)
+          stop = nova.HOME_PAGE.index('{% elif is_chronological_pending %}', start)
+          renderer = nova.app.jinja_env.from_string(nova.HOME_PAGE[start:stop]+'{% endif %}')
+          base = dict(verified_offer=False, verified_future_plan=True,
+                      title='R151 AUTHORITY-CONSTRAINED TEST',workout_id='TEST_ID',
+                      personalized_watts='260–280 W',structure='3x10/5min',
+                      execution='recheck before doing',purpose='verified future only',
+                      reason='not scheduled',phases=[])
+          def display(card, other):
+              return renderer.render(is_quality_slot=True,
+                  quality_already_shown=True,is_chronological_pending=False,
+                  upcoming={'quality_index':0},
+                  data={'nova_card3_workout_view':card,
+                        'next_sessions':[{'nova_workout_id':other}]})
+          assert 'Same canonical workout as Card 1' in display(base,'TEST_ID')
+          assert 'Same canonical workout as Card 1' not in display(base,'OTHER_ID')
+          assert '260–280 W' in display(base,'OTHER_ID')
+          assert 'NO VERIFIED QUALITY WORKOUT' in display(
+              {'title':'GOAL ONLY','verified_offer':False,'verified_future_plan':False},'TEST_ID')
+          print(json.dumps({'suite':'INC132_R151_EPHEMERAL_RUNTIME',
+                            'status':'PASS_IN_CI_ONLY','home_page':'NO_GREY_C07',
+                            'verified_card3_mirror':'PASS',
+                            'unrelated_calendar_hard':'PASS',
+                            'empty_quality_fail_closed':'PASS',
+                            'healthz':'PASS',
+                            'authenticated_owner_e2e':'NOT_VERIFIED',
+                            'card2_quality':'NOT_IMPLEMENTED','release':'NO_GO'},sort_keys=True))
+          PY
+          git diff --check -- the_lab_app.py
+          echo "R151 source was changed ONLY in the ephemeral runner checkout. No commit or deploy."
       - name: State scientific limitations
         if: always()
         run: |
