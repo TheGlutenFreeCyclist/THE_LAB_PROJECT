@@ -8,6 +8,7 @@ on:
     paths:
       - 'qa/nova_test_lab/inc132_r153/**'
       - '.github/workflows/nova-inc132-r153-commit-qa.yml'
+      - 'the_lab_app.py'
 permissions:
   contents: read
 jobs:

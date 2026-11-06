@@ -1,0 +1,60 @@
+name: NOVA INC132 R153 TEST root integration (NO PRODUCTION)
+on:
+  push:
+    branches:
+      - 'fix/neon-report-egress-r196999'
+    paths:
+      - 'qa/nova_test_lab/inc132_r153/PROMOTE_TEST_ROOT_R153_ONCE.txt'
+permissions:
+  contents: write
+concurrency:
+  group: nova-inc132-r153-test-root-promotion
+  cancel-in-progress: false
+jobs:
+  integrate-root-test-only:
+    if: github.ref == 'refs/heads/fix/neon-report-egress-r196999'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Assert immutable TEST baseline and committed patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = 'refs/heads/fix/neon-report-egress-r196999'
+          echo '6db176875fdc6b60b9ce437aae2046774bca9495f2864005f4c45d61f355ca73  the_lab_app.py' | sha256sum -c -
+          git diff --quiet
+          git diff --cached --quiet
+      - name: Apply reviewed R150 -> R153 FTP -> R153 dual patches to TEST only
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=qa/nova_test_lab/inc132_r153/patches
+          git apply --check "$BASE/R150_to_FTP.patch"
+          git apply "$BASE/R150_to_FTP.patch"
+          echo '6e7e70e033d1a9e53105cfe0d3660c3f3366f91d8ed9ce09423dc1ae9a8fede9  the_lab_app.py' | sha256sum -c -
+          git apply --check "$BASE/FTP_to_DUAL.patch"
+          git apply "$BASE/FTP_to_DUAL.patch"
+          echo 'd37840512624592eaf867730e93156ca50eb99e864bdf171f6379823d93291c1  the_lab_app.py' | sha256sum -c -
+          python -m py_compile the_lab_app.py
+      - name: Commit byte-identical runtime onto TEST branch (no deploy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- the_lab_app.py
+          git diff --cached --check
+          git diff --cached --name-only
+          git commit -m 'test(inc132): integrate verified R153 dual runtime on TEST only [no production]'
+          git push origin 'HEAD:refs/heads/fix/neon-report-egress-r196999'
+      - name: Boundaries
+        if: always()
+        run: |
+          echo 'TEST branch runtime integration only. No main, no deploy, no private DTM or RAW.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'PRODUCT_GO remains gated by authenticated RAW FIT/issuer, 7-goal science review and Q01-Q31.' >> "$GITHUB_STEP_SUMMARY"
