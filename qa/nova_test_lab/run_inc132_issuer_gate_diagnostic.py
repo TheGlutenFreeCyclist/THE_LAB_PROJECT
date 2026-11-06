@@ -109,6 +109,12 @@ def run():
         "scenario":"SYNTHETIC_POWER5_NO_REAL_PROVENANCE",
         "decision_action":public_reason((actual.get("nova_decision") or {}).get("action")),
         "decision_goal":public_reason((actual.get("nova_decision") or {}).get("goal_key")),
+        "available_future_plan_in_core":isinstance(actual.get("future_quality_plan"),dict),
+        "core_future_plan_status":public_reason((actual.get("future_quality_plan") or {}).get("status")),
+        "core_future_plan_reason_codes":[public_reason(x) for x in
+            ((actual.get("future_quality_plan") or {}).get("reason_codes") or [])[:5]
+            if isinstance(x,str)],
+        "future_card3_view_present":isinstance(actual.get("nova_card3_workout_view"),dict),
         "prescription_status":public_reason((actual.get("nova_prescription") or {}).get("status")),
         "prescription_rejection":public_reason((actual.get("nova_prescription") or {}).get("fail_closed_reason")),
         "slot_attempt_count":len(attempts),
