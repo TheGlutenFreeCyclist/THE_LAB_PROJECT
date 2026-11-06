@@ -1,0 +1,55 @@
+# INC132 · Fase 4 — tracciatura delle autorità R150 (sola TEST)
+
+**Stato:** analisi statica e confronto con il diagnostico esistente, NON implementazione prodotto, NON validazione scientifica né E2E.  
+**Norma:** DTM v1.0.74, BH-000–BH-008, senza modificarlo.  
+**Baseline:** `the_lab_app.py` SHA256 `6db176875fdc6b60b9ce437aae2046774bca9495f2864005f4c45d61f355ca73`; Git blob `ca07e9f135328c5c7e4aa1c4a5be9711a53cd714`.  
+**HEAD prima di questa scrittura:** `c0d395da435fa93729298bf7db87e310bf360a5e`, branch `fix/neon-report-egress-r196999`.  
+**Fonte:** archivio di handover Fase 3.1 del 06/11/2026 e analisi AST del sorgente R150, confrontati con il branch TEST. Numeri di riga riferiti a R150 IMMUTATA.
+
+## 1. Percorsi realmente distinti
+
+| Responsabilità | Codice R150 | Significato e vincolo |
+|---|---|---|
+| Punto di composizione Snapshot | `the_lab_app.py:29265–29272,29308–29316,29447–29450` | Prima issuer della quality odierna, poi pianificazione futura indipendente, infine attestazione dopo la composizione. |
+| Issuer HARD odierno | `_nova_r196956_build_offer`, wrapper finale `:66696–66765`; `_nova_inc076_seal_ok` `:65265–65279` | Il veto `EASY_ONLY` deve restare applicato. HMAC dell'offerta non è prova di libertà di esecuzione futura. |
+| Planner scientifico futuro | `_nova_inc056_plan_result` `:65719–65770` | Seleziona tramite `_nova_inc088_scientific_candidate` `:65636–65716`; verifica replay watt, ma genera deliberatamente solo `mechanics`, `workout=None`, `PERSONAL_POWER_NOT_COMPILED`. |
+| Tentativo di compilazione futura completa | `_nova_inc050_future_quality` finale `:65906–65963` | Il ramo INC091 richiede `PLANNED_NOT_CLEARED`, nessuna offerta attiva e nessun infortunio dichiarato. Prima prova `_nova_inc091_truth`, poi `_nova_inc091_compile_native`. |
+| Provenienza e confine auth | `_nova_inc091_truth` (wrapper finale `:66441–66482`, precedente `:65788–65838`) | Richiede request Flask `analyze`, attore owner e eventi server `RESOLVED` coerenti. Una stringa `DEVICE_LAPS` in fixture offline NON costituisce la prova. L'ulteriore ricevuta RAW FIT resta esplicitamente NON verificata. |
+| Compilazione scientifica | `_nova_inc091_compile_native` (wrapper finale `:66488–66545`, precedente `:65841–65903`) | Replay originale, banda W, renderer canonico, `_v19697_session_envelope`, durata e `_v19696_execution_contract`; nessun giorno/slot inventato. |
+| Attestazione futuro | `_nova_inc051_attest_future_snapshot` `:66037–66079`; `_nova_inc091_eligible` `:65976–66034` | Ricontrolla owner, digest, replay, composizione, fueling e `authority_seal`. Il piano futuro rimane `not_issued/not_scheduled`: non è l'issuer di HARD corrente. |
+| Presentazione C3 | `_nova_r1969104_canonical_card3` `:66082–66110` | Solo dati eleggibili e attestati; UI non inventa dose. |
+| Contrasto C07/BH-001 | `HOME_PAGE` patch INC121 `:67549–67569` | Ancora previsto placeholder grigio/inattivo quando quality è in Card1/2: incompatibile con nuova Card3 sempre completa e con identità condivisa. Da riformare mantenendo una sola prescrizione/ledger. |
+
+## 2. Blocco preciso (provenienza ≠ dose ≠ clearance)
+
+Nel probe reale sintetico CI `42194585623`, `decision=TRAIN`, prescrizione `EASY_ONLY`, rifiuti `CURRENT_NOVA_DECISION_DOES_NOT_AUTHORIZE_HARD`. Il planner indipendente è `PLANNED_NOT_CLEARED`, con `mechanics` ma senza `workout`, `COMPATIBLE_STRUCTURE_ONLY_NOT_A_QUALITY`. Il probe è **SUCCESS diagnostico** perché non falsifica l'issuer; la feature C3 è **RED**.
+
+La via INC091 *può teoricamente* arrivare a `COMPILED_UNSCHEDULED` con watt e fueling, ma questa fixture offline non soddisfa il gate di provenance owner-bound nella richiesta autenticata, né verifica ricevute RAW byte. Non dichiarare coperto il ramo positivo compilato; non usare mock, `strong=True`, `DEVICE_LAPS` autoassegnato o HMAC test come prova reale.
+
+### Matrice sperimentale da implementare/testare
+
+| Scenario | Numeric science replay | Auth/provenienza | HARD oggi | C3 futura | Interpretazione |
+|---|---|---|---|---|---|
+| N0: nessuna evidenza, goal valido | Negativo | No | Negata | RED, non inventare | Fail-closed necessario, prodotto ancora non conforme BH-001 |
+| N1: ripetizioni sintetiche comparabili | Testare positivo/negativo col modello originale | Non attestata | Negata se `EASY_ONLY` | Non chiamare completa | Test soltanto numerico, non prova della feature |
+| P1: evento raw realmente validato, owner-binding e replay medesimo Snapshot (TEST autorizzato) | Positivo richiesto | Positiva richiesta | Separata | Compilazione+attestazione+fueling richiesti | **NOT_VERIFIED**, non simulare ricevute come se fossero vere |
+| X1: altra identità, stale, replay diverso, injury `NO INTENSITY` | Irrilevante | Invalida / safety stop | Negata | Fail-closed secondo injury e provenance | Da eseguire su Flask/auth con isolamento rigoroso |
+| X2: quality già pianificata in Card1/2 | Dipende da contratto | Medesimo owner/ID | Nessuna doppia HARD | Medesima quality leggibile in C3 | R150 ha placeholder grigio da correggere prima del GO |
+
+## 3. Sequenza obbligata di sviluppo
+
+1. Scrivere test RED veri per due percorsi separati: un workout futuro completo e sottoposto a provenance/compilatore/attestazione; un HARD day-of rifiutato se `EASY_ONLY`. I test numerici sintetici sono *non certificanti*.
+2. Verificare su runtime autorizzato il percorso INC091 con ricevuta raw e boundary owner; in assenza di dato autentico il gate rimane NOT_VERIFIED, non bypassato.
+3. Implementare in TEST BH-001 Card3, rimuovendo il placeholder C07 **senza clonare il workout, la prescription authority o il ledger**; assicurare titolo, fasi, W, durata, fueling e ID.
+4. Solo dopo, introdurre Card2 Tempo come alternativa nello *stesso producer*, con dose distinta e controlli rigorosi per ciascuno dei 7 goal (3 ancora RESEARCH_ONLY).
+5. Card1 Z2 sotto LT1 attestata; arbitro di priorità; singolo bordo snapshot-bound; Jinja/Flask/auth/mobile; matrice Q01–Q24. Nessun deploy né modifica a produzione/Neon/Render/main.
+
+## 4. Gate attuali
+
+- `TEST_BRANCH_ALIGNED=PASS`; `R150_LOCAL_SHA256=PASS`; `STATIC_AUTHORITY_TRACE=COMPLETE`.
+- `SYNTHETIC_NUMERIC_FOUNDATION=PREVIOUS_76_PASS_NOT_REVALIDATED_HERE`.
+- `FUTURE_FULL_WORKOUT_AUTHENTICATED=NOT_VERIFIED`; `CARD3_BH001=RED`; `CARD2_RUNTIME=NOT_IMPLEMENTED`.
+- `ISSUER_LIVE_AUTH=NOT_VERIFIED`; `RAW_FIT_RECEIPT=NOT_VERIFIED`; `Q01_Q24=NOT_VERIFIED`.
+- `PRODUCTION=NO_GO`. Il workflow storico R141 è ancora da migrare con controllo indipendente; NON disattivare i test.
+
+_Nessun dato privato, scrittura ledger, calendario, deploy o cambio R150 in questa tracciatura._
