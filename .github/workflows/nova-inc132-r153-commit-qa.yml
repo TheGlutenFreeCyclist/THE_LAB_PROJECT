@@ -1,0 +1,56 @@
+name: NOVA INC132 R153 isolated candidate checks (NO DEPLOY)
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'fix/neon-report-egress-r196999'
+      - 'qa/inc132-r153*'
+    paths:
+      - 'qa/nova_test_lab/inc132_r153/**'
+      - '.github/workflows/nova-inc132-r153-commit-qa.yml'
+permissions:
+  contents: read
+jobs:
+  r153-candidate-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      INC132_DTM: qa/nova_test_lab/inc132_r153/tests/DTM/DTM_v1_0_75.sha256
+      INC132_CANDIDATE: qa/nova_test_lab/inc132_r153/implementation/the_lab_app_R153_DUAL_QA.py
+      INC132_EVIDENCE_DIR: qa/nova_test_lab/inc132_r153/evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install OFFLINE QA dependencies only
+        run: python -m pip install --disable-pip-version-check jinja2 requests playwright
+      - name: Materialize pinned R153 candidate from TEST root R150 (no runtime mutation)
+        run: python qa/nova_test_lab/inc132_r153/bootstrap_from_R150.py
+      - name: Verify staged source SHA and secret-safe boundaries
+        run: python qa/nova_test_lab/inc132_r153/verify_commit_candidate.py
+      - name: Deterministic build from R153 FTP baseline
+        run: python qa/nova_test_lab/inc132_r153/implementation/build_inc132_dual_quality.py
+      - name: Compatible legacy + dual-quality tests (51 expected)
+        run: python qa/nova_test_lab/inc132_r153/tests/run_inc132_candidate_qa.py
+      - name: Install headless Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Nine synthetic-only DOM/viewport checks
+        run: |
+          python qa/nova_test_lab/inc132_r153/tests/test_browser_r153.py
+          python qa/nova_test_lab/inc132_r153/tests/test_browser_inc132_dual_synthetic.py
+          python qa/nova_test_lab/inc132_r153/tests/test_browser_inc132_priority_card3.py
+      - name: Archive synthetic UI logs only (no private RAW)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-inc132-r153-synthetic-dom
+          path: |
+            qa/nova_test_lab/inc132_r153/evidence/browser_results_DEMO.json
+            qa/nova_test_lab/inc132_r153/implementation/browser/**/results.json
+          if-no-files-found: ignore
+      - name: Boundaries of CI result
+        if: always()
+        run: |
+          echo 'Commit QA only. Authenticated RAW/issuer E2E and seven-goal scientific approval remain separate.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'NO production deploy, NO private DTM/raw exports.' >> "$GITHUB_STEP_SUMMARY"

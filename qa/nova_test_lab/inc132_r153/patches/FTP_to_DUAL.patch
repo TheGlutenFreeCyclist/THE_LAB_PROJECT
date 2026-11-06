@@ -1,0 +1,505 @@
+--- a/the_lab_app.py
++++ b/the_lab_app.py
+@@ -68808,5 +68808,502 @@
+ # End of strictly isolated FTP preservation patch; no UI/issuer mutation.
+ 
+ 
++
++# INC132/BH · R153 dual-quality integration, owner-bound and evidence-locked.
++# Inserted before __main__ by build_inc132_dual_quality.py. No Flask route added.
++INC132_DUAL_SCHEMA = 'NOVA-INC132-BH-DUAL-QUALITY-VERIFIED-1'
++INC132_TEMPO_SCHEMA = 'NOVA-INC132-BH-REPLICATED-TEMPO-DOSE-1'
++_INC132_DUAL_GOALS = frozenset(('POWER_5','VO2MAX','POWER_20','TIME_TRIAL',
++                                  'POWER_1','SPRINTER','ENDURANCE_BASE'))
++_INC132_TEMPO_SOURCES = frozenset(('DEVICE_LAPS','ICU_INTERVALS_CANONICAL'))
++_INC132_TEMPO_BEFORE_BAND = _v1943_band
++_INC132_TEMPO_BEFORE_REPLAY = _nova_inc083_science_replay
++_INC132_DUAL_BEFORE_FUTURE = _nova_inc050_future_quality
++_INC132_DUAL_BEFORE_ATTEST = _nova_inc051_attest_future_snapshot
++_INC132_DUAL_BEFORE_UI = _v4891_prepare_snapshot_for_ui
++
++# For the three goals without approved canonical Tempo, the original INC131
++# structures remain research hypotheses. We do not quietly register them as
++# source-of-truth workouts or change the existing canonical library revision.
++_INC132_RESEARCH_ONLY_GOALS = frozenset(('POWER_1','SPRINTER','ENDURANCE_BASE'))
++
++
++def _inc132_finite_protocol_seconds(value):
++    """Numeric seconds with bounded conversion (reject bool, NaN, infinity)."""
++    if type(value) not in (int,float):return False
++    try:seconds=float(value)
++    except (ValueError,TypeError,OverflowError):return False
++    return math.isfinite(seconds) and 1<=seconds<=7200
++
++
++def _inc132_tempo_events(tpl, ledger, as_of):
++    """Independent, exact-protocol, resolved activity truth; no FTP-as-dose.
++
++    This uses NO guessed duration or goal inference. A pair of *distinct* past
++    matching and already-completed Tempo exposures is mandatory. Their actual
++    power must have been in the Tempo domain relative to the event's dated FTP.
++    Neither a single threshold workout nor repeated metadata with the same
++    activity identity can prove the second exposure.
++    """
++    t = tpl if isinstance(tpl,dict) else {}
++    ev = ledger if isinstance(ledger,dict) else {}
++    if (str(t.get('work_domain') or '').upper()!='TEMPO_Z3'
++        or str(t.get('pattern') or '').upper()!='SUSTAINED'
++        or _R19696_LIBRARY_INDEX.get(str(t.get('id') or '')) != t
++        or str(t.get('goal') or '').upper() not in _INC132_DUAL_GOALS
++        or str(t.get('goal') or '').upper() in _INC132_RESEARCH_ONLY_GOALS):
++        return []
++    try:
++        current=date.fromisoformat(str(as_of)[:10])
++        reps=int(t['reps']); work=int(t['work_s']); recovery=int(t['recovery_s'])
++    except (ValueError,TypeError,KeyError,OverflowError):
++        return []
++    if not (2<=reps<=3 and 600<=work<=1200 and 180<=recovery<=600):
++        return []
++    repeated=(ev.get('repeatability') or {}).get('events') or []
++    activity_rows=ev.get('events') or []
++    if not isinstance(repeated,list) or not isinstance(activity_rows,list):
++        return []
++    # Ambiguous repeated receipts are rejected as a WHOLE identity, not only
++    # ignored after the first record. Otherwise a forged/conflicting duplicate
++    # could silently leave the first receipt eligible.
++    identity_counts={}
++    for row in repeated:
++        if isinstance(row,dict) and str(row.get('activity_id') or '').strip():
++            key=str(row['activity_id']).strip()
++            identity_counts[key]=identity_counts.get(key,0)+1
++    eligible=[]
++    for r in repeated:
++        if not isinstance(r,dict):continue
++        aid=str(r.get('activity_id') or '').strip()
++        if not aid or identity_counts.get(aid)!=1:continue
++        source=str(r.get('activity_truth_source') or '').upper()
++        if (r.get('strong') is not True
++            or source not in _INC132_TEMPO_SOURCES
++            or r.get('activity_truth_status')!='RESOLVED'
++            or r.get('recovery_observation_complete') is not True
++            or type(r.get('reps')) is not int or r['reps']!=reps
++            or not _inc132_finite_protocol_seconds(r.get('interval_secs'))
++            or abs(float(r['interval_secs'])-work)>1
++            or not _inc132_finite_protocol_seconds(r.get('recovery_secs'))
++            or abs(float(r['recovery_secs'])-recovery)>5
++            or not (r.get('recovery_pair_count')==r.get('recovery_pair_expected')==reps-1)):
++            continue
++        try:
++            when=date.fromisoformat(str(r.get('date') or '')[:10])
++            watts=float(r.get('avg_watts'))
++            ftp=float(r.get('ftp'))
++        except (ValueError,TypeError,OverflowError):
++            continue
++        if (not 0<=(current-when).days<=42 or
++            not math.isfinite(watts) or not math.isfinite(ftp)
++            or not 80<=ftp<=600 or not 70<=watts<=600
++            or not .80 <= watts/ftp <= .88):
++            continue
++        # This exact source row must also be present in the independently
++        # built training event set. A user-provided repeat entry is insufficient.
++        matched=[s for s in activity_rows if isinstance(s,dict)
++             and str(s.get('activity_id') or '')==aid
++             and s.get('event_kind')=='TRAINING'
++             and s.get('activity_truth_status')=='RESOLVED'
++             and str(s.get('activity_truth_source') or '').upper()==source
++             and str(s.get('date') or '')[:10]==when.isoformat()
++             and s.get('repeatability')==r]
++        if len(matched)!=1:continue
++        eligible.append((when.isoformat(), aid, r, watts, ftp))
++    # No multiple activities on the same day masquerading as independent
++    # confirmation. Pick a bounded, deterministic latest pair.
++    eligible.sort(key=lambda row:(row[0],row[1]),reverse=True)
++    selected=[]; days=set()
++    for row in eligible:
++        if row[0] in days:continue
++        selected.append(row);days.add(row[0])
++        if len(selected)==2:break
++    if len(selected)!=2:return []
++    # Confirm consistency of two individually observed, fully repeated Tempo
++    # sessions. The pair never authorizes a progression or a longer duration.
++    ratio=max(selected[0][3],selected[1][3])/min(selected[0][3],selected[1][3])
++    if ratio>1.10:return []
++    return selected
++
++
++def _inc132_measured_tempo_band(tpl,evidence_ledger,as_of_date,dimension):
++    t=tpl if isinstance(tpl,dict) else {}
++    if str(dimension or '').upper() not in set(t.get('dimensions') or ()):return None
++    events=_inc132_tempo_events(t,evidence_ledger,as_of_date)
++    if len(events)!=2:return None
++    # Conservative repeat of the LOWER of two observed actual Tempo averages;
++    # never extrapolate a higher or longer load from threshold/Z4 evidence.
++    minimum=min(row[3] for row in events)
++    base=int(math.floor(minimum/5)*5)
++    low=base-5;high=base+5
++    if not (70<=low<high<=600 and all(high<=e[4]*.90 for e in events)):
++        return None
++    primary,second=events
++    proof_items=[{'activity_id':r[1], 'date':r[0],
++                  'avg_watts':r[3], 'ftp':r[4],
++                  'reps':r[2]['reps'],'work_s':r[2]['interval_secs'],
++                  'recovery_s':r[2]['recovery_secs']}
++                 for r in events]
++    digest=hashlib.sha256(_nova_inc051_canonical_json(proof_items).encode()).hexdigest()
++    return {'schema':R1943_SCHEMA,'state':'PRESCRIBED',
++        'source':'COMPARABLE_VERIFIED_REPEATED_WORK',
++        'tempo_proof_schema':INC132_TEMPO_SCHEMA,
++        'confidence':'DIRECT_OBSERVED_REPLICATION',
++        'repeatability_state':'VERIFIED_COMPARABLE_REPEATS',
++        'power_target_mode':'VERIFIED_REPEATED_TARGET',
++        'target_watts':base,'low_watts':low,'high_watts':high,
++        'reps':t['reps'],'work_seconds':t['work_s'],
++        'recovery_seconds':t['recovery_s'],
++        'observed_repeated_avg_watts':primary[3],
++        'observed_recovery_seconds':t['recovery_s'],
++        'evidence_interval_seconds':t['work_s'],
++        'recovery_duration_comparable':True,
++        'activity_id':primary[1],'activity_date':primary[0],
++        'second_activity_id':second[1],'second_activity_date':second[0],
++        'observed_dose_digest':digest,
++        'work_domain':'TEMPO_Z3','workout_specific_proof':'TWO_EXACT_VERIFIED_TEMPO_SESSIONS',
++        'no_progression':True,'non_punitive':True,
++        'execution_clearance':'SEPARATE_DOWNSTREAM'}
++
++
++def _v1943_band(template,evidence_ledger=None,ftp_anchor=None,as_of_date=None,dimension=None):
++    if str((template or {}).get('work_domain') or '').upper()=='TEMPO_Z3':
++        measured=_inc132_measured_tempo_band(template,evidence_ledger,
++            as_of_date or get_rome_now().date().isoformat(),dimension)
++        if measured is not None:return measured
++    return _INC132_TEMPO_BEFORE_BAND(template,evidence_ledger=evidence_ledger,
++        ftp_anchor=ftp_anchor,as_of_date=as_of_date,dimension=dimension)
++
++
++def _nova_inc083_science_replay(work,evidence_ledger,ftp_anchor,road,today=None):
++    w=work if isinstance(work,dict) else {}
++    t=_R19696_LIBRARY_INDEX.get(str(w.get('nova_workout_id') or '')) or {}
++    power=w.get('power_prescription') or {}
++    if str(t.get('work_domain') or '').upper()!='TEMPO_Z3':
++        return _INC132_TEMPO_BEFORE_REPLAY(work,evidence_ledger,ftp_anchor,road,today=today)
++    reject=lambda code:{'schema':INC132_TEMPO_SCHEMA,'state':'FAIL','accepted':False,'reason':code}
++    dim=str(w.get('nova_prescription_dimension') or '').upper()
++    if (dim not in set(t.get('dimensions') or ())
++        or dim!=str(((road or {}).get('scientific_progression') or {}).get('dimension') or '').upper()):
++        return reject('DIMENSION_MISMATCH')
++    if not isinstance(power,dict) or power.get('tempo_proof_schema')!=INC132_TEMPO_SCHEMA:
++        # Preserve INC083's exact historical rejection and diagnostic code for
++        # all FTP-only / unsupported bands; no retroactive waiver.
++        return _INC132_TEMPO_BEFORE_REPLAY(work,evidence_ledger,ftp_anchor,road,today=today)
++    when=(today if isinstance(today,date) else get_rome_now().date())
++    expected=_inc132_measured_tempo_band(t,evidence_ledger,when.isoformat(),dim)
++    if expected is None:return reject('VERIFIED_TEMPO_REPLICATION_ABSENT')
++    # Refuse extra, mutated, stale or cross-template evidence. This is an
++    # equality replay, not trust in an arbitrary client-supplied band.
++    if expected!=power:return reject('MEASURED_TEMPO_DOSE_REPLAY_DIFFERS')
++    return {'schema':INC132_TEMPO_SCHEMA,'state':'PASS','accepted':True,
++        'reason':'TWO_IDENTICAL_PROTOCOLS_INDEPENDENTLY_RESOLVED_NO_PROGRESSION',
++        'observed_dose_digest':expected['observed_dose_digest']}
++
++
++def _inc132_tempo_server_truth(band,ledger,owner_id,producer_request=True):
++    """Live-only full provenance of BOTH training exposures."""
++    if (not owner_id or not isinstance(band,dict)
++        or band.get('tempo_proof_schema')!=INC132_TEMPO_SCHEMA):
++        return None
++    events=ledger if isinstance(ledger,dict) else {}
++    attest=[]
++    for aid, day in ((band.get('activity_id'),band.get('activity_date')),
++                     (band.get('second_activity_id'),band.get('second_activity_date'))):
++        # Native INC091 checks true server actor, request endpoint, resolved
++        # training event and matching independent repetition record.
++        proof=dict(band,activity_id=aid,activity_date=day)
++        item=_nova_inc091_truth(events,proof,owner_id,producer_request=producer_request)
++        if (not isinstance(item,dict) or
++            item.get('state')!='SERVER_RESOLVED_TRUTH_REPLAYED'
++            or item.get('owner_scope')!=_nova_inc050_owner_scope(owner_id)
++            or item.get('activity_id')!=aid or not item.get('event_digest')):
++            return None
++        attest.append((str(aid),str(item['event_digest'])))
++    if attest[0][0]==attest[1][0]:return None
++    return {'schema':INC132_TEMPO_SCHEMA,'owner_scope':_nova_inc050_owner_scope(owner_id),
++        'event_receipts':attest,'state':'BOTH_SERVER_RESOLVED'}
++
++
++def _inc132_build_integrative(goal,dimension,evidence_ledger,ftp_anchor,road,
++                              power_model,owner_user_id):
++    if str(goal or '').upper() in _INC132_RESEARCH_ONLY_GOALS:
++        return None,'THREE_GOAL_RESEARCH_ONLY_NOT_ISSUABLE'
++    candidates=[t for t in _NOVA_WORKOUT_LIBRARY if isinstance(t,dict)
++       and t.get('goal')==goal and t.get('work_domain')=='TEMPO_Z3'
++       and dimension in set(t.get('dimensions') or ())]
++    candidates.sort(key=lambda t:(-int(t.get('priority') or 0),str(t.get('id') or '')))
++    for t in candidates:
++        band=_v1943_band(t,evidence_ledger=evidence_ledger,ftp_anchor=ftp_anchor,
++            as_of_date=get_rome_now().date().isoformat(),dimension=dimension)
++        if (not isinstance(band,dict)
++            or band.get('tempo_proof_schema')!=INC132_TEMPO_SCHEMA):continue
++        truth=_inc132_tempo_server_truth(band,evidence_ledger,owner_user_id)
++        if truth is None:continue
++        plan={'workout_id':t['id'],'goal_key':goal,'dimension':dimension}
++        work=_nova_inc091_compile_native(t,plan,evidence_ledger,
++            ftp_anchor,road,power_model=power_model)
++        if not isinstance(work,dict) or not _nova_inc075_valid_compiled_duration(work):
++            continue
++        comp=work.get('session_composition') or {}
++        return {'schema':INC132_DUAL_SCHEMA,'role':'CARD2',
++            'owner_scope':_nova_inc050_owner_scope(owner_user_id),
++            'goal_key':goal,'dimension':dimension,'workout_id':t['id'],
++            'workout':work,'compiled_workout_digest':_nova_inc050_workout_digest(work),
++            'origin_proof':truth,'no_calendar':True,'not_issued':True,
++            'execution_authorized':False,'duration_minutes':comp['total_seconds']/60,
++            'evidence_ids':[band['activity_id'],band['second_activity_id']]},'VERIFIED'
++    return None,'NO_EXACT_INDEPENDENT_TEMPO_DOSE_ATTESTED'
++
++
++def _nova_inc050_future_quality(owner_user_id,decision,clock,road,ledger,
++       evidence_ledger=None,power_model=None,ftp_anchor=None,
++       aerobic_metabolic_range=None,training_definitions=None,
++       compiler_args=None,planning_context=None,training_state=None,
++       active_offer=None):
++    plan=_INC132_DUAL_BEFORE_FUTURE(owner_user_id,decision,clock,road,ledger,
++        evidence_ledger=evidence_ledger,power_model=power_model,
++        ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
++        training_definitions=training_definitions,compiler_args=compiler_args,
++        planning_context=planning_context,training_state=training_state,
++        active_offer=active_offer)
++    if not isinstance(plan,dict):return plan
++    plan=dict(plan)
++    plan['inc132_dual_schema']=INC132_DUAL_SCHEMA
++    # C3 is NEVER replaced, reissued or made subordinate to the Card2 selector.
++    # Existing injury/issuer boundaries remain authoritative.
++    if (_nova_inc079_explicit_injury_restriction(planning_context)
++        or plan.get('status')!='COMPILED_UNSCHEDULED'
++        or plan.get('schema')!=INC091_SCHEMA or active_offer):
++        plan['inc132_integrative_state']='NOT_EVALUATED_WITHOUT_VERIFIED_CARD3'
++        return plan
++    candidate,why=_inc132_build_integrative(str(plan.get('goal_key') or ''),
++        str(plan.get('dimension') or ''),evidence_ledger,ftp_anchor,
++        road,power_model,owner_user_id)
++    plan['inc132_integrative_state']=why
++    if candidate is not None and candidate['workout_id']!=plan.get('workout_id'):
++        plan['inc132_integrative']=candidate
++    return plan
++
++
++_INC132_SPECIFIC_VERIFIED_FAMILIES = {
++    'POWER_5':frozenset({'VO2max'}),
++    'VO2MAX':frozenset({'VO2max'}),
++    'POWER_20':frozenset({'TTE'}),
++    'TIME_TRIAL':frozenset({'TTE'}),
++    'POWER_1':frozenset({'Sprint / Neuromuscular'}),
++    'SPRINTER':frozenset({'Sprint / Neuromuscular'}),
++    # Endurance/Z2 is NOT hard/specific exposure; never relabel it as HARD.
++    'ENDURANCE_BASE':frozenset(),
++}
++
++
++def _inc132_priority(data,tempo,owner_id):
++    """Single conservative advisory from owner-verified specific training.
++
++    Real event records use 'family'/'quality_relevant', not goal_key or
++    work_domain. Names, mere FTP, threshold in a different family, or
++    unverified labels must never trigger the C2 recommendation. Every
++    candidate exposure is replayed against the native server truth boundary.
++    """
++    ev=(data.get('evidence_ledger') or {}).get('events') or []
++    ledger=data.get('evidence_ledger') or {}
++    families=_INC132_SPECIFIC_VERIFIED_FAMILIES.get(tempo.get('goal_key'),frozenset())
++    tempo_exposures={str(x) for x in (tempo.get('evidence_ids') or [])}
++    today=get_rome_now().date()
++    seen=set(); seen_days=set()
++    if not owner_id or not families:
++        return 'CARD3','SPECIFIC_QUALITY_REMAINS_PRIMARY'
++    for item in ev:
++        if (not isinstance(item,dict) or item.get('event_kind')!='TRAINING'
++            or item.get('family') not in families
++            or item.get('quality_relevant') is not True):continue
++        aid=str(item.get('activity_id') or '')
++        if not aid or aid in tempo_exposures or aid in seen:continue
++        if (item.get('activity_truth_status')!='RESOLVED'
++            or item.get('activity_truth_source') not in _INC132_TEMPO_SOURCES):continue
++        try:d=date.fromisoformat(str(item.get('date') or '')[:10])
++        except (ValueError,TypeError):continue
++        if not 0<=(today-d).days<=14 or d in seen_days:continue
++        repeat=item.get('repeatability')
++        if not (isinstance(repeat,dict) and repeat.get('strong') is True
++            and repeat.get('recovery_observation_complete') is True
++            and _inc132_finite_protocol_seconds(repeat.get('interval_secs'))
++            and _inc132_finite_protocol_seconds(repeat.get('recovery_secs'))):continue
++        # Labels alone are not sufficient. The source and this event must have
++        # a matching repeat receipt in the original server-built ledger.
++        band={'activity_id':aid,
++              'evidence_interval_seconds':repeat['interval_secs'],
++              'observed_recovery_seconds':repeat['recovery_secs']}
++        witness=_nova_inc091_truth(ledger,band,owner_id,producer_request=True)
++        if (not isinstance(witness,dict)
++            or witness.get('state')!='SERVER_RESOLVED_TRUTH_REPLAYED'
++            or witness.get('owner_scope')!=_nova_inc050_owner_scope(owner_id)
++            or witness.get('activity_id')!=aid):continue
++        seen.add(aid);seen_days.add(d)
++        if len(seen)>=2:
++            return 'CARD2','TWO_DISTINCT_OWNER_VERIFIED_RECENT_SPECIFIC_SESSIONS'
++    return 'CARD3','SPECIFIC_QUALITY_REMAINS_PRIMARY'
++
++
++def _inc132_validate_integrative(data,plan,owner_user_id,producer_request=True):
++    tempo=plan.get('inc132_integrative') if isinstance(plan,dict) else None
++    if not isinstance(tempo,dict):return False
++    work=tempo.get('workout') or {}
++    wid=str(tempo.get('workout_id') or '')
++    tpl=_R19696_LIBRARY_INDEX.get(wid)
++    if (tempo.get('schema')!=INC132_DUAL_SCHEMA or tempo.get('role')!='CARD2'
++        or not isinstance(tpl,dict) or tpl.get('work_domain')!='TEMPO_Z3'
++        or tempo.get('goal_key')!=plan.get('goal_key')
++        or tempo.get('dimension')!=plan.get('dimension')
++        or tempo.get('owner_scope')!=_nova_inc050_owner_scope(owner_user_id)
++        or wid==plan.get('workout_id')
++        or str(work.get('nova_workout_id') or '')!=wid
++        or not _nova_inc075_valid_compiled_duration(work)
++        or tempo.get('compiled_workout_digest')!=_nova_inc050_workout_digest(work)
++        or not _v19696_execution_contract(work).get('ready')
++        or tempo.get('no_calendar') is not True
++        or tempo.get('execution_authorized') is not False
++        or tempo.get('not_issued') is not True):return False
++    evidence=data.get('evidence_ledger') or {}
++    band=work.get('power_prescription') or {}
++    if (_nova_inc083_science_replay(work,evidence,data.get('ftp_anchor'),
++        data.get('adaptive_roadmap')).get('accepted') is not True):return False
++    truth=_inc132_tempo_server_truth(band,evidence,owner_user_id,producer_request=producer_request)
++    if not truth or tempo.get('origin_proof')!=truth:return False
++    comp=(work.get('session_composition') or {})
++    return (comp.get('total_seconds')/60==tempo.get('duration_minutes')
++            and tempo.get('evidence_ids')==[band.get('activity_id'),band.get('second_activity_id')])
++
++
++def _nova_inc051_attest_future_snapshot(data,owner_user_id):
++    plan=data.get('future_quality_plan') if isinstance(data,dict) else None
++    tempo=(plan or {}).get('inc132_integrative') if isinstance(plan,dict) else None
++    if isinstance(tempo,dict):
++        if _inc132_validate_integrative(data,plan,owner_user_id):
++            minutes=tempo['duration_minutes']
++            metabolic=data.get('metabolic_context') or {}
++            try:
++                inside=_intra_fueling_strategy('THRESHOLD','INDOOR','THRESHOLD',minutes,
++                    glycogen_pressure=metabolic.get('glycogen_pressure'),
++                    metabolic_context=metabolic)
++                outside=_intra_fueling_strategy('THRESHOLD','OUTDOOR','THRESHOLD',minutes,
++                    glycogen_pressure=metabolic.get('glycogen_pressure'),
++                    metabolic_context=metabolic)
++                if not (inside.get('display') and outside.get('display')):raise ValueError('FUEL_MISSING')
++                tempo['fueling']={'workout_id':tempo['workout_id'],
++                    'source':'EXACT_COMPILED_INTEGRATIVE_TEMPO_DURATION',
++                    'display':inside['display'],'outdoor_display':outside['display'],
++                    'total_minutes_example':minutes,'read_only':True,
++                    'execution_authorized':False,'is_scheduled':False}
++                priority,reason=_inc132_priority(data,tempo,owner_user_id)
++                plan['inc132_recommended_priority']=priority
++                plan['inc132_priority_reason']=reason
++            except (ValueError,TypeError,AttributeError,KeyError):
++                plan.pop('inc132_integrative',None)
++                plan['inc132_integrative_state']='FUELING_NOT_ATTESTED'
++        else:
++            plan.pop('inc132_integrative',None)
++            plan['inc132_integrative_state']='OWNER_OR_DOSE_ATTESTATION_FAILED'
++    return _INC132_DUAL_BEFORE_ATTEST(data,owner_user_id)
++
++
++def _inc132_valid_dual_view(data,owner_id):
++    d=data if isinstance(data,dict) else {}
++    plan=d.get('future_quality_plan') or {}
++    tempo=plan.get('inc132_integrative') or {}
++    if (not isinstance(plan,dict) or not isinstance(tempo,dict)
++        or not owner_id or plan.get('inc132_dual_schema')!=INC132_DUAL_SCHEMA
++        or plan.get('inc132_recommended_priority') not in {'CARD2','CARD3'}
++        or not _nova_inc091_eligible(d,plan,owner_id)
++        or not _inc132_validate_integrative(d,plan,owner_id,producer_request=False)
++        or not isinstance(tempo.get('fueling'),dict)
++        or tempo['fueling'].get('workout_id')!=tempo.get('workout_id')):
++        return None
++    return tempo
++
++
++def _v4891_prepare_snapshot_for_ui(data):
++    prior=_INC132_DUAL_BEFORE_UI(data)
++    if not isinstance(prior,dict):return prior
++    out=dict(prior)
++    out['inc132_dual_quality'] = None
++    owner=_nova_inc051_verified_owner_id()
++    tempo=_inc132_valid_dual_view(out,owner)
++    if tempo is None:return out
++    plan=out['future_quality_plan']
++    specific=out.get('nova_card3_workout_view') or {}
++    if (specific.get('verified_future_plan') is not True
++        or specific.get('workout_id')!=plan.get('workout_id')):
++        return out
++    band=tempo['workout']['power_prescription']
++    out['inc132_dual_quality']={
++        'schema':INC132_DUAL_SCHEMA,
++        'owner_scope':_nova_inc050_owner_scope(owner),
++        'quality_specific':{'role':'CARD3','workout_id':plan['workout_id'],
++            'complete':True,'title':specific.get('title'),
++            'fueling':out.get('quality_direction_fuel')},
++        'quality_integrative':{'role':'CARD2','workout_id':tempo['workout_id'],
++            'complete':True,'title':tempo['workout'].get('title'),
++            'structure':tempo['workout'].get('main_set'),
++            'why':tempo['workout'].get('why'),
++            'power_display':f'{band["low_watts"]}–{band["high_watts"]} W',
++            'duration_minutes':tempo['duration_minutes'],
++            'fueling':tempo['fueling']},
++        'recommended_priority':plan['inc132_recommended_priority'],
++        'reason_code':plan['inc132_priority_reason'],
++        'execution_clearance':'RECHECK_DAY_OF_EXECUTION',
++        'calendar_commitment':False}
++    return out
++
++# A future variant with formally validated Tempo for the three remaining goal
++# families can be installed only by an explicit library+science revision; this
++# extension intentionally does not promote the INC131 RESEARCH_ONLY records.
++APP_VERSION=('THE LAB · R196.9.153 · INC132 BH VERIFIED DUAL-QUALITY INTEGRATION '
++             '· FTP PRESERVATION · SCIENCE EVIDENCE-LOCKED · TEST CANDIDATE')
++
++# INC132 BH · attach the two verified future offers to Card2/Card3 presentation.
++_INC132_SELECTED_MARKER="{{ ' v1962-quality-card' if is_quality_slot else '' }}"
++assert HOME_PAGE.count(_INC132_SELECTED_MARKER)==1,'INC132_DUAL_PRIORITY_CLASS_ANCHOR_DRIFT'
++HOME_PAGE=HOME_PAGE.replace(_INC132_SELECTED_MARKER,_INC132_SELECTED_MARKER +
++    "{{ ' inc132-selected' if data.inc132_dual_quality and ((loop.index == 2 and data.inc132_dual_quality.recommended_priority == 'CARD2') or (is_quality_slot and data.inc132_dual_quality.recommended_priority == 'CARD3')) else '' }}",1)
++_INC132_CARD_ENTRY='{% if is_quality_slot and next_quality_offer and not quality_already_shown %}'
++assert HOME_PAGE.count(_INC132_CARD_ENTRY)==1,'INC132_DUAL_BODY_START_DRIFT'
++_INC132_CARD2_VIEW='''{% set dual = data.inc132_dual_quality or {} %}
++{% set zi = dual.quality_integrative or {} %}
++{% if loop.index == 2 and zi.complete and zi.workout_id and dual.quality_specific and dual.quality_specific.complete %}
++<div class="inc132-dual-role">QUALITY INTEGRATIVA · TEMPO/Z3{% if dual.recommended_priority == 'CARD2' %}<span>PRIORITÀ CONSIGLIATA</span>{% endif %}</div>
++<h3>{{ zi.title|e }}</h3>
++<div class="v4-session-meta"><span class="v4-session-pill">{{ zi.duration_minutes|round(1) }} min totali</span><span class="v4-session-pill">SCEGLI TU QUANDO · NON IN CALENDARIO</span></div>
++<div class="inc132-dual-work" role="group" aria-label="Attested integrative quality">
++<p><b>Struttura e recuperi:</b> {{ zi.structure|e }}</p>
++<p><b>Range personale da ripetizioni Tempo verificate:</b> {{ zi.power_display|e }}</p>
++<p><b>Perché:</b> {{ zi.why|e }}</p>
++<p><b>Fueling indoor:</b> {{ (zi.fueling or {}).get('display')|e }}</p>
++<p><b>Fueling outdoor:</b> {{ (zi.fueling or {}).get('outdoor_display')|e }}</p>
++<small>Alternativa alla Card 3, non una seconda qualità obbligatoria. Nessuna autorizzazione automatica a svolgerla oggi.</small>
++</div>
++{% if s and s.source == 'CALENDAR' %}<details class="inc132-calendar-preserved"><summary>Attività già presente nel Calendario</summary><p>{{ s.title|e }} · {{ s.date|e }} · {{ s.intensity|e }}</p></details>{% endif %}
++{% else %}
++'''
++HOME_PAGE=HOME_PAGE.replace(_INC132_CARD_ENTRY,_INC132_CARD2_VIEW+_INC132_CARD_ENTRY,1)
++_INC132_CARD_CLOSE='</article>\n{% endif %}\n{% if not is_quality_slot or'
++assert HOME_PAGE.count(_INC132_CARD_CLOSE)==1,'INC132_DUAL_BODY_END_DRIFT'
++HOME_PAGE=HOME_PAGE.replace(_INC132_CARD_CLOSE,
++    '{% endif %}\n</article>\n{% endif %}\n{% if not is_quality_slot or',1)
++_INC132_DUAL_CSS='''<style id="inc132-dual-quality-style">
++.inc132-selected{border:2px solid #21cbb2!important;box-shadow:0 0 0 2px rgba(33,203,178,.12),0 9px 32px rgba(33,203,178,.14)!important}
++.inc132-dual-role{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:10px;letter-spacing:.08em;font-weight:850;color:#50e6ce;margin:2px 0 11px}
++.inc132-dual-role span{border:1px solid rgba(80,230,206,.6);padding:3px 6px;border-radius:5px;color:#eafffb;font-size:9px}
++.inc132-dual-work{margin-top:12px;padding:12px;border:1px solid rgba(80,230,206,.28);border-radius:10px;background:rgba(80,230,206,.05);overflow-wrap:anywhere}
++.inc132-dual-work p{margin:0 0 10px;font-size:12px;line-height:1.5;color:#e2f0f4}.inc132-dual-work b{color:#b0eee3}.inc132-dual-work small{font-size:10px;line-height:1.5;color:#bdd5d6}
++.inc132-calendar-preserved{margin-top:10px;font-size:11px;color:#c3d7de}
++@media(max-width:420px){.inc132-dual-work{padding:9px}.inc132-dual-work p{font-size:11px}}
++</style>'''
++assert HOME_PAGE.count('</head>')==1,'INC132_DUAL_STYLE_ANCHOR_DRIFT'
++HOME_PAGE=HOME_PAGE.replace('</head>',_INC132_DUAL_CSS+'\n</head>',1)
++app.jinja_env.parse(HOME_PAGE)
++
+ if __name__ == "__main__":
+     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)

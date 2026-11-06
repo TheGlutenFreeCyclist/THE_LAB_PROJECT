@@ -1,0 +1,41 @@
+# INC132 BH · attach the two verified future offers to Card2/Card3 presentation.
+_INC132_SELECTED_MARKER="{{ ' v1962-quality-card' if is_quality_slot else '' }}"
+assert HOME_PAGE.count(_INC132_SELECTED_MARKER)==1,'INC132_DUAL_PRIORITY_CLASS_ANCHOR_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_INC132_SELECTED_MARKER,_INC132_SELECTED_MARKER +
+    "{{ ' inc132-selected' if data.inc132_dual_quality and ((loop.index == 2 and data.inc132_dual_quality.recommended_priority == 'CARD2') or (is_quality_slot and data.inc132_dual_quality.recommended_priority == 'CARD3')) else '' }}",1)
+_INC132_CARD_ENTRY='{% if is_quality_slot and next_quality_offer and not quality_already_shown %}'
+assert HOME_PAGE.count(_INC132_CARD_ENTRY)==1,'INC132_DUAL_BODY_START_DRIFT'
+_INC132_CARD2_VIEW='''{% set dual = data.inc132_dual_quality or {} %}
+{% set zi = dual.quality_integrative or {} %}
+{% if loop.index == 2 and zi.complete and zi.workout_id and dual.quality_specific and dual.quality_specific.complete %}
+<div class="inc132-dual-role">QUALITY INTEGRATIVA · TEMPO/Z3{% if dual.recommended_priority == 'CARD2' %}<span>PRIORITÀ CONSIGLIATA</span>{% endif %}</div>
+<h3>{{ zi.title|e }}</h3>
+<div class="v4-session-meta"><span class="v4-session-pill">{{ zi.duration_minutes|round(1) }} min totali</span><span class="v4-session-pill">SCEGLI TU QUANDO · NON IN CALENDARIO</span></div>
+<div class="inc132-dual-work" role="group" aria-label="Attested integrative quality">
+<p><b>Struttura e recuperi:</b> {{ zi.structure|e }}</p>
+<p><b>Range personale da ripetizioni Tempo verificate:</b> {{ zi.power_display|e }}</p>
+<p><b>Perché:</b> {{ zi.why|e }}</p>
+<p><b>Fueling indoor:</b> {{ (zi.fueling or {}).get('display')|e }}</p>
+<p><b>Fueling outdoor:</b> {{ (zi.fueling or {}).get('outdoor_display')|e }}</p>
+<small>Alternativa alla Card 3, non una seconda qualità obbligatoria. Nessuna autorizzazione automatica a svolgerla oggi.</small>
+</div>
+{% if s and s.source == 'CALENDAR' %}<details class="inc132-calendar-preserved"><summary>Attività già presente nel Calendario</summary><p>{{ s.title|e }} · {{ s.date|e }} · {{ s.intensity|e }}</p></details>{% endif %}
+{% else %}
+'''
+HOME_PAGE=HOME_PAGE.replace(_INC132_CARD_ENTRY,_INC132_CARD2_VIEW+_INC132_CARD_ENTRY,1)
+_INC132_CARD_CLOSE='</article>\n{% endif %}\n{% if not is_quality_slot or'
+assert HOME_PAGE.count(_INC132_CARD_CLOSE)==1,'INC132_DUAL_BODY_END_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_INC132_CARD_CLOSE,
+    '{% endif %}\n</article>\n{% endif %}\n{% if not is_quality_slot or',1)
+_INC132_DUAL_CSS='''<style id="inc132-dual-quality-style">
+.inc132-selected{border:2px solid #21cbb2!important;box-shadow:0 0 0 2px rgba(33,203,178,.12),0 9px 32px rgba(33,203,178,.14)!important}
+.inc132-dual-role{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:10px;letter-spacing:.08em;font-weight:850;color:#50e6ce;margin:2px 0 11px}
+.inc132-dual-role span{border:1px solid rgba(80,230,206,.6);padding:3px 6px;border-radius:5px;color:#eafffb;font-size:9px}
+.inc132-dual-work{margin-top:12px;padding:12px;border:1px solid rgba(80,230,206,.28);border-radius:10px;background:rgba(80,230,206,.05);overflow-wrap:anywhere}
+.inc132-dual-work p{margin:0 0 10px;font-size:12px;line-height:1.5;color:#e2f0f4}.inc132-dual-work b{color:#b0eee3}.inc132-dual-work small{font-size:10px;line-height:1.5;color:#bdd5d6}
+.inc132-calendar-preserved{margin-top:10px;font-size:11px;color:#c3d7de}
+@media(max-width:420px){.inc132-dual-work{padding:9px}.inc132-dual-work p{font-size:11px}}
+</style>'''
+assert HOME_PAGE.count('</head>')==1,'INC132_DUAL_STYLE_ANCHOR_DRIFT'
+HOME_PAGE=HOME_PAGE.replace('</head>',_INC132_DUAL_CSS+'\n</head>',1)
+app.jinja_env.parse(HOME_PAGE)
