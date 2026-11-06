@@ -8,6 +8,8 @@ on:
       - .github/workflows/nova-inc132-producer-probe.yml
       - qa/nova_test_lab/run_inc132_issuer_gate_diagnostic.py
       - qa/nova_test_lab/run_inc132_phase4_science_split_probe.py
+      - qa/nova_test_lab/inc132_card3_mirror.py
+      - qa/nova_test_lab/run_inc132_card3_mirror_probe.py
   workflow_dispatch:
 
 permissions:
@@ -50,6 +52,7 @@ jobs:
           python qa/nova_test_lab/run_inc109_full_pipeline.py
           python qa/nova_test_lab/run_inc132_issuer_gate_diagnostic.py
           python qa/nova_test_lab/run_inc132_phase4_science_split_probe.py
+          python qa/nova_test_lab/run_inc132_card3_mirror_probe.py
       - name: State scientific limitations
         if: always()
         run: |
