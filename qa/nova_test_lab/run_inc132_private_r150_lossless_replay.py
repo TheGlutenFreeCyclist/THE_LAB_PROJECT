@@ -30,7 +30,7 @@ MAX_LOCAL_FIXTURE = 900000
 def emit(status, **data):
     print(json.dumps({"suite":"INC132_R150_PRIVATE_REPLAY",
                       "status":status,"release":"NO_GO", **data}, sort_keys=True))
-    return 0 if status in ("TEST_EXECUTED",) else 2
+    return 0 if status=="TEST_EXECUTED" else (1 if status=="SCIENTIFIC_DRIFT" else 2)
 
 
 def verify_fixture(fixture, nova):
@@ -55,6 +55,7 @@ def verify_fixture(fixture, nova):
     return {
         "expected_invariant_count":len(fixture["expected"]),
         "expected_invariant_drift_count":len(mismatched),
+        "expected_invariant_drift_names":mismatched,
         "mutation_pass":bool(isinstance(mutations,dict) and mutations.get("pass") is True),
         "core_result_present":isinstance(result,dict),
         "card3_future_complete_and_attested":"NOT_VERIFIED",
@@ -142,8 +143,12 @@ def run():
                 # A mutable JSON reference is never written to disk.
                 del fixture, row
 
-    return emit("TEST_EXECUTED",
+    scientific_ok=all(
+        v["core_result_present"] and v["expected_invariant_drift_count"]==0
+        and v["mutation_pass"] for v in out.values())
+    return emit("TEST_EXECUTED" if scientific_ok else "SCIENTIFIC_DRIFT",
         active_lossless_fixtures=len(out),
+        scientific_regression_gate="PASS" if scientific_ok else "FAIL",
         source_r150_verified=True,reader_role_verified=True,
         source_payloads_exported=False,
         fixture_replay_summaries=list(out.values()),
