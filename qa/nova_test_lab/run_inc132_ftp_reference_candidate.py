@@ -80,6 +80,20 @@ def run():
     assert_true(science.get("reason") == "CURRENT_NUMERIC_SOURCE_NOT_REPEATED_WORK_PROVEN",
                 "INC111_ORIGINAL_REASON_SEMANTICS_CHANGED")
 
+    # Positive independent numeric proof must still compile with R151 loaded.
+    from test_inc108_origins import original_repetition_fixture, replay, WID, DIM
+    ledger, _ = original_repetition_fixture()
+    band, proof = replay(ledger)
+    assert_true(band.get("state") == "PRESCRIBED"
+                and proof.get("accepted") is True, "ORIGINAL_POSITIVE_REPLAY_REGRESSED")
+    native = nova._nova_inc091_compile_native(
+        nova._R19696_LIBRARY_INDEX[WID],
+        {"goal_key": "POWER_5", "dimension": DIM, "workout_id": WID},
+        ledger, None, {"scientific_progression": {"dimension": DIM}},
+        power_model={})
+    assert_true(isinstance(native, dict) and native.get("is_scheduled") is False
+                and native.get("date") is None, "UNSCHEDULED_COMPILER_REGRESSED")
+
     with nova.app.test_client() as client:
         response = client.get("/healthz")
         assert_true(response.status_code == 204, "INERT_HEALTHZ_FAILED")
@@ -91,6 +105,8 @@ def run():
         "ftp_errors_removed_from_tested_athlete_card": True,
         "missing_ftp_not_fabricated": True,
         "science_replay_rejects_unproven_ftp_only_dose": True,
+        "positive_numeric_replay_preserved": True,
+        "unscheduled_native_compiler_preserved": True,
         "new_owner_authenticated_snapshot": "NOT_VERIFIED",
         "raw_fit_provenance": "NOT_VERIFIED",
         "card2_card3_release": "RED",
