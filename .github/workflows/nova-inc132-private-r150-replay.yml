@@ -17,7 +17,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  neon-connection-verified:
+    name: "Neon TEST / authenticated read-only connection"
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    env:
+      NOVA_TEST_LAB_DATABASE_URL: ${{ secrets.NOVA_TEST_LAB_DATABASE_URL }}
+      DATABASE_URL: ""
+      THE_LAB_OWNER_DATABASE_URL: ""
+    steps:
+      - name: Checkout TEST only without retained credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PostgreSQL client
+        run: python -m pip install --disable-pip-version-check psycopg2-binary==2.9.13
+      - name: Verify live TEST endpoint, TLS, and SELECT-only LAB identity
+        run: python qa/nova_test_lab/probe_inc132_neon_egress.py
+
   authorized-private-r150:
+    name: "R150 private fixture regression (science is a separate gate)"
+    needs: neon-connection-verified
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
