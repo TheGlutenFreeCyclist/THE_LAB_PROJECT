@@ -51,6 +51,10 @@ def _inc132_stage_summary(row):
         counts[reason] = counts.get(reason, 0) + 1
     library = row.get("workout_library") or {}
     library = library if isinstance(library, dict) else {}
+    raw = next((x for x in (row.get("raw_sessions") or [])
+                if isinstance(x, dict) and str(x.get("intensity") or "").upper().startswith("HARD")), {})
+    band = raw.get("_tl_v1943_power_band") or {}
+    band = band if isinstance(band, dict) else {}
     cc = row.get("coach_compiler_contract") or {}
     cc = cc if isinstance(cc, dict) else {}
     return {
@@ -61,6 +65,11 @@ def _inc132_stage_summary(row):
             if isinstance(x, dict) and str(x.get("intensity") or "").upper().startswith("HARD")),
         "closed_reason": _inc132_safe_code(row.get("fail_closed_reason")),
         "workout_library_reason": _inc132_safe_code(library.get("reason")),
+        "numeric_band_state": _inc132_safe_code(band.get("state")),
+        "numeric_band_source": _inc132_safe_code(band.get("source")),
+        "numeric_repeatability_state": _inc132_safe_code(band.get("repeatability_state")),
+        "numeric_band_has_activity_binding": bool(band.get("activity_id")),
+        "numeric_band_recovery_comparable": band.get("recovery_duration_comparable") is True,
         "inc111_rejected_count": len(review),
         "inc111_rejected_reason_counts": counts,
         "compiler_state": _inc132_safe_code(cc.get("state")),
@@ -85,7 +94,7 @@ def verify_fixture(fixture, nova):
     originals = {name: getattr(nova, name) for name in monitored}
     stages = {}
     upstream = {"calls": 0, "hard_candidates": 0, "statuses": {},
-                "closed_reasons": {}}
+                "closed_reasons": {}, "hard_candidate_band_classes": []}
 
     def spy(name, original):
         def wrapped(*args, **kwargs):
@@ -97,6 +106,12 @@ def verify_fixture(fixture, nova):
             if name == "_INC111_PRODUCER_BEFORE":
                 upstream["calls"] += 1
                 upstream["hard_candidates"] += int(summary["hard"])
+                if summary["hard"] and len(upstream["hard_candidate_band_classes"]) < 5:
+                    upstream["hard_candidate_band_classes"].append({
+                        k: summary[k] for k in (
+                            "numeric_band_state", "numeric_band_source",
+                            "numeric_repeatability_state", "numeric_band_has_activity_binding",
+                            "numeric_band_recovery_comparable")})
                 state = summary["status"]
                 upstream["statuses"][state] = upstream["statuses"].get(state, 0) + 1
                 cause = summary["closed_reason"]
