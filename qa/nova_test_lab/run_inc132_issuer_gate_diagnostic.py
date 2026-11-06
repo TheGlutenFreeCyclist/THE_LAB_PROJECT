@@ -88,6 +88,17 @@ def run():
         signed=bool(isinstance(offer,dict) and nova._nova_inc076_seal_ok(
             offer,audit,FAKE_OWNER))
         scheduled=bool((offer or {}).get("suggested_start_confirmed"))
+        # Read-only independent future planning: do NOT set HARD clearance or
+        # sign anything. This checks Card 3's future-planning boundary while
+        # the synthetic day-of decision stays EASY_ONLY.
+        future_plan=nova._nova_inc056_plan_result(
+            FAKE_OWNER,copy.deepcopy(actual.get("nova_decision") or {}),
+            copy.deepcopy(actual.get("adaptive_roadmap") or {}),
+            copy.deepcopy(core_data.get("evidence_ledger") or {}),
+            copy.deepcopy(core_data.get("training_definitions") or {}),
+            copy.deepcopy(core_data.get("planning_context") or {}),
+            copy.deepcopy(core_data.get("training_state") or {}),
+            offer)
     current_phase="VERDICT"
     res={
         "suite":"INC109_PUBLIC_SYNTHETIC_FULL_PIPELINE",
@@ -109,6 +120,11 @@ def run():
         "scenario":"SYNTHETIC_POWER5_NO_REAL_PROVENANCE",
         "decision_action":public_reason((actual.get("nova_decision") or {}).get("action")),
         "decision_goal":public_reason((actual.get("nova_decision") or {}).get("goal_key")),
+        "independent_future_planner_status":public_reason(future_plan.get("status")),
+        "independent_future_planner_reason_codes":[public_reason(x) for x in (future_plan.get("reason_codes") or [])[:5] if isinstance(x,str)],
+        "independent_future_has_mechanics":isinstance(future_plan.get("mechanics"),dict),
+        "independent_future_has_workout":isinstance(future_plan.get("workout"),dict),
+        "independent_future_not_scheduled":future_plan.get("not_scheduled") is True,
         "available_future_plan_in_core":isinstance(actual.get("future_quality_plan"),dict),
         "core_future_plan_status":public_reason((actual.get("future_quality_plan") or {}).get("status")),
         "core_future_plan_reason_codes":[public_reason(x) for x in
