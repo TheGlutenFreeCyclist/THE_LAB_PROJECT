@@ -89,5 +89,7 @@ if __name__ == '__main__':
         raise SystemExit(run())
     except Exception as e:
         print(json.dumps({'suite':'INC132_BH001_C07_REAL_JINJA_OVERLAY',
-            'status':'BLOCKED', 'error_class':type(e).__name__, 'release':'NO_GO'}))
+            'status':'BLOCKED', 'error_class':type(e).__name__,
+            'safe_error_code':str(e) if isinstance(e, Card3MirrorTemplateDrift) else 'OTHER',
+            'release':'NO_GO'}))
         raise SystemExit(2)
