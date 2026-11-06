@@ -36,3 +36,15 @@ Controlli aggregati sulle fixture **attive**: tutti i 40 e i 41 activity ID sono
 - Card3 BH-001 e Card2 BH-004: **RED**; Q01–Q24: **NOT_VERIFIED**; **PRODUCTION=NO_GO**.
 
 Per proseguire correttamente: ripristinare solo un collegamento LAB sicuro oppure utilizzare il connettore Neon per ulteriori SELECT aggregati senza esportare le fixture pubblicamente; mai aggirare i gate FIT o usare un owner simulato come autentico.
+
+## 06/11/2026 · GitHub ↔ Neon TEST CONNECTED — riparazione verificata
+
+**CI [42205575451](https://github.com/TheGlutenFreeCyclist/THE_LAB_PROJECT/actions/runs/42205575451)** sul branch TEST:
+
+- `neon-connection-verified`: **SUCCESS**. Secret GitHub compatibile con host TEST, porta 5432, autenticazione PostgreSQL TLS e utente `nova_r139_qa_reader`; database `nova_lab`, SELECT consentita e INSERT/UPDATE/DELETE negate.
+- Diagnosi causale: il server Neon accetta il normale startup PostgreSQL TLS, ma il precedente client che inviava `options="-c default_transaction_read_only=on -c statement_timeout=12000"` in startup andava in timeout. Correzione: aprire connessione TLS, poi `db_connection.set_session(readonly=True, autocommit=False)`. L'identità e il gate `transaction_read_only=on` sono ricontrollati prima di ogni SELECT.
+- `authorized-private-r150`: **FAIL SCIENTIFICO**, NON errore di collegamento. Entrambe le fixture lossless sono state lette in memoria e processate dal vero R150. Ciascuna presenta 3 divergenze nei 10 assert registrati: `canonical_plan_id`, `hard_session_count`, `workout_ids`. Mutation suite **non PASS** per entrambe. Nuova semantica: `SCIENTIFIC_DRIFT` con exit code 1; il sistema non considera tali scostamenti un PASS.
+- Nessun nuovo Snapshot, nessun accesso a Neon produzione, nessuna modifica a DB, nessun dump JSON, nessun secret esportato in log, nessuna modifica a `the_lab_app.py`.
+- Prossima ricerca: capire se queste tre differenze sono la conseguenza prevista del fail-closed R150 rispetto ai vecchi expected R135/R136 oppure una regressione non consentita. Non aggiornare gli expected per ottenere verde senza esaminare DTM/provenienza, e non usare fixture storiche come prova RAW FIT.
+
+**Verdetto:** `GITHUB_NEON_TEST_LINK=PASS`, `R150_HISTORICAL_SCIENCE=FAIL/UNDER_INVESTIGATION`, `CARD3_BH001=RED`, `CARD2_BH004=RED`, `RAW_PROVENANCE=NOT_VERIFIED`, `PRODUCTION=NO_GO`.
