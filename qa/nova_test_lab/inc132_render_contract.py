@@ -3,6 +3,7 @@ Mock issuer booleans do not verify real signatures, physiology or doses.
 No training is executable/schedulable here. Production integration NO-GO.
 """
 from collections.abc import Mapping
+from datetime import date
 import math
 
 TEMPO_IDS = {
@@ -13,6 +14,15 @@ TEMPO_IDS = {
 }
 GOALS = {"POWER_5","POWER_20","POWER_1","SPRINTER","VO2MAX","TIME_TRIAL","ENDURANCE_BASE"}
 
+def _day(x):
+    if not isinstance(x,str) or len(x)!=10: return False
+    try: return date.fromisoformat(x).isoformat()==x
+    except ValueError: return False
+
+def _nonempty(x):
+    return isinstance(x,str) and bool(x.strip())
+
+
 def _complete(row):
     if not isinstance(row,Mapping): return False
     blocks=row.get("blocks")
@@ -21,26 +31,33 @@ def _complete(row):
             and isinstance(blocks,list) and bool(blocks)
             and all(isinstance(b,Mapping) and isinstance(b.get("seconds"),(int,float))
                     and not isinstance(b.get("seconds"),bool) and math.isfinite(b["seconds"])
-                    and b["seconds"]>0 and isinstance(b.get("domain"),str) and bool(b["domain"]) for b in blocks))
+                    and b["seconds"]>0 and _nonempty(b.get("domain")) for b in blocks))
 
-def project(contract,viewer_owner,live_snapshot_id,live_digest):
+def project(contract,viewer_owner,live_snapshot_id,live_digest,*,live_as_of=None,live_goal=None,live_card2_workout_id=None,live_card3_workout_id=None):
     """Return fail-closed structural preview of a trusted MOCK payload.
     Never selects priority itself. Does not write, schedule or approve quality.
     """
+    if not isinstance(contract,Mapping):
+        return {"valid":False,"errors":["PAYLOAD_INVALID"],"card1":None,"card2":None,
+                "card3":None,"highlight":None,"is_historical":True,
+                "can_execute":False,"can_schedule":False,"scope":"INC132_QA_MOCK_NOT_APP"}
     e=[]
     owner=contract.get("owner_id")
     snapshot=contract.get("snapshot_id")
     digest=contract.get("decision_digest")
     c1,c2,c3=(contract.get("card"+str(i)) for i in (1,2,3))
     goal=contract.get("goal")
+    as_of=contract.get("as_of")
     injury=contract.get("injury")
+    if not _day(as_of): e.append("DATE_MISSING_OR_INVALID")
+    if not _nonempty(contract.get("producer_version")): e.append("PRODUCER_VERSION_MISSING")
     if not owner or viewer_owner!=owner: e.append("OWNER_SCOPE_FAIL")
     if not snapshot or not digest: e.append("SNAPSHOT_MISSING")
     if contract.get("issuer_signature_verified") is not True: e.append("ISSUER_MISSING")
     if goal not in GOALS: e.append("GOAL_INVALID")
     if not isinstance(c1,Mapping) or c1.get("role")!="CARD1" or c1.get("intensity_class") not in ("EASY","RECOVERY"):
         e.append("CARD1_BAD")
-    if not _complete(c3) or c3.get("role")!="CARD3" or c3.get("goal")!=goal:
+    if not _complete(c3) or c3.get("role")!="CARD3" or c3.get("goal")!=goal or c3.get("intensity_class")!="HARD":
         e.append("CARD3_MISSING")
     if isinstance(c2,Mapping):
         if not _complete(c2) or c2.get("role")!="CARD2" or c2.get("domain")!="TEMPO_Z3" or c2.get("intensity_class")!="HARD":
@@ -54,8 +71,11 @@ def project(contract,viewer_owner,live_snapshot_id,live_digest):
             e.append("C2_REASON_MISSING")
     else: e.append("CARD2_BAD")
     for name,c in (("CARD1",c1),("CARD2",c2),("CARD3",c3)):
-        if isinstance(c,Mapping) and (c.get("owner_id")!=owner or c.get("snapshot_id")!=snapshot):
-            e.append(name+"_IDENTITY_MISMATCH")
+        if isinstance(c,Mapping):
+            if c.get("owner_id")!=owner or c.get("snapshot_id")!=snapshot:
+                e.append(name+"_IDENTITY_MISMATCH")
+            if name!="CARD1" and (c.get("as_of")!=as_of or c.get("decision_digest")!=digest):
+                e.append(name+"_ATTESTATION_MISMATCH")
     if injury in ("NO_TRAINING","NO_INTENSITY"):
         if c2 is not None or not isinstance(c3,Mapping) or c3.get("injury_safe_projection") is not True:
             e.append("INJURY_HARD_BLOCK")
@@ -63,9 +83,14 @@ def project(contract,viewer_owner,live_snapshot_id,live_digest):
     pri=contract.get("recommended_priority")
     if pri not in ("CARD2","CARD3") or (pri=="CARD2" and not isinstance(c2,Mapping)):
         e.append("PRIORITY_INVALID")
-    if not contract.get("priority_reason_code") or not contract.get("priority_evidence_ids"):
+    witnesses=contract.get("priority_evidence_ids")
+    if not _nonempty(contract.get("priority_reason_code")) or not isinstance(witnesses,list) or not witnesses or not all(_nonempty(x) for x in witnesses):
         e.append("WITNESS_MISSING")
-    active=(owner==viewer_owner and snapshot==live_snapshot_id and digest==live_digest)
+    active=(owner==viewer_owner and _nonempty(snapshot) and snapshot==live_snapshot_id
+            and _nonempty(digest) and digest==live_digest and _day(as_of)
+            and as_of==live_as_of and goal==live_goal
+            and (c2.get("workout_id") if isinstance(c2,Mapping) else None)==live_card2_workout_id
+            and (c3.get("workout_id") if isinstance(c3,Mapping) else None)==live_card3_workout_id)
     return {
        "valid":not e,"errors":e,"card1":c1 if not e else None,
        "card2":c2 if not e else None,"card3":c3 if not e else None,
