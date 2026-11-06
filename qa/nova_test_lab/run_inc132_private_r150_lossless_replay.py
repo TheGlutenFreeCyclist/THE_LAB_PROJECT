@@ -77,6 +77,19 @@ def verify_fixture(fixture, nova):
                        and x.get("name") != "BASELINE_IDENTITY" and x.get("pass") is not True)
     realistic = mutations.get("realistic_completion_suite") if isinstance(mutations, dict) else {}
     realistic = realistic if isinstance(realistic, dict) else {}
+    realistic_state = str(realistic.get("state") or "")
+    realistic_state_class = (realistic_state if realistic_state in {
+        "SKIPPED_WRONG_GOAL", "SKIPPED_WRONG_PHASE"}
+        else ("EVALUATED" if realistic.get("scenarios") else "NOT_APPLICABLE"))
+    realistic_scenarios = realistic.get("scenarios") if isinstance(realistic.get("scenarios"), list) else []
+    pres = result.get("nova_prescription") if isinstance(result, dict) else {}
+    pres = pres if isinstance(pres, dict) else {}
+    compiled_hard = pres.get("hard_prescription_available") is True
+    requested_hard = pres.get("requested_hard_prescription_available") is True
+    hard_loss_stage = ("NO_HARD_REQUESTED" if not requested_hard
+        else "COMPILE_REJECTED_HARD" if not compiled_hard
+        else "DOWNSTREAM_REMOVED_HARD" if new_hard_ok and new_hard == 0
+        else "HARD_STILL_PRESENT")
     # Compare expected canonical keys only, never print private values/workout IDs.
     return {
         "r27_gate_state_class": r27_category,
@@ -84,9 +97,16 @@ def verify_fixture(fixture, nova):
         "legacy_hard_present": bool(old_hard > 0) if old_hard_ok else None,
         "r150_hard_present": bool(new_hard > 0) if new_hard_ok else None,
         "hard_count_changed": old_hard != new_hard,
+        "hard_loss_stage": hard_loss_stage,
+        "prescription_status_class": str(pres.get("status")) if pres.get("status") in {"PRESCRIBED","BLOCKED","EASY_ONLY","HOLD"} else "OTHER",
+        "execution_status_class": str(pres.get("execution_status")) if pres.get("execution_status") in {"READY","EASY_ONLY","BLOCKED_BY_FINAL_SAFETY_GATE"} else "OTHER",
+        "authority_final_pass": result.get("authority_final_pass") is True,
         "mutation_baseline_identity_pass": (base_tests[0].get("pass") is True) if base_tests else None,
         "mutation_other_failed_count": other_failed,
-        "mutation_realistic_completion_pass": realistic.get("pass") is True if realistic else None,
+        "mutation_realistic_completion_applicable": realistic.get("applicable") is not False if realistic else None,
+        "mutation_realistic_completion_state_class": realistic_state_class,
+        "mutation_realistic_completion_pass": realistic.get("pass") if type(realistic.get("pass")) is bool else None,
+        "mutation_realistic_failed_case_count": sum(1 for x in realistic_scenarios if isinstance(x, dict) and x.get("pass") is not True),
         "expected_invariant_count":len(fixture["expected"]),
         "expected_invariant_drift_count":len(mismatched),
         "expected_invariant_drift_names":mismatched,
