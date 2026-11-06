@@ -1,0 +1,8 @@
+INC132 R153 TEST ROOT INTEGRATION REQUEST
+
+Scope: fix/neon-report-egress-r196999 (only). No main, no Render deployment.
+Source R150 SHA256: 6db176875fdc6b60b9ce437aae2046774bca9495f2864005f4c45d61f355ca73
+Target R153+FTP+dual SHA256: d37840512624592eaf867730e93156ca50eb99e864bdf171f6379823d93291c1
+Prerequisite: successful R153 QA GitHub Actions run 42269620840 (51 unit + 9 synthetic DOM).
+Integration: apply the two reviewed patches and refuse unexpected root hash or branch.
+PRODUCT_GO is not asserted: authenticated issuer/RAW FIT and science review remain.
