@@ -198,6 +198,22 @@ def _inc132_alternative_numeric_scan(fixture, result, nova, clock):
                     active_offer=None)
         future = future if isinstance(future, dict) else {}
         tally["unowned_future_planner_status"] = _inc132_safe_code(future.get("status"))
+        tally["unowned_future_reason_codes"] = [
+            _inc132_safe_code(x) for x in (future.get("reason_codes") or [])[:5]
+            if isinstance(x, str)]
+        preflight = future.get("inc088_selector_preflight") or {}
+        preflight = preflight if isinstance(preflight, dict) else {}
+        tally["unowned_future_selector_state"] = _inc132_safe_code(preflight.get("state"))
+        tally["unowned_future_selector_reason"] = _inc132_safe_code(preflight.get("reason"))
+        tally["unowned_future_selector_calls"] = (
+            preflight.get("selector_calls") if type(preflight.get("selector_calls")) is int else None)
+        rejected = preflight.get("rejected") or []
+        rejected = rejected if isinstance(rejected, list) else []
+        reason_counts = {}
+        for rej in rejected:
+            code = _inc132_safe_code(rej.get("reason")) if isinstance(rej, dict) else "UNCLASSIFIED"
+            reason_counts[code] = reason_counts.get(code, 0) + 1
+        tally["unowned_future_rejection_reason_counts"] = reason_counts
         tally["unowned_future_origin_state"] = _inc132_safe_code(
             (future.get("inc091_integrity") or {}).get("state"))
         tally["unowned_future_has_compiled_workout"] = isinstance(future.get("workout"), dict)
