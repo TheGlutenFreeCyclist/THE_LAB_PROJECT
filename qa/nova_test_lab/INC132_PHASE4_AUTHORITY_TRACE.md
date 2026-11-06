@@ -77,3 +77,11 @@ _Nessun dato privato, scrittura ledger, calendario, deploy o cambio R150 in ques
 - **Restano RED/NOT_VERIFIED:** C3 sempre completa per tutti sette goal e ogni Snapshot; dose attesa da prova vera autenticata RAW, completa fino al fueling; Card2 Tempo individualizzata; arbitro/priority; E2E reale owner-bound, browser/mobile; matrice Q01–Q24. L'app candidata R151 non è una release.
 
 **Sequenza successiva:** preservare la sorgente R150 finché non esistono prove end-to-end e rollback; diagnosticare i sette goal sul vero catalogo canonico, separare l'ammissibilità scientifica dalla selezione della priorità e non riempire C2 con template `RESEARCH_ONLY`. Nessun GO.
+
+## 7. Fase 4 / BH-004 — Tempo/Z3 catalogo nativo R150 e fail-closed (06/11/2026)
+
+CI [42200918057](https://github.com/TheGlutenFreeCyclist/THE_LAB_PROJECT/actions/runs/42200918057): **SUCCESS**. Nel runtime R150 effettivo, `run_inc132_tempo_real_engine_no_evidence.py` ha controllato tutti i sette template Tempo canonici, quattro goal `POWER_5`, `VO2MAX`, `POWER_20`, `TIME_TRIAL`. Su tutti e sette, senza evidenza, il modello nativo watt e replay scientifico hanno **rifiutato** una prescrizione HARD. Questo è PASS di sicurezza negativa, NON prova di una dose Z3 scientificamente individualizzata.
+
+I goal `POWER_1`, `SPRINTER`, `ENDURANCE_BASE` non hanno un template Tempo nativo validato: restano `RESEARCH_ONLY` / release `NO-GO` per requisito 7/7. Non è ammesso usare percentuali FTP o dati Health inventati per sbloccarli. **C2_RUNTIME=NOT_IMPLEMENTED; C2_FULL_DOSE=RED.**
+
+Nella stessa CI, la build R151 effimera e il probe C07 sono nuovamente **PASS**; app R150 su GitHub invariata. È necessario un percorso autenticato con dati reali e raw provenance indipendentemente per Card 3 e Card 2, attestation, fueling, scelta scientifica della priorità, E2E, Q01–Q24. **PRODUCTION NO-GO**.
