@@ -114,7 +114,11 @@ def _inc132_alternative_numeric_scan(fixture, result, nova, clock):
              "replay_accepted_and_declared_time_feasible": 0,
              "original_science_replay_checked": 0,
              "science_model_exceptions": 0,
-             "unassessable_template_duration": 0}
+             "unassessable_template_duration": 0,
+             "native_unscheduled_compiled": 0,
+             "native_unscheduled_withheld": 0,
+             "native_compiler_errors": 0,
+             "native_compiler_invented_booking": 0}
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         with patch.object(nova, "get_rome_now", return_value=clock):
             for t in templates:
@@ -138,6 +142,28 @@ def _inc132_alternative_numeric_scan(fixture, result, nova, clock):
                     if not isinstance(science, dict) or science.get("accepted") is not True:
                         continue
                     tally["original_science_replay_accepted"] += 1
+                    # The original INC091 native compiler has NO calendar slot
+                    # and no owner authentication here. Count numeric-only
+                    # completeness, never issue a quality or save the result.
+                    try:
+                        native = nova._nova_inc091_compile_native(
+                            t, {"goal_key": goal, "dimension": dim,
+                                "workout_id": t.get("id")},
+                            ledger, ftp, roadmap, power_model=inputs.get("power_model") or {})
+                        if not isinstance(native, dict):
+                            tally["native_unscheduled_withheld"] += 1
+                        elif native.get("is_scheduled") is not False or native.get("date") is not None:
+                            tally["native_compiler_invented_booking"] += 1
+                        elif (native.get("nova_prescription_authority") is False
+                              and (native.get("power_prescription") or {}).get("source")
+                                  == "COMPARABLE_VERIFIED_REPEATED_WORK"
+                              and (native.get("session_composition") or {}).get("total_seconds")):
+                            tally["native_unscheduled_compiled"] += 1
+                        else:
+                            tally["native_unscheduled_withheld"] += 1
+                    except (TypeError, ValueError, KeyError, ArithmeticError, OverflowError,
+                            IndexError, AttributeError, RecursionError):
+                        tally["native_compiler_errors"] += 1
                     required = nova._nova_quality_template_required_seconds(t, dim)
                     if type(required) not in (int, float):
                         tally["unassessable_template_duration"] += 1
