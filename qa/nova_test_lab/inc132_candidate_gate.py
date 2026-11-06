@@ -64,7 +64,7 @@ def study(goal, kind, athlete, owner, today, mode="STEADY"):
         "schema":"INC132-TEST-ONLY-1","goal":goal,"research_id":workout,
         "intensity":intensity,"phases":phases,"potential_power_watts":power if not fail else None,
         "blockers":tuple(fail),"study_screened":not bool(fail),
-        "scientific_goal_dose_validated":kind=="TEMPO_Z3" and TEMPO[goal][4] and not bool(fail),
+        "existing_inc038_template_screened":kind=="TEMPO_Z3" and TEMPO[goal][4] and not bool(fail),
         "executable":False,"scheduled":False,"recommended_priority":None,
         "fueling":None,"canonical_workout_id":None,"ledger_write":False,
         "science_pmids":SCIENCE_PMIDS
