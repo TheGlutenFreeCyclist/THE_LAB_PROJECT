@@ -34,19 +34,18 @@ def apply_card3_mirror(home_page, grey_card):
         + updated[stop + len(next_branch):])
     # This label is conditional on the exact ID and carries no extra schedule,
     # ledger, watt or training dose. A nonmatching Calendar HARD is NOT a copy.
-    title_anchor = '<h3>{{ card3.title|e }}</h3>'
-    view_start = updated.index('{% if card3.verified_offer or card3.verified_future_plan %}', start)
-    view_else = updated.index('{% else %}', view_start)
-    title_at = updated.find(title_anchor, view_start, view_else)
-    if title_at < 0 or updated.find(title_anchor, title_at + len(title_anchor), view_else) >= 0:
-        raise Card3MirrorTemplateDrift('CANONICAL_TITLE_DRIFT')
+    # The R150 title itself is revised by later copy adapters; the unique
+    # canonical workout container is a stronger structural anchor.
+    title_anchor = '<div class="r1969102-canonical-copy r1969104-single-workout" role="group" aria-label="Single canonical quality plan">'
+    if updated.count(title_anchor) != 1:
+        raise Card3MirrorTemplateDrift('CANONICAL_WORKOUT_CONTAINER_DRIFT')
     same_id = ("\n{% if quality_already_shown and upcoming.quality_index is not none "
                "and data.next_sessions and "
                "data.next_sessions[upcoming.quality_index].nova_workout_id == card3.workout_id %}"
                "\n<div class=\"inc132-shared-id\" role=\"note\">Same canonical workout as "
                "Card {{ upcoming.quality_index + 1 }} · one plan, no additional session</div>"
                "\n{% endif %}")
-    updated = updated[:title_at] + title_anchor + same_id + updated[title_at + len(title_anchor):]
+    updated = updated.replace(title_anchor, title_anchor + same_id, 1)
     if ('nova-card3-grey-placeholder' in updated
             or 'CARD3_GREY' in updated):
         raise Card3MirrorTemplateDrift('GREY_BRANCH_STILL_PRESENT')
