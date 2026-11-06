@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/nova-inc132-private-r150-replay.yml
       - qa/nova_test_lab/run_inc132_private_r150_lossless_replay.py
+      - qa/nova_test_lab/probe_inc132_neon_egress.py
   workflow_dispatch:
 
 permissions:
@@ -49,6 +50,8 @@ jobs:
           set -euo pipefail
           echo "6db176875fdc6b60b9ce437aae2046774bca9495f2864005f4c45d61f355ca73  the_lab_app.py" | sha256sum --check
           python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Diagnose only sanitized secret endpoint and TEST TCP egress
+        run: python qa/nova_test_lab/probe_inc132_neon_egress.py
       - name: Replay two pinned active authorized lossless LAB fixtures through real R150
         shell: bash
         run: |
