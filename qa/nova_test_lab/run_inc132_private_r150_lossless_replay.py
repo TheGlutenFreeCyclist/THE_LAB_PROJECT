@@ -91,8 +91,12 @@ def run():
 
     out={}
     try:
-        db_connection = psycopg2.connect(dsn,connect_timeout=10,
-                          options="-c default_transaction_read_only=on -c statement_timeout=12000")
+        # Neon proxy accepts a normal TLS startup, but rejects libpq startup
+        # options. Establish TLS first, then mark every transaction READ ONLY.
+        db_connection = psycopg2.connect(
+            dsn, sslmode="require", connect_timeout=12,
+            application_name="inc132-private-r150-test-only")
+        db_connection.set_session(readonly=True, autocommit=False)
     except psycopg2.OperationalError as exc:
         s = str(exc).lower()  # deliberately NOT printed
         category = ("AUTH_REJECTED" if "password authentication failed" in s
