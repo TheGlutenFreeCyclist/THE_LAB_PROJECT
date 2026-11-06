@@ -11,7 +11,7 @@ diff --git a/the_lab_app.py b/the_lab_app.py
      si_current_ref = si_series[-1][1] if si_series and (today - si_series[-1][0]).days <= 7 else None
      poincare_current_ref = poincare[-1][3] if poincare and (today - poincare[-1][0]).days <= 7 else None
      rpp_current_ref = rpp[-1][1] if rpp and (today - rpp[-1][0]).days <= 7 else None
-@@ -3880,31 +3881,12 @@
+@@ -3880,30 +3881,11 @@
  {% if data.aerobic_efficiency.latest_sessions %}<div class="v35-aero-sessions">{% for x in data.aerobic_efficiency.latest_sessions %}<span class="v35-aero-session">{{ x.date|ui_date }} · {{ x.watts }} W / {{ x.hr }} bpm{% if x.decoupling is not none %} · drift {{ x.decoupling }}%{% endif %}</span>{% endfor %}</div>{% endif %}
  <p class="v35-aero-note">{{ data.aerobic_efficiency.note }}{% if data.aerobic_efficiency.eligibility_note %} {{ data.aerobic_efficiency.eligibility_note }}.{% endif %} Confidence · {{ data.aerobic_efficiency.confidence }}.</p>
  </div>{% endif %}
@@ -19,17 +19,13 @@ diff --git a/the_lab_app.py b/the_lab_app.py
 -<div class="v21-vo2-head">
 -<div class="v21-vo2-title"><span class="v21-vo2-icon" aria-hidden="true">🫁</span><div><h3>VO₂ &amp; RACE REPEATABILITY</h3><p>Aerobic-capacity trend + observed repeated-effort retention</p></div></div>
 -<span class="v21-vo2-agreement {{ data.vo2_trend.agreement_class if data.vo2_trend else 'grey' }}">VO₂ · {{ data.vo2_trend.agreement if data.vo2_trend else 'INSUFFICIENT DATA' }}</span>
-+<div class="v21-vo2 v147-repeatability-only">
-+<div class="v21-vo2-head"><div class="v21-vo2-title"><span class="v21-vo2-icon" aria-hidden="true">🔁</span><div><h3>RACE REPEATABILITY</h3><p>Verified repeated-effort retention from your riding history</p></div></div></div>
-+<div class="v21-vo2-summary">
-+<div class="repeatability"><span>Race repeatability · total</span>{% if data.race_repeatability and data.race_repeatability.available %}<div class="v21-repeat-main"><strong>{{ data.race_repeatability.value_label }}</strong><span class="v21-repeat-trend {{ data.race_repeatability.trend_class or 'grey' }}" role="img" aria-label="{{ data.race_repeatability.trend }}">{{ data.race_repeatability.trend_icon or '➡️' }}</span></div><small>{{ data.race_repeatability.ui_detail or data.race_repeatability.context }}</small>{% else %}<strong>Learning</strong><small>Needs repeated-effort evidence</small>{% endif %}</div>
- </div>
+-</div>
 -{% if data.vo2_trend and data.vo2_trend.available %}
 -<div class="v21-vo2-summary">
 -<div class="wearable"><span>{{ data.vo2_trend.wearable_label or 'Wearable VO₂' }}</span><strong>{% if data.vo2_trend.wearable_display_current is not none %}{{ data.vo2_trend.wearable_display_current }}{% else %}—{% endif %}</strong><small>{% if data.vo2_trend.wearable_display_current is not none %}ml/kg/min{% if data.vo2_trend.wearable_delta28 is not none %} · {{ '+' if data.vo2_trend.wearable_delta28 > 0 else '' }}{{ data.vo2_trend.wearable_delta28 }} / 28d{% endif %}{% elif data.vo2_trend.wearable_history_latest is not none %}latest history {{ data.vo2_trend.wearable_history_latest }} ml/kg/min{% endif %}{% if data.vo2_trend.wearable_source_detail %} · {{ data.vo2_trend.wearable_source_detail }}{% endif %}{% if data.vo2_trend.wearable_last_date %} · last received {{ data.vo2_trend.wearable_last_date|ui_date }}{% endif %}{% if data.vo2_trend.wearable_fallback %} · history retained{% endif %}</small></div>
 -<div class="performance"><span>{{ data.vo2_trend.performance_label or 'Intervals VO₂ estimate' }}</span><strong>{% if data.vo2_trend.performance_current is not none %}{{ data.vo2_trend.performance_current }}{% else %}—{% endif %}</strong><small>ml/kg/min · latest performance-derived value returned by Intervals{% if data.vo2_trend.performance_delta28 is not none %} · {{ '+' if data.vo2_trend.performance_delta28 > 0 else '' }}{{ data.vo2_trend.performance_delta28 }} / 28d{% endif %}{% if data.vo2_trend.performance_fallback %} · history retained{% endif %}</small></div>
 -<div class="repeatability"><span>Race repeatability · total</span>{% if data.race_repeatability and data.race_repeatability.available %}<div class="v21-repeat-main"><strong>{{ data.race_repeatability.value_label }}</strong><span class="v21-repeat-trend {{ data.race_repeatability.trend_class or 'grey' }}" role="img" aria-label="{{ data.race_repeatability.trend }}">{{ data.race_repeatability.trend_icon or '➡️' }}</span></div><small>{{ data.race_repeatability.ui_detail or data.race_repeatability.context }}</small>{% else %}<strong>Learning</strong><small>Needs repeated-effort evidence</small>{% endif %}</div>
- </div>
+-</div>
 -<div class="v21-vo2-chart-wrap">
 -<svg class="v21-vo2-chart" viewBox="0 0 1000 240" role="img" aria-label="VO2max estimate trend">
 -{% for t in data.vo2_trend.ticks %}<line class="v21-vo2-grid" x1="58" y1="{{ t.y }}" x2="942" y2="{{ t.y }}"/><text class="v21-vo2-axistext" x="12" y="{{ t.y + 3 }}">{{ t.value }}</text>{% endfor %}
@@ -43,10 +39,14 @@ diff --git a/the_lab_app.py b/the_lab_app.py
 -<div class="v21-vo2-legend"><span class="v21-vo2-key"><i class="v21-vo2-swatch"></i>Wearable VO₂</span><span class="v21-vo2-key"><i class="v21-vo2-swatch performance"></i>Intervals VO₂ estimate</span></div>
 -<div class="v21-vo2-disclaimer"><strong>Two different signals.</strong> Wearable VO₂ comes from the connected wearable ecosystem; Intervals VO₂ estimate is the separate performance-derived value returned by Intervals when THE LAB refreshes.</div>
 -{% else %}<div class="v21-vo2-empty">No usable Wearable VO₂ or Intervals VO₂ estimate is available yet. THE LAB will show each signal independently as soon as the connected data sources expose it.</div>{% endif %}
--</div>
++<div class="v21-vo2 v147-repeatability-only">
++<div class="v21-vo2-head"><div class="v21-vo2-title"><span class="v21-vo2-icon" aria-hidden="true">🔁</span><div><h3>RACE REPEATABILITY</h3><p>Verified repeated-effort retention from your riding history</p></div></div></div>
++<div class="v21-vo2-summary">
++<div class="repeatability"><span>Race repeatability · total</span>{% if data.race_repeatability and data.race_repeatability.available %}<div class="v21-repeat-main"><strong>{{ data.race_repeatability.value_label }}</strong><span class="v21-repeat-trend {{ data.race_repeatability.trend_class or 'grey' }}" role="img" aria-label="{{ data.race_repeatability.trend }}">{{ data.race_repeatability.trend_icon or '➡️' }}</span></div><small>{{ data.race_repeatability.ui_detail or data.race_repeatability.context }}</small>{% else %}<strong>Learning</strong><small>Needs repeated-effort evidence</small>{% endif %}</div>
++</div>
+ </div>
  <section class="lab-accordion v4-details" data-lab-accordion data-open="false"><div class="lab-accordion-trigger" role="button" tabindex="0" aria-expanded="false">Training Load<span class="lab-accordion-sign" aria-hidden="true">+</span></div><div class="lab-accordion-panel" hidden><p>{{ data.training_load }}</p></div></section>
  </article>
- <section id="v4873-r4-power-output" class="v4-card v4-section-card v7-analysis v4873-power-output">
 @@ -18875,15 +18857,7 @@
          lines.append('\nREAL POWER CURVE (actual best efforts, last 42 days - use these as athlete-relative calibration. For ordinary training, do not casually prescribe sustained targets above the observed same-duration best. A roadmap-authorized maximal field test is the exception: the existing best is a pacing/reference anchor, not a ceiling, and the athlete must be free to beat it):')
          for p in best_watts:
@@ -177,7 +177,7 @@ diff --git a/the_lab_app.py b/the_lab_app.py
  .r143-quality-entry{margin:12px 0 8px;color:var(--text,#dce8ef)}
  .r143-open-dialog{appearance:none;width:100%;display:flex;align-items:center;gap:11px;padding:13px 15px;cursor:pointer;text-align:left;border:1px solid rgba(61,196,227,.62);border-radius:11px;background:rgba(25,105,137,.13);color:inherit;font:inherit;font-weight:700;transition:border-color .17s,background .17s}
  .r143-open-dialog:hover{background:rgba(31,145,185,.23);border-color:#37c9ea}
-@@ -68373,10 +68379,78 @@
+@@ -68373,8 +68379,76 @@
              'latest_intent_date': recent[0].get('local_date')}
  
  app.jinja_env.parse(HOME_PAGE)
@@ -185,10 +185,8 @@ diff --git a/the_lab_app.py b/the_lab_app.py
 -               '· R144 CALENDAR ICON · SCIENCE AND CLEARANCE UNCHANGED · LAB CANDIDATE')
 +APP_VERSION = ('THE LAB · R196.9.148 · INC128 NESTED QUALITY EXPLANATION BOX + LIVE R143 CSS '
 +               '· R147 DEVICE VO2 UI RETIREMENT · R146 SCIENCE UNCHANGED · TEST CANDIDATE')
- 
- 
--if __name__ == "__main__":
--    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
++
++
 +# INC130 / R196.9.150 — CARD 3 DTM BD-001..BD-006 COPY CLARITY ONLY.
 +# Source of truth: authenticated owner-bound canonical producer and saved snapshot.
 +# No change to science/producer, selection, issuer, auth, HMAC, fueling, timing,
@@ -198,7 +196,7 @@ diff --git a/the_lab_app.py b/the_lab_app.py
 +_R150_FUTURE_EYEBROW_NEW = "'NEXT QUALITY · COMPLETE FUTURE PLAN'"
 +assert HOME_PAGE.count(_R150_FUTURE_EYEBROW)==1, 'INC130_FUTURE_EYEBROW_DRIFT'
 +HOME_PAGE=HOME_PAGE.replace(_R150_FUTURE_EYEBROW,_R150_FUTURE_EYEBROW_NEW,1)
- 
++
 +_R150_FUTURE_PILL = "'NEEDS A SUITABLE WINDOW · NOT CLEARED'"
 +_R150_FUTURE_PILL_NEW = "'NOT SCHEDULED · EXECUTION RECHECK REQUIRED'"
 +assert HOME_PAGE.count(_R150_FUTURE_PILL)==1, 'INC130_FUTURE_PILL_DRIFT'
@@ -255,8 +253,6 @@ diff --git a/the_lab_app.py b/the_lab_app.py
 +app.jinja_env.parse(HOME_PAGE)
 +APP_VERSION=('THE LAB · R196.9.150 · INC130 DTM BD001 CARD3 FUTURE PLAN CLARITY '
 +             '· R148 CARD12 UX PRESERVED · R146 SCIENCE UNCHANGED · OFFLINE NO-GO')
-+
-+
-+if __name__ == "__main__":
-+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
-+
+ 
+ 
+ if __name__ == "__main__":
