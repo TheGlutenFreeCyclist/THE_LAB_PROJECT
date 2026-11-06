@@ -86,8 +86,12 @@ HOME_PAGE = HOME_PAGE.replace(_INC132_FTP_PARAGRAPH_OLD, _INC132_FTP_PARAGRAPH_N
 
 _INC132_FTP_GATE_OLD = '<p>A provisional FTP test is not proof of repeatable power. Nova can now offer controlled exploratory sustained work only when the documented 20–29-minute test remains eligible and the other gates pass.</p>'
 _INC132_FTP_GATE_NEW = '<p>Intervals FTP is already considered as a dated pacing reference when available. No additional FTP test is required merely to show training direction. A specific hard-work dose needs independent completed work/recovery evidence, and the current safety and time gates remain in force.</p>'
-assert HOME_PAGE.count(_INC132_FTP_GATE_OLD) == 1, "INC132_FTP_GATE_DRIFT"
-HOME_PAGE = HOME_PAGE.replace(_INC132_FTP_GATE_OLD, _INC132_FTP_GATE_NEW, 1)
+# R150 may already have retired this older technical detail from the final
+# template. Replace it only if still rendered; do not add a new diagnostics UI.
+assert HOME_PAGE.count(_INC132_FTP_GATE_OLD) in (0, 1), "INC132_FTP_GATE_MULTIPLICITY"
+if HOME_PAGE.count(_INC132_FTP_GATE_OLD):
+    HOME_PAGE = HOME_PAGE.replace(_INC132_FTP_GATE_OLD, _INC132_FTP_GATE_NEW, 1)
+assert "A provisional FTP test is not proof of repeatable power." not in HOME_PAGE, "OLD_FTP_GATE_UI_LEFT_VISIBLE"
 
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION = ("THE LAB · R196.9.151 · INC132 INTERVALS FTP REFERENCE COPY "
