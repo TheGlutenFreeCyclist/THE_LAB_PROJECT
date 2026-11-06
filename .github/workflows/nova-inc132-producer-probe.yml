@@ -1,0 +1,54 @@
+name: INC132 real R150 producer compiler issuer diagnostic (synthetic only)
+
+on:
+  push:
+    branches:
+      - fix/neon-report-egress-r196999
+    paths:
+      - .github/workflows/nova-inc132-producer-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-engine-synthetic-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ""
+      THE_LAB_OWNER_DATABASE_URL: ""
+      ICU_API_KEY: ""
+      ICU_ATHLETE_ID: ""
+      GARMIN_EMAIL: ""
+      GARMIN_PASSWORD: ""
+      ANTHROPIC_API_KEY: ""
+      THE_LAB_STANDARD_AI_API_KEY: ""
+      THE_LAB_PLATFORM_AI_API_KEY: ""
+      THE_LAB_TEST_LAB_MODE: "1"
+      PRODUCT_SECURITY_STRICT: "0"
+      SESSION_COOKIE_SECURE: "0"
+    steps:
+      - name: Checkout only TEST source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install actual NOVA dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Verify isolated exact R150 and run original real engine diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object the_lab_app.py)" = "ca07e9f135328c5c7e4aa1c4a5be9711a53cd714"
+          python qa/nova_test_lab/run_inc109_full_pipeline.py
+      - name: State scientific limitations
+        if: always()
+        run: |
+          echo "Even PASS here covers only an isolated synthetic replay."
+          echo "Does not attest athlete-specific Tempo/Z3, cadence, verified real activity or authenticated Snapshot."
+          echo "Release gate INC132 Q01-Q24 NOT VERIFIED. PRODUCTION NO-GO."
