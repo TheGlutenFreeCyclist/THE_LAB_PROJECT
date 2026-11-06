@@ -7,6 +7,7 @@ production app/database access, writes, private logs, raw artifacts, or HMAC
 shortcut. Each lossless JSON is an R115 recorded input, NOT raw FIT bytes.
 """
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -176,6 +177,41 @@ def _inc132_alternative_numeric_scan(fixture, result, nova, clock):
         "POTENTIAL_SELECTION_GAP" if tally["replay_accepted_and_declared_time_feasible"]
         else "ORIGINAL_REPLAYED_BUT_NO_DECLARED_SLOT" if tally["original_science_replay_accepted"]
         else "NO_ORIGINAL_REPLAY_APPROVED_NUMERIC_CANDIDATE")
+    # Deliberately NO owner, NO Flask request and NO raw receipt. The live
+    # future authority may provide only a planning explanation, never a sealed
+    # or compiled athlete-facing prescription based on replayed JSON alone.
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with patch.object(nova, "get_rome_now", return_value=clock):
+                future = nova._nova_inc050_future_quality(
+                    None,
+                    copy.deepcopy(result.get("nova_decision") or {}),
+                    copy.deepcopy(rawclock),
+                    copy.deepcopy(roadmap),
+                    copy.deepcopy(result.get("microcycle_ledger") or {}),
+                    evidence_ledger=copy.deepcopy(ledger),
+                    power_model=copy.deepcopy(inputs.get("power_model") or {}),
+                    ftp_anchor=copy.deepcopy(ftp),
+                    training_definitions=copy.deepcopy(inputs.get("training_definitions") or {}),
+                    planning_context=copy.deepcopy(inputs.get("planning_context") or {}),
+                    training_state=copy.deepcopy(inputs.get("training_state") or {}),
+                    active_offer=None)
+        future = future if isinstance(future, dict) else {}
+        tally["unowned_future_planner_status"] = _inc132_safe_code(future.get("status"))
+        tally["unowned_future_origin_state"] = _inc132_safe_code(
+            (future.get("inc091_integrity") or {}).get("state"))
+        tally["unowned_future_has_compiled_workout"] = isinstance(future.get("workout"), dict)
+        if (future.get("status") in {"COMPILED_UNSCHEDULED", "OFFERED"}
+            or future.get("execution_authorized") is True
+            or isinstance(future.get("workout"), dict)):
+            raise AssertionError("UNAUTHENTICATED_FUTURE_WORKOUT_ACCEPTED")
+    except AssertionError:
+        raise
+    except (TypeError, ValueError, KeyError, ArithmeticError, OverflowError,
+            IndexError, AttributeError, RecursionError):
+        tally["unowned_future_planner_status"] = "DIAGNOSTIC_EXCEPTION"
+        tally["unowned_future_origin_state"] = "NOT_VERIFIED"
+        tally["unowned_future_has_compiled_workout"] = False
     tally["raw_fit_owner_provenance"] = "NOT_VERIFIED"
     return tally
 
