@@ -48,3 +48,26 @@ Per proseguire correttamente: ripristinare solo un collegamento LAB sicuro oppur
 - Prossima ricerca: capire se queste tre differenze sono la conseguenza prevista del fail-closed R150 rispetto ai vecchi expected R135/R136 oppure una regressione non consentita. Non aggiornare gli expected per ottenere verde senza esaminare DTM/provenienza, e non usare fixture storiche come prova RAW FIT.
 
 **Verdetto:** `GITHUB_NEON_TEST_LINK=PASS`, `R150_HISTORICAL_SCIENCE=FAIL/UNDER_INVESTIGATION`, `CARD3_BH001=RED`, `CARD2_BH004=RED`, `RAW_PROVENANCE=NOT_VERIFIED`, `PRODUCTION=NO_GO`.
+
+
+## 06/11/2026 · Fase 4.3 — triage privacy-safe del drift R135/R136 → R150
+
+È stata estesa **solo** la diagnostica del replay, senza modificare R150, DTM, fixture/expected o dati Neon:
+- [Commit diagnostico 1](https://github.com/TheGlutenFreeCyclist/THE_LAB_PROJECT/commit/8ace7b43f3cf4748016dbe41326640e89d879d5a): transizione HARD storica e R27, mutazioni differenziate;
+- [Commit diagnostico 2](https://github.com/TheGlutenFreeCyclist/THE_LAB_PROJECT/commit/97cdffc98bf2350b9b30a83fd29ca4b3bb1a733d): stadio di perdita HARD, R116 SKIPPED vs FAIL, authority e stato della prescrizione;
+- [CI conclusiva 42209511450](https://github.com/TheGlutenFreeCyclist/THE_LAB_PROJECT/actions/runs/42209511450): connessione Neon TEST read-only **PASS**; replay privato R150 **FAIL SCIENTIFIC_DRIFT**, non errore di rete.
+
+Esito identico su **entrambe** le fixture autorizzate (solo valori categoriali pubblicati):
+- Expected storico: HARD presente. R150: **HARD assente**.
+- R150: `hard_loss_stage=NO_HARD_REQUESTED`, `prescription_status=EASY_ONLY`, `execution_status=EASY_ONLY`.
+- Gate nativo R27: **NOT_APPLICABLE**. Non è la causa di queste due divergenze.
+- `authority_final_pass=true`: il blocco non è dovuto a un FAIL dell'autorità finale.
+- 3/10 invarianti storici divergono: `canonical_plan_id`, `hard_session_count`, `workout_ids`. Gli altri sette corrispondono.
+- La mutation suite R115 fallisce **solo il caso BASELINE_IDENTITY**; zero altri casi falliti tra gli eseguiti.
+- I casi R116 di completamento realistico sono **SKIPPED_WRONG_PHASE** / not applicable, **non** FAIL fisiologico. Non contarli come test verdi né come regressione positiva.
+
+**Nuova localizzazione:** R150 non domanda HARD **prima del compilatore**. I valori della decisione (`decision_action`/`decision_dimension`) continuano a coincidere con gli expected storici, quindi indagare lo storico del producer `build_nova_prescription` e i suoi gate, non falsificare `expected` e non introdurre un workaround UI. Una trasformazione safety fail-closed è plausibile ma **non provata**; resta aperta la distinzione safety corretta / regressione.
+
+Workflow storico [42209511539](https://github.com/TheGlutenFreeCyclist/THE_LAB_PROJECT/actions/runs/42209511539): **FAIL sui pin R141** nei vecchi job; non indica perdita connessione Neon del workflow INC132.
+
+**Stato:** ACCESS NEON TEST=PASS, REPLAY SCIENTIFICO=FAIL, R116 scenari=SKIPPED, R150 invariato, CARD3 BH-001=RED, CARD2 BH-004=RED, RAW FIT/owner-auth E2E=NOT_VERIFIED, PRODUZIONE=NO_GO. Nessun dump, write DB, Snapshot o calendario.
