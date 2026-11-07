@@ -29412,6 +29412,9 @@ def analyze():
             execution_link = _v156_execution_history_link(latest_activity_feedback, microcycle_ledger)
             latest_activity_feedback['prescription_link_status'] = (
                 'LINKED' if execution_link else 'UNLINKED')
+        training_direction["nova_execution"] = _v1965_verified_quality_execution(
+            microcycle_ledger, training_direction.get("started_on"), now=get_rome_now(),
+            observed_blocks=progression_training_blocks)
         # INC125: observe a saved athlete window versus verified completed work.
         # This sidecar is built AFTER all hard decisions, without modifying them.
         data['quality_intent_reconciliation'] = _r145_quality_intent_observation(
@@ -30452,10 +30455,12 @@ def _v111_select_workout_template(goal, dimension, evidence_ledger=None, trainin
     ledger=(context or {}).get('ledger') if isinstance(context,dict) else None
     ftp=(context or {}).get('ftp_anchor') if isinstance(context,dict) else None
     ftp=ftp if isinstance(ftp,dict) else {}
-    # The canonical Tempo band also checks the dated Intervals reference.
+    # Same facts required downstream by the canonical Tempo power band.
     # Rank other feasible qualities first when this reference is missing;
     # never consume the entire eligible slot trying an unissuable Tempo.
-    tempo_ftp_valid=(_nova_power_coaching_reference(ftp,(slot or {}).get('date')) is not None)
+    tempo_ftp_valid=(ftp.get('available') is True
+        and str(ftp.get('status') or '').upper() in {'VALID','TEST SUPPORTED'}
+        and _v1943_finite(ftp.get('prescription_watts'),80,600) is not None)
     exposure=_nova_inc038_verified_stimulus_exposures(goal,evidence_ledger,slot,ledger)
     specific=('MULTIMINUTE_SPECIFIC' if goal in {'POWER_5','VO2MAX'} else
               'SUSTAINED_SPECIFIC' if goal in {'POWER_20','TIME_TRIAL'} else None)
@@ -30492,7 +30497,7 @@ def _v111_select_workout_template(goal, dimension, evidence_ledger=None, trainin
         score=float(t.get("priority") or 50); why=[]; sig=_v109_template_signature(t); quality_min=_v109_template_total_quality_min(t); est=_v109_template_estimated_session_min(t,dim); band=_v111_band_for_seconds(goal,t.get("work_s"))
         family=_nova_inc038_stimulus_family(t)
         if t.get('complementary_only') is True:
-            # A Tempo session without an eligible dated owner-scoped FTP reference is not a candidate.
+            # A Tempo session without trusted FTP is not an issuable candidate.
             # Exclude it from ranking rather than relying on an arbitrary low
             # score to outrank every other poor-fit choice.
             if not tempo_ftp_valid:continue
@@ -46859,7 +46864,7 @@ def build_training_direction(season_activities, planning_context=None, plan=None
     return out
 
 
-def _v1965_verified_quality_execution(ledger, start_date, now=None):
+def _v1965_verified_quality_execution(ledger, start_date, now=None, observed_blocks=None):
     """Never infer full-plan compliance from hard-only prescription history."""
     today = (now or get_rome_now()).date()
     try:
@@ -46868,7 +46873,11 @@ def _v1965_verified_quality_execution(ledger, start_date, now=None):
         return {'available': False, 'reason': 'NO_DECLARED_PLAN_START', 'completed': 0, 'confirmed_missed': 0, 'unresolved': 0, 'score': None}
     start = max(start, today - timedelta(days=27))
     groups = {}
-    for row in (ledger or {}).get('prescription_history') or []:
+    history = (ledger or {}).get('prescription_history') or []
+    linked = {str(row['executed_activity_id']).strip() for row in history
+              if isinstance(row, dict) and row.get('executed_activity_id')
+              and str(row.get('prescription_status') or '').upper() == 'FULFILLED'}
+    for row in history:
         if not isinstance(row, dict) or not (row.get('nova_workout_id') or row.get('nova_contract_id')):
             continue
         if not _v136_is_hard_summary(row) and not _v153_is_training_plan(row):
@@ -46895,10 +46904,34 @@ def _v1965_verified_quality_execution(ledger, start_date, now=None):
     unresolved = len(groups) - completed - missed
     # Unresolved attribution prevents a misleading numerical score.
     scored = completed + missed if unresolved == 0 else 0
+    unlinked = {}
+    for block in observed_blocks or ():
+        if not isinstance(block, dict) or block.get('quality_relevant') is not True:
+            continue
+        truth = block.get('activity_truth') or {}
+        activity_id = str(block.get('activity_id') or '').strip()
+        if (not activity_id or activity_id in linked or not isinstance(truth, dict)
+            or truth.get('status') != 'RESOLVED'
+            or truth.get('source') not in {'ICU_INTERVALS_CANONICAL', 'DEVICE_LAPS'}):
+            continue
+        try:
+            observed = date.fromisoformat(str(block.get('date') or '')[:10])
+        except ValueError:
+            continue
+        if start <= observed <= today and not _v156_execution_history_link(block, ledger):
+            unlinked[activity_id] = observed.isoformat()
     return {
         'available': bool(scored), 'score': round(100 * completed/scored) if scored else None,
         'completed': completed, 'confirmed_missed': missed, 'unresolved': unresolved,
         'observed_hard_contracts': len(groups),
+        'window_start': start.isoformat(),
+        'window_end': (today - timedelta(days=1)).isoformat(),
+        'last_linked_prescription_date': max(
+            (due for (due, _), row in groups.items()
+             if str(row.get('prescription_status') or '').upper() == 'FULFILLED'
+             and row.get('executed_activity_id')), default=None),
+        'unlinked_observed_quality': len(unlinked),
+        'last_unlinked_observed_date': max(unlinked.values(), default=None),
         'reason': 'VERIFIED_HARD_ONLY' if scored else ('LINKS_UNRESOLVED' if unresolved else 'NO_VERIFIED_DUE_QUALITY_CONTRACTS'),
         'scope': 'VERIFIED_QUALITY_PRESCRIPTIONS_ONLY_NOT_FULL_PLAN_ADHERENCE',
     }
@@ -48949,7 +48982,7 @@ def _v19696_execution_contract(session):
             'INTERVALS_DATED_FTP_EXPLORATORY',
         } or (str(t.get('work_domain') or '').upper()=='TEMPO_Z3'
             and str(band.get('work_domain') or '').upper()=='TEMPO_Z3'
-            and band.get('source')=='DATED_FTP_TEMPO_STARTER_NOT_REPEATABILITY'
+            and band.get('source')=='VALID_FTP_TEMPO_STARTER_POLICY_NOT_REPEATABILITY'
             and band.get('observed_repeated_work_is_direct_evidence') is False
             and _v1943_finite(band.get('ftp_watts'),80,600) is not None
             and .76*float(band['ftp_watts']) <= lo <= hi <= .9*float(band['ftp_watts'])+2.5
@@ -56496,14 +56529,14 @@ def _nova_power_coaching_reference(ftp_anchor, as_of_date=None):
         try: day=date.fromisoformat(str(f.get(day_field) or '')[:10])
         except (TypeError,ValueError): continue
         age=(today-day).days
-        if watts is not None and age >= 0:
+        if watts is not None and 0 <= age <= 365:
             candidates.append((day, label, int(round(watts)), age))
     if not candidates:
         return None
     day,origin,watts,age=max(candidates,key=lambda x:(x[0],x[1]=='INTERVALS_TEST_ESTIMATE'))
     return {'watts':watts,'origin':origin,'date':day.isoformat(),
-            'age_days':age,'stale':age>FTP_ANCHOR_VALID_DAYS,
-            'needs_check':age>FTP_ANCHOR_VALID_DAYS,
+            'age_days':age,'stale':age>56,'needs_check':age>56 or
+            origin not in {'INTERVALS_TEST_ESTIMATE','NOVA_COMPLETED_20MIN_TEST'} or not f.get('prescription_watts'),
             'provider':'INTERVALS_ICU','evidence_grade':'COACHING_ESTIMATE_NOT_VALIDATED_REPEATED_WORK'}
 
 
@@ -56664,13 +56697,14 @@ def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None
     if str(t.get('work_domain') or '').upper()=='TEMPO_Z3':
         # Existing canonical power-contract owner; Z3 cannot borrow the
         # goal-specific VO₂/threshold band or claim repeatability evidence.
-        # Exact library identity, matching science dimension, and other dose gates persist.
-        # An eligible Intervals reference is not a completed-work or HARD-clearance proof.
+        # Only real library identities and the SAME active scientific
+        # dimension are eligible. A stale/model FTP must fail closed.
         indexed=next((x for x in _NOVA_WORKOUT_LIBRARY if x.get('id')==t.get('id')),{})
         ftp=ftp_anchor if isinstance(ftp_anchor,dict) else {}
-        ref=_nova_power_coaching_reference(ftp,as_of_date)
-        watts=_v1943_finite(ref.get('watts'),80,600) if ref else None
-        trusted=bool(ref and watts is not None)
+        watts=_v1943_finite(ftp.get('prescription_watts'),80,600)
+        trusted=(ftp.get('available') is True and
+                 str(ftp.get('status') or '').upper() in {'VALID','TEST SUPPORTED'} and
+                 watts is not None)
         try: reps=int(t.get('reps'));secs=int(t.get('work_s'));rest=int(t.get('recovery_s'))
         except (ValueError,TypeError,OverflowError):reps=secs=rest=0
         if not (indexed==t and str(t.get('pattern') or '').upper()=='SUSTAINED'
@@ -56678,14 +56712,14 @@ def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None
             and str(dimension or '').upper() in set(t.get('dimensions') or ())
             and 2<=reps<=3 and 600<=secs<=1200 and 180<=rest<=600 and trusted):
             return {'schema':R1943_SCHEMA,'state':'NO_DEFENSIBLE_POWER_TARGET',
-                    'reason':'TEMPO_REQUIRES_DATED_FTP_REFERENCE_AND_CANONICAL_MECHANICS',
+                    'reason':'TEMPO_REQUIRES_VALID_FTP_AND_CANONICAL_MECHANICS',
                     'work_domain':'TEMPO_Z3','permission_granted':False}
         low=int(round(watts*.80/5)*5);high=int(round(watts*.88/5)*5)
         if not (70<=low<high<=600 and high<=watts*.90+2.5):
             return {'schema':R1943_SCHEMA,'state':'NO_DEFENSIBLE_POWER_TARGET',
                     'reason':'INVALID_TEMPO_WATT_RANGE','permission_granted':False}
         return {'schema':R1943_SCHEMA,'state':'PRESCRIBED',
-            'source':'DATED_FTP_TEMPO_STARTER_NOT_REPEATABILITY',
+            'source':'VALID_FTP_TEMPO_STARTER_POLICY_NOT_REPEATABILITY',
             'confidence':'PROVISIONAL','target_watts':None,
             'exploratory':True,'non_punitive':True,
             'power_target_mode':'EXPLORATORY_RANGE',
@@ -56694,12 +56728,7 @@ def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None
             'recovery_seconds':rest,'ftp_watts':watts,
             'work_domain':'TEMPO_Z3','observed_repeated_work_is_direct_evidence':False,
             'not_a_pb_or_formal_validation':True,
-            'reference_date':ref['date'],'reference_origin':ref['origin'],
-            'reference_age_days':ref['age_days'],'reference_is_stale':ref['stale'],
-            'test_recommended_nonblocking':ref['needs_check'],
-            'workout_specific_proof': 'NOT_IMPLIED_BY_FTP',
-            'execution_clearance': 'SEPARATE_DOWNSTREAM',
-            'rule':'Cycling Z3 Tempo starter range from dated FTP reference; exact mechanics, workout-specific evidence and downstream safety gates remain separate.'}
+            'rule':'Cycling Z3 Tempo starter range; current validated FTP required; exact interval mechanics and downstream safety gates unchanged.'}
     band = _r196936_measured_band_before(template, evidence_ledger=evidence_ledger,
         ftp_anchor=ftp_anchor, as_of_date=as_of_date, dimension=dimension)
     # Only the exact NO-REFERENCE outcome is eligible. We never override
@@ -57613,6 +57642,8 @@ def _nova_r196957_install_direction_visual_only():
 <span><strong>{{ nx_missed }}</strong> confirmed missed</span>
 {% if nx_unresolved > 0 %}<span class="unresolved"><strong>{{ nx_unresolved }}</strong> unresolved</span>{% endif %}
 </div>
+{% if nx.get('window_start') and nx.get('window_end') %}<p class="v196957-scope">Prescription dates assessed · {{ nx.window_start|ui_date }} – {{ nx.window_end|ui_date }}.{% if nx.get('last_linked_prescription_date') %} Most recent linked prescription · {{ nx.last_linked_prescription_date|ui_date }}.{% endif %}</p>{% endif %}
+{% if nx.get('unlinked_observed_quality') %}<p class="v196957-scope"><strong>{{ nx.unlinked_observed_quality }} observed quality session{% if nx.unlinked_observed_quality != 1 %}s{% endif %} without a prescription link.</strong> Latest · {{ nx.last_unlinked_observed_date|ui_date }}. Reported separately from the execution score.</p>{% endif %}
 <p class="v196957-scope"><strong>Verified quality prescriptions only.</strong> This is not whole-plan adherence: Z2, easy rides and rest are not scored without a confirmed prescription–activity link. Unresolved or missing links are never automatically counted as missed. The training-distribution map remains a separate observation.</p>
 </article>'''
     t = t[:left] + new_card + t[right:]
@@ -65867,6 +65898,11 @@ def _nova_inc091_compile_native(tpl, plan, ledger, ftp_anchor, road, power_model
         ledger, ftp_anchor, road)
     if proof.get('accepted') is not True or band.get('state') != 'PRESCRIBED':
         return None
+    return _nova_inc091_render_native(tpl, goal, dim, band, ftp_anchor, power_model)
+
+
+def _nova_inc091_render_native(tpl, goal, dim, band, ftp_anchor, power_model=None):
+    wid = tpl['id']
     raw = _v109_render_library_workout(tpl,goal,dim,
         power_model=power_model,ftp_anchor=ftp_anchor,slot=None)
     seconds = _nova_quality_template_required_seconds(tpl,dim)
@@ -68480,253 +68516,16 @@ APP_VERSION=('THE LAB · R196.9.150 · INC130 DTM BD001 CARD3 FUTURE PLAN CLARIT
              '· R148 CARD12 UX PRESERVED · R146 SCIENCE UNCHANGED · OFFLINE NO-GO')
 
 
-# INC132 R153 C07 template adapter imported unchanged from QA.
-"""INC132/BH-001 isolated candidate: display canonical Card3 even on C07 mirror.
+# INC132 · Card 2 rolling FTP and future Tempo advisory.
+_INC132_R153_ROLLING_METRIC = 'NOVA_INC132_INTERVALS_ROLLING_FTP'
+_INC132_CARD2_FTP_BEFORE = build_ftp_anchor_context
 
-This ONLY transforms a Jinja template. The original producer, attestations,
-Card3 data and issuer remain untouched. Not a new workout or training authority.
-"""
-
-
-class Card3MirrorTemplateDrift(ValueError):
-    pass
-
-
-def apply_card3_mirror(home_page, grey_card):
-    if not isinstance(home_page, str) or not isinstance(grey_card, str):
-        raise Card3MirrorTemplateDrift('MALFORMED_TEMPLATE')
-    if not grey_card or home_page.count(grey_card) != 1:
-        raise Card3MirrorTemplateDrift('C07_GREY_CARD_ANCHOR_DRIFT')
-    # Preserve the original enclosing {% endif %}: it now wraps the real Card3,
-    # not a disabled placeholder. The "true" constant never grants authority.
-    updated = home_page.replace(grey_card, '{% if true %}\n', 1)
-    begin = ('{% if is_quality_slot %}\n'
-             '{% set card3 = data.nova_card3_workout_view or {} %}\n'
-             '{% if quality_already_shown %}\n')
-    next_branch = '{% elif card3.verified_offer or card3.verified_future_plan %}'
-    if updated.count(begin) != 1:
-        raise Card3MirrorTemplateDrift('CANONICAL_VIEW_BRANCH_DRIFT')
-    start = updated.index(begin)
-    stop = updated.find(next_branch, start)
-    if stop < 0 or stop - start > 1300:
-        raise Card3MirrorTemplateDrift('CANONICAL_VIEW_NEXT_BRANCH_DRIFT')
-    updated = (updated[:start]
-        + '{% if is_quality_slot %}\n'
-          '{% set card3 = data.nova_card3_workout_view or {} %}\n'
-          '{% if card3.verified_offer or card3.verified_future_plan %}'
-        + updated[stop + len(next_branch):])
-    # This label is conditional on the exact ID and carries no extra schedule,
-    # ledger, watt or training dose. A nonmatching Calendar HARD is NOT a copy.
-    # The R150 title itself is revised by later copy adapters; the unique
-    # canonical workout container is a stronger structural anchor.
-    title_anchor = '<div class="r1969102-canonical-copy r1969104-single-workout" role="group" aria-label="Single canonical quality plan">'
-    if updated.count(title_anchor) != 1:
-        raise Card3MirrorTemplateDrift('CANONICAL_WORKOUT_CONTAINER_DRIFT')
-    same_id = ("\n{% if quality_already_shown and upcoming.quality_index is not none "
-               "and data.next_sessions and "
-               "data.next_sessions[upcoming.quality_index].nova_workout_id == card3.workout_id %}"
-               "\n<div class=\"inc132-shared-id\" role=\"note\">Same canonical workout as "
-               "Card {{ upcoming.quality_index + 1 }} · one plan, no additional session</div>"
-               "\n{% endif %}")
-    updated = updated.replace(title_anchor, title_anchor + same_id, 1)
-    if ('nova-card3-grey-placeholder' in updated
-            or 'CARD3_GREY' in updated):
-        raise Card3MirrorTemplateDrift('GREY_BRANCH_STILL_PRESENT')
-    css = '''<style id="inc132-card3-mirror-style">
-.inc132-shared-id{margin:7px 0;padding:8px 10px;border-radius:8px;
-  border:1px solid rgba(90,200,200,.38);background:rgba(90,200,200,.07);
-  color:#bddfe6;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
-</style>'''
-    if updated.count('</head>') != 1:
-        raise Card3MirrorTemplateDrift('HEAD_ANCHOR_DRIFT')
-    updated = updated.replace('</head>', css + '\n</head>', 1)
-    return updated
-
-
-# INC132 / R196.9.153 TEST CANDIDATE -- single reference, no issuer bypass.
-# BI-001..009: Athlete-facing FTP is an owner-scoped, dated Intervals reference;
-# an invitation to recheck it is not a numeric-workout issue credential.
-INC132_R153_SCHEMA='NOVA-R196.9.153-FTP-REFERENCE-OWNER-SCOPE-1'
-_INC132_R153_CONTEXT_BEFORE=build_ftp_anchor_context
 
 def _inc132_r153_scope_token(owner_id):
     if not owner_id:
         return None
     return hmac.new(str(SECRET_KEY).encode('utf-8'),
         ('INC132_FTP_OWNER_V1|'+str(owner_id)).encode('utf-8'), hashlib.sha256).hexdigest()
-
-def build_ftp_anchor_context(history_activities, now=None, user_id=None):
-    # Genuine pipeline passes the authenticated owner id and the original
-    # context's reads are already constrained to that owner in SQL.
-    result=_INC132_R153_CONTEXT_BEFORE(history_activities,now=now,user_id=user_id)
-    if not isinstance(result,dict):return result
-    out=dict(result)
-    out['nova_inc132_owner_token']=_inc132_r153_scope_token(_data_owner_user_id(user_id))
-    return out
-
-def _inc132_r153_owner_ok(f, expected_owner_id=None):
-    if not isinstance(f,dict):return False
-    token=str(f.get('nova_inc132_owner_token') or '')
-    if not token:
-        # Legacy snapshots are still owner-scoped by the authenticated
-        # report loader; never claim an additional R153 owner attestation.
-        return expected_owner_id is None
-    owner=expected_owner_id
-    if owner is None and has_request_context():
-        try:owner=_data_owner_user_id()
-        except (RuntimeError,PermissionError,AttributeError):return False
-    if owner is None:return False
-    expected=_inc132_r153_scope_token(owner)
-    return bool(expected and hmac.compare_digest(token,expected))
-
-_INC132_R153_OLD_REF=_nova_power_coaching_reference
-
-def _nova_power_coaching_reference(ftp_anchor, as_of_date=None):
-    f=ftp_anchor if isinstance(ftp_anchor,dict) else {}
-    # A stamped reading from another owner is never a source for a new dose,
-    # even if a caller inserts plausible watts and a recent date.
-    if f.get('nova_inc132_owner_token') and not _inc132_r153_owner_ok(f):
-        return None
-    return _INC132_R153_OLD_REF(ftp_anchor,as_of_date)
-
-def _inc132_r153_public_ftp(f,as_of_date=None,expected_owner_id=None):
-    if not isinstance(f,dict):f={}
-    if f.get('nova_inc132_owner_token') and not _inc132_r153_owner_ok(f,expected_owner_id):
-        ref=None
-    else:
-        ref=_nova_power_coaching_reference(f,as_of_date)
-    if not isinstance(ref,dict):
-        return {'schema':INC132_R153_SCHEMA,'state':'NOT_AVAILABLE','watts':None,
-            'date':None,'source':None,'verification_suggested':False,
-            'owner_attested':False,'execution_clearance':'SEPARATE'}
-    origin=str(ref.get('origin') or '')
-    return {'schema':INC132_R153_SCHEMA,'state':'AVAILABLE',
-        'watts':int(ref['watts']),'date':ref['date'],
-        'source':('INTERVALS.ICU' if origin.startswith('INTERVALS_')
-                  else 'RECORDED 20-MINUTE CALIBRATION'),
-        'verification_suggested':bool(ref.get('needs_check')),
-        'older_reference':bool(ref.get('stale')),
-        'owner_attested':bool(f.get('nova_inc132_owner_token')),
-        'execution_clearance':'SEPARATE','not_workout_specific_proof':True}
-
-_INC132_R153_OLD_FTP_TEXT=ftp_anchor_text
-
-def ftp_anchor_text(context):
-    ref=_inc132_r153_public_ftp(context)
-    if ref['state']=='NOT_AVAILABLE':
-        return ('FTP reference: no eligible dated personal value available. '
-                'Do not invent watts. Workout-specific science and current '
-                'training safety remain independent.')
-    check=('You may consider checking this estimate when practical. '
-        if ref['verification_suggested'] else '')
-    return ('Intervals FTP reference: %d W, dated %s. %s'
-            'This is a coaching estimate, not proof of repeatable interval '
-            'performance or an authorization for a hard workout.'
-            %(ref['watts'],ref['date'],check))
-
-_INC132_R153_OLD_UI=_v4891_prepare_snapshot_for_ui
-
-def _v4891_prepare_snapshot_for_ui(data):
-    out=_INC132_R153_OLD_UI(data)
-    if not isinstance(out,dict):return out
-    result=dict(out)
-    # Recompute deterministically from the saved input, never from browser or
-    # LLM fields. As-of date comes from the snapshot if available.
-    snapshot_day=(str(result.get('snapshot_generated_at_local') or
-        result.get('generated_at_local') or
-        ((result.get('coach_clock') or {}).get('date') if isinstance(result.get('coach_clock'),dict) else '')
-        or '')[:10] or None)
-    f=result.get('ftp_anchor')
-    result['nova_inc132_ftp_reference']=_inc132_r153_public_ftp(f,snapshot_day)
-    return result
-
-# No template re-renders the old TEST/FTP_UP status as the athlete's FTP.
-_INC132_R153_FTP_OPEN='{% if data.ftp_anchor %}\n{% set fa = data.ftp_anchor %}'
-_INC132_R153_FTP_END='{% if data.aerobic_metabolic_range and data.aerobic_metabolic_range.available %}'
-assert HOME_PAGE.count(_INC132_R153_FTP_OPEN)==1,'R153_FTP_PANEL_START_DRIFT'
-start=HOME_PAGE.index(_INC132_R153_FTP_OPEN)
-finish=HOME_PAGE.find(_INC132_R153_FTP_END,start)
-assert start < finish and finish-start<5500,'R153_FTP_PANEL_END_DRIFT'
-_INC132_R153_FTP_PANEL='''{% set fr = data.nova_inc132_ftp_reference or {} %}
-<article class="v4825-ftp-anchor inc132-ftp-panel" aria-label="Personal Intervals FTP reference">
-<div class="v4825-ftp-anchor-head"><div><span>📌 INTERVALS FTP REFERENCE</span><strong>{% if fr.state == 'AVAILABLE' %}{{ fr.watts }} W{% else %}NO DATED PERSONAL REFERENCE{% endif %}</strong></div><b>COACHING ESTIMATE</b></div>
-<div class="v4825-ftp-anchor-grid"><div><span>REFERENCE DATE</span><strong>{{ fr.date or '—' }}</strong><small>{{ fr.source or 'PERSONAL SOURCE UNAVAILABLE' }}</small></div></div>
-<p>{% if fr.state == 'AVAILABLE' %}This dated FTP remains a reference for pacing. {% if fr.verification_suggested %}You can check or update it when convenient; this does not remove your existing reference. {% endif %}{% else %}Nova does not invent a missing FTP. {% endif %}Evidence for the proposed workout and clearance to do hard training today are assessed separately.</p>
-</article>
-'''
-HOME_PAGE=HOME_PAGE[:start]+_INC132_R153_FTP_PANEL+HOME_PAGE[finish:]
-# Mirror a genuinely identical Card3 plan without a duplicate issuer/ledger.
-# The C07 adapter is inserted below by the deterministic builder.
-HOME_PAGE=apply_card3_mirror(HOME_PAGE,_INC121_GREY_CARD)
-# Unit tests check the public template and producer/issuer separately; this
-# parse also fails closed if an existing Jinja contract was accidentally cut.
-app.jinja_env.parse(HOME_PAGE)
-APP_VERSION=('THE LAB · R196.9.153 · INC132 BI FTP REFERENCE AND BH001 C07 VIEW '
-             '· ORIGINAL INC083/INC111 ISSUER AND SCIENCE GATES PRESERVED '
-             '· TEST ONLY · NO DEPLOY')
-
-
-# INC132 / R153 stabilization — maintain science, issuer and owner authority.
-# No new app release number, calendar action or synthetic watt prescription.
-INC132_R153_FTP_STABILIZATION_SCHEMA = 'INC132-R153-OWNER-HMAC-ROLLING-HISTORY-1'
-_INC132_R153_ROLLING_METRIC = 'NOVA_INC132_INTERVALS_ROLLING_FTP'
-_INC132_R153_CONTEXT_WITH_TOKEN = build_ftp_anchor_context
-_INC132_R153_HMAC_GUARD_BEFORE = _INC132_R153_OLD_REF
-
-
-def _inc132_r153_resolve_owner(expected_owner_id=None):
-    """Never derive a trusted owner from an untrusted FTP payload."""
-    if expected_owner_id is not None:
-        if not str(expected_owner_id).strip():
-            return None
-        if has_request_context():
-            try:
-                actual = _data_owner_user_id()
-                if str(actual) != str(expected_owner_id):
-                    return None
-            except (RuntimeError, PermissionError, AttributeError):
-                return None
-        return str(expected_owner_id)
-    if has_request_context():
-        try:
-            return str(_data_owner_user_id())
-        except (RuntimeError, PermissionError, AttributeError):
-            pass
-    return None
-
-
-def _nova_power_coaching_reference(ftp_anchor, as_of_date=None, *, expected_owner_id=None):
-    """Resolve dated coaching reference only after validating signed owner."""
-    reading = ftp_anchor if isinstance(ftp_anchor, dict) else {}
-    if reading.get('nova_inc132_owner_token'):
-        owner = _inc132_r153_resolve_owner(expected_owner_id)
-        if owner is None or not _inc132_r153_owner_ok(reading, expected_owner_id=owner):
-            return None
-    return _INC132_R153_HMAC_GUARD_BEFORE(ftp_anchor, as_of_date)
-
-
-def _inc132_r153_public_ftp(f, as_of_date=None, expected_owner_id=None):
-    reading = f if isinstance(f, dict) else {}
-    token = reading.get('nova_inc132_owner_token')
-    owner = _inc132_r153_resolve_owner(expected_owner_id)
-    ref = (_nova_power_coaching_reference(reading, as_of_date, expected_owner_id=owner)
-           if (not token or owner is not None) else None)
-    if not isinstance(ref, dict):
-        return {'schema': INC132_R153_SCHEMA, 'state': 'NOT_AVAILABLE',
-                'watts': None, 'date': None, 'source': None,
-                'verification_suggested': False, 'owner_attested': False,
-                'execution_clearance': 'SEPARATE'}
-    origin = str(ref.get('origin') or '')
-    return {'schema': INC132_R153_SCHEMA, 'state': 'AVAILABLE',
-        'watts': int(ref['watts']), 'date': ref['date'],
-        'source': ('INTERVALS.ICU' if origin.startswith('INTERVALS_')
-                   else 'RECORDED 20-MINUTE CALIBRATION'),
-        'verification_suggested': bool(ref.get('needs_check')),
-        'older_reference': bool(ref.get('stale')),
-        'owner_attested': bool(token and owner is not None
-             and _inc132_r153_owner_ok(reading, expected_owner_id=owner)),
-        'execution_clearance': 'SEPARATE', 'not_workout_specific_proof': True}
-
 
 def _inc132_r153_rolling_points(activities, today):
     """Pick deterministic last recorded Intervals rolling estimate per day."""
@@ -68761,90 +68560,48 @@ def build_ftp_anchor_context(history_activities, now=None, user_id=None):
     """
     now = now or get_rome_now()
     owner = _data_owner_user_id(user_id)
-    # The request must belong to the authenticated owner; background callers
-    # must supply an explicit owner and should originate from trusted fetch.
-    if has_request_context():
-        verified = _inc132_r153_resolve_owner(owner)
-        if verified is None:
-            raise PermissionError('INC132_ROLLING_FTP_OWNER_MISMATCH')
-    points = _inc132_r153_rolling_points(history_activities, now.date())
-    persistence_problem = None
-    if points:
-        try:
-            _persist_interval_metric_points(_INC132_R153_ROLLING_METRIC, points,
-                 'INTERVALS_ICU_ROLLING_FTP', user_id=owner)
-        except Exception as exc:
-            # Ordinary source data may still be usable for this Snapshot;
-            # failure of a secondary historical write must not crash /analyze.
-            persistence_problem = type(exc).__name__
-            app.logger.warning('INC132 FTP history persistence skipped: %s', exc)
-    result = _INC132_R153_CONTEXT_WITH_TOKEN(history_activities,
-               now=now, user_id=owner)
+    if has_request_context() and str(_data_owner_user_id()) != str(owner):
+        raise PermissionError('INC132_ROLLING_FTP_OWNER_MISMATCH')
+    result = _INC132_CARD2_FTP_BEFORE(history_activities, now=now, user_id=owner)
     if not isinstance(result, dict):
         return result
-    out = dict(result)
-    if persistence_problem:
-        out['nova_inc132_rolling_persistence_state'] = 'WRITE_FAILED'
-    stored = _stored_interval_metric_points(_INC132_R153_ROLLING_METRIC,
-                                            user_id=owner)
-    candidates = []
+    points = _inc132_r153_rolling_points(history_activities, now.date())
+    candidates = list(points)
+    try:
+        if points:
+            _persist_interval_metric_points(_INC132_R153_ROLLING_METRIC, points,
+                                            'INTERVALS_ICU_ROLLING_FTP', user_id=owner)
+    except Exception as exc:
+        app.logger.warning('Card 2 FTP history write skipped: %s', type(exc).__name__)
+    try:
+        stored = _stored_interval_metric_points(_INC132_R153_ROLLING_METRIC, user_id=owner)
+    except Exception as exc:
+        app.logger.warning('Card 2 FTP history read skipped: %s', type(exc).__name__)
+        stored = []
     for row in stored:
         if not isinstance(row, dict):
             continue
-        day = str(row.get('date') or '')[:10]
         try:
-            value = _plausible_ftp(row.get('value'))
-            d = date.fromisoformat(day)
-        except (ValueError, TypeError):
+            day = date.fromisoformat(str(row.get('date') or ''))
+        except ValueError:
             continue
-        if value is not None and d <= now.date():
-            candidates.append((day, int(round(value))))
-    if candidates:
-        latest = max(candidates, key=lambda item: item[0])
-        try:
-            live_date = date.fromisoformat(str(out.get('current_rolling_date') or '')[:10])
-        except (ValueError, TypeError):
-            live_date = None
-        live_value = _plausible_ftp(out.get('current_rolling_ftp'))
-        if (live_date is None or live_date > now.date()
-                or live_date < date.fromisoformat(latest[0])
-                or live_value is None):
-            out['current_rolling_ftp'] = latest[1]
-            out['current_rolling_date'] = latest[0]
-        out['available'] = True
-        out['nova_inc132_rolling_history_persisted'] = True
-        out['nova_inc132_rolling_metric_source'] = _INC132_R153_ROLLING_METRIC
-    return out
-
-
-def ftp_anchor_text(context, expected_owner_id=None):
-    # The request path resolves its authenticated owner automatically; a
-    # trusted worker can pass an explicit owner without relying on Flask.
-    ref = _inc132_r153_public_ftp(context, expected_owner_id=expected_owner_id)
-    if ref['state'] == 'NOT_AVAILABLE':
-        return ('FTP reference: no eligible dated personal value available. '
-                'Do not invent watts. Workout-specific science and current '
-                'training safety remain independent.')
-    check = ('You may consider checking this estimate when practical. '
-             if ref['verification_suggested'] else '')
-    return ('Intervals FTP reference: %d W, dated %s. %s'
-            'This is a coaching estimate, not proof of repeatable interval '
-            'performance or an authorization for a hard workout.'
-            % (ref['watts'], ref['date'], check))
-
-# End of strictly isolated FTP preservation patch; no UI/issuer mutation.
+        watts = _plausible_ftp(row.get('value'))
+        if watts is not None and math.isfinite(watts) and day <= now.date():
+            candidates.append((day.isoformat(), int(round(watts))))
+    if not candidates:
+        return result
+    day, watts = max(candidates, key=lambda item: item[0])
+    return dict(result, nova_inc132_owner_token=_inc132_r153_scope_token(owner),
+                nova_inc132_card2_rolling_date=day, nova_inc132_card2_rolling_ftp=watts)
 
 
 
 # INC132/BH · R153 dual-quality integration, owner-bound and evidence-locked.
-# Inserted before __main__ by build_inc132_dual_quality.py. No Flask route added.
 INC132_DUAL_SCHEMA = 'NOVA-INC132-BH-DUAL-QUALITY-VERIFIED-1'
 INC132_TEMPO_SCHEMA = 'NOVA-INC132-BH-REPLICATED-TEMPO-DOSE-1'
 _INC132_DUAL_GOALS = frozenset(('POWER_5','VO2MAX','POWER_20','TIME_TRIAL',
                                   'POWER_1','SPRINTER','ENDURANCE_BASE'))
 _INC132_TEMPO_SOURCES = frozenset(('DEVICE_LAPS','ICU_INTERVALS_CANONICAL'))
-_INC132_TEMPO_BEFORE_BAND = _v1943_band
-_INC132_TEMPO_BEFORE_REPLAY = _nova_inc083_science_replay
 _INC132_DUAL_BEFORE_FUTURE = _nova_inc050_future_quality
 _INC132_DUAL_BEFORE_ATTEST = _nova_inc051_attest_future_snapshot
 _INC132_DUAL_BEFORE_UI = _v4891_prepare_snapshot_for_ui
@@ -68983,50 +68740,17 @@ def _inc132_measured_tempo_band(tpl,evidence_ledger,as_of_date,dimension):
         'reps':t['reps'],'work_seconds':t['work_s'],
         'recovery_seconds':t['recovery_s'],
         'observed_repeated_avg_watts':primary[3],
-        'observed_recovery_seconds':t['recovery_s'],
-        'evidence_interval_seconds':t['work_s'],
+        'observed_recovery_seconds':primary[2]['recovery_secs'],
+        'evidence_interval_seconds':primary[2]['interval_secs'],
         'recovery_duration_comparable':True,
         'activity_id':primary[1],'activity_date':primary[0],
         'second_activity_id':second[1],'second_activity_date':second[0],
+        'second_observed_recovery_seconds':second[2]['recovery_secs'],
+        'second_evidence_interval_seconds':second[2]['interval_secs'],
         'observed_dose_digest':digest,
         'work_domain':'TEMPO_Z3','workout_specific_proof':'TWO_EXACT_VERIFIED_TEMPO_SESSIONS',
         'no_progression':True,'non_punitive':True,
         'execution_clearance':'SEPARATE_DOWNSTREAM'}
-
-
-def _v1943_band(template,evidence_ledger=None,ftp_anchor=None,as_of_date=None,dimension=None):
-    if str((template or {}).get('work_domain') or '').upper()=='TEMPO_Z3':
-        measured=_inc132_measured_tempo_band(template,evidence_ledger,
-            as_of_date or get_rome_now().date().isoformat(),dimension)
-        if measured is not None:return measured
-    return _INC132_TEMPO_BEFORE_BAND(template,evidence_ledger=evidence_ledger,
-        ftp_anchor=ftp_anchor,as_of_date=as_of_date,dimension=dimension)
-
-
-def _nova_inc083_science_replay(work,evidence_ledger,ftp_anchor,road,today=None):
-    w=work if isinstance(work,dict) else {}
-    t=_R19696_LIBRARY_INDEX.get(str(w.get('nova_workout_id') or '')) or {}
-    power=w.get('power_prescription') or {}
-    if str(t.get('work_domain') or '').upper()!='TEMPO_Z3':
-        return _INC132_TEMPO_BEFORE_REPLAY(work,evidence_ledger,ftp_anchor,road,today=today)
-    reject=lambda code:{'schema':INC132_TEMPO_SCHEMA,'state':'FAIL','accepted':False,'reason':code}
-    dim=str(w.get('nova_prescription_dimension') or '').upper()
-    if (dim not in set(t.get('dimensions') or ())
-        or dim!=str(((road or {}).get('scientific_progression') or {}).get('dimension') or '').upper()):
-        return reject('DIMENSION_MISMATCH')
-    if not isinstance(power,dict) or power.get('tempo_proof_schema')!=INC132_TEMPO_SCHEMA:
-        # Preserve INC083's exact historical rejection and diagnostic code for
-        # all FTP-only / unsupported bands; no retroactive waiver.
-        return _INC132_TEMPO_BEFORE_REPLAY(work,evidence_ledger,ftp_anchor,road,today=today)
-    when=(today if isinstance(today,date) else get_rome_now().date())
-    expected=_inc132_measured_tempo_band(t,evidence_ledger,when.isoformat(),dim)
-    if expected is None:return reject('VERIFIED_TEMPO_REPLICATION_ABSENT')
-    # Refuse extra, mutated, stale or cross-template evidence. This is an
-    # equality replay, not trust in an arbitrary client-supplied band.
-    if expected!=power:return reject('MEASURED_TEMPO_DOSE_REPLAY_DIFFERS')
-    return {'schema':INC132_TEMPO_SCHEMA,'state':'PASS','accepted':True,
-        'reason':'TWO_IDENTICAL_PROTOCOLS_INDEPENDENTLY_RESOLVED_NO_PROGRESSION',
-        'observed_dose_digest':expected['observed_dose_digest']}
 
 
 def _inc132_tempo_server_truth(band,ledger,owner_id,producer_request=True):
@@ -69036,11 +68760,13 @@ def _inc132_tempo_server_truth(band,ledger,owner_id,producer_request=True):
         return None
     events=ledger if isinstance(ledger,dict) else {}
     attest=[]
-    for aid, day in ((band.get('activity_id'),band.get('activity_date')),
-                     (band.get('second_activity_id'),band.get('second_activity_date'))):
-        # Native INC091 checks true server actor, request endpoint, resolved
-        # training event and matching independent repetition record.
-        proof=dict(band,activity_id=aid,activity_date=day)
+    for prefix in ('', 'second_'):
+        aid = band.get(prefix + 'activity_id')
+        # Each receipt replays the timing observed in its own activity.
+        proof = dict(band, activity_id=aid,
+                     activity_date=band.get(prefix + 'activity_date'),
+                     evidence_interval_seconds=band.get(prefix + 'evidence_interval_seconds'),
+                     observed_recovery_seconds=band.get(prefix + 'observed_recovery_seconds'))
         item=_nova_inc091_truth(events,proof,owner_id,producer_request=producer_request)
         if (not isinstance(item,dict) or
             item.get('state')!='SERVER_RESOLVED_TRUTH_REPLAYED'
@@ -69062,15 +68788,14 @@ def _inc132_build_integrative(goal,dimension,evidence_ledger,ftp_anchor,road,
        and dimension in set(t.get('dimensions') or ())]
     candidates.sort(key=lambda t:(-int(t.get('priority') or 0),str(t.get('id') or '')))
     for t in candidates:
-        band=_v1943_band(t,evidence_ledger=evidence_ledger,ftp_anchor=ftp_anchor,
-            as_of_date=get_rome_now().date().isoformat(),dimension=dimension)
-        if (not isinstance(band,dict)
-            or band.get('tempo_proof_schema')!=INC132_TEMPO_SCHEMA):continue
+        band=_inc132_measured_tempo_band(t,evidence_ledger,
+            get_rome_now().date().isoformat(),dimension)
+        if band is None:continue
         truth=_inc132_tempo_server_truth(band,evidence_ledger,owner_user_id)
         if truth is None:continue
-        plan={'workout_id':t['id'],'goal_key':goal,'dimension':dimension}
-        work=_nova_inc091_compile_native(t,plan,evidence_ledger,
-            ftp_anchor,road,power_model=power_model)
+        if dimension != ((road or {}).get('scientific_progression') or {}).get('dimension'):
+            continue
+        work=_nova_inc091_render_native(t,goal,dimension,band,ftp_anchor,power_model)
         if not isinstance(work,dict) or not _nova_inc075_valid_compiled_duration(work):
             continue
         comp=work.get('session_composition') or {}
@@ -69082,6 +68807,13 @@ def _inc132_build_integrative(goal,dimension,evidence_ledger,ftp_anchor,road,
             'execution_authorized':False,'duration_minutes':comp['total_seconds']/60,
             'evidence_ids':[band['activity_id'],band['second_activity_id']]},'VERIFIED'
     return None,'NO_EXACT_INDEPENDENT_TEMPO_DOSE_ATTESTED'
+
+
+def _inc132_card3_numeric_dose_blocked(plan):
+    return (plan.get('schema') == INC056_SCHEMA
+            and plan.get('source') == INC056_SOURCE
+            and plan.get('status') == 'PLANNING_BLOCKED'
+            and plan.get('reason_codes') == ['NUMERIC_REPEAT_DOSE_NOT_VERIFIED_FOR_CATALOGUE'])
 
 
 def _nova_inc050_future_quality(owner_user_id,decision,clock,road,ledger,
@@ -69098,11 +68830,10 @@ def _nova_inc050_future_quality(owner_user_id,decision,clock,road,ledger,
     if not isinstance(plan,dict):return plan
     plan=dict(plan)
     plan['inc132_dual_schema']=INC132_DUAL_SCHEMA
-    # C3 is NEVER replaced, reissued or made subordinate to the Card2 selector.
-    # Existing injury/issuer boundaries remain authoritative.
-    if (_nova_inc079_explicit_injury_restriction(planning_context)
-        or plan.get('status')!='COMPILED_UNSCHEDULED'
-        or plan.get('schema')!=INC091_SCHEMA or active_offer):
+    # A missing numeric Card 3 dose leaves room for a separate Tempo advisory.
+    compiled_card3 = plan.get('status') == 'COMPILED_UNSCHEDULED' and plan.get('schema') == INC091_SCHEMA
+    if (_nova_inc079_explicit_injury_restriction(planning_context) or active_offer
+        or not (compiled_card3 or _inc132_card3_numeric_dose_blocked(plan))):
         plan['inc132_integrative_state']='NOT_EVALUATED_WITHOUT_VERIFIED_CARD3'
         return plan
     candidate,why=_inc132_build_integrative(str(plan.get('goal_key') or ''),
@@ -69195,10 +68926,14 @@ def _inc132_validate_integrative(data,plan,owner_user_id,producer_request=True):
         or tempo.get('not_issued') is not True):return False
     evidence=data.get('evidence_ledger') or {}
     band=work.get('power_prescription') or {}
-    if (_nova_inc083_science_replay(work,evidence,data.get('ftp_anchor'),
-        data.get('adaptive_roadmap')).get('accepted') is not True):return False
+    dimension=tempo.get('dimension')
+    if dimension != ((data.get('adaptive_roadmap') or {}).get('scientific_progression') or {}).get('dimension'):
+        return False
+    expected=_inc132_measured_tempo_band(tpl,evidence,get_rome_now().date().isoformat(),dimension)
+    if expected is None or expected!=band:return False
     truth=_inc132_tempo_server_truth(band,evidence,owner_user_id,producer_request=producer_request)
-    if not truth or tempo.get('origin_proof')!=truth:return False
+    if (not truth or _nova_inc051_canonical_json(tempo.get('origin_proof'))!=
+            _nova_inc051_canonical_json(truth)):return False
     comp=(work.get('session_composition') or {})
     return (comp.get('total_seconds')/60==tempo.get('duration_minutes')
             and tempo.get('evidence_ids')==[band.get('activity_id'),band.get('second_activity_id')])
@@ -69224,7 +68959,10 @@ def _nova_inc051_attest_future_snapshot(data,owner_user_id):
                     'display':inside['display'],'outdoor_display':outside['display'],
                     'total_minutes_example':minutes,'read_only':True,
                     'execution_authorized':False,'is_scheduled':False}
-                priority,reason=_inc132_priority(data,tempo,owner_user_id)
+                if _inc132_card3_numeric_dose_blocked(plan):
+                    priority,reason=None,'CARD3_NUMERIC_DOSE_PENDING'
+                else:
+                    priority,reason=_inc132_priority(data,tempo,owner_user_id)
                 plan['inc132_recommended_priority']=priority
                 plan['inc132_priority_reason']=reason
             except (ValueError,TypeError,AttributeError,KeyError):
@@ -69239,16 +68977,24 @@ def _nova_inc051_attest_future_snapshot(data,owner_user_id):
 def _inc132_valid_dual_view(data,owner_id):
     d=data if isinstance(data,dict) else {}
     plan=d.get('future_quality_plan') or {}
+    if not isinstance(plan,dict) or not owner_id:
+        return None
     tempo=plan.get('inc132_integrative') or {}
-    if (not isinstance(plan,dict) or not isinstance(tempo,dict)
-        or not owner_id or plan.get('inc132_dual_schema')!=INC132_DUAL_SCHEMA
-        or plan.get('inc132_recommended_priority') not in {'CARD2','CARD3'}
-        or not _nova_inc091_eligible(d,plan,owner_id)
+    if (not isinstance(tempo,dict) or plan.get('inc132_dual_schema')!=INC132_DUAL_SCHEMA
+        or d.get('next_quality_offer') or _nova_inc079_explicit_injury_restriction(d.get('planning_context'))
         or not _inc132_validate_integrative(d,plan,owner_id,producer_request=False)
         or not isinstance(tempo.get('fueling'),dict)
         or tempo['fueling'].get('workout_id')!=tempo.get('workout_id')):
         return None
-    return tempo
+    if _inc132_card3_numeric_dose_blocked(plan):
+        blocked_view = _nova_r1969104_canonical_card3(d, owner_id)
+        if (plan.get('inc132_recommended_priority') is None
+            and blocked_view.get('state') == 'SCIENTIFIC_PLANNING_BLOCKED'):
+            return tempo
+    elif (plan.get('inc132_recommended_priority') in {'CARD2','CARD3'}
+          and _nova_inc091_eligible(d,plan,owner_id)):
+        return tempo
+    return None
 
 
 def _v4891_prepare_snapshot_for_ui(data):
@@ -69261,8 +69007,9 @@ def _v4891_prepare_snapshot_for_ui(data):
     if tempo is None:return out
     plan=out['future_quality_plan']
     specific=out.get('nova_card3_workout_view') or {}
-    if (specific.get('verified_future_plan') is not True
-        or specific.get('workout_id')!=plan.get('workout_id')):
+    blocked_card3 = _inc132_card3_numeric_dose_blocked(plan)
+    if not blocked_card3 and (specific.get('verified_future_plan') is not True
+                             or specific.get('workout_id')!=plan.get('workout_id')):
         return out
     band=tempo['workout']['power_prescription']
     out['inc132_dual_quality']={
@@ -69270,7 +69017,7 @@ def _v4891_prepare_snapshot_for_ui(data):
         'owner_scope':_nova_inc050_owner_scope(owner),
         'quality_specific':{'role':'CARD3','workout_id':plan['workout_id'],
             'complete':True,'title':specific.get('title'),
-            'fueling':out.get('quality_direction_fuel')},
+            'fueling':out.get('quality_direction_fuel')} if not blocked_card3 else None,
         'quality_integrative':{'role':'CARD2','workout_id':tempo['workout_id'],
             'complete':True,'title':tempo['workout'].get('title'),
             'structure':tempo['workout'].get('main_set'),
@@ -69287,10 +69034,19 @@ def _v4891_prepare_snapshot_for_ui(data):
 # A future variant with formally validated Tempo for the three remaining goal
 # families can be installed only by an explicit library+science revision; this
 # extension intentionally does not promote the INC131 RESEARCH_ONLY records.
-APP_VERSION=('THE LAB · R196.9.153 · INC132 BH VERIFIED DUAL-QUALITY INTEGRATION '
-             '· FTP PRESERVATION · SCIENCE EVIDENCE-LOCKED · TEST CANDIDATE')
 
 # INC132 BH · attach the two verified future offers to Card2/Card3 presentation.
+# Keep Product's chronological cards and legacy duplicate handling when
+# there is no attested Card 2. With a dual plan, show the canonical Card 3
+# and retain the full original chronological session underneath Card 2.
+_INC132_GREY_BRANCH = '{% if is_quality_slot and quality_already_shown %}'
+assert HOME_PAGE.count(_INC132_GREY_BRANCH)==1,'INC132_DUAL_GREY_BRANCH_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_INC132_GREY_BRANCH,
+    '{% if is_quality_slot and quality_already_shown and not (data.inc132_dual_quality and data.inc132_dual_quality.quality_specific) %}',1)
+_INC132_DUPLICATE_BODY = '{% if quality_already_shown %}'
+assert HOME_PAGE.count(_INC132_DUPLICATE_BODY)==1,'INC132_DUAL_DUPLICATE_BODY_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_INC132_DUPLICATE_BODY,
+    '{% if quality_already_shown and not (data.inc132_dual_quality and data.inc132_dual_quality.quality_specific) %}',1)
 _INC132_SELECTED_MARKER="{{ ' v1962-quality-card' if is_quality_slot else '' }}"
 assert HOME_PAGE.count(_INC132_SELECTED_MARKER)==1,'INC132_DUAL_PRIORITY_CLASS_ANCHOR_DRIFT'
 HOME_PAGE=HOME_PAGE.replace(_INC132_SELECTED_MARKER,_INC132_SELECTED_MARKER +
@@ -69299,26 +69055,28 @@ _INC132_CARD_ENTRY='{% if is_quality_slot and next_quality_offer and not quality
 assert HOME_PAGE.count(_INC132_CARD_ENTRY)==1,'INC132_DUAL_BODY_START_DRIFT'
 _INC132_CARD2_VIEW='''{% set dual = data.inc132_dual_quality or {} %}
 {% set zi = dual.quality_integrative or {} %}
-{% if loop.index == 2 and zi.complete and zi.workout_id and dual.quality_specific and dual.quality_specific.complete %}
-<div class="inc132-dual-role">QUALITY INTEGRATIVA · TEMPO/Z3{% if dual.recommended_priority == 'CARD2' %}<span>PRIORITÀ CONSIGLIATA</span>{% endif %}</div>
+{% set show_tempo = loop.index == 2 and zi.complete and zi.workout_id %}
+{% if show_tempo %}
+<div class="inc132-dual-role">COMPLEMENTARY QUALITY · TEMPO/Z3{% if dual.recommended_priority == 'CARD2' %}<span>RECOMMENDED PRIORITY</span>{% endif %}</div>
 <h3>{{ zi.title|e }}</h3>
-<div class="v4-session-meta"><span class="v4-session-pill">{{ zi.duration_minutes|round(1) }} min totali</span><span class="v4-session-pill">SCEGLI TU QUANDO · NON IN CALENDARIO</span></div>
+<div class="v4-session-meta"><span class="v4-session-pill">{{ zi.duration_minutes|round(1) }} min total</span><span class="v4-session-pill">YOU CHOOSE WHEN · UNSCHEDULED</span></div>
 <div class="inc132-dual-work" role="group" aria-label="Attested integrative quality">
-<p><b>Struttura e recuperi:</b> {{ zi.structure|e }}</p>
-<p><b>Range personale da ripetizioni Tempo verificate:</b> {{ zi.power_display|e }}</p>
-<p><b>Perché:</b> {{ zi.why|e }}</p>
-<p><b>Fueling indoor:</b> {{ (zi.fueling or {}).get('display')|e }}</p>
-<p><b>Fueling outdoor:</b> {{ (zi.fueling or {}).get('outdoor_display')|e }}</p>
-<small>Alternativa alla Card 3, non una seconda qualità obbligatoria. Nessuna autorizzazione automatica a svolgerla oggi.</small>
+<p><b>Workout and recovery:</b> {{ zi.structure|e }}</p>
+<p><b>Power range from verified Tempo efforts:</b> {{ zi.power_display|e }}</p>
+<p><b>Purpose:</b> {{ zi.why|e }}</p>
+<p><b>Indoor fueling:</b> {{ (zi.fueling or {}).get('display')|e }}</p>
+<p><b>Outdoor fueling:</b> {{ (zi.fueling or {}).get('outdoor_display')|e }}</p>
+<small>{% if dual.quality_specific %}Choose this session as an alternative to Card 3.{% else %}Optional Tempo session. Card 3 still needs evidence for its specific workout.{% endif %} Check your readiness before riding.</small>
 </div>
-{% if s and s.source == 'CALENDAR' %}<details class="inc132-calendar-preserved"><summary>Attività già presente nel Calendario</summary><p>{{ s.title|e }} · {{ s.date|e }} · {{ s.intensity|e }}</p></details>{% endif %}
-{% else %}
+{% endif %}
+{% if not show_tempo or s %}
+{% if show_tempo %}<details class="inc132-calendar-preserved"><summary>Session already on your plan</summary>{% endif %}
 '''
 HOME_PAGE=HOME_PAGE.replace(_INC132_CARD_ENTRY,_INC132_CARD2_VIEW+_INC132_CARD_ENTRY,1)
 _INC132_CARD_CLOSE='</article>\n{% endif %}\n{% if not is_quality_slot or'
 assert HOME_PAGE.count(_INC132_CARD_CLOSE)==1,'INC132_DUAL_BODY_END_DRIFT'
 HOME_PAGE=HOME_PAGE.replace(_INC132_CARD_CLOSE,
-    '{% endif %}\n</article>\n{% endif %}\n{% if not is_quality_slot or',1)
+    '{% if show_tempo %}</details>{% endif %}\n{% endif %}\n</article>\n{% endif %}\n{% if not is_quality_slot or',1)
 _INC132_DUAL_CSS='''<style id="inc132-dual-quality-style">
 .inc132-selected{border:2px solid #21cbb2!important;box-shadow:0 0 0 2px rgba(33,203,178,.12),0 9px 32px rgba(33,203,178,.14)!important}
 .inc132-dual-role{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:10px;letter-spacing:.08em;font-weight:850;color:#50e6ce;margin:2px 0 11px}
@@ -69332,7 +69090,7 @@ assert HOME_PAGE.count('</head>')==1,'INC132_DUAL_STYLE_ANCHOR_DRIFT'
 HOME_PAGE=HOME_PAGE.replace('</head>',_INC132_DUAL_CSS+'\n</head>',1)
 app.jinja_env.parse(HOME_PAGE)
 
-# INC132 / TEST: Card2-only future FIRST TEMPO DOSE (explicit owner consent).
+# INC132 · First Tempo dose for Card 2.
 # This policy never changes Card3, the canonical library, INC083/INC111 issuer,
 # execution matching, ledger, calendar or production authentication.
 INC132_CARD2_FIRST_SCHEMA = 'NOVA-INC132-CARD2-FIRST-TEMPO-ONLY-1'
@@ -69342,6 +69100,17 @@ _INC132_CARD2_FIRST_BASE_UI = _v4891_prepare_snapshot_for_ui
 _INC132_CARD2_FIRST_GOALS = frozenset(('POWER_5','VO2MAX','POWER_20','TIME_TRIAL',
                                       'POWER_1','SPRINTER','ENDURANCE_BASE'))
 _INC132_CARD2_FIRST_REASONS = {
+    'POWER_5':'Build aerobic support for repeatable five-minute efforts.',
+    'VO2MAX':'Build aerobic support for VO2 work with a Tempo session.',
+    'POWER_20':'Build the ability to sustain power.',
+    'TIME_TRIAL':'Develop steadier pacing.',
+    'POWER_1':'Build aerobic support for anaerobic work.',
+    'SPRINTER':'Build aerobic support for sprint training.',
+    'ENDURANCE_BASE':'Introduce a controlled Tempo effort alongside easy endurance work.',
+}
+
+# Historical copy is used only to replay previously signed reports.
+_INC132_CARD2_FIRST_LEGACY_REASONS = {
     'POWER_5':'supporto aerobico alla ripetibilità dei 5 minuti',
     'VO2MAX':'sostegno aerobico al lavoro VO2 senza aggiungere HIIT',
     'POWER_20':'sostegno al tempo sotto pressione',
@@ -69352,7 +69121,7 @@ _INC132_CARD2_FIRST_REASONS = {
 }
 
 
-def _inc132_card2_first_build(goal, dimension, ftp_anchor, owner_user_id):
+def _inc132_card2_first_build(goal, dimension, ftp_anchor, owner_user_id, *, legacy_copy=False):
     """Deterministic Card2 advisory. Same future-unscheduled semantics as Card3.
 
     FTP is an owner-attested *pacing reference*, not proof of past Tempo or an
@@ -69361,30 +69130,18 @@ def _inc132_card2_first_build(goal, dimension, ftp_anchor, owner_user_id):
     goal=str(goal or '').upper();dimension=str(dimension or '').upper()
     if goal not in _INC132_CARD2_FIRST_GOALS or not dimension or not owner_user_id:
         return None
-    # Explicit real owner binding; a tampered/missing token fails closed.
     f=ftp_anchor if isinstance(ftp_anchor,dict) else {}
-    if not f.get('nova_inc132_owner_token'):
+    token=f.get('nova_inc132_owner_token')
+    expected=_inc132_r153_scope_token(owner_user_id)
+    if not isinstance(token,str) or not hmac.compare_digest(token,expected):
         return None
-    ref=_inc132_r153_public_ftp(f,expected_owner_id=owner_user_id)
-    if (not isinstance(ref,dict) or ref.get('state')!='AVAILABLE'
-        or ref.get('owner_attested') is not True or ref.get('source')!='INTERVALS.ICU'
-        or type(ref.get('watts')) is not int or not 80<=ref['watts']<=600):
+    ftp=f.get('nova_inc132_card2_rolling_ftp')
+    if type(ftp) not in (int,float) or not 80<=ftp<=600:
         return None
-    # The owner-approved DTM BI prioritizes Intervals rolling FTP as the
-    # persistent pacing reference. Older formal estimates may share its date;
-    # do not silently replace the rolling estimate with that alternative.
-    ftp=ref['watts']
-    reference_date=ref.get('date')
-    rolling=f.get('current_rolling_ftp')
-    rolling_date=f.get('current_rolling_date')
-    if type(rolling) in (int,float) and math.isfinite(rolling) and 80<=rolling<=600:
-        try: latest=date.fromisoformat(str(rolling_date or '')[:10])
-        except (ValueError,TypeError):latest=None
-        if latest is not None and latest<=get_rome_now().date():
-            ftp=int(round(rolling));reference_date=latest.isoformat()
-    try: stamp=date.fromisoformat(str(reference_date or ''))
+    try: stamp=date.fromisoformat(str(f.get('nova_inc132_card2_rolling_date') or ''))
     except (ValueError,TypeError):return None
     if stamp>get_rome_now().date():return None
+    ftp=int(round(ftp))
     # Minimum controlled FIRST exposure, not a hidden progression from Z4/VO2.
     # Conservative 80-85% FTP, round *down* to 5W, do not add false precision.
     low=int(math.floor(ftp*.80/5)*5)
@@ -69408,12 +69165,17 @@ def _inc132_card2_first_build(goal, dimension, ftp_anchor, owner_user_id):
         'recovery_seconds':300,'observed_repeated_work_is_direct_evidence':False,
         'workout_specific_proof':'NOT_IMPLIED_BY_FTP',
         'execution_clearance':'NOT_GRANTED', 'no_progression':True}
+    title = 'First Tempo/Z3 session · 2×10 min'
+    main_set = (f'15 min easy in Z1/Z2, then 2×10 min in Tempo/Z3 at {low}–{high} W '
+                'with 5 min in Z1 between efforts. Finish with 10 min in Z1.')
+    purpose = _INC132_CARD2_FIRST_REASONS[goal]
+    if legacy_copy:
+        title = 'Prima dose Tempo/Z3 · 2×10 min'
+        main_set = (f'15 min facile Z1/Z2; 2×10 min in Tempo/Z3 a {low}–{high} W, '
+                    '5 min Z1 fra le ripetute; 10 min defaticamento Z1. Nessuna progressione automatica.')
+        purpose = _INC132_CARD2_FIRST_LEGACY_REASONS[goal]
     work={'nova_workout_id':wid,'goal_key':goal,'nova_prescription_dimension':dimension,
-        'title':'Prima dose Tempo/Z3 · 2×10 min',
-        'main_set':('15 min facile Z1/Z2; 2×10 min in Tempo/Z3 a '+
-                   str(low)+'–'+str(high)+' W, 5 min Z1 fra le ripetute; '+
-                   '10 min defaticamento Z1. Nessuna progressione automatica.'),
-        'why':_INC132_CARD2_FIRST_REASONS[goal],
+        'title':title,'main_set':main_set,'why':purpose,
         'duration':'50 min','intensity':'TEMPO Z3 · FUTURE FIRST DOSE',
         'power_prescription':band,
         'session_composition':{'schema':INC132_CARD2_FIRST_SCHEMA,
@@ -69456,7 +69218,7 @@ def _inc132_validate_integrative(data,plan,owner_user_id,producer_request=True):
                     producer_request=producer_request)
     if not owner_user_id or not isinstance(data,dict):return False
     if (plan.get('inc132_dual_schema')!=INC132_DUAL_SCHEMA
-        or plan.get('status')!='COMPILED_UNSCHEDULED'
+        or not (plan.get('status')=='COMPILED_UNSCHEDULED' or _inc132_card3_numeric_dose_blocked(plan))
         or tempo.get('schema')!=INC132_DUAL_SCHEMA
         or tempo.get('first_dose_schema')!=INC132_CARD2_FIRST_SCHEMA
         or tempo.get('role')!='CARD2'
@@ -69485,7 +69247,11 @@ def _inc132_validate_integrative(data,plan,owner_user_id,producer_request=True):
     base={k:v for k,v in tempo.items() if k!='fueling'}
     if not hmac.compare_digest(_nova_inc051_canonical_json(base),
                                _nova_inc051_canonical_json(expected)):
-        return False
+        legacy = _inc132_card2_first_build(plan.get('goal_key'),plan.get('dimension'),
+                    data.get('ftp_anchor'),owner_user_id,legacy_copy=True)
+        if not hmac.compare_digest(_nova_inc051_canonical_json(base),
+                                   _nova_inc051_canonical_json(legacy)):
+            return False
     if 'fueling' not in tempo:return True
     fuel=tempo.get('fueling')
     if not isinstance(fuel,dict):return False
@@ -69517,22 +69283,28 @@ def _v4891_prepare_snapshot_for_ui(data):
     result=dict(out);dual=dict(dual);integrative=dict(integrative)
     plan=(result.get('future_quality_plan') or {}).get('inc132_integrative') or {}
     if plan.get('dose_kind')=='FIRST_TEMPO_FTP_ADVISORY':
-        integrative['dose_label']='Range della prima esposizione (FTP Intervals personale, non prove già svolte)'
+        integrative['dose_label']='First-session power range based on your Intervals FTP'
+        # Project English copy after validating the original persisted contract.
+        english = _inc132_card2_first_build(plan.get('goal_key'),plan.get('dimension'),
+                    result.get('ftp_anchor'),_nova_inc051_verified_owner_id())
+        if english:
+            work = english['workout']
+            integrative.update(title=work['title'], structure=work['main_set'], why=work['why'])
         integrative['first_exposure']=True
-        integrative['execution_disclaimer']='Proposta futura · verifica condizione e tempi prima di eseguirla'
+        integrative['execution_disclaimer']='Future option. Check your readiness and available time before riding.'
     else:
-        integrative['dose_label']='Range personale da ripetizioni Tempo verificate'
+        integrative['dose_label']='Power range from verified Tempo efforts'
         integrative['first_exposure']=False
     dual['quality_integrative']=integrative;result['inc132_dual_quality']=dual
     return result
 
 # Only change a single label in Card2; Card3 markup and rendering stay intact.
-_INC132_C2_FIRST_OLD_LABEL='<b>Range personale da ripetizioni Tempo verificate:</b>'
+_INC132_C2_FIRST_OLD_LABEL='<b>Power range from verified Tempo efforts:</b>'
 assert HOME_PAGE.count(_INC132_C2_FIRST_OLD_LABEL)==1,'INC132_FIRST_CARD2_LABEL_ANCHOR_DRIFT'
 HOME_PAGE=HOME_PAGE.replace(_INC132_C2_FIRST_OLD_LABEL,
-    '<b>{{ zi.dose_label|default("Range personale da ripetizioni Tempo verificate")|e }}:</b>',1)
+    '<b>{{ zi.dose_label|default("Power range from verified Tempo efforts")|e }}:</b>',1)
 app.jinja_env.parse(HOME_PAGE)
-# No changed APP_VERSION/release number for test-only repair.
+APP_VERSION += " · INC132 CARD 2 TEMPO AND EXECUTION ENGLISH COPY CANDIDATE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
