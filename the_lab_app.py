@@ -3906,6 +3906,11 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <article class="v4822-breakthrough" style="margin-top:18px">
   <div class="v4822-breakthrough-head"><div><span class="v4822-breakthrough-kicker">LATEST QUALITY SESSION · NOVA</span><h3>{{ lf.headline }}</h3><div class="v4822-activity-name">{{ lf.name }}</div></div><span class="v4822-breakthrough-date">{{ lf.date|ui_date }}</span></div>
   <p style="font-size:13px;line-height:1.65;white-space:normal;margin:14px 0">{{ lf.text }}</p>
+  {% if lf.prescription_link_status == 'LINKED' %}
+  <p class="v4822-method">Linked to a previously issued Nova prescription.</p>
+  {% elif lf.prescription_link_status == 'UNLINKED' %}
+  <p class="v4822-method">Completed quality recorded. A link to an issued Nova prescription could not be verified.</p>
+  {% endif %}
   {% if lf.structure_status != 'VERIFIED' %}<p class="v4822-method">Source-lap verification pending. A missing lap import is not an incomplete athlete effort.</p>{% endif %}
 </article>
 {% endif %}
@@ -29403,6 +29408,10 @@ def analyze():
             "science_insights": science_context,
             "science_kb_version": SCIENCE_KB.get("version", 1),
         }
+        if latest_activity_feedback.get('available'):
+            execution_link = _v156_execution_history_link(latest_activity_feedback, microcycle_ledger)
+            latest_activity_feedback['prescription_link_status'] = (
+                'LINKED' if execution_link else 'UNLINKED')
         # INC125: observe a saved athlete window versus verified completed work.
         # This sidecar is built AFTER all hard decisions, without modifying them.
         data['quality_intent_reconciliation'] = _r145_quality_intent_observation(
@@ -68283,6 +68292,7 @@ HOME_PAGE = HOME_PAGE.replace('</body>', _R143_SCRIPT + '\n</body>', 1)
 # prescription. Even when observed work matches exactly, retain R139 causal
 # adherence guard, the original hard clearance, and all future science gates.
 R145_INTENT_OBSERVATION_SCHEMA = 'NOVA-R196.9.145-INTENT-OBSERVATION-1'
+_R145_INTERVAL_TOLERANCE_SECONDS = 10.0
 
 
 def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback=None):
@@ -68313,22 +68323,27 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
     for entry in recent:
         wid = str(entry.get('workout_id') or '')
         goal = str(entry.get('goal_key') or '').upper()
-        template = next((t for t in _NOVA_WORKOUT_LIBRARY
-                         if t.get('id') == wid and t.get('goal') == goal
-                         and t.get('pattern') == 'STANDARD'), None)
+        template = _R19696_LIBRARY_INDEX.get(wid)
+        if (not template or template.get('goal') != goal
+                or template.get('pattern') not in {'STANDARD', 'SUSTAINED'}):
+            continue
         saved = _v139_parse_local_dt(entry.get('saved_at_utc'))
         try:
             declared = float(entry.get('minutes'))
         except (ValueError, TypeError):
             continue
-        if template is None or saved is None or not (15 <= declared <= 360):
+        if saved is None or not (15 <= declared <= 360):
             continue
+        matches = {}
         for block in blocks or []:
-            if not isinstance(block, dict) or str(block.get('event_kind') or '').upper() == 'RACE':
+            if (not isinstance(block, dict) or block.get('quality_relevant') is not True
+                    or _v1954_confirmed_competition(block)):
                 continue
             activity_id = str(block.get('activity_id') or '').strip()
+            if not activity_id or not str(block.get('time') or '').strip():
+                continue
             activity_at = _v139_activity_dt(block)
-            if not activity_id or activity_at is None or activity_at < saved:
+            if activity_at is None or activity_at < saved:
                 continue
             if activity_at.date().isoformat() != str(entry.get('local_date') or '')[:10]:
                 continue
@@ -68338,33 +68353,42 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
             rep = block.get('repeatability')
             if not isinstance(rep, dict):
                 continue
-            try:
-                # Earlier block surfaces expose provenance directly, whereas
-                # the latest completed-quality audit independently attests
-                # the canonical interval structure for the SAME activity ID.
-                verified = (rep.get('activity_truth_status') == 'RESOLVED'
-                    and rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL')
-                attested = (isinstance(latest_feedback, dict)
-                    and latest_feedback.get('activity_id') == activity_id
-                    and latest_feedback.get('structure_status') == 'VERIFIED'
-                    and block.get('quality_relevant') is True)
-                mechanics_ok = ((verified or attested)
-                    and (rep.get('source') == 'ICU_INTERVALS_CANONICAL'
-                         or rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL')
-                    and int(rep.get('reps') or 0) == int(template.get('reps') or 0)
-                    and int(rep.get('interval_secs') or 0) == int(template.get('work_s') or 0)
-                    and int(rep.get('recovery_secs') or 0) == int(template.get('recovery_s') or 0))
-            except (TypeError, ValueError):
-                mechanics_ok = False
-            if not mechanics_ok:
+            truth = block.get('activity_truth') or {}
+            canonical = 'ICU_INTERVALS_CANONICAL'
+            rep_source = rep.get('activity_truth_source') or rep.get('source')
+            source_verified = (
+                truth.get('status') == 'RESOLVED'
+                and truth.get('source') == rep_source
+                and rep_source in {canonical, 'DEVICE_LAPS'}
+            )
+            legacy_verified = rep_source == canonical and (
+                rep.get('activity_truth_status') == 'RESOLVED'
+                or ((latest_feedback or {}).get('activity_id') == activity_id
+                    and (latest_feedback or {}).get('structure_status') == 'VERIFIED')
+            )
+            if not (source_verified or legacy_verified):
+                continue
+            if rep.get('recovery_observation_complete') is False:
                 continue
             try:
-                duration = float(block.get('duration_min'))
-            except (ValueError, TypeError):
+                reps = int(template['reps'])
+                work_seconds = float(template['work_s'])
+                recovery_seconds = float(template['recovery_s'])
+                observed_reps = float(rep['reps'])
+                observed_work = float(rep['interval_secs'])
+                observed_recovery = float(rep['recovery_secs'])
+                duration = float(block['duration_min'])
+            except (KeyError, TypeError, ValueError, OverflowError):
                 continue
-            if not (0 < duration <= declared + 0.5):
+            if not (reps > 1 and observed_reps == reps
+                    and rep.get('recovery_pair_count', reps - 1) == reps - 1
+                    and work_seconds > 0 and observed_work > 0
+                    and recovery_seconds > 0 and observed_recovery > 0
+                    and abs(observed_work - work_seconds) <= _R145_INTERVAL_TOLERANCE_SECONDS
+                    and abs(observed_recovery - recovery_seconds) <= _R145_INTERVAL_TOLERANCE_SECONDS
+                    and 0 < duration <= declared + 0.5):
                 continue
-            return {**base, 'state': 'OBSERVED_AFTER_SAVED_AVAILABILITY',
+            matches[activity_id] = {**base, 'state': 'OBSERVED_AFTER_SAVED_AVAILABILITY',
                     'intent_local_date': entry['local_date'],
                     'intent_daypart': entry['daypart'],
                     'declared_minutes': round(declared, 1),
@@ -68372,11 +68396,14 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
                     'activity_id': activity_id,
                     'observed_local_time': activity_at.strftime('%H:%M'),
                     'observed_duration_min': round(duration, 1),
-                    'observed_reps': int(rep['reps']),
-                    'observed_interval_seconds': int(rep['interval_secs']),
-                    'observed_recovery_seconds': int(rep['recovery_secs']),
-                    'source': 'ICU_INTERVALS_CANONICAL + OWNER_SCOPED_SAVED_INTENT',
+                    'observed_reps': reps,
+                    'observed_interval_seconds': observed_work,
+                    'observed_recovery_seconds': observed_recovery,
+                    'interval_tolerance_seconds': _R145_INTERVAL_TOLERANCE_SECONDS,
+                    'source': rep_source + ' + OWNER_SCOPED_SAVED_INTENT',
                     'meaning': 'OBSERVED_EXECUTION_NOT_RETROACTIVE_CLEARANCE'}
+        if len(matches) == 1:
+            return next(iter(matches.values()))
     return {**base, 'state': 'NO_VERIFIED_OBSERVED_MATCH',
             'latest_intent_date': recent[0].get('local_date')}
 
