@@ -3906,6 +3906,13 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 <article class="v4822-breakthrough" style="margin-top:18px">
   <div class="v4822-breakthrough-head"><div><span class="v4822-breakthrough-kicker">LATEST QUALITY SESSION · NOVA</span><h3>{{ lf.headline }}</h3><div class="v4822-activity-name">{{ lf.name }}</div></div><span class="v4822-breakthrough-date">{{ lf.date|ui_date }}</span></div>
   <p style="font-size:13px;line-height:1.65;white-space:normal;margin:14px 0">{{ lf.text }}</p>
+  {% if lf.prescription_link_status == 'LINKED' %}
+  <p class="v4822-method">Linked to a previously issued Nova prescription.</p>
+  {% elif lf.prescription_link_status == 'AVAILABILITY_MATCH' %}
+  <p class="v4822-method">Completed quality matches your saved availability and workout structure. Availability is recorded separately from prescription adherence.</p>
+  {% elif lf.prescription_link_status == 'UNLINKED' %}
+  <p class="v4822-method">Completed quality recorded. No verified link to an issued Nova prescription.</p>
+  {% endif %}
   {% if lf.structure_status != 'VERIFIED' %}<p class="v4822-method">Source-lap verification pending. A missing lap import is not an incomplete athlete effort.</p>{% endif %}
 </article>
 {% endif %}
@@ -22197,10 +22204,10 @@ def _v4879_note_power_band(note):
     if low is not None and high is not None and low < high:
         return low, high
     return None
-def _v125_latest_activity_feedback(blocks, achievements, evidence_ledger=None, now=None):
-    """Recognize today's observed quality, even if canonical lap reconstruction fails."""
+def _v125_latest_activity_feedback(blocks, achievements, evidence_ledger=None, now=None,
+                                   microcycle_ledger=None, availability_match=None):
+    """Recognize recent observed quality independently of prescription linkage."""
     now=now or get_rome_now()
-    today=now.date().isoformat()
     rows=[]
     for b in (blocks or []):
         if not isinstance(b,dict) or not b.get('quality_relevant'):continue
@@ -22243,8 +22250,14 @@ def _v125_latest_activity_feedback(blocks, achievements, evidence_ledger=None, n
         text+=' The canonical interval analysis is available as roadmap evidence; separate progression gates still apply.'
     elif partial or not rep:
         text+=' Roadmap breadth credit remains pending source-lap verification; the verified power best is recognized independently.'
+    link_status = 'UNLINKED'
+    if aid and _v156_execution_history_link(b, microcycle_ledger):
+        link_status = 'LINKED'
+    elif aid and (availability_match or {}).get('activity_id') == aid:
+        link_status = 'AVAILABILITY_MATCH'
     return {'available':True,'activity_id':aid,'date':activity_day,'name':b.get('name'),
             'headline':headline,'text':text,'structure_status':verdict,'pb':pb,
+            'prescription_link_status':link_status,
             'roadmap_repetition_evidence':bool(ledger_matches),
             'method':'SOURCE_LAPS_FIRST; AUTOMATIC_INTERVALS_DESCRIPTIVE_IF_UNVERIFIED; DIRECT_PB_INDEPENDENT'}
 
@@ -28920,7 +28933,12 @@ def analyze():
             goal_key=training_direction.get("primary_goal"), scope_start=training_direction.get("started_on") or (strategy_plan or {}).get("started_on"),
         )
         race_repeatability=build_race_repeatability(repeatability_history_blocks or progression_training_blocks,session_progression,evidence_ledger=evidence_ledger)
-        latest_activity_feedback=_v125_latest_activity_feedback(previous_training_blocks,power_achievements,evidence_ledger=evidence_ledger)
+        # Observation is separate from clearance and prescription adherence.
+        quality_intent_reconciliation = _r145_quality_intent_observation(
+            user['id'], previous_training_blocks, now=get_rome_now())
+        latest_activity_feedback = _v125_latest_activity_feedback(
+            previous_training_blocks, power_achievements, evidence_ledger=evidence_ledger,
+            microcycle_ledger=microcycle_ledger, availability_match=quality_intent_reconciliation)
         if completed_quality_review and previous_training_blocks and completed_quality_review.get("name")==previous_training_blocks[0].get("name"):completed_quality_review["execution_quality"]=previous_training_blocks[0].get("execution_quality")
         stored_performance_evidence = _v4896_plan_performance_evidence(strategy_plan)
         performance_evidence = _v4896_build_performance_evidence(
@@ -29405,9 +29423,7 @@ def analyze():
         }
         # INC125: observe a saved athlete window versus verified completed work.
         # This sidecar is built AFTER all hard decisions, without modifying them.
-        data['quality_intent_reconciliation'] = _r145_quality_intent_observation(
-            user['id'], previous_training_blocks, now=get_rome_now(),
-            latest_feedback=latest_activity_feedback)
+        data['quality_intent_reconciliation'] = quality_intent_reconciliation
         # R196.9.16 shadow-only exact references in the already-fetched history.
         try:
             data['execution_reference_coverage'] = _v196916_execution_reference_coverage(
@@ -68075,7 +68091,8 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
   <p class="r143-planning-notice" role="status">Availability saved: {{ nova_r142_state.latest_intent.minutes|e }} min · pending next Snapshot.</p>
   {% endif %}
   {% set r145_observation = data.quality_intent_reconciliation or {} %}
-  {% if r145_observation.state == 'OBSERVED_AFTER_SAVED_AVAILABILITY' %}
+  {% if r145_observation.state == 'OBSERVED_AFTER_SAVED_AVAILABILITY'
+    and (not data.latest_activity_feedback or data.latest_activity_feedback.prescription_link_status != 'AVAILABILITY_MATCH') %}
   <p class="r143-planning-notice" role="status">Your {{ r145_observation.observed_duration_min|e }} min quality was recorded on {{ r145_observation.intent_local_date|e }} at {{ r145_observation.observed_local_time|e }}. Your earlier availability was saved; it was not Nova execution clearance. Your next quality is a separate coaching decision.</p>
   {% endif %}
   <button type="button" class="r143-open-dialog" data-r143-open="r143-quality-dialog" aria-haspopup="dialog" aria-controls="r143-quality-dialog">
@@ -68283,7 +68300,7 @@ HOME_PAGE = HOME_PAGE.replace('</body>', _R143_SCRIPT + '\n</body>', 1)
 R145_INTENT_OBSERVATION_SCHEMA = 'NOVA-R196.9.145-INTENT-OBSERVATION-1'
 
 
-def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback=None):
+def _r145_quality_intent_observation(owner_id, blocks, now=None):
     base = {'schema': R145_INTENT_OBSERVATION_SCHEMA,
             'state': 'NO_RECENT_INTENT', 'observational_only': True,
             'not_a_nova_prescription': True, 'execution_authorized': False,
@@ -68321,12 +68338,16 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
             continue
         if template is None or saved is None or not (15 <= declared <= 360):
             continue
+        matches = {}
         for block in blocks or []:
-            if not isinstance(block, dict) or str(block.get('event_kind') or '').upper() == 'RACE':
+            if (not isinstance(block, dict) or block.get('quality_relevant') is not True
+                    or _v1954_confirmed_competition(block)):
                 continue
             activity_id = str(block.get('activity_id') or '').strip()
+            if not activity_id or not str(block.get('time') or '').strip():
+                continue
             activity_at = _v139_activity_dt(block)
-            if not activity_id or activity_at is None or activity_at < saved:
+            if activity_at is None or activity_at < saved:
                 continue
             if activity_at.date().isoformat() != str(entry.get('local_date') or '')[:10]:
                 continue
@@ -68334,35 +68355,30 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
             if actual_part != entry.get('daypart'):
                 continue
             rep = block.get('repeatability')
-            if not isinstance(rep, dict):
+            truth = block.get('activity_truth')
+            if not isinstance(rep, dict) or not isinstance(truth, dict):
                 continue
             try:
-                # Earlier block surfaces expose provenance directly, whereas
-                # the latest completed-quality audit independently attests
-                # the canonical interval structure for the SAME activity ID.
-                verified = (rep.get('activity_truth_status') == 'RESOLVED'
-                    and rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL')
-                attested = (isinstance(latest_feedback, dict)
-                    and latest_feedback.get('activity_id') == activity_id
-                    and latest_feedback.get('structure_status') == 'VERIFIED'
-                    and block.get('quality_relevant') is True)
-                mechanics_ok = ((verified or attested)
-                    and (rep.get('source') == 'ICU_INTERVALS_CANONICAL'
-                         or rep.get('activity_truth_source') == 'ICU_INTERVALS_CANONICAL')
-                    and int(rep.get('reps') or 0) == int(template.get('reps') or 0)
-                    and int(rep.get('interval_secs') or 0) == int(template.get('work_s') or 0)
-                    and int(rep.get('recovery_secs') or 0) == int(template.get('recovery_s') or 0))
-            except (TypeError, ValueError):
-                mechanics_ok = False
-            if not mechanics_ok:
-                continue
-            try:
+                reps = int(template['reps'])
+                work_seconds = float(template['work_s'])
+                recovery_seconds = float(template['recovery_s'])
+                observed_work = float(rep['interval_secs'])
+                observed_recovery = float(rep['recovery_secs'])
                 duration = float(block.get('duration_min'))
-            except (ValueError, TypeError):
+            except (KeyError, ValueError, TypeError, OverflowError):
                 continue
-            if not (0 < duration <= declared + 0.5):
+            if not (truth.get('status') == 'RESOLVED'
+                    and truth.get('source') in {'DEVICE_LAPS', 'ICU_INTERVALS_CANONICAL'}
+                    and rep.get('source') == truth.get('source')
+                    and reps > 1 and work_seconds > 0 and recovery_seconds > 0
+                    and rep.get('reps') == reps
+                    and rep.get('recovery_observation_complete') is True
+                    and rep.get('recovery_pair_count') == reps - 1
+                    and abs(observed_work - work_seconds) <= max(12.0, 0.08 * work_seconds)
+                    and abs(observed_recovery - recovery_seconds) <= 30.0
+                    and 0 < duration <= declared + 0.5):
                 continue
-            return {**base, 'state': 'OBSERVED_AFTER_SAVED_AVAILABILITY',
+            matches[activity_id] = {**base, 'state': 'OBSERVED_AFTER_SAVED_AVAILABILITY',
                     'intent_local_date': entry['local_date'],
                     'intent_daypart': entry['daypart'],
                     'declared_minutes': round(declared, 1),
@@ -68373,8 +68389,10 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
                     'observed_reps': int(rep['reps']),
                     'observed_interval_seconds': int(rep['interval_secs']),
                     'observed_recovery_seconds': int(rep['recovery_secs']),
-                    'source': 'ICU_INTERVALS_CANONICAL + OWNER_SCOPED_SAVED_INTENT',
+                    'source': truth['source'] + ' + OWNER_SCOPED_SAVED_INTENT',
                     'meaning': 'OBSERVED_EXECUTION_NOT_RETROACTIVE_CLEARANCE'}
+        if len(matches) == 1:
+            return next(iter(matches.values()))
     return {**base, 'state': 'NO_VERIFIED_OBSERVED_MATCH',
             'latest_intent_date': recent[0].get('local_date')}
 
