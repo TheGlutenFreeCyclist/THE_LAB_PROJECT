@@ -22151,6 +22151,8 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
             open_seq=[d for d in (graph.get("sequence") or ()) if not _v82_question_exit_satisfied(question_state,d)]
             dim=(open_seq or list(graph.get("sequence") or ("FRESH_CAPACITY",)))[0]; scores[dim]=50.0; reasons[dim]="Insufficient evidence to rank a more specific unresolved adaptation question."
     _nova_r134_rank_science_after_recent_transfer(scores, reasons, goal, evidence_ledger, roadmap)
+    dose_feasibility = _nova_inc133_rank_supported_questions(
+        goal, scores, road, evidence_ledger)
     ranked=sorted(scores,key=lambda k:(-scores[k],(graph.get("sequence") or ()).index(k) if k in (graph.get("sequence") or ()) else 999))
     dim=ranked[0]; arch=list((graph.get("architectures") or {}).get(dim) or ())
     evidence=["TID_ELITE","CYCLIST_TRAINING_DISTRIBUTION","LONG_TERM_DEVELOPMENT"]
@@ -22166,7 +22168,7 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
     margin=(scores[ranked[0]]-scores[ranked[1]]) if len(ranked)>1 else 30
     confidence="HIGH" if dim=="NONE" else ("HIGH" if scores[dim]>=85 and margin>=12 else ("MEDIUM" if scores[dim]>=70 else "LOW"))
     dose_contract=_v504_scientific_dose_contract(goal,dim,feat)
-    return {"schema":"V4.8.74-R72-1","available":True,"goal_key":goal,"primary_anchor":graph.get("anchor"),"dimension":dim,"open_question":reasons.get(dim),"candidate_architectures":arch,"ranked_questions":ranked_questions,"confidence":confidence,"evidence_ids":evidence,"evidence":[{"id":k,**_V503_SCIENCE_EVIDENCE[k]} for k in evidence if k in _V503_SCIENCE_EVIDENCE],"dose_contract":dose_contract,"signals":{"fresh_anchor":fresh_anchor,"repeatability_strong":repeat_strong,"quality_sessions":feat["quality_sessions"],"repeatability_sessions":feat.get("repeatability_sessions"),"repeatability_strong_sessions":feat.get("repeatability_strong_sessions"),"repeatability_efforts":((evidence_ledger or {}).get("counts") or {}).get("repeatability_efforts") if isinstance(evidence_ledger,dict) else None,"evidence_ledger_schema":(evidence_ledger or {}).get("schema") if isinstance(evidence_ledger,dict) else None,"question_state_schema":(question_state or {}).get("schema") if isinstance(question_state,dict) else None,"closed_questions":list((question_state or {}).get("closed_dimensions") or []) if isinstance(question_state,dict) else [],"evidence_scope":(evidence_ledger or {}).get("scope") if isinstance(evidence_ledger,dict) else None,"active_load_recovery_seen":feat["active_load_recovery"],"recovery_under_load_exposures":feat.get("recovery_under_load_exposures"),"recovery_under_load_successes":feat.get("recovery_under_load_successes"),"max_successful_recovery_ratio":feat.get("max_successful_recovery_ratio"),"preloaded_quality_seen":feat["preloaded_quality"],"long_session_seen":feat["long_session"],"race_transfer_seen":feat["race_transfer"],"high_dose_progressed":high_progressed,"moderate_dose_progressed":moderate_progressed,"validation_due":validation_due,"checkpoint_role":role,"latest_repeatability_signature":feat.get("latest_repeatability_signature"),"repeatability_signature_streak":int(feat.get("repeatability_signature_streak") or 0),"structure_saturated":bool(structure_saturated)},"guardrail":"Specificity first: science selects the adaptation question; athlete data doses the progression. Change one dominant stress variable at a time when an architecture is novel. Recovery/spacing decides executability, not adaptation purpose. Product score thresholds and dose ramps are conservative heuristics, not physiological laws."}
+    return {"schema":"V4.8.74-R72-1","available":True,"dose_feasibility":dose_feasibility,"goal_key":goal,"primary_anchor":graph.get("anchor"),"dimension":dim,"open_question":reasons.get(dim),"candidate_architectures":arch,"ranked_questions":ranked_questions,"confidence":confidence,"evidence_ids":evidence,"evidence":[{"id":k,**_V503_SCIENCE_EVIDENCE[k]} for k in evidence if k in _V503_SCIENCE_EVIDENCE],"dose_contract":dose_contract,"signals":{"fresh_anchor":fresh_anchor,"repeatability_strong":repeat_strong,"quality_sessions":feat["quality_sessions"],"repeatability_sessions":feat.get("repeatability_sessions"),"repeatability_strong_sessions":feat.get("repeatability_strong_sessions"),"repeatability_efforts":((evidence_ledger or {}).get("counts") or {}).get("repeatability_efforts") if isinstance(evidence_ledger,dict) else None,"evidence_ledger_schema":(evidence_ledger or {}).get("schema") if isinstance(evidence_ledger,dict) else None,"question_state_schema":(question_state or {}).get("schema") if isinstance(question_state,dict) else None,"closed_questions":list((question_state or {}).get("closed_dimensions") or []) if isinstance(question_state,dict) else [],"evidence_scope":(evidence_ledger or {}).get("scope") if isinstance(evidence_ledger,dict) else None,"active_load_recovery_seen":feat["active_load_recovery"],"recovery_under_load_exposures":feat.get("recovery_under_load_exposures"),"recovery_under_load_successes":feat.get("recovery_under_load_successes"),"max_successful_recovery_ratio":feat.get("max_successful_recovery_ratio"),"preloaded_quality_seen":feat["preloaded_quality"],"long_session_seen":feat["long_session"],"race_transfer_seen":feat["race_transfer"],"high_dose_progressed":high_progressed,"moderate_dose_progressed":moderate_progressed,"validation_due":validation_due,"checkpoint_role":role,"latest_repeatability_signature":feat.get("latest_repeatability_signature"),"repeatability_signature_streak":int(feat.get("repeatability_signature_streak") or 0),"structure_saturated":bool(structure_saturated)},"guardrail":"Specificity first: science selects the adaptation question; athlete data doses the progression. Change one dominant stress variable at a time when an architecture is novel. Recovery/spacing decides executability, not adaptation purpose. Product score thresholds and dose ramps are conservative heuristics, not physiological laws."}
 def _v503_scientific_progression_text(x):
     if not (x or {}).get("available"): return "SCIENTIFIC COACH MEMORY: unavailable."
     if str((x or {}).get("dimension") or "").upper()=="NONE":
@@ -67631,6 +67633,9 @@ _R142_UI_BEFORE = _v4891_prepare_snapshot_for_ui
 
 def _r142_quality_identity(data):
     d = data if isinstance(data, dict) else {}
+    specific = (d.get('inc132_dual_quality') or {}).get('quality_specific') or {}
+    if specific.get('complete') and specific.get('workout_id'):
+        return specific['workout_id'], 3
     index = d.get('inc120_quality_duplicate_card')
     if index in (1, 2):
         cards = d.get('nova_inc110_chronological_cards') or []
@@ -67649,16 +67654,21 @@ def _r142_quality_identity(data):
     return None, None
 
 
-def _r142_report_binding(report, owner_id):
-    raw = (report or {}).get('data') or {}
-    d = _v4891_prepare_snapshot_for_ui(raw)
+def _r142_report_binding(report, owner_id, target=None, prepared=None):
+    d = prepared if prepared is not None else _v4891_prepare_snapshot_for_ui(
+        (report or {}).get('data') or {})
     wid, card = _r142_quality_identity(d)
+    if target == 'TEMPO':
+        tempo = (d.get('inc132_dual_quality') or {}).get('quality_integrative') or {}
+        wid, card = (tempo.get('workout_id') if tempo.get('complete') else None), 2
     goal = str(((d.get('nova_decision') or {}).get('goal_key') or
                 (d.get('adaptive_roadmap') or {}).get('goal_key') or '')).upper()
     stamp = str(report.get('generated_at_utc') or report.get('generated_at_local') or '')
     if not wid or not stamp or not owner_id or not goal:
         return None
     raw_key = '|'.join((R142_AVAILABILITY_SCHEMA, str(owner_id), stamp, goal, wid, str(card)))
+    if target == 'TEMPO':
+        raw_key += '|TEMPO'
     token = hmac.new(str(SECRET_KEY).encode('utf-8'), raw_key.encode('utf-8'),
                      hashlib.sha256).hexdigest()
     return {'token': token, 'workout_id': wid, 'card': card, 'goal': goal,
@@ -67879,34 +67889,38 @@ def _v4891_prepare_snapshot_for_ui(data):
     return displayed
 
 
-def _r142_page_state():
+@app.context_processor
+def _r142_template_context():
+    states = {'nova_r142_state': {'active': False}, 'nova_tempo_state': {'active': False}}
     if (not has_request_context() or request.endpoint not in ('home', 'last_report')
         or not session.get('auth_token') or not session.get('user_id')):
-        return {'active': False}
+        return states
     try:
         owner = str(session['user_id'])
         report = load_latest_report(include_payload=True, owner_user_id=owner)
-        binding = _r142_report_binding(report, owner) if report else None
-        if not binding:
-            return {'active': False}
-        binding['active'] = True
-        items = _r142_intents(owner)
-        items = [i for i in items if i.get('scope') == 'USUAL' or
-                 i.get('workout_id') == binding['workout_id']]
-        items.sort(key=lambda i: str(i.get('saved_at_utc') or ''), reverse=True)
-        binding['latest_intent'] = items[0] if items else None
-        binding['usual_limit'] = next((i for i in items if i.get('kind') == 'TOO_LONG'
-                                       and i.get('scope') == 'USUAL'), None)
-        binding['feedback'] = session.pop('r142_quality_notice', None)
-        return binding
+        if not report:
+            return states
+        prepared = _v4891_prepare_snapshot_for_ui(report.get('data') or {})
+        items = sorted(_r142_intents(owner), key=lambda i: str(i.get('saved_at_utc') or ''),
+                       reverse=True)
+        for key, target, notice in (
+            ('nova_r142_state', None, 'r142_quality_notice'),
+            ('nova_tempo_state', 'TEMPO', 'r142_tempo_notice'),
+        ):
+            binding = _r142_report_binding(report, owner, target, prepared=prepared)
+            if not binding:
+                continue
+            matching = [i for i in items if i.get('scope') == 'USUAL' or
+                        i.get('workout_id') == binding['workout_id']]
+            binding['active'] = True
+            binding['latest_intent'] = matching[0] if matching else None
+            binding['usual_limit'] = next((i for i in matching if i.get('kind') == 'TOO_LONG'
+                                          and i.get('scope') == 'USUAL'), None)
+            binding['feedback'] = session.pop(notice, None)
+            states[key] = binding
     except Exception:
         app.logger.exception('R142 availability context unavailable')
-        return {'active': False}
-
-
-@app.context_processor
-def _r142_template_context():
-    return {'nova_r142_state': _r142_page_state()}
+    return states
 
 
 @app.route('/quality/intent', methods=['POST'])
@@ -67914,10 +67928,12 @@ def r142_quality_intent():
     if not require_login():
         return redirect(url_for('login'))
     owner = str(session.get('user_id') or '')
+    target = 'TEMPO' if request.form.get('planning_target') == 'TEMPO' else None
+    notice_key = 'r142_tempo_notice' if target else 'r142_quality_notice'
     feedback = 'Request was not saved. Please review your latest Snapshot.'
     try:
         report = load_latest_report(include_payload=True, owner_user_id=owner)
-        binding = _r142_report_binding(report, owner) if report else None
+        binding = _r142_report_binding(report, owner, target) if report else None
         posted = str(request.form.get('offer_binding') or '')
         if (not binding or len(posted) != 64 or
             not hmac.compare_digest(posted, binding['token'])):
@@ -67978,7 +67994,7 @@ def r142_quality_intent():
     except Exception:
         app.logger.exception('R142 quality planning request save failed')
         feedback = 'Your request could not be saved. Please retry from the latest report.'
-    session['r142_quality_notice'] = feedback
+    session[notice_key] = feedback
     return redirect(url_for('last_report'), code=303)
 
 
@@ -67989,10 +68005,12 @@ def r142_quality_clear_usual():
     if not require_login():
         return redirect(url_for('login'))
     owner = str(session.get('user_id') or '')
+    target = 'TEMPO' if request.form.get('planning_target') == 'TEMPO' else None
+    notice_key = 'r142_tempo_notice' if target else 'r142_quality_notice'
     msg = 'The usual limit was not changed. Please reload your latest report.'
     try:
         report = load_latest_report(include_payload=True, owner_user_id=owner)
-        binding = _r142_report_binding(report, owner) if report else None
+        binding = _r142_report_binding(report, owner, target) if report else None
         posted = str(request.form.get('offer_binding') or '')
         if not binding or not hmac.compare_digest(posted, binding['token']):
             raise ValueError('The quality offer has changed. Reload the latest report.')
@@ -68009,7 +68027,7 @@ def r142_quality_clear_usual():
     except Exception:
         app.logger.exception('R142 usual limit revocation failed')
         msg = 'The usual limit could not be removed. Please retry.'
-    session['r142_quality_notice'] = msg
+    session[notice_key] = msg
     return redirect(url_for('last_report'), code=303)
 
 _R142_PANEL = r'''{% if data and not is_preview and not qa_mode and not download_mode
@@ -68094,7 +68112,7 @@ _R142_EASY_NOTE = r'''{% if not is_quality_slot and s and data.nova_r142_plan_ui
 </section>
 {% endif %}'''
 HOME_PAGE = HOME_PAGE.replace(_R142_CARD_ARTICLE_END,
-    _R142_EASY_NOTE + '\n{% if is_quality_slot and not quality_already_shown %}' +
+    _R142_EASY_NOTE + '\n{% if is_quality_slot and (not quality_already_shown or (data.inc132_dual_quality and data.inc132_dual_quality.quality_specific)) %}' +
     _R142_PANEL + '{% endif %}\n' + _R142_CARD_ARTICLE_END, 1)
 _R142_PANEL_ANCHOR = '{% endfor %}\n</div>\n<style>'
 if HOME_PAGE.count(_R142_PANEL_ANCHOR) != 1:
@@ -68142,8 +68160,8 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
       <p id="r143-dialog-description" class="r143-dialog-summary">{% if data.nova_r142_plan_ui.card in (1, 2) %}This quality is already displayed in Card {{ data.nova_r142_plan_ui.card }}. Card 3 remains inactive. {% endif %}Your workout requires <strong>{{ data.nova_r142_plan_ui.required_minutes or 'a full canonical session' }}{% if data.nova_r142_plan_ui.required_minutes %} min{% endif %}</strong>{% if data.nova_r142_plan_ui.learned_minutes %}; Nova currently estimates <strong>{{ data.nova_r142_plan_ui.learned_minutes }} min</strong> from your usual training{% endif %}. Changing your availability does not book or approve it.</p>
       <fieldset class="r143-choice-group" aria-label="Choose an availability request">
         <legend>What would you like to tell Nova?</legend>
-        <label class="r143-choice"><input type="radio" name="r143_intent_mode" value="PLAN" checked><span><strong>I can make time for this workout</strong><small>Tell Nova when you have a suitable training window.</small></span></label>
-        <label class="r143-choice"><input type="radio" name="r143_intent_mode" value="TOO_LONG"><span><strong>This workout is too long for me</strong><small>Tell Nova your available duration instead.</small></span></label>
+        <label class="r143-choice"><input type="radio" name="r143_intent_mode" data-r143-mode value="PLAN" checked><span><strong>I can make time for this workout</strong><small>Tell Nova when you have a suitable training window.</small></span></label>
+        <label class="r143-choice"><input type="radio" name="r143_intent_mode" data-r143-mode value="TOO_LONG"><span><strong>This workout is too long for me</strong><small>Tell Nova your available duration instead.</small></span></label>
       </fieldset>
       <div class="r143-plan-fields" data-r143-section="PLAN">
         <form method="post" action="{{ url_for('r142_quality_intent') }}">
@@ -68266,13 +68284,14 @@ _R143_SCRIPT = r'''<script>
 (function(){
   'use strict';
   function init(){
-    var root=document.getElementById('r142-plan-your-quality');
-    if(!root)return;
+    document.querySelectorAll('.r143-quality-entry').forEach(bind);
+  }
+  function bind(root){
     var open=root.querySelector('[data-r143-open]');
-    var dlg=root.querySelector('#r143-quality-dialog');
+    var dlg=root.querySelector('.r143-quality-dialog');
     if(!open||!dlg)return;
     var close=dlg.querySelector('[data-r143-close]');
-    var choices=dlg.querySelectorAll('input[name="r143_intent_mode"]');
+    var choices=dlg.querySelectorAll('input[data-r143-mode]');
     var sections=dlg.querySelectorAll('[data-r143-section]');
     var shortScope=dlg.querySelector('[data-r143-short-scope]');
     var onceFields=dlg.querySelector('[data-r143-once-fields]');
@@ -68283,7 +68302,7 @@ _R143_SCRIPT = r'''<script>
       onceFields.querySelectorAll('input,select').forEach(function(input){input.disabled=!once;});
     }
     function syncMode(){
-      var selected=dlg.querySelector('input[name="r143_intent_mode"]:checked');
+      var selected=dlg.querySelector('input[data-r143-mode]:checked');
       var mode=selected?selected.value:'PLAN';
       sections.forEach(function(node){
         var active=node.getAttribute('data-r143-section')===mode;
@@ -68298,7 +68317,7 @@ _R143_SCRIPT = r'''<script>
       syncMode();
       if(typeof dlg.showModal==='function')dlg.showModal();
       else{dlg.setAttribute('open','');dlg.classList.add('r143-fallback-open');}
-      var first=dlg.querySelector('input[name="r143_intent_mode"]:checked');
+      var first=dlg.querySelector('input[data-r143-mode]:checked');
       if(first)first.focus();
     });
     function dismiss(){
@@ -69072,6 +69091,30 @@ _INC132_CARD2_VIEW='''{% set dual = data.inc132_dual_quality or {} %}
 {% if not show_tempo or s %}
 {% if show_tempo %}<details class="inc132-calendar-preserved"><summary>Session already on your plan</summary>{% endif %}
 '''
+# Both cards use the existing availability dialog, with distinct report bindings.
+_INC132_TEMPO_PANEL = (
+    _R143_PANEL.replace('nova_r142_state', 'nova_tempo_state')
+    .replace('data.nova_r142_plan_ui', 'tempo_planning')
+    .replace('r142-plan-your-quality', 'r142-plan-your-tempo')
+    .replace('r143-quality-dialog"', 'r143-tempo-dialog"')
+    .replace('class="r143-tempo-dialog"', 'class="r143-quality-dialog"')
+    .replace('r143-dialog-title', 'r143-tempo-title')
+    .replace('r143-dialog-description', 'r143-tempo-description')
+    .replace('r143_intent_mode', 'r143_tempo_mode')
+    .replace('Plan your next quality', 'Plan this Tempo workout')
+    .replace('<input type="hidden" name="offer_binding"',
+             '<input type="hidden" name="planning_target" value="TEMPO">'
+             '<input type="hidden" name="offer_binding"')
+    .replace('{% set r145_observation = data.quality_intent_reconciliation or {} %}',
+             '{% set r145_observation = {} %}')
+)
+_INC132_TEMPO_PANEL = (
+    "{% set tempo_planning = {'workout_id': zi.workout_id, 'required_minutes': zi.duration_minutes} %}"
+    + _INC132_TEMPO_PANEL
+)
+_INC132_CARD2_VIEW = _INC132_CARD2_VIEW.replace(
+    '{% endif %}\n{% if not show_tempo or s %}',
+    _INC132_TEMPO_PANEL + '{% endif %}\n{% if not show_tempo or s %}', 1)
 HOME_PAGE=HOME_PAGE.replace(_INC132_CARD_ENTRY,_INC132_CARD2_VIEW+_INC132_CARD_ENTRY,1)
 _INC132_CARD_CLOSE='</article>\n{% endif %}\n{% if not is_quality_slot or'
 assert HOME_PAGE.count(_INC132_CARD_CLOSE)==1,'INC132_DUAL_BODY_END_DRIFT'
@@ -69296,6 +69339,7 @@ def _v4891_prepare_snapshot_for_ui(data):
         integrative['dose_label']='Power range from verified Tempo efforts'
         integrative['first_exposure']=False
     dual['quality_integrative']=integrative;result['inc132_dual_quality']=dual
+    result['nova_r142_plan_ui'] = _r142_card_copy(result)
     return result
 
 # Only change a single label in Card2; Card3 markup and rendering stay intact.
@@ -69304,7 +69348,45 @@ assert HOME_PAGE.count(_INC132_C2_FIRST_OLD_LABEL)==1,'INC132_FIRST_CARD2_LABEL_
 HOME_PAGE=HOME_PAGE.replace(_INC132_C2_FIRST_OLD_LABEL,
     '<b>{{ zi.dose_label|default("Power range from verified Tempo efforts")|e }}:</b>',1)
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION += " · INC132 CARD 2 TEMPO AND EXECUTION ENGLISH COPY CANDIDATE"
+APP_VERSION += " · INC133 COMPLETE QUALITY PLANNING"
+
+def _nova_inc133_rank_supported_questions(goal, scores, road, evidence_ledger):
+    """Keep the existing rank among open questions with a replayable dose.
+
+    This runs inside the scientific owner, before decision, producer and
+    compiler. An unavailable dose defers a question for this evaluation only.
+    It never closes the question or changes evidence and power calculations.
+    """
+    ranking = sorted(scores, key=lambda dimension: -scores[dimension])
+    excluded = {'NONE', 'VALIDATE', 'REVALIDATION', 'EXTENSION_OR_REVALIDATION',
+                'RECOVERY_UNDER_LOAD'}
+    if not ranking or ranking[0] in excluded or not evidence_ledger:
+        return None
+    attempts = []
+    for dimension in ranking:
+        if dimension in excluded:
+            return None
+        candidate_road = dict(road or {})
+        candidate_road['scientific_progression'] = dict(
+            candidate_road.get('scientific_progression') or {}, dimension=dimension)
+        template, proof = _nova_inc088_scientific_candidate(
+            goal, dimension, evidence_ledger, None, candidate_road,
+            today=get_rome_now().date())
+        attempts.append({'dimension': dimension, 'rank_score': scores[dimension],
+                         'workout_id': (template or {}).get('id'),
+                         'reason': proof.get('reason')})
+        if template is not None:
+            if dimension == ranking[0]:
+                return None
+            for attempt in attempts[:-1]:
+                scores.pop(attempt['dimension'], None)
+            return {'schema': 'NOVA-INC133-SUPPORTED-OPEN-QUESTION-1',
+                    'selected_dimension': dimension, 'attempts': attempts,
+                    'evidence_unchanged': True, 'execution_authorized': False}
+    return {'schema': 'NOVA-INC133-SUPPORTED-OPEN-QUESTION-1',
+            'selected_dimension': None, 'attempts': attempts,
+            'evidence_unchanged': True, 'execution_authorized': False}
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
