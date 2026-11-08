@@ -29412,6 +29412,9 @@ def analyze():
             execution_link = _v156_execution_history_link(latest_activity_feedback, microcycle_ledger)
             latest_activity_feedback['prescription_link_status'] = (
                 'LINKED' if execution_link else 'UNLINKED')
+        training_direction["nova_execution"] = _v1965_verified_quality_execution(
+            microcycle_ledger, training_direction.get("started_on"), now=get_rome_now(),
+            observed_blocks=progression_training_blocks)
         # INC125: observe a saved athlete window versus verified completed work.
         # This sidecar is built AFTER all hard decisions, without modifying them.
         data['quality_intent_reconciliation'] = _r145_quality_intent_observation(
@@ -46861,7 +46864,7 @@ def build_training_direction(season_activities, planning_context=None, plan=None
     return out
 
 
-def _v1965_verified_quality_execution(ledger, start_date, now=None):
+def _v1965_verified_quality_execution(ledger, start_date, now=None, observed_blocks=None):
     """Never infer full-plan compliance from hard-only prescription history."""
     today = (now or get_rome_now()).date()
     try:
@@ -46870,7 +46873,11 @@ def _v1965_verified_quality_execution(ledger, start_date, now=None):
         return {'available': False, 'reason': 'NO_DECLARED_PLAN_START', 'completed': 0, 'confirmed_missed': 0, 'unresolved': 0, 'score': None}
     start = max(start, today - timedelta(days=27))
     groups = {}
-    for row in (ledger or {}).get('prescription_history') or []:
+    history = (ledger or {}).get('prescription_history') or []
+    linked = {str(row['executed_activity_id']).strip() for row in history
+              if isinstance(row, dict) and row.get('executed_activity_id')
+              and str(row.get('prescription_status') or '').upper() == 'FULFILLED'}
+    for row in history:
         if not isinstance(row, dict) or not (row.get('nova_workout_id') or row.get('nova_contract_id')):
             continue
         if not _v136_is_hard_summary(row) and not _v153_is_training_plan(row):
@@ -46897,10 +46904,34 @@ def _v1965_verified_quality_execution(ledger, start_date, now=None):
     unresolved = len(groups) - completed - missed
     # Unresolved attribution prevents a misleading numerical score.
     scored = completed + missed if unresolved == 0 else 0
+    unlinked = {}
+    for block in observed_blocks or ():
+        if not isinstance(block, dict) or block.get('quality_relevant') is not True:
+            continue
+        truth = block.get('activity_truth') or {}
+        activity_id = str(block.get('activity_id') or '').strip()
+        if (not activity_id or activity_id in linked or not isinstance(truth, dict)
+            or truth.get('status') != 'RESOLVED'
+            or truth.get('source') not in {'ICU_INTERVALS_CANONICAL', 'DEVICE_LAPS'}):
+            continue
+        try:
+            observed = date.fromisoformat(str(block.get('date') or '')[:10])
+        except ValueError:
+            continue
+        if start <= observed <= today and not _v156_execution_history_link(block, ledger):
+            unlinked[activity_id] = observed.isoformat()
     return {
         'available': bool(scored), 'score': round(100 * completed/scored) if scored else None,
         'completed': completed, 'confirmed_missed': missed, 'unresolved': unresolved,
         'observed_hard_contracts': len(groups),
+        'window_start': start.isoformat(),
+        'window_end': (today - timedelta(days=1)).isoformat(),
+        'last_linked_prescription_date': max(
+            (due for (due, _), row in groups.items()
+             if str(row.get('prescription_status') or '').upper() == 'FULFILLED'
+             and row.get('executed_activity_id')), default=None),
+        'unlinked_observed_quality': len(unlinked),
+        'last_unlinked_observed_date': max(unlinked.values(), default=None),
         'reason': 'VERIFIED_HARD_ONLY' if scored else ('LINKS_UNRESOLVED' if unresolved else 'NO_VERIFIED_DUE_QUALITY_CONTRACTS'),
         'scope': 'VERIFIED_QUALITY_PRESCRIPTIONS_ONLY_NOT_FULL_PLAN_ADHERENCE',
     }
@@ -57611,6 +57642,8 @@ def _nova_r196957_install_direction_visual_only():
 <span><strong>{{ nx_missed }}</strong> confirmed missed</span>
 {% if nx_unresolved > 0 %}<span class="unresolved"><strong>{{ nx_unresolved }}</strong> unresolved</span>{% endif %}
 </div>
+{% if nx.get('window_start') and nx.get('window_end') %}<p class="v196957-scope">Prescription dates assessed · {{ nx.window_start|ui_date }} – {{ nx.window_end|ui_date }}.{% if nx.get('last_linked_prescription_date') %} Most recent linked prescription · {{ nx.last_linked_prescription_date|ui_date }}.{% endif %}</p>{% endif %}
+{% if nx.get('unlinked_observed_quality') %}<p class="v196957-scope"><strong>{{ nx.unlinked_observed_quality }} observed quality session{% if nx.unlinked_observed_quality != 1 %}s{% endif %} without a prescription link.</strong> Latest · {{ nx.last_unlinked_observed_date|ui_date }}. Reported separately from the execution score.</p>{% endif %}
 <p class="v196957-scope"><strong>Verified quality prescriptions only.</strong> This is not whole-plan adherence: Z2, easy rides and rest are not scored without a confirmed prescription–activity link. Unresolved or missing links are never automatically counted as missed. The training-distribution map remains a separate observation.</p>
 </article>'''
     t = t[:left] + new_card + t[right:]
@@ -68776,6 +68809,13 @@ def _inc132_build_integrative(goal,dimension,evidence_ledger,ftp_anchor,road,
     return None,'NO_EXACT_INDEPENDENT_TEMPO_DOSE_ATTESTED'
 
 
+def _inc132_card3_numeric_dose_blocked(plan):
+    return (plan.get('schema') == INC056_SCHEMA
+            and plan.get('source') == INC056_SOURCE
+            and plan.get('status') == 'PLANNING_BLOCKED'
+            and plan.get('reason_codes') == ['NUMERIC_REPEAT_DOSE_NOT_VERIFIED_FOR_CATALOGUE'])
+
+
 def _nova_inc050_future_quality(owner_user_id,decision,clock,road,ledger,
        evidence_ledger=None,power_model=None,ftp_anchor=None,
        aerobic_metabolic_range=None,training_definitions=None,
@@ -68790,11 +68830,10 @@ def _nova_inc050_future_quality(owner_user_id,decision,clock,road,ledger,
     if not isinstance(plan,dict):return plan
     plan=dict(plan)
     plan['inc132_dual_schema']=INC132_DUAL_SCHEMA
-    # C3 is NEVER replaced, reissued or made subordinate to the Card2 selector.
-    # Existing injury/issuer boundaries remain authoritative.
-    if (_nova_inc079_explicit_injury_restriction(planning_context)
-        or plan.get('status')!='COMPILED_UNSCHEDULED'
-        or plan.get('schema')!=INC091_SCHEMA or active_offer):
+    # A missing numeric Card 3 dose leaves room for a separate Tempo advisory.
+    compiled_card3 = plan.get('status') == 'COMPILED_UNSCHEDULED' and plan.get('schema') == INC091_SCHEMA
+    if (_nova_inc079_explicit_injury_restriction(planning_context) or active_offer
+        or not (compiled_card3 or _inc132_card3_numeric_dose_blocked(plan))):
         plan['inc132_integrative_state']='NOT_EVALUATED_WITHOUT_VERIFIED_CARD3'
         return plan
     candidate,why=_inc132_build_integrative(str(plan.get('goal_key') or ''),
@@ -68920,7 +68959,10 @@ def _nova_inc051_attest_future_snapshot(data,owner_user_id):
                     'display':inside['display'],'outdoor_display':outside['display'],
                     'total_minutes_example':minutes,'read_only':True,
                     'execution_authorized':False,'is_scheduled':False}
-                priority,reason=_inc132_priority(data,tempo,owner_user_id)
+                if _inc132_card3_numeric_dose_blocked(plan):
+                    priority,reason=None,'CARD3_NUMERIC_DOSE_PENDING'
+                else:
+                    priority,reason=_inc132_priority(data,tempo,owner_user_id)
                 plan['inc132_recommended_priority']=priority
                 plan['inc132_priority_reason']=reason
             except (ValueError,TypeError,AttributeError,KeyError):
@@ -68935,16 +68977,24 @@ def _nova_inc051_attest_future_snapshot(data,owner_user_id):
 def _inc132_valid_dual_view(data,owner_id):
     d=data if isinstance(data,dict) else {}
     plan=d.get('future_quality_plan') or {}
+    if not isinstance(plan,dict) or not owner_id:
+        return None
     tempo=plan.get('inc132_integrative') or {}
-    if (not isinstance(plan,dict) or not isinstance(tempo,dict)
-        or not owner_id or plan.get('inc132_dual_schema')!=INC132_DUAL_SCHEMA
-        or plan.get('inc132_recommended_priority') not in {'CARD2','CARD3'}
-        or not _nova_inc091_eligible(d,plan,owner_id)
+    if (not isinstance(tempo,dict) or plan.get('inc132_dual_schema')!=INC132_DUAL_SCHEMA
+        or d.get('next_quality_offer') or _nova_inc079_explicit_injury_restriction(d.get('planning_context'))
         or not _inc132_validate_integrative(d,plan,owner_id,producer_request=False)
         or not isinstance(tempo.get('fueling'),dict)
         or tempo['fueling'].get('workout_id')!=tempo.get('workout_id')):
         return None
-    return tempo
+    if _inc132_card3_numeric_dose_blocked(plan):
+        blocked_view = _nova_r1969104_canonical_card3(d, owner_id)
+        if (plan.get('inc132_recommended_priority') is None
+            and blocked_view.get('state') == 'SCIENTIFIC_PLANNING_BLOCKED'):
+            return tempo
+    elif (plan.get('inc132_recommended_priority') in {'CARD2','CARD3'}
+          and _nova_inc091_eligible(d,plan,owner_id)):
+        return tempo
+    return None
 
 
 def _v4891_prepare_snapshot_for_ui(data):
@@ -68957,8 +69007,9 @@ def _v4891_prepare_snapshot_for_ui(data):
     if tempo is None:return out
     plan=out['future_quality_plan']
     specific=out.get('nova_card3_workout_view') or {}
-    if (specific.get('verified_future_plan') is not True
-        or specific.get('workout_id')!=plan.get('workout_id')):
+    blocked_card3 = _inc132_card3_numeric_dose_blocked(plan)
+    if not blocked_card3 and (specific.get('verified_future_plan') is not True
+                             or specific.get('workout_id')!=plan.get('workout_id')):
         return out
     band=tempo['workout']['power_prescription']
     out['inc132_dual_quality']={
@@ -68966,7 +69017,7 @@ def _v4891_prepare_snapshot_for_ui(data):
         'owner_scope':_nova_inc050_owner_scope(owner),
         'quality_specific':{'role':'CARD3','workout_id':plan['workout_id'],
             'complete':True,'title':specific.get('title'),
-            'fueling':out.get('quality_direction_fuel')},
+            'fueling':out.get('quality_direction_fuel')} if not blocked_card3 else None,
         'quality_integrative':{'role':'CARD2','workout_id':tempo['workout_id'],
             'complete':True,'title':tempo['workout'].get('title'),
             'structure':tempo['workout'].get('main_set'),
@@ -68991,11 +69042,11 @@ def _v4891_prepare_snapshot_for_ui(data):
 _INC132_GREY_BRANCH = '{% if is_quality_slot and quality_already_shown %}'
 assert HOME_PAGE.count(_INC132_GREY_BRANCH)==1,'INC132_DUAL_GREY_BRANCH_DRIFT'
 HOME_PAGE=HOME_PAGE.replace(_INC132_GREY_BRANCH,
-    '{% if is_quality_slot and quality_already_shown and not data.inc132_dual_quality %}',1)
+    '{% if is_quality_slot and quality_already_shown and not (data.inc132_dual_quality and data.inc132_dual_quality.quality_specific) %}',1)
 _INC132_DUPLICATE_BODY = '{% if quality_already_shown %}'
 assert HOME_PAGE.count(_INC132_DUPLICATE_BODY)==1,'INC132_DUAL_DUPLICATE_BODY_DRIFT'
 HOME_PAGE=HOME_PAGE.replace(_INC132_DUPLICATE_BODY,
-    '{% if quality_already_shown and not data.inc132_dual_quality %}',1)
+    '{% if quality_already_shown and not (data.inc132_dual_quality and data.inc132_dual_quality.quality_specific) %}',1)
 _INC132_SELECTED_MARKER="{{ ' v1962-quality-card' if is_quality_slot else '' }}"
 assert HOME_PAGE.count(_INC132_SELECTED_MARKER)==1,'INC132_DUAL_PRIORITY_CLASS_ANCHOR_DRIFT'
 HOME_PAGE=HOME_PAGE.replace(_INC132_SELECTED_MARKER,_INC132_SELECTED_MARKER +
@@ -69004,22 +69055,22 @@ _INC132_CARD_ENTRY='{% if is_quality_slot and next_quality_offer and not quality
 assert HOME_PAGE.count(_INC132_CARD_ENTRY)==1,'INC132_DUAL_BODY_START_DRIFT'
 _INC132_CARD2_VIEW='''{% set dual = data.inc132_dual_quality or {} %}
 {% set zi = dual.quality_integrative or {} %}
-{% set show_tempo = loop.index == 2 and zi.complete and zi.workout_id and dual.quality_specific and dual.quality_specific.complete %}
+{% set show_tempo = loop.index == 2 and zi.complete and zi.workout_id %}
 {% if show_tempo %}
-<div class="inc132-dual-role">QUALITY INTEGRATIVA · TEMPO/Z3{% if dual.recommended_priority == 'CARD2' %}<span>PRIORITÀ CONSIGLIATA</span>{% endif %}</div>
+<div class="inc132-dual-role">COMPLEMENTARY QUALITY · TEMPO/Z3{% if dual.recommended_priority == 'CARD2' %}<span>RECOMMENDED PRIORITY</span>{% endif %}</div>
 <h3>{{ zi.title|e }}</h3>
-<div class="v4-session-meta"><span class="v4-session-pill">{{ zi.duration_minutes|round(1) }} min totali</span><span class="v4-session-pill">SCEGLI TU QUANDO · NON IN CALENDARIO</span></div>
+<div class="v4-session-meta"><span class="v4-session-pill">{{ zi.duration_minutes|round(1) }} min total</span><span class="v4-session-pill">YOU CHOOSE WHEN · UNSCHEDULED</span></div>
 <div class="inc132-dual-work" role="group" aria-label="Attested integrative quality">
-<p><b>Struttura e recuperi:</b> {{ zi.structure|e }}</p>
-<p><b>Range personale da ripetizioni Tempo verificate:</b> {{ zi.power_display|e }}</p>
-<p><b>Perché:</b> {{ zi.why|e }}</p>
-<p><b>Fueling indoor:</b> {{ (zi.fueling or {}).get('display')|e }}</p>
-<p><b>Fueling outdoor:</b> {{ (zi.fueling or {}).get('outdoor_display')|e }}</p>
-<small>Alternativa alla Card 3, non una seconda qualità obbligatoria. Nessuna autorizzazione automatica a svolgerla oggi.</small>
+<p><b>Workout and recovery:</b> {{ zi.structure|e }}</p>
+<p><b>Power range from verified Tempo efforts:</b> {{ zi.power_display|e }}</p>
+<p><b>Purpose:</b> {{ zi.why|e }}</p>
+<p><b>Indoor fueling:</b> {{ (zi.fueling or {}).get('display')|e }}</p>
+<p><b>Outdoor fueling:</b> {{ (zi.fueling or {}).get('outdoor_display')|e }}</p>
+<small>{% if dual.quality_specific %}Choose this session as an alternative to Card 3.{% else %}Optional Tempo session. Card 3 still needs evidence for its specific workout.{% endif %} Check your readiness before riding.</small>
 </div>
 {% endif %}
 {% if not show_tempo or s %}
-{% if show_tempo %}<details class="inc132-calendar-preserved"><summary>Attività già presente nel piano</summary>{% endif %}
+{% if show_tempo %}<details class="inc132-calendar-preserved"><summary>Session already on your plan</summary>{% endif %}
 '''
 HOME_PAGE=HOME_PAGE.replace(_INC132_CARD_ENTRY,_INC132_CARD2_VIEW+_INC132_CARD_ENTRY,1)
 _INC132_CARD_CLOSE='</article>\n{% endif %}\n{% if not is_quality_slot or'
@@ -69049,6 +69100,17 @@ _INC132_CARD2_FIRST_BASE_UI = _v4891_prepare_snapshot_for_ui
 _INC132_CARD2_FIRST_GOALS = frozenset(('POWER_5','VO2MAX','POWER_20','TIME_TRIAL',
                                       'POWER_1','SPRINTER','ENDURANCE_BASE'))
 _INC132_CARD2_FIRST_REASONS = {
+    'POWER_5':'Build aerobic support for repeatable five-minute efforts.',
+    'VO2MAX':'Build aerobic support for VO2 work with a Tempo session.',
+    'POWER_20':'Build the ability to sustain power.',
+    'TIME_TRIAL':'Develop steadier pacing.',
+    'POWER_1':'Build aerobic support for anaerobic work.',
+    'SPRINTER':'Build aerobic support for sprint training.',
+    'ENDURANCE_BASE':'Introduce a controlled Tempo effort alongside easy endurance work.',
+}
+
+# Historical copy is used only to replay previously signed reports.
+_INC132_CARD2_FIRST_LEGACY_REASONS = {
     'POWER_5':'supporto aerobico alla ripetibilità dei 5 minuti',
     'VO2MAX':'sostegno aerobico al lavoro VO2 senza aggiungere HIIT',
     'POWER_20':'sostegno al tempo sotto pressione',
@@ -69059,7 +69121,7 @@ _INC132_CARD2_FIRST_REASONS = {
 }
 
 
-def _inc132_card2_first_build(goal, dimension, ftp_anchor, owner_user_id):
+def _inc132_card2_first_build(goal, dimension, ftp_anchor, owner_user_id, *, legacy_copy=False):
     """Deterministic Card2 advisory. Same future-unscheduled semantics as Card3.
 
     FTP is an owner-attested *pacing reference*, not proof of past Tempo or an
@@ -69103,12 +69165,17 @@ def _inc132_card2_first_build(goal, dimension, ftp_anchor, owner_user_id):
         'recovery_seconds':300,'observed_repeated_work_is_direct_evidence':False,
         'workout_specific_proof':'NOT_IMPLIED_BY_FTP',
         'execution_clearance':'NOT_GRANTED', 'no_progression':True}
+    title = 'First Tempo/Z3 session · 2×10 min'
+    main_set = (f'15 min easy in Z1/Z2, then 2×10 min in Tempo/Z3 at {low}–{high} W '
+                'with 5 min in Z1 between efforts. Finish with 10 min in Z1.')
+    purpose = _INC132_CARD2_FIRST_REASONS[goal]
+    if legacy_copy:
+        title = 'Prima dose Tempo/Z3 · 2×10 min'
+        main_set = (f'15 min facile Z1/Z2; 2×10 min in Tempo/Z3 a {low}–{high} W, '
+                    '5 min Z1 fra le ripetute; 10 min defaticamento Z1. Nessuna progressione automatica.')
+        purpose = _INC132_CARD2_FIRST_LEGACY_REASONS[goal]
     work={'nova_workout_id':wid,'goal_key':goal,'nova_prescription_dimension':dimension,
-        'title':'Prima dose Tempo/Z3 · 2×10 min',
-        'main_set':('15 min facile Z1/Z2; 2×10 min in Tempo/Z3 a '+
-                   str(low)+'–'+str(high)+' W, 5 min Z1 fra le ripetute; '+
-                   '10 min defaticamento Z1. Nessuna progressione automatica.'),
-        'why':_INC132_CARD2_FIRST_REASONS[goal],
+        'title':title,'main_set':main_set,'why':purpose,
         'duration':'50 min','intensity':'TEMPO Z3 · FUTURE FIRST DOSE',
         'power_prescription':band,
         'session_composition':{'schema':INC132_CARD2_FIRST_SCHEMA,
@@ -69151,7 +69218,7 @@ def _inc132_validate_integrative(data,plan,owner_user_id,producer_request=True):
                     producer_request=producer_request)
     if not owner_user_id or not isinstance(data,dict):return False
     if (plan.get('inc132_dual_schema')!=INC132_DUAL_SCHEMA
-        or plan.get('status')!='COMPILED_UNSCHEDULED'
+        or not (plan.get('status')=='COMPILED_UNSCHEDULED' or _inc132_card3_numeric_dose_blocked(plan))
         or tempo.get('schema')!=INC132_DUAL_SCHEMA
         or tempo.get('first_dose_schema')!=INC132_CARD2_FIRST_SCHEMA
         or tempo.get('role')!='CARD2'
@@ -69180,7 +69247,11 @@ def _inc132_validate_integrative(data,plan,owner_user_id,producer_request=True):
     base={k:v for k,v in tempo.items() if k!='fueling'}
     if not hmac.compare_digest(_nova_inc051_canonical_json(base),
                                _nova_inc051_canonical_json(expected)):
-        return False
+        legacy = _inc132_card2_first_build(plan.get('goal_key'),plan.get('dimension'),
+                    data.get('ftp_anchor'),owner_user_id,legacy_copy=True)
+        if not hmac.compare_digest(_nova_inc051_canonical_json(base),
+                                   _nova_inc051_canonical_json(legacy)):
+            return False
     if 'fueling' not in tempo:return True
     fuel=tempo.get('fueling')
     if not isinstance(fuel,dict):return False
@@ -69212,22 +69283,28 @@ def _v4891_prepare_snapshot_for_ui(data):
     result=dict(out);dual=dict(dual);integrative=dict(integrative)
     plan=(result.get('future_quality_plan') or {}).get('inc132_integrative') or {}
     if plan.get('dose_kind')=='FIRST_TEMPO_FTP_ADVISORY':
-        integrative['dose_label']='Range della prima esposizione (FTP Intervals personale, non prove già svolte)'
+        integrative['dose_label']='First-session power range based on your Intervals FTP'
+        # Project English copy after validating the original persisted contract.
+        english = _inc132_card2_first_build(plan.get('goal_key'),plan.get('dimension'),
+                    result.get('ftp_anchor'),_nova_inc051_verified_owner_id())
+        if english:
+            work = english['workout']
+            integrative.update(title=work['title'], structure=work['main_set'], why=work['why'])
         integrative['first_exposure']=True
-        integrative['execution_disclaimer']='Proposta futura · verifica condizione e tempi prima di eseguirla'
+        integrative['execution_disclaimer']='Future option. Check your readiness and available time before riding.'
     else:
-        integrative['dose_label']='Range personale da ripetizioni Tempo verificate'
+        integrative['dose_label']='Power range from verified Tempo efforts'
         integrative['first_exposure']=False
     dual['quality_integrative']=integrative;result['inc132_dual_quality']=dual
     return result
 
 # Only change a single label in Card2; Card3 markup and rendering stay intact.
-_INC132_C2_FIRST_OLD_LABEL='<b>Range personale da ripetizioni Tempo verificate:</b>'
+_INC132_C2_FIRST_OLD_LABEL='<b>Power range from verified Tempo efforts:</b>'
 assert HOME_PAGE.count(_INC132_C2_FIRST_OLD_LABEL)==1,'INC132_FIRST_CARD2_LABEL_ANCHOR_DRIFT'
 HOME_PAGE=HOME_PAGE.replace(_INC132_C2_FIRST_OLD_LABEL,
-    '<b>{{ zi.dose_label|default("Range personale da ripetizioni Tempo verificate")|e }}:</b>',1)
+    '<b>{{ zi.dose_label|default("Power range from verified Tempo efforts")|e }}:</b>',1)
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION += " · INC132 CARD 2 TEMPO CANDIDATE"
+APP_VERSION += " · INC132 CARD 2 TEMPO AND EXECUTION ENGLISH COPY CANDIDATE"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
