@@ -29529,6 +29529,7 @@ def analyze():
             replay_bundle["nova_replay_fixture"] = nova_replay_fixture
             snapshot_fault_stage = "SAVE_REPORT"
             saved_report_meta = save_latest_report(data, qa_replay_bundle=replay_bundle)
+            g.r142_saved_snapshot_stamp = saved_report_meta.get("generated_at_utc")
         except Exception as report_exc:
             # A failed/uncertain commit must never be displayed as a valid new Snapshot.
             _r177_best_effort_ai_status(snapshot_ai_event_id, "save_error", report_exc.__class__.__name__)
@@ -67892,13 +67893,16 @@ def _v4891_prepare_snapshot_for_ui(data):
 @app.context_processor
 def _r142_template_context():
     states = {'nova_r142_state': {'active': False}, 'nova_tempo_state': {'active': False}}
-    if (not has_request_context() or request.endpoint not in ('home', 'last_report')
+    if (not has_request_context() or request.endpoint not in ('home', 'last_report', 'analyze')
         or not session.get('auth_token') or not session.get('user_id')):
+        return states
+    snapshot_stamp = getattr(g, 'r142_saved_snapshot_stamp', None)
+    if request.endpoint == 'analyze' and (request.method != 'POST' or not snapshot_stamp):
         return states
     try:
         owner = str(session['user_id'])
         report = load_latest_report(include_payload=True, owner_user_id=owner)
-        if not report:
+        if not report or (snapshot_stamp and report.get('generated_at_utc') != snapshot_stamp):
             return states
         prepared = _v4891_prepare_snapshot_for_ui(report.get('data') or {})
         items = sorted(_r142_intents(owner), key=lambda i: str(i.get('saved_at_utc') or ''),
@@ -68108,7 +68112,12 @@ _R142_EASY_NOTE = r'''{% if not is_quality_slot and s and data.nova_r142_plan_ui
     <h4 class="r148-quality-why-heading">WHY EASY ENDURANCE TODAY?</h4>
     <p class="r148-quality-why-copy">{{ data.nova_r142_plan_ui.easy_explanation|upper|e }}</p>
   </div>
+  {% if not is_preview and not qa_mode and not download_mode
+    and nova_r142_state.active
+    and data.nova_r142_plan_ui.workout_id == nova_r142_state.workout_id
+    and (not quality_already_shown or (data.inc132_dual_quality and data.inc132_dual_quality.quality_specific)) %}
   <a class="r148-quality-note-action" href="#r142-plan-your-quality"><span aria-hidden="true">📅</span> PLAN YOUR NEXT QUALITY</a>
+  {% endif %}
 </section>
 {% endif %}'''
 HOME_PAGE = HOME_PAGE.replace(_R142_CARD_ARTICLE_END,
@@ -69348,7 +69357,7 @@ assert HOME_PAGE.count(_INC132_C2_FIRST_OLD_LABEL)==1,'INC132_FIRST_CARD2_LABEL_
 HOME_PAGE=HOME_PAGE.replace(_INC132_C2_FIRST_OLD_LABEL,
     '<b>{{ zi.dose_label|default("Power range from verified Tempo efforts")|e }}:</b>',1)
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION += " · INC133 COMPLETE QUALITY PLANNING"
+APP_VERSION += " · INC133 COMPLETE QUALITY PLANNING · INC134 SNAPSHOT PLANNING CONTROLS"
 
 def _nova_inc133_rank_supported_questions(goal, scores, road, evidence_ledger):
     """Keep the existing rank among open questions with a replayable dose.
