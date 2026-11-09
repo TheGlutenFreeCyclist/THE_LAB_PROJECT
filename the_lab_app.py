@@ -69092,8 +69092,6 @@ _INC132_CARD2_VIEW='''{% set dual = data.inc132_dual_quality or {} %}
 <p><b>Workout and recovery:</b> {{ zi.structure|e }}</p>
 <p><b>Power range from verified Tempo efforts:</b> {{ zi.power_display|e }}</p>
 <p><b>Purpose:</b> {{ zi.why|e }}</p>
-<p><b>Indoor fueling:</b> {{ (zi.fueling or {}).get('display')|e }}</p>
-<p><b>Outdoor fueling:</b> {{ (zi.fueling or {}).get('outdoor_display')|e }}</p>
 <small>{% if dual.quality_specific %}Choose this session as an alternative to Card 3.{% else %}Optional Tempo session. Card 3 still needs evidence for its specific workout.{% endif %} Check your readiness before riding.</small>
 </div>
 {% endif %}
@@ -69395,6 +69393,34 @@ def _nova_inc133_rank_supported_questions(goal, scores, road, evidence_ledger):
     return {'schema': 'NOVA-INC133-SUPPORTED-OPEN-QUESTION-1',
             'selected_dimension': None, 'attempts': attempts,
             'evidence_unchanged': True, 'execution_authorized': False}
+
+
+# INC135: the visible Tempo workout owns its Session Fuel presentation.
+_INC135_FUEL_HEAD = '<div class="v23-fuel-head"><span>🥤</span><strong>SESSION FUEL</strong>{% if n %}<b>{{ n.session_demand }}</b>{% endif %}</div>'
+assert HOME_PAGE.count(_INC135_FUEL_HEAD) == 1, 'INC135_SESSION_FUEL_HEAD_DRIFT'
+_inc135_fuel_start = HOME_PAGE.index(_INC135_FUEL_HEAD)
+_inc135_fuel_body = _inc135_fuel_start + len(_INC135_FUEL_HEAD)
+_inc135_fuel_end = HOME_PAGE.index('\n</div>\n{% endif %}\n{% endfor %}', _inc135_fuel_body)
+_INC135_TEMPO_FUEL = """
+{% set has_planned_fuel = n or (data.quality_fuel_chronological_card == loop.index0 and data.quality_direction_fuel) %}
+{% if show_tempo %}
+<div class="v23-fuel-meta">TEMPO/Z3 · {{ zi.duration_minutes|round(1) }} min</div>
+<div class="v23-fuel-copy"><b>Indoor:</b> {{ zi.fueling.display|e }}</div>
+<div class="v23-fuel-copy"><b>Outdoor:</b> {{ zi.fueling.outdoor_display|e }}</div>
+{% if has_planned_fuel %}<details class="inc132-calendar-preserved"><summary>Fuel for the session already on your plan</summary>{% endif %}
+{% endif %}
+{% if not show_tempo or has_planned_fuel %}
+"""
+HOME_PAGE = (
+    HOME_PAGE[:_inc135_fuel_start]
+    + _INC135_FUEL_HEAD.replace('{% if n %}', '{% if n and not show_tempo %}')
+    + _INC135_TEMPO_FUEL
+    + HOME_PAGE[_inc135_fuel_body:_inc135_fuel_end]
+    + '\n{% endif %}{% if show_tempo and has_planned_fuel %}</details>{% endif %}'
+    + HOME_PAGE[_inc135_fuel_end:]
+)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += " · INC135 TEMPO SESSION FUEL"
 
 
 if __name__ == "__main__":
