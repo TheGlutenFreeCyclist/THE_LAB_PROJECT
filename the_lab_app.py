@@ -67672,8 +67672,40 @@ def _r142_report_binding(report, owner_id, target=None, prepared=None):
         raw_key += '|TEMPO'
     token = hmac.new(str(SECRET_KEY).encode('utf-8'), raw_key.encode('utf-8'),
                      hashlib.sha256).hexdigest()
-    return {'token': token, 'workout_id': wid, 'card': card, 'goal': goal,
-            'report_stamp': stamp}
+    binding = {'token': token, 'workout_id': wid, 'card': card, 'goal': goal,
+               'report_stamp': stamp}
+    dual = d.get('inc132_dual_quality') or {}
+    quality = dual.get('quality_integrative' if target == 'TEMPO' else 'quality_specific') or {}
+    plan = d.get('future_quality_plan') or {}
+    if target == 'TEMPO':
+        plan = plan.get('inc132_integrative') or {}
+    verified_id = quality.get('workout_id') if quality.get('complete') else None
+    if target != 'TEMPO':
+        view = d.get('nova_card3_workout_view') or {}
+        if view.get('verified_future_plan'):
+            verified_id = view.get('workout_id')
+    if verified_id == plan.get('workout_id') == wid:
+        binding['archived_workout'] = _inc137_workout_copy(plan)
+    return binding
+
+
+def _inc137_workout_copy(plan):
+    work = plan.get('workout') or {}
+    band = work.get('power_prescription') or {}
+    composition = work.get('session_composition') or {}
+    template = _R19696_LIBRARY_INDEX.get(plan.get('workout_id')) or {}
+    if plan.get('dose_kind') == 'FIRST_TEMPO_FTP_ADVISORY':
+        pattern = 'STANDARD'
+        reps, work_s, recovery_s = band.get('reps'), band.get('work_seconds'), band.get('recovery_seconds')
+    else:
+        pattern = template.get('pattern')
+        reps, work_s, recovery_s = template.get('reps'), template.get('work_s'), template.get('recovery_s')
+    phases = [[b.get('type'), b.get('duration_seconds', b.get('seconds'))]
+              for b in composition.get('blocks') or []]
+    return {'title': work.get('title'), 'pattern': pattern, 'reps': reps,
+            'work_s': work_s, 'recovery_s': recovery_s, 'phases': phases,
+            'total_seconds': composition.get('total_seconds'),
+            'low_watts': band.get('low_watts'), 'high_watts': band.get('high_watts')}
 
 
 def _r142_intents(owner_id):
@@ -67722,6 +67754,10 @@ def _r142_write_intent(owner_id, obj):
     wid = obj['workout_id']
     item_id = _r142_intent_record_id(owner_id, kind, scope, wid)
     target = obj.get('local_date') or get_rome_now().date().isoformat()
+    if obj.get('archived_workout'):
+        # Keep distinct planned days and make repeated saves for the same slot idempotent.
+        identity = '|'.join((item_id, target, obj['daypart']))
+        item_id = hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]
     note = _R142_PREFIX + json.dumps(obj, ensure_ascii=False, sort_keys=True,
                                      separators=(',', ':'))
     if len(note) > 2100:
@@ -67989,6 +68025,8 @@ def r142_quality_intent():
                'saved_at_utc':now, 'status':'REQUEST_SAVED_PENDING_NEXT_SNAPSHOT',
                'not_an_execution_authorization':True,
                'not_a_calendar_event':True, 'not_an_observed_activity':True}
+        if kind == 'PLAN' and binding.get('archived_workout'):
+            obj['archived_workout'] = binding['archived_workout']
         _r142_write_intent(owner, obj)
         feedback = ('Your availability request was saved. The existing Training engine will '
                     'reassess it in the next Snapshot. Your current report is unchanged; '
@@ -68379,16 +68417,25 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
             day = date.fromisoformat(str(entry.get('local_date') or '')[:10])
         except (TypeError, ValueError):
             continue
-        if 0 <= (today - day).days <= 2:
+        age = (today - day).days
+        if age >= 0 and (age <= 2 or entry.get('archived_workout')):
             recent.append(entry)
     if not recent:
         return base
     recent.sort(key=lambda e: str(e.get('saved_at_utc') or ''), reverse=True)
+    matched = {}
+    ambiguous = set()
+    archived_slots = {(e.get('workout_id'), e.get('local_date'), e.get('daypart'))
+                      for e in recent if e.get('archived_workout')}
     for entry in recent:
         wid = str(entry.get('workout_id') or '')
         goal = str(entry.get('goal_key') or '').upper()
-        template = _R19696_LIBRARY_INDEX.get(wid)
-        if (not template or template.get('goal') != goal
+        archived = entry.get('archived_workout')
+        slot = (wid, entry.get('local_date'), entry.get('daypart'))
+        if not archived and slot in archived_slots:
+            continue
+        template = archived or _R19696_LIBRARY_INDEX.get(wid)
+        if (not template or (not archived and template.get('goal') != goal)
                 or template.get('pattern') not in {'STANDARD', 'SUSTAINED'}):
             continue
         saved = _v139_parse_local_dt(entry.get('saved_at_utc'))
@@ -68450,7 +68497,7 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
                     and recovery_seconds > 0 and observed_recovery > 0
                     and abs(observed_work - work_seconds) <= _R145_INTERVAL_TOLERANCE_SECONDS
                     and abs(observed_recovery - recovery_seconds) <= _R145_INTERVAL_TOLERANCE_SECONDS
-                    and 0 < duration <= declared + 0.5):
+                    and math.isfinite(duration) and duration > 0):
                 continue
             matches[activity_id] = {**base, 'state': 'OBSERVED_AFTER_SAVED_AVAILABILITY',
                     'intent_local_date': entry['local_date'],
@@ -68466,8 +68513,27 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
                     'interval_tolerance_seconds': _R145_INTERVAL_TOLERANCE_SECONDS,
                     'source': rep_source + ' + OWNER_SCOPED_SAVED_INTENT',
                     'meaning': 'OBSERVED_EXECUTION_NOT_RETROACTIVE_CLEARANCE'}
-        if len(matches) == 1:
-            return next(iter(matches.values()))
+            if archived:
+                result = matches[activity_id]
+                result['archived_workout'] = archived
+                watts = rep.get('watts') or []
+                low, high = archived.get('low_watts'), archived.get('high_watts')
+                if (len(watts) == reps and all(type(w) in (int, float) and math.isfinite(w) and w > 0 for w in watts)
+                        and type(low) in (int, float) and type(high) in (int, float) and 0 < low <= high):
+                    result['observed_work_watts'] = watts
+                    result['reps_in_planned_power_range'] = sum(low <= w <= high for w in watts)
+        if len(matches) > 1:
+            ambiguous.update(matches)
+        elif matches:
+            activity_id, result = next(iter(matches.items()))
+            if activity_id in matched:
+                ambiguous.add(activity_id)
+            else:
+                matched[activity_id] = result
+    verified = {key: result for key, result in matched.items() if key not in ambiguous}
+    if verified:
+        latest = next(iter(verified.values()))
+        return {**latest, 'by_activity': verified}
     return {**base, 'state': 'NO_VERIFIED_OBSERVED_MATCH',
             'latest_intent_date': recent[0].get('local_date')}
 
@@ -69421,6 +69487,34 @@ HOME_PAGE = (
 )
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION += " · INC135 TEMPO SESSION FUEL"
+
+
+# INC136: elapsed time describes a match without grading the warm-up or cool-down.
+_INC136_HISTORY_UNLINKED = '<div class="v184-evidence-detail">No causally linked THE LAB prescription for this activity.</div>'
+assert HOME_PAGE.count(_INC136_HISTORY_UNLINKED) == 1, 'INC136_HISTORY_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC136_HISTORY_UNLINKED, """
+{% set observation = data.quality_intent_reconciliation or {} %}
+{% set observed_plan = (observation.by_activity or {}).get(b.activity_id, observation) %}
+{% if observed_plan.state == 'OBSERVED_AFTER_SAVED_AVAILABILITY'
+      and observed_plan.activity_id == b.activity_id %}
+<div class="v184-evidence-detail">
+<strong>Planned workout structure matched</strong> · {{ observed_plan.observed_reps }} intervals ·
+{{ observed_plan.observed_duration_min|round(1) }} min total / {{ observed_plan.declared_minutes|round(1) }} min available.
+{% if observed_plan.archived_workout %}
+<div>{{ observed_plan.archived_workout.title|e }} · {{ observed_plan.observed_recovery_seconds|round(0)|int }} s between intervals</div>
+{% if observed_plan.reps_in_planned_power_range is defined %}
+<div>{{ observed_plan.reps_in_planned_power_range }}/{{ observed_plan.observed_reps }} intervals at
+{{ observed_plan.archived_workout.low_watts }}–{{ observed_plan.archived_workout.high_watts }} W ·
+Measured: {{ observed_plan.observed_work_watts|join(', ') }} W</div>
+{% endif %}
+{% endif %}
+</div>
+{% else %}
+""" + _INC136_HISTORY_UNLINKED + """
+{% endif %}
+""", 1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += " · INC136 MAIN SET MATCH · INC137 PLANNED WORKOUT ARCHIVE"
 
 
 if __name__ == "__main__":
