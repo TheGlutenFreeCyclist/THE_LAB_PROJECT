@@ -69706,6 +69706,129 @@ HOME_PAGE = HOME_PAGE.replace('</head>', _INC138_STYLES + '\n</head>', 1)
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION += ' · INC138 PLANNING STATUS + EXPLICIT REPLACEMENT + SNAPSHOT EXPIRY'
 
+# INC139 · UI-only: quality link audit clarity and a single upcoming Z2
+# recovery card unless a matching, currently displayed Card 2/3 quality has
+# been planned. This reads existing snapshot display rows and the INC138
+# owner-bound plan context. No execution ledger, clinical/nutrition maths,
+# coach, issuer, calendar, intent persistence or stored snapshot is modified.
+_INC139_EXEC_CARD_START = '<article class="v48-adherence-card v196957-execution" aria-label="Nova verified quality execution">'
+_INC139_EXEC_CARD_END = '</article>'
+assert HOME_PAGE.count(_INC139_EXEC_CARD_START) == 1, 'INC139_EXEC_CARD_ANCHOR_DRIFT'
+_inc139_start = HOME_PAGE.index(_INC139_EXEC_CARD_START)
+_inc139_end = HOME_PAGE.index(_INC139_EXEC_CARD_END, _inc139_start) + len(_INC139_EXEC_CARD_END)
+_INC139_EXEC_CARD = '''<article class="v48-adherence-card v196957-execution inc139-execution" aria-label="Nova quality prescription matching status">
+{% set nx = td.get('nova_execution') or {} %}
+{% set nx_completed = nx.get('completed', 0)|int %}
+{% set nx_missed = nx.get('confirmed_missed', 0)|int %}
+{% set nx_unresolved = nx.get('unresolved', 0)|int %}
+{% set nx_unlinked = nx.get('unlinked_observed_quality', 0)|int %}
+{% set nx_due = nx_completed + nx_missed %}
+{% set nx_scored = nx.get('available') and nx.get('score') is not none and nx_unresolved == 0 and nx_due > 0 %}
+<div class="inc139-exec-heading">
+  <span class="v196957-eyebrow">🎯 NOVA QUALITY · LINK AUDIT</span>
+  <strong class="v196957-state">{% if nx_unlinked or nx_unresolved %}EXECUTION LINKS TO REVIEW{% elif nx_scored %}CONFIRMED QUALITY LINKS{% else %}QUALITY LINKS NOT YET VERIFIABLE{% endif %}</strong>
+  <small class="v196957-subtitle">Only independently matched prescriptions are scored. Observed quality sessions without a confirmed prescription link are shown separately, not counted as missed.</small>
+</div>
+<div class="inc139-exec-stats" aria-label="Quality prescription and observation counts">
+  <div><strong>{{ nx_completed }}</strong><span>Completed & linked prescriptions</span></div>
+  <div class="{% if nx_unlinked %}needs-review{% endif %}"><strong>{{ nx_unlinked }}</strong><span>Observed quality sessions without a link</span></div>
+  <div><strong>{{ nx_missed }}</strong><span>Confirmed missed prescriptions</span></div>
+</div>
+{% if nx_scored %}
+<p class="inc139-exec-scoped-rate">{{ nx_completed }} of {{ nx_due }} adjudicated prescriptions completed · <strong>{{ nx.get('score')|int }}%</strong> <span>within this limited group, not across all training.</span></p>
+{% elif nx_unresolved > 0 %}
+<p class="inc139-exec-scoped-rate">{{ nx_unresolved }} prescription–activity link{{ '' if nx_unresolved == 1 else 's' }} unresolved · no percentage issued.</p>
+{% else %}
+<p class="inc139-exec-scoped-rate">No confirmed, matured quality prescriptions currently eligible for a percentage.</p>
+{% endif %}
+{% if nx.get('window_start') and nx.get('window_end') %}<p class="v196957-scope">Rolling prescription window · {{ nx.window_start|ui_date }} – {{ nx.window_end|ui_date }}.{% if nx.get('last_linked_prescription_date') %} Last linked prescription · {{ nx.last_linked_prescription_date|ui_date }}.{% endif %}{% if nx_unlinked and nx.get('last_unlinked_observed_date') %} Latest unlinked observed quality · {{ nx.last_unlinked_observed_date|ui_date }}.{% endif %}</p>{% endif %}
+<p class="v196957-scope"><strong>What changes these numbers?</strong> New confirmed prescription–activity links, explicit missed outcomes, and the moving date window. Z2, rest and unlinked activity are not part of the scored denominator. A planned workout by itself is not a completed workout.</p>
+</article>'''
+HOME_PAGE = HOME_PAGE[:_inc139_start] + _INC139_EXEC_CARD + HOME_PAGE[_inc139_end:]
+
+# Replace only the Jinja presentation loop, keeping each canonical nutrition
+# object's contents untouched. Recoveries don't become newly scheduled just
+# because a planning intent exists; only an exact workout-ID match is eligible.
+_INC139_RECOVERY_LOOP_START = '<div class="v23-recovery-grid">\n{% for recovery_row in data.nova_recovery_display_rows %}'
+_INC139_RECOVERY_LOOP_END = '</div>\n<div class="v8-science v23-science">'
+assert HOME_PAGE.count(_INC139_RECOVERY_LOOP_START) == 1, 'INC139_RECOVERY_START_DRIFT'
+_inc139_rstart = HOME_PAGE.index(_INC139_RECOVERY_LOOP_START)
+_inc139_rend = HOME_PAGE.index(_INC139_RECOVERY_LOOP_END, _inc139_rstart)
+_inc139_original = HOME_PAGE[_inc139_rstart:_inc139_rend]
+assert _inc139_original.count('data-nova-recovery-source=') == 1, 'INC139_RECOVERY_BODY_DRIFT'
+assert _inc139_original.count('{% endfor %}') == 1, 'INC139_RECOVERY_LOOP_DRIFT'
+_inc139_body = _inc139_original.split('{% for recovery_row in data.nova_recovery_display_rows %}\n', 1)[1].rsplit('{% endfor %}', 1)[0]
+_inc139_body = _inc139_body.replace(
+    '<div class="v23-recovery-slot">{% if dated_session and dated_session.date %}{{ dated_session.date[8:10] }}/{{ dated_session.date[5:7] }}/{{ dated_session.date[:4] }} · {% endif %}{{ n.slot }}</div>',
+    '<div class="v23-recovery-slot">{% if r139_plan %}{{ r139_plan.planned_label|e }} · conditional post-workout guidance{% else %}{% if dated_session and dated_session.date %}{{ dated_session.date[8:10] }}/{{ dated_session.date[5:7] }}/{{ dated_session.date[:4] }} · {% endif %}{{ n.slot }}{% endif %}</div>', 1)
+_inc139_body = _inc139_body.replace(
+    '{% if recovery_row.conditional %}<small class="v26-first-feed-note">UNSCHEDULED QUALITY · recovery guidance applies only after this exact workout is completed. No calendar booking or execution clearance.</small>{% else %}<small class="v26-first-feed-note">First recovery feeding — not total ride replacement.</small>{% endif %}',
+    '''{% if r139_plan %}<small class="v26-first-feed-note">PLANNED QUALITY · guidance applies only after the exact workout is completed. The plan is not execution clearance.</small>{% elif recovery_row.conditional %}<small class="v26-first-feed-note">UNSCHEDULED QUALITY · recovery guidance applies only after this exact workout is completed. No calendar booking or execution clearance.</small>{% else %}<small class="v26-first-feed-note">First recovery feeding — not total ride replacement.</small>{% endif %}''', 1)
+assert 'conditional post-workout guidance' in _inc139_body and 'PLANNED QUALITY' in _inc139_body, 'INC139_RECOVERY_LABEL_DRIFT'
+_INC139_RECOVERY_LOOP = '''{% set r139_card2 = nova_tempo_state.planned_intent if nova_tempo_state is defined and nova_tempo_state.planned_intent else none %}
+{% set r139_card3 = nova_r142_state.planned_intent if nova_r142_state is defined and nova_r142_state.planned_intent else none %}
+{% set r139_display = namespace(easy=false) %}
+{% set r139_shown_quality_ids = [] %}
+<div class="inc139-recovery-intro" aria-label="Recovery card display policy">
+  {% if r139_card2 or r139_card3 %}Next easy-session recovery plus guidance for any matching planned quality shown in this Snapshot. Planning does not grant execution clearance.
+  {% else %}Your next easy-session recovery is shown once. Extra quality recovery guidance appears only when you plan a matching Nova workout.{% endif %}
+</div>
+<div class="v23-recovery-grid inc139-recovery-grid">
+{% for recovery_row in data.nova_recovery_display_rows or [] %}
+{% set n = recovery_row.nutrition or {} %}
+{% set dated_session = recovery_row.session or {} %}
+{% set r139_kind = n.get('kind', '')|upper %}
+{% set r139_intensity = dated_session.get('intensity_class', '')|lower %}
+{% set r139_easy = r139_kind in ('RECOVERY', 'ENDURANCE') or (r139_kind not in ('VO2', 'THRESHOLD', 'TEMPO', 'RACE', 'SPRINT', 'HARD') and r139_intensity in ('recovery', 'endurance', 'easy')) %}
+{% set r139_plan = r139_card2 if r139_card2 and recovery_row.workout_id and recovery_row.workout_id == r139_card2.workout_id else r139_card3 if r139_card3 and recovery_row.workout_id and recovery_row.workout_id == r139_card3.workout_id else none %}
+{% set r139_show_quality = r139_plan and not r139_easy and recovery_row.workout_id not in r139_shown_quality_ids %}
+{% set r139_show_easy = r139_easy and not r139_display.easy %}
+{% if r139_show_easy or r139_show_quality %}
+{% if r139_show_easy %}{% set r139_display.easy = true %}{% endif %}
+{% if r139_show_quality %}{% set _ = r139_shown_quality_ids.append(recovery_row.workout_id) %}{% endif %}
+''' + _inc139_body + '''{% endif %}
+{% endfor %}
+</div>
+{% if not r139_display.easy %}<p class="inc139-recovery-note">No upcoming easy-session recovery estimate is available in this Snapshot. No generic Z2 target has been invented.</p>{% endif %}
+{% if (r139_card2 and r139_card2.workout_id not in r139_shown_quality_ids) or (r139_card3 and r139_card3.workout_id not in r139_shown_quality_ids) %}<p class="inc139-recovery-note">A quality workout is planned, but this Snapshot contains no post-workout recovery estimate matched to that exact workout. Check its workout-specific Session Fuel guidance; no substitute recovery target is inferred.</p>{% endif %}
+'''
+HOME_PAGE = HOME_PAGE[:_inc139_rstart] + _INC139_RECOVERY_LOOP + HOME_PAGE[_inc139_rend:]
+# The original loop's closing </div> still begins the retained suffix. Remove
+# that duplicate while preserving the following independent science section.
+assert HOME_PAGE.count('</div>\n<div class="v8-science v23-science">') >= 1
+# The old closing div is now redundant immediately after the new note block.
+HOME_PAGE = HOME_PAGE.replace('''</p>{% endif %}
+</div>
+<div class="v8-science v23-science">''', '''</p>{% endif %}
+<div class="v8-science v23-science">''', 1)
+
+_INC139_HEAD_COPY = ('Your first recovery meal is scaled to the exercise and the time available before the next demand. '
+                   'Carbs and protein get specific targets when useful; fat stays at normal meal intake because there is no robust recovery-specific gram target.')
+assert HOME_PAGE.count(_INC139_HEAD_COPY) == 1, 'INC139_RECOVERY_COPY_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC139_HEAD_COPY,
+    'One upcoming easy-session recovery card, with additional guidance only for a quality you have actually planned. The immediate RECOVERY NOW guidance above remains independent. Nutrition amounts and timing are unchanged.', 1)
+
+_INC139_STYLES = '''<style>
+.inc139-execution{padding:18px 17px}
+.inc139-execution .inc139-exec-heading{max-width:670px}
+.inc139-execution .inc139-exec-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:15px}
+.inc139-execution .inc139-exec-stats>div{min-width:0;padding:12px;border:1px solid rgba(84,210,219,.18);border-radius:12px;background:rgba(43,115,134,.055)}
+.inc139-execution .inc139-exec-stats>div.needs-review{border-color:rgba(244,179,85,.38);background:rgba(185,116,39,.07)}
+.inc139-execution .inc139-exec-stats strong{display:block;color:#e5f8fb;font-size:28px;line-height:1.15}
+.inc139-execution .inc139-exec-stats .needs-review strong{color:#f1c487}
+.inc139-execution .inc139-exec-stats span{display:block;color:#9ab3c1;font-size:11px;line-height:1.45;margin-top:5px}
+.inc139-execution .inc139-exec-scoped-rate{font-size:12px;color:#c6dbe5;margin:13px 0 0}
+.inc139-execution .inc139-exec-scoped-rate strong{color:#b0edf0}
+.inc139-execution .inc139-exec-scoped-rate span{color:#9fb4c2}
+.inc139-recovery-intro{font-size:12px;line-height:1.6;color:#b8dce5;border-left:3px solid rgba(77,211,224,.55);padding:8px 11px;margin:6px 0 14px;background:rgba(77,211,224,.045)}
+.inc139-recovery-note{font-size:12px;color:#b4c6d4;line-height:1.55;padding:10px 12px;border:1px solid rgba(255,255,255,.1);border-radius:10px;margin:12px 0}
+@media(max-width:540px){.inc139-execution .inc139-exec-stats{grid-template-columns:1fr}.inc139-execution .inc139-exec-stats>div{display:flex;align-items:center;gap:12px}.inc139-execution .inc139-exec-stats strong{font-size:24px}.inc139-execution .inc139-exec-stats span{margin:0}}
+</style>'''
+assert HOME_PAGE.count('</head>') == 1, 'INC139_STYLE_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace('</head>', _INC139_STYLES + '\n</head>', 1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += ' · INC139 EXECUTION LINK UI + CONCISE PLANNED-ONLY RECOVERY'
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
