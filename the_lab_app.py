@@ -15,7 +15,7 @@ import statistics
 import uuid
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, time
 from zoneinfo import ZoneInfo
 import requests
 try:
@@ -67743,6 +67743,79 @@ def load_planning_items(active_only=True, limit=100, owner_user_id=None):
     return ordinary[:int(limit)]
 
 
+
+# INC138 — Presentation of an athlete's saved workout planning window.
+# Compare expiration with the last saved Snapshot, not page reload time.  This
+# retains the existing badge until the next Snapshot after the daypart ends.
+def _inc138_snapshot_clock(report):
+    raw = str((report or {}).get('generated_at_utc') or
+              (report or {}).get('generated_at_local') or '').strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ROME_TZ)
+        return parsed.astimezone(ROME_TZ)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _inc138_end_of_daypart(local_date, daypart):
+    try:
+        day = date.fromisoformat(str(local_date or ''))
+    except (TypeError, ValueError):
+        return None
+    end_hour = {'MORNING': 12, 'AFTERNOON': 17, 'EVENING': 24}.get(
+        str(daypart or '').upper())
+    if end_hour is None:
+        return None
+    if end_hour == 24:
+        return datetime.combine(day + timedelta(days=1), time.min, ROME_TZ)
+    return datetime.combine(day, time(hour=end_hour), ROME_TZ)
+
+
+def _inc138_current_plan(intents, workout_id, goal_key, report):
+    snapshot_time = _inc138_snapshot_clock(report)
+    if snapshot_time is None:
+        return None  # Do not assert an active plan without a report clock.
+    candidates = sorted((i for i in intents if isinstance(i, dict)),
+        key=lambda i: str(i.get('saved_at_utc') or ''), reverse=True)
+    for i in candidates:
+        if (i.get('kind') != 'PLAN' or i.get('scope') != 'ONCE'
+            or i.get('workout_id') != workout_id
+            or str(i.get('goal_key') or '').upper() != goal_key):
+            continue
+        expiry = _inc138_end_of_daypart(i.get('local_date'), i.get('daypart'))
+        if expiry is None or snapshot_time >= expiry:
+            continue
+        label = 'Planned for %s · %s' % (
+            date.fromisoformat(i['local_date']).strftime('%d %b %Y'),
+            i['daypart'].title())
+        return dict(i, planned_label=label)
+    return None
+
+
+def _inc138_is_future_window(plan, now):
+    expiry = _inc138_end_of_daypart(plan.get('local_date'), plan.get('daypart'))
+    return expiry is not None and now.astimezone(ROME_TZ) < expiry
+
+
+def _inc138_deactivate_replaced(owner, chosen, new_id, now):
+    # Only supersede still-open alternatives to this workout. Past entries
+    # survive for INC136/137 historical evidence and interval reconciliation.
+    for prior in _r142_intents(owner):
+        if (prior.get('id') == new_id or prior.get('kind') != 'PLAN'
+            or prior.get('scope') != 'ONCE'
+            or prior.get('workout_id') != chosen['workout_id']
+            or str(prior.get('goal_key') or '').upper() != chosen['goal_key']
+            or not _inc138_is_future_window(prior, now)):
+            continue
+        _data_execute(owner, 'UPDATE planning_items SET active=0 '
+            'WHERE id=? AND user_id=? AND kind=? AND note LIKE ?',
+            (prior['id'], str(owner), 'OTHER', _R142_PREFIX + '%'))
+
+
 def _r142_intent_record_id(owner_id, kind, scope, workout_id):
     identity = ('R142|%s|%s|%s|%s' %
                 (owner_id, kind, scope, workout_id if scope == 'ONCE' else 'GLOBAL'))
@@ -67928,7 +68001,8 @@ def _v4891_prepare_snapshot_for_ui(data):
 
 @app.context_processor
 def _r142_template_context():
-    states = {'nova_r142_state': {'active': False}, 'nova_tempo_state': {'active': False}}
+    states = {'nova_r142_state': {'active': False}, 'nova_tempo_state': {'active': False},
+              'nova_planning_toast': None}
     if (not has_request_context() or request.endpoint not in ('home', 'last_report', 'analyze')
         or not session.get('auth_token') or not session.get('user_id')):
         return states
@@ -67943,6 +68017,8 @@ def _r142_template_context():
         prepared = _v4891_prepare_snapshot_for_ui(report.get('data') or {})
         items = sorted(_r142_intents(owner), key=lambda i: str(i.get('saved_at_utc') or ''),
                        reverse=True)
+        if request.endpoint == 'last_report':
+            states['nova_planning_toast'] = session.pop('inc138_planning_toast', None)
         for key, target, notice in (
             ('nova_r142_state', None, 'r142_quality_notice'),
             ('nova_tempo_state', 'TEMPO', 'r142_tempo_notice'),
@@ -67954,6 +68030,8 @@ def _r142_template_context():
                         i.get('workout_id') == binding['workout_id']]
             binding['active'] = True
             binding['latest_intent'] = matching[0] if matching else None
+            binding['planned_intent'] = _inc138_current_plan(
+                items, binding['workout_id'], binding['goal'], report)
             binding['usual_limit'] = next((i for i in matching if i.get('kind') == 'TOO_LONG'
                                           and i.get('scope') == 'USUAL'), None)
             binding['feedback'] = session.pop(notice, None)
@@ -68005,6 +68083,9 @@ def r142_quality_intent():
                 raise ValueError('Choose a date within the next 90 days.')
             if part not in ('MORNING','AFTERNOON','EVENING'):
                 raise ValueError('Choose morning, afternoon or evening.')
+            if (kind == 'PLAN' and _inc138_end_of_daypart(day, part)
+                    <= get_rome_now().astimezone(ROME_TZ)):
+                raise ValueError('That planning window has already passed. Choose an upcoming date or time of day.')
             existing = _R142_PLANNING_ITEMS_BEFORE(active_only=True, limit=300,
                                                    owner_user_id=owner)
             for item in existing:
@@ -68027,16 +68108,38 @@ def r142_quality_intent():
                'not_a_calendar_event':True, 'not_an_observed_activity':True}
         if kind == 'PLAN' and binding.get('archived_workout'):
             obj['archived_workout'] = binding['archived_workout']
-        _r142_write_intent(owner, obj)
-        feedback = ('Your availability request was saved. The existing Training engine will '
-                    'reassess it in the next Snapshot. Your current report is unchanged; '
-                    'this is not permission to execute a hard session.')
+        prior = None
+        if kind == 'PLAN':
+            prior = _inc138_current_plan(_r142_intents(owner), binding['workout_id'],
+                                         binding['goal'], report)
+            same_choice = (prior and prior.get('local_date') == day
+                           and prior.get('daypart') == part
+                           and prior.get('minutes') == minutes)
+            if (prior and not same_choice and
+                str(request.form.get('overwrite_plan_id') or '') != prior['id']):
+                raise ValueError('This workout is already planned. Confirm that you want to replace its existing planning.')
+        item_id = _r142_write_intent(owner, obj)
+        if kind == 'PLAN':
+            _inc138_deactivate_replaced(owner, obj, item_id, get_rome_now())
+            session['inc138_planning_toast'] = {
+                'heading': 'WORKOUT PLANNED SUCCESSFULLY',
+                'detail': ('Your workout is planned for %s · %s. Nova will reassess '
+                           'it at your next Snapshot.' %
+                           (date.fromisoformat(day).strftime('%d %b %Y'), part.title()))}
+            feedback = None
+        else:
+            feedback = ('Your availability request was saved. The existing Training engine will '
+                        'reassess it in the next Snapshot. Your current report is unchanged; '
+                        'this is not permission to execute a hard session.')
     except ValueError as exc:
         feedback = str(exc)[:240]
     except Exception:
         app.logger.exception('R142 quality planning request save failed')
         feedback = 'Your request could not be saved. Please retry from the latest report.'
-    session[notice_key] = feedback
+    if feedback:
+        session[notice_key] = feedback
+    else:
+        session.pop(notice_key, None)
     return redirect(url_for('last_report'), code=303)
 
 
@@ -68180,10 +68283,10 @@ APP_VERSION = ('THE LAB · R196.9.142 · INC122 QUALITY AVAILABILITY REQUEST '
 _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download_mode
   and nova_r142_state.active and data.nova_r142_plan_ui
   and data.nova_r142_plan_ui.workout_id == nova_r142_state.workout_id %}
-<section id="r142-plan-your-quality" class="r143-quality-entry" aria-label="Plan your next quality workout">
+<section id="r142-plan-your-quality" class="r143-quality-entry" aria-label="Plan your next quality workout"{% if nova_r142_state.planned_intent %} data-inc138-existing-plan="{{ nova_r142_state.planned_intent.id|e }}"{% endif %}>
   {% if nova_r142_state.feedback %}
   <p class="r143-planning-notice" role="status">{{ nova_r142_state.feedback|e }}</p>
-  {% elif nova_r142_state.latest_intent %}
+  {% elif nova_r142_state.latest_intent and nova_r142_state.latest_intent.kind == 'TOO_LONG' %}
   <p class="r143-planning-notice" role="status">Availability saved: {{ nova_r142_state.latest_intent.minutes|e }} min · pending next Snapshot.</p>
   {% endif %}
   {% set r145_observation = data.quality_intent_reconciliation or {} %}
@@ -68204,6 +68307,16 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
         <div><p class="r143-dialog-kicker">YOUR NEXT QUALITY · AVAILABILITY</p><h3 id="r143-dialog-title">Plan your next quality</h3></div>
         <button type="button" class="r143-close-dialog" data-r143-close aria-label="Close planning dialog">×</button>
       </header>
+      <div class="inc138-overwrite-warning" data-inc138-overwrite hidden role="group" aria-label="Confirm replacing the existing workout plan">
+        <strong>THIS WORKOUT IS ALREADY PLANNED</strong>
+        <p>{{ nova_r142_state.planned_intent.planned_label if nova_r142_state.planned_intent else '' }}</p>
+        <p>Creating a new planning entry will replace your previous choice for this workout. Do you want to change it?</p>
+        <div class="inc138-overwrite-actions">
+          <button type="button" data-inc138-keep>Keep existing plan</button>
+          <button type="button" data-inc138-change>Change planning</button>
+        </div>
+      </div>
+      <div data-inc138-edit-fields>
       <p id="r143-dialog-description" class="r143-dialog-summary">{% if data.nova_r142_plan_ui.card in (1, 2) %}This quality is already displayed in Card {{ data.nova_r142_plan_ui.card }}. Card 3 remains inactive. {% endif %}Your workout requires <strong>{{ data.nova_r142_plan_ui.required_minutes or 'a full canonical session' }}{% if data.nova_r142_plan_ui.required_minutes %} min{% endif %}</strong>{% if data.nova_r142_plan_ui.learned_minutes %}; Nova currently estimates <strong>{{ data.nova_r142_plan_ui.learned_minutes }} min</strong> from your usual training{% endif %}. Changing your availability does not book or approve it.</p>
       <fieldset class="r143-choice-group" aria-label="Choose an availability request">
         <legend>What would you like to tell Nova?</legend>
@@ -68215,9 +68328,10 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="offer_binding" value="{{ nova_r142_state.token|e }}">
           <input type="hidden" name="intent_kind" value="PLAN"><input type="hidden" name="scope" value="ONCE">
+          <input type="hidden" name="overwrite_plan_id" value="{{ nova_r142_state.planned_intent.id|e if nova_r142_state.planned_intent else '' }}">
           <div class="r143-fields-grid">
-            <label>Day <input type="date" name="local_date" min="{{ today_iso }}" value="{{ today_iso }}" required></label>
-            <label>Time of day <select name="daypart" required><option value="MORNING">Morning</option><option value="AFTERNOON">Afternoon</option><option value="EVENING" selected>Evening</option></select></label>
+            <label>Day <input type="date" name="local_date" min="{{ today_iso }}" value="{{ nova_r142_state.planned_intent.local_date if nova_r142_state.planned_intent and nova_r142_state.planned_intent.local_date >= today_iso else today_iso }}" required></label>
+            <label>Time of day <select name="daypart" required><option value="MORNING"{% if nova_r142_state.planned_intent and nova_r142_state.planned_intent.daypart == 'MORNING' %} selected{% endif %}>Morning</option><option value="AFTERNOON"{% if nova_r142_state.planned_intent and nova_r142_state.planned_intent.daypart == 'AFTERNOON' %} selected{% endif %}>Afternoon</option><option value="EVENING"{% if not nova_r142_state.planned_intent or nova_r142_state.planned_intent.daypart == 'EVENING' %} selected{% endif %}>Evening</option></select></label>
           </div>
           <label>Available minutes <input type="number" inputmode="numeric" name="minutes" min="15" max="360" value="{{ data.nova_r142_plan_ui.required_minutes|round|int if data.nova_r142_plan_ui.required_minutes else 75 }}" required></label>
           <button type="submit" class="r143-submit">Save availability request</button>
@@ -68247,6 +68361,7 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
       </form>
       {% endif %}
       <p class="r143-disclaimer">Nova will reassess this request during the <strong>next Snapshot</strong>. The current report stays unchanged. The training engine alone decides; Nova Health cannot approve or veto the workout. This request never shortens canonical intervals, recoveries or the durability preload, and is <strong>not permission to perform a hard session</strong>.</p>
+      </div>
     </div>
   </dialog>
 </section>
@@ -68342,6 +68457,10 @@ _R143_SCRIPT = r'''<script>
     var sections=dlg.querySelectorAll('[data-r143-section]');
     var shortScope=dlg.querySelector('[data-r143-short-scope]');
     var onceFields=dlg.querySelector('[data-r143-once-fields]');
+    var overwriteWarning=dlg.querySelector('[data-inc138-overwrite]');
+    var editFields=dlg.querySelector('[data-inc138-edit-fields]');
+    var keep=dlg.querySelector('[data-inc138-keep]');
+    var change=dlg.querySelector('[data-inc138-change]');
     function syncScope(){
       if(!shortScope||!onceFields)return;
       var once=shortScope.value==='ONCE';
@@ -68362,9 +68481,14 @@ _R143_SCRIPT = r'''<script>
     if(shortScope)shortScope.addEventListener('change',syncScope);
     open.addEventListener('click',function(){
       syncMode();
+      var isReplacing=!!root.getAttribute('data-inc138-existing-plan');
+      if(overwriteWarning&&editFields){
+        overwriteWarning.hidden=!isReplacing;
+        editFields.hidden=isReplacing;
+      }
       if(typeof dlg.showModal==='function')dlg.showModal();
       else{dlg.setAttribute('open','');dlg.classList.add('r143-fallback-open');}
-      var first=dlg.querySelector('input[data-r143-mode]:checked');
+      var first=isReplacing?keep:dlg.querySelector('input[data-r143-mode]:checked');
       if(first)first.focus();
     });
     function dismiss(){
@@ -68373,6 +68497,14 @@ _R143_SCRIPT = r'''<script>
       open.focus();
     }
     if(close)close.addEventListener('click',dismiss);
+    if(keep)keep.addEventListener('click',dismiss);
+    if(change)change.addEventListener('click',function(){
+      overwriteWarning.hidden=true;
+      editFields.hidden=false;
+      syncMode();
+      var first=dlg.querySelector('input[data-r143-mode]:checked');
+      if(first)first.focus();
+    });
     dlg.addEventListener('click',function(event){if(event.target===dlg)dismiss();});
     dlg.addEventListener('close',function(){open.focus();});
     syncMode();
@@ -69515,6 +69647,64 @@ Measured: {{ observed_plan.observed_work_watts|join(', ') }} W</div>
 """, 1)
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION += " · INC136 MAIN SET MATCH · INC137 PLANNED WORKOUT ARCHIVE"
+
+
+# INC138 · Success toast, live green card pills, overwrite confirmation UI.
+_INC138_CARD2_PILL = '<span class="v4-session-pill">YOU CHOOSE WHEN · UNSCHEDULED</span>'
+assert HOME_PAGE.count(_INC138_CARD2_PILL) == 1, 'INC138_CARD2_PILL_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC138_CARD2_PILL, '''{% if nova_tempo_state is defined and nova_tempo_state.planned_intent %}
+<span class="v4-session-pill inc138-planned-pill">{{ nova_tempo_state.planned_intent.planned_label|e }}</span>
+{% else %}''' + _INC138_CARD2_PILL + '{% endif %}', 1)
+_INC138_CARD3_PILL = '''<span class="v4-session-pill">{{ 'YOU CHOOSE WHEN · NOT BOOKED' if card3.verified_offer else 'NOT SCHEDULED · EXECUTION RECHECK REQUIRED' }}</span>'''
+assert HOME_PAGE.count(_INC138_CARD3_PILL) == 1, 'INC138_CARD3_PILL_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC138_CARD3_PILL, '''{% if nova_r142_state is defined and nova_r142_state.planned_intent %}
+<span class="v4-session-pill inc138-planned-pill">{{ nova_r142_state.planned_intent.planned_label|e }}</span>
+{% else %}''' + _INC138_CARD3_PILL + '{% endif %}', 1)
+# Card 3 can also show a future structure without a verified personal dose.
+# Planning availability remains visible, while the separate not-cleared
+# execution notice and all scientific checks remain unchanged.
+for _inc138_original in (
+    '<span class="v4-session-pill">NO VERIFIED PERSONAL DOSE · NOT EXECUTABLE</span>',
+    '<span class="v4-session-pill">SCIENTIFIC STRUCTURE · NOT CLEARED TO EXECUTE</span>',
+    '<span class="v4-session-pill">PLANNED STRUCTURE · NOT CLEARED FOR EXECUTION</span>',
+):
+    if HOME_PAGE.count(_inc138_original) > 1:
+        raise RuntimeError('INC138_CARD3_ALTERNATE_PILL_MULTIPLICITY')
+    if _inc138_original in HOME_PAGE:
+        HOME_PAGE = HOME_PAGE.replace(_inc138_original,
+            '{% if nova_r142_state is defined and nova_r142_state.planned_intent %}'
+            '<span class="v4-session-pill inc138-planned-pill">{{ nova_r142_state.planned_intent.planned_label|e }}</span>'
+            '{% else %}' + _inc138_original + '{% endif %}', 1)
+_INC138_TOAST_ANCHOR = "{% if request.args.get('notice') %}<div class=\"v13-toast\""
+assert HOME_PAGE.count(_INC138_TOAST_ANCHOR) == 1, 'INC138_TOAST_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC138_TOAST_ANCHOR,
+    '''{% if nova_planning_toast and not is_preview and not download_mode %}
+<div class="v13-toast" id="v13-toast" role="status" aria-live="polite">
+  <span class="v13-toast-icon">✓</span>
+  <div><strong>{{ nova_planning_toast.heading|e }}</strong><small>{{ nova_planning_toast.detail|e }}</small></div>
+</div>{% endif %}
+''' + _INC138_TOAST_ANCHOR, 1)
+_INC138_STYLES = '''<style>
+.v4-session-pill.inc138-planned-pill{display:inline-flex!important;align-items:center!important;
+  max-width:100%;white-space:normal!important;line-height:1.4!important;
+  color:#bafad1!important;background:rgba(15,127,61,.28)!important;
+  border:1px solid rgba(68,218,119,.72)!important;
+  border-radius:999px;padding:6px 11px;font-weight:800!important}
+.inc138-overwrite-warning{padding:14px;border:1px solid rgba(255,199,103,.58);
+  border-radius:11px;background:rgba(110,70,24,.16);margin:10px 0 15px}
+.inc138-overwrite-warning strong{font-size:13px;color:#ffd18b;letter-spacing:.04em}
+.inc138-overwrite-warning p{font-size:13px;line-height:1.5;color:#dfedf6;margin:9px 0}
+.inc138-overwrite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:16px}
+.inc138-overwrite-actions button{padding:11px 9px;min-height:46px;cursor:pointer;
+  border:1px solid rgba(152,181,204,.48);border-radius:8px;background:#163446;
+  color:#edf7fc;font:inherit;font-size:12px;font-weight:750}
+.inc138-overwrite-actions [data-inc138-change]{background:#e9b66b;color:#172531;border-color:#f5ce91}
+@media(max-width:370px){.inc138-overwrite-actions{grid-template-columns:1fr}}
+</style>'''
+assert HOME_PAGE.count('</head>') == 1, 'INC138_STYLE_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace('</head>', _INC138_STYLES + '\n</head>', 1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += ' · INC138 PLANNING STATUS + EXPLICIT REPLACEMENT + SNAPSHOT EXPIRY'
 
 
 if __name__ == "__main__":
