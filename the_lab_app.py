@@ -68550,7 +68550,11 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
         except (TypeError, ValueError):
             continue
         age = (today - day).days
-        if age >= 0 and (age <= 2 or entry.get('archived_workout')):
+        # INC140: legacy requests without archived copies remain eligible within
+        # the owner-scoped, verified activity horizon. Historical PLAN alone
+        # is not execution evidence: the source-lap, exact structure,
+        # time/daypart, ambiguity and non-adherence checks below still apply.
+        if age >= 0 and (age <= 42 or entry.get('archived_workout')):
             recent.append(entry)
     if not recent:
         return base
@@ -69828,6 +69832,318 @@ assert HOME_PAGE.count('</head>') == 1, 'INC139_STYLE_ANCHOR_DRIFT'
 HOME_PAGE = HOME_PAGE.replace('</head>', _INC139_STYLES + '\n</head>', 1)
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION += ' · INC139 EXECUTION LINK UI + CONCISE PLANNED-ONLY RECOVERY'
+
+
+# INC140 · VERIFIED HISTORICAL EXPOSURE & FUTURE CARD CONSISTENCY
+# Scope: read-only, owner-scoped canonical observation replay. No retrospective
+# prescription fulfillment, no watt reconstruction, no new quality issuance.
+INC140_SCHEMA = 'NOVA-INC140-VERIFIED-EXPOSURE-FUTURE-COHERENCE-1'
+INC140_RECENT_DAYS = 28   # restrict repetition within the active evidence horizon
+INC140_TRUST_SOURCES = frozenset(('DEVICE_LAPS','ICU_INTERVALS_CANONICAL'))
+_INC140_PRIOR_FUTURE = _nova_inc050_future_quality
+_INC140_PRIOR_CARD3 = _nova_r1969104_canonical_card3
+_INC140_PRIOR_UI = _v4891_prepare_snapshot_for_ui
+_INC140_PRIOR_BIND = _r142_report_binding
+_INC140_PRIOR_ATTEST = _nova_inc051_attest_future_snapshot
+
+
+def _inc140_verified_exposures(evidence_ledger, previous_blocks=None):
+    """All currently loaded resolved, independent repeated-work observations.
+
+    Dedup by ORIGINAL activity id; never turn saved availability, activity
+    title, raw fallback or a single max-power PB into proof of repeated work.
+    An unavailable source remains unknown, not zero evidence and not a PASS.
+    """
+    ev = evidence_ledger if isinstance(evidence_ledger, dict) else {}
+    repeatability = ev.get('repeatability')
+    src = repeatability.get('events') or [] if isinstance(repeatability, dict) else []
+    observations = {}
+    for row in src if isinstance(src, list) else []:
+        if not isinstance(row, dict):
+            continue
+        origin = str(row.get('activity_truth_source') or row.get('source') or '').upper()
+        aid = str(row.get('activity_id') or '')
+        if (not aid or origin not in INC140_TRUST_SOURCES or
+            row.get('activity_truth_status') != 'RESOLVED' or row.get('strong') is not True):
+            continue
+        observation = row
+        try:
+            when = date.fromisoformat(str(observation.get('date') or '')[:10])
+            reps = int(observation['reps'])
+            work = float(observation['interval_secs'])
+            rest = float(observation['recovery_secs'])
+        except (TypeError, ValueError, KeyError, OverflowError):
+            continue
+        if not (reps > 1 and all(math.isfinite(v) and v > 0 for v in (work, rest))):
+            continue
+        observations[aid] = {'date': when.isoformat(), 'activity_id': aid,
+            'source': origin, 'reps': reps, 'work_seconds': work,
+            'recovery_seconds': rest, 'observation': 'VERIFIED_STRUCTURE_NOT_ADHERENCE'}
+    # Older or differently serialized exports may have the verified source
+    # under Previous Training Blocks, exactly like an ordinary current event.
+    for block in previous_blocks or []:
+        if not isinstance(block, dict) or block.get('quality_relevant') is not True:
+            continue
+        aid = str(block.get('activity_id') or '')
+        if not aid or aid in observations:
+            continue
+        origin_truth = block.get('activity_truth') or {}
+        rep = block.get('repeatability') or {}
+        if not isinstance(origin_truth, dict) or not isinstance(rep, dict):
+            continue
+        origin = str(origin_truth.get('source') or '').upper()
+        if (not isinstance(origin_truth, dict) or not isinstance(rep, dict)
+            or origin_truth.get('status') != 'RESOLVED'
+            or origin not in INC140_TRUST_SOURCES
+            or str(rep.get('source') or '').upper() != origin):
+            continue
+        if rep.get('recovery_observation_complete') is False:
+            continue
+        try:
+            when = date.fromisoformat(str(block.get('date') or '')[:10])
+            reps = int(rep['reps'])
+            work = float(rep['interval_secs'])
+            rest = float(rep['recovery_secs'])
+        except (TypeError, ValueError, KeyError, OverflowError):
+            continue
+        if reps <= 1 or not all(math.isfinite(v) and v > 0 for v in (work, rest)):
+            continue
+        observations[aid] = {'date': when.isoformat(), 'activity_id': aid,
+            'source': origin, 'reps': reps, 'work_seconds': work,
+            'recovery_seconds': rest, 'observation': 'VERIFIED_STRUCTURE_NOT_ADHERENCE'}
+    return sorted(observations.values(), key=lambda e:(e['date'],e['activity_id']),reverse=True)
+
+
+def _inc140_candidate_replay(evidence_ledger, blocks, workout_id, snapshot_date):
+    """Compare the *complete* observed index, not just the last HARD.
+
+    Only an exact canonical STANDARD/SUSTAINED work/recovery structure may
+    withhold a duplicate future advisory. Preload is deliberately UNKNOWN:
+    matching repetitions does not prove it happened or imply a new lever.
+    """
+    base={'schema':INC140_SCHEMA,'read_only':True,
+          'scope':'VERIFIED_OWNER_SNAPSHOT_ACTIVITY_EVIDENCE',
+          'state':'NO_PROVEN_RECENT_SAME_STRUCTURE',
+          'blocks_future_card':False,'retrospective_fulfillment':False,
+          'preload_verified':False,'history_complete':False,'matches':[]}
+    tpl = _R19696_LIBRARY_INDEX.get(str(workout_id or ''))
+    if not isinstance(tpl, dict) or str(tpl.get('pattern') or '').upper() not in {'STANDARD','SUSTAINED'}:
+        return dict(base, state='TEMPLATE_NOT_COMPARABLE')
+    try:
+        now_day = date.fromisoformat(str(snapshot_date)[:10])
+        reps=int(tpl['reps']); work=float(tpl['work_s']); rest=float(tpl['recovery_s'])
+    except (TypeError, ValueError, KeyError, OverflowError):
+        return dict(base,state='INVALID_TEMPLATE_OR_SNAPSHOT_CLOCK')
+    if reps <= 1 or not all(math.isfinite(v) and v > 0 for v in (work,rest)):
+        return dict(base,state='INVALID_CANONICAL_STRUCTURE')
+    observed = _inc140_verified_exposures(evidence_ledger,blocks)
+    matches=[]
+    for row in observed:
+        age = (now_day-date.fromisoformat(row['date'])).days
+        if (0 <= age <= INC140_RECENT_DAYS and row['reps'] == reps
+            and abs(row['work_seconds']-work) <= _R145_INTERVAL_TOLERANCE_SECONDS
+            and abs(row['recovery_seconds']-rest) <= 15.0):
+            matches.append(dict(row, days_ago=age))
+    if matches:
+        return dict(base,state='RECENT_VERIFIED_SAME_STRUCTURE',
+                    blocks_future_card=True,matches=matches[:12],
+                    matched_count=len(matches),candidate_workout_id=str(workout_id),
+                    reason='RECENT_OBSERVED_CANONICAL_WORK_REQUIRES_NEW_COACHING_PURPOSE')
+    return dict(base, examined_verified_events=len(observed))
+
+
+def _inc140_report_replay(data, workout_id=None, snapshot_date=None):
+    d=data if isinstance(data,dict) else {}
+    if workout_id is None:
+        plan=d.get('future_quality_plan') or {}
+        workout_id = plan.get('workout_id') if isinstance(plan,dict) else None
+    if not workout_id:
+        return None
+    plan=d.get('future_quality_plan') or {}
+    producer=(plan.get('inc140_exposure_check') or {}) if isinstance(plan,dict) else {}
+    known_dates=[str(row.get('date') or '')[:10] for row in (d.get('previous_training_blocks') or [])
+                 if isinstance(row,dict) and row.get('date')]
+    day=(snapshot_date or d.get('inc140_snapshot_date')
+         or producer.get('as_of_date') or (max(known_dates) if known_dates else None)
+         or get_rome_now().date().isoformat())
+    return _inc140_candidate_replay(d.get('evidence_ledger'),
+                                   d.get('previous_training_blocks'),workout_id,day)
+
+
+def _nova_inc050_future_quality(owner_user_id,decision,clock,road,ledger,
+        evidence_ledger=None,power_model=None,ftp_anchor=None,
+        aerobic_metabolic_range=None,training_definitions=None,
+        compiler_args=None,planning_context=None,training_state=None,
+        active_offer=None):
+    """Re-select inside the ORIGINAL scientific producer if the future
+    candidate repeats a verified recent work/recovery architecture.
+
+    Do not replace the canonical selector or loosen its watt/provenance gates.
+    The existing Card2 proposal remains independently available even if no
+    distinct, fully compiled Card3 candidate is found. A bounded retry cannot
+    loop indefinitely or poison a contextvar for another owner/request.
+    """
+    def original():
+        return _INC140_PRIOR_FUTURE(owner_user_id,decision,clock,road,ledger,
+            evidence_ledger=evidence_ledger,power_model=power_model,
+            ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+            training_definitions=training_definitions,compiler_args=compiler_args,
+            planning_context=planning_context,training_state=training_state,
+            active_offer=active_offer)
+    plan=original()
+    if (not owner_user_id or not isinstance(plan,dict)
+        or plan.get('status') != 'COMPILED_UNSCHEDULED'
+        or plan.get('schema') != INC091_SCHEMA):
+        return plan
+    today=get_rome_now().date().isoformat()
+    initial=plan
+    excluded=set()
+    attempts=[]
+    for _ in range(4):
+        wid=str(plan.get('workout_id') or '')
+        replay=_inc140_candidate_replay(evidence_ledger,None,wid,today)
+        if replay.get('blocks_future_card') is not True:
+            stamped=dict(plan)
+            replay['as_of_date']=today
+            replay['excluded_prior_candidates']=sorted(excluded)
+            replay['producer_action']='DISTINCT_CANONICAL_RESELECTION' if excluded else 'UNCHANGED'
+            stamped['inc140_exposure_check']=replay
+            return stamped
+        if not wid or wid in excluded:
+            break
+        excluded.add(wid)
+        attempts.append({'workout_id':wid,'reason':replay.get('reason')})
+        token=_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(
+            set(_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()) | excluded))
+        try:
+            alternative=original()  # original selector, original replay, no invented dose
+        finally:
+            _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
+        if (not isinstance(alternative,dict)
+            or alternative.get('schema') != INC091_SCHEMA
+            or alternative.get('status') != 'COMPILED_UNSCHEDULED'
+            or not alternative.get('workout_id')
+            or str(alternative['workout_id']) in excluded):
+            break
+        plan=alternative
+    # No distinct, scientifically compiled alternative. Keep the original
+    # signed candidate solely as a forensic audit object; every consumer below
+    # suppresses it and the server rejects attempts to plan it.
+    failed=dict(initial)
+    proof=_inc140_candidate_replay(evidence_ledger,None,initial.get('workout_id'),today)
+    proof.update(as_of_date=today,producer_action='WITHHELD_NO_DISTINCT_VERIFIED_ALTERNATIVE',
+                 excluded_prior_candidates=sorted(excluded),
+                 reselection_attempts=attempts)
+    failed['inc140_exposure_check']=proof
+    return failed
+
+
+def _nova_inc051_attest_future_snapshot(data,owner_user_id):
+    # Snapshot-born observation receipt is dated before issuer attestation;
+    # this NEVER turns earlier availability into a fulfilled prescription.
+    if isinstance(data,dict) and owner_user_id:
+        data['inc140_snapshot_date']=get_rome_now().date().isoformat()
+    attested=_INC140_PRIOR_ATTEST(data,owner_user_id)
+    if isinstance(data,dict) and owner_user_id:
+        exposures=_inc140_verified_exposures(data.get('evidence_ledger'),
+                                             data.get('previous_training_blocks'))
+        data['inc140_observation_index']={
+            'schema':INC140_SCHEMA,'read_only':True,
+            'scope':'CURRENT_OWNER_VERIFIED_SOURCE_ONLY',
+            'verified_structure_events':len(exposures),
+            'last_verified_structure_date':exposures[0]['date'] if exposures else None,
+            'prescription_links_created':0,'prior_availability_is_not_adherence':True,
+            'missing_raw_history_is_not_proof_of_no_training':True}
+    return attested
+
+
+def _inc140_safe_card3(card, proof):
+    old=card if isinstance(card,dict) else {}
+    goal=str(old.get('goal_key') or '').upper()
+    return dict(old, schema=INC140_SCHEMA, state='RECENT_EXPOSURE_REASSESS',
+        title='Next quality · new progression needed',workout_id=None,
+        verified_offer=False,verified_future_plan=False,planned_quality=False,
+        offer_structure_only=False,direction_only=True,inc120_quality_intent=False,
+        execution_authorized_by_preview=False,is_scheduled=False,
+        execution_clearance='NOT_CLEARED_FOR_EXECUTION',
+        structure=None,execution=None,purpose=None,phases=[],
+        personalized_watts=None,power_source=None,
+        reason=('Nova has verified a comparable repeated-work session in the recent activity '
+                'history. The future candidate would repeat its work/recovery structure '
+                'without a separately verified new training lever; a distinct quality '
+                'must pass the canonical selector and day-of checks.'),
+        goal_explanation=('Recent verified repeated work is recorded, but no new distinct '
+                          'hard workout has been cleared. Continue the currently issued '
+                          'easy/recovery guidance and reassess at the next Snapshot.'),
+        inc140_evidence=proof,goal_key=goal)
+
+
+def _inc140_ui_guard(data, output):
+    d=data if isinstance(data,dict) else {}
+    if not isinstance(output,dict): return output
+    old=output.get('nova_card3_workout_view') or {}
+    if not isinstance(old,dict) or old.get('verified_offer') is True:
+        return output  # Never replace an authentically issued canonical workout.
+    candidate=str(old.get('workout_id') or '')
+    plan=d.get('future_quality_plan') or {}
+    if not candidate and isinstance(plan,dict):
+        candidate=str(plan.get('workout_id') or '')
+    if not candidate:return output
+    # A fresh issuer marker is advisory only; recheck the actual currently
+    # stored resolved history so pasted / stale / foreign labels cannot block.
+    proof=_inc140_report_replay(d,candidate)
+    if not proof or proof.get('blocks_future_card') is not True:return output
+    updated=dict(output)
+    updated['inc140_future_quality_guard']=proof
+    updated['nova_card3_workout_view']=_inc140_safe_card3(old,proof)
+    dual=updated.get('inc132_dual_quality')
+    if isinstance(dual,dict):
+        dual=dict(dual)
+        dual['quality_specific']=None
+        if dual.get('recommended_priority') == 'CARD3':
+            dual['recommended_priority']=None
+            dual['reason_code']='RECENT_VERIFIED_CARD3_EXPOSURE_REQUIRES_DISTINCT_PURPOSE'
+        updated['inc132_dual_quality']=dual
+    # Never show conditional recovery for the rejected Card3 candidate.
+    rows=updated.get('nova_recovery_display_rows')
+    if isinstance(rows,list):
+        updated['nova_recovery_display_rows']=[row for row in rows
+            if not (isinstance(row,dict) and row.get('workout_id') == candidate
+                    and row.get('conditional') is True)]
+    updated['quality_direction_fuel']=None
+    direction=dict(updated.get('next_quality_direction') or {})
+    direction.update(title='Next quality · new progression needed',
+        referenced_canonical_template_id=None,
+        source='INC140_RECENT_CANONICAL_EXPOSURE_HOLD',
+        direction_only=True,is_a_prescription=False,is_scheduled=False,
+        execution_authorized_by_preview=False,
+        suggested_date=None,suggested_time=None)
+    updated['next_quality_direction']=direction
+    updated['nova_r142_plan_ui']=None
+    return updated
+
+
+def _nova_r1969104_canonical_card3(data,expected_owner_user_id=None):
+    prior=_INC140_PRIOR_CARD3(data,expected_owner_user_id)
+    return _inc140_ui_guard(data,{'nova_card3_workout_view':prior}).get('nova_card3_workout_view',prior)
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    prior=_INC140_PRIOR_UI(data)
+    return _inc140_ui_guard(data,prior)
+
+
+def _r142_report_binding(report,owner_id,target=None,prepared=None):
+    # Server-side hard gate protects even old signed report form tokens and
+    # direct POST requests; Card2 remains an independent matching workout.
+    view=prepared if isinstance(prepared,dict) else _v4891_prepare_snapshot_for_ui(
+        (report or {}).get('data') or {})
+    if target != 'TEMPO' and isinstance(view,dict):
+        if (view.get('inc140_future_quality_guard') or {}).get('blocks_future_card'):
+            return None
+    return _INC140_PRIOR_BIND(report,owner_id,target,prepared=view)
+
+APP_VERSION += ' · INC140 VERIFIED HISTORY + NO-LOOP FUTURE GUARD'
 
 
 if __name__ == "__main__":
