@@ -11500,6 +11500,20 @@ ADMIN_PAGE = """
 {% if athlete_count == 0 %}<div class="ps-muted" style="padding:16px 2px">No athlete accounts yet.</div>{% endif %}</div>
 {% for u in users %}{% if u.role == 'admin' %}<div class="ps59-owner-card"><div class="ps59-owner-main"><strong>{{ u.username }}</strong><span>Owner account · personal workspace stays on the dedicated owner data path.</span><span>{% if u.birth_date_ready %}DOB {{ u.birth_date_display }} · age {{ u.age_years }}{% else %}<strong style="color:#ffd38a">DOB REQUIRED BEFORE SNAPSHOT</strong>{% endif %}</span></div><div class="ps59-owner-meta"><span class="ps59-mini good">OWNER</span><span class="ps59-mini">{{ u.active_sessions }} ACTIVE SESSION{{ '' if u.active_sessions == 1 else 'S' }}</span><form class="ps59-owner-dob" method="post" action="{{ url_for('admin_update_birth_date', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label class="ps-field"><span>DATE OF BIRTH · REQUIRED</span><input name="birth_date" type="date" autocomplete="bday" max="{{ today_iso }}" value="{{ u.birth_date or '' }}" required></label><button class="ps-btn primary" type="submit">Save DOB</button></form></div></div>{% endif %}{% endfor %}</section>
 {% if hidden_users %}<section class="ps-card ps-accordion" style="margin-top:16px"><button class="ps-accordion-trigger" type="button" data-accordion-target="archived-users-panel" aria-expanded="false"><span class="ps-accordion-copy"><strong>Archived athletes</strong><small>Inactive accounts removed from the main roster. Data and history are preserved.</small></span><span class="ps-accordion-meta"><span class="ps-count">{{ hidden_users|length }}</span><span class="ps-accordion-icon" aria-hidden="true">+</span></span></button><div class="ps-accordion-panel" id="archived-users-panel" hidden><div class="ps59-hidden-list">{% for u in hidden_users %}<div class="ps59-hidden-row"><div><strong>{{ u.username }}</strong><small>{{ u.status|upper }} · {{ u.last_login_at_utc|admin_dt if u.last_login_at_utc else 'never logged in' }} · {{ 'report available' if u.report_generated else 'no report' }}</small></div><form method="post" action="{{ url_for('admin_user_visibility', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="visibility" value="restore"><button class="ps-btn restore small" type="submit">Restore to roster</button></form></div>{% endfor %}</div></div></section>{% endif %}
+<section class="ps-card" style="margin-top:16px" id="neon-infrastructure-monitor">
+<div class="ps-section-head"><h2>Neon infrastructure · monthly public transfer</h2><span class="ps-count">OFFICIAL API</span></div>
+<p class="ps59-usage-note">Read-only counters from Neon project details (Free compatible). Each production project is monitored independently; the 5 GB default limit is configurable. Historical October consumption cannot be recovered from this current-month counter. Data refreshes at most every 15 minutes while Admin is viewed.</p>
+{% if neon_usage.ready %}
+<div class="ps-ai-stats"><div class="ps-ai-stat"><span>PUBLIC TRANSFER QUOTA / PROJECT</span><strong>{{ '%.2f'|format(neon_usage.limit_gb) }} GB</strong></div><div class="ps-ai-stat"><span>READ AT</span><strong style="font-size:15px">{{ neon_usage.sampled_at }}</strong></div></div>
+{% for p in neon_usage.projects %}
+<div style="padding:14px;margin:11px 0;border:1px solid rgba(155,185,205,.2);border-radius:13px">
+<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px"><strong>{{ p.name }}</strong><strong style="color:{{ '#ffb27c' if p.risk != 'ok' else '#aef3ce' }}">{{ p.pct }}% · {{ p.gb }} GB</strong></div>
+<div style="height:10px;margin:11px 0 7px;border-radius:8px;background:rgba(255,255,255,.12);overflow:hidden"><div style="height:100%;width:{{ p.bar_pct }}%;background:{{ '#ff9a68' if p.risk != 'ok' else '#49d9b0' }}"></div></div>
+<div class="ps-muted">{{ p.remaining_gb }} GB remaining · Linear month-end forecast: {{ p.forecast_pct }}% · period {{ p.period_start }} to {{ p.period_end }} (exclusive)</div>
+{% if p.risk != 'ok' %}<div class="ps-error" style="margin-top:8px">{% if p.risk == 'critical' %}CRITICAL: Public network transfer near/exceeding quota.{% elif p.pct >= 85 %}HIGH WARNING: Public network transfer above 85%.{% elif p.pct >= 70 %}WARNING: Public network transfer above 70%.{% else %}WARNING: Current pace projects quota exhaustion before reset.{% endif %}</div>{% endif %}
+</div>{% endfor %}
+{% else %}<div class="ps-error">Official usage unavailable: {{ neon_usage.error }} No zero or estimated figure is presented as an official Neon counter.</div>{% endif %}
+</section>
 <section class="ps-card ps-accordion" style="margin-top:16px"><button class="ps-accordion-trigger" type="button" data-accordion-target="ai-usage-panel" aria-expanded="false"><span class="ps-accordion-copy"><strong>AI usage monitor</strong><small>Owner + athlete API cost visibility · per-athlete caps · BYOK unlimited by THE LAB</small></span><span class="ps-accordion-meta"><span class="ps-count">{{ ai_usage.today_api_calls }}</span><span class="ps-accordion-icon" aria-hidden="true">+</span></span></button><div class="ps-accordion-panel" id="ai-usage-panel" hidden><div class="ps-ai-stats"><div class="ps-ai-stat"><span>OWNER-FUNDED API CALLS TODAY</span><strong>{{ ai_usage.today_owner_funded_calls }}</strong></div><div class="ps-ai-stat"><span>ALL API REQUESTS TODAY</span><strong>{{ ai_usage.today_api_calls }}</strong></div><div class="ps-ai-stat"><span>TOKENS REPORTED TODAY</span><strong>{{ ai_usage.today_tokens }}</strong></div><div class="ps-ai-stat"><span>DEFAULT GATEWAY</span><strong>{{ ai_usage.mode }}</strong></div></div><p class="ps59-usage-note">Top counters include the owner account and athletes so cost monitoring cannot hide owner Snapshots. The quota table below remains athlete-only: owner calls are uncapped and never consume an athlete allowance. Defaults remain Standard {{ ai_usage.standard_daily_limit }}/day and Managed {{ ai_usage.managed_daily_limit }} premium + Standard fallback when configured.</p><div class="ps-table-wrap"><table class="ps-table"><thead><tr><th>ATHLETE</th><th>LOCAL DATE</th><th>POLICY / USED</th><th>REMAINING</th><th>API CALLS</th><th>INPUT TOKENS</th><th>OUTPUT TOKENS</th><th>TOTAL TOKENS</th></tr></thead><tbody>{% for u in ai_usage.athletes %}<tr><td><strong>{{ u.username }}</strong>{{ ' · archived' if u.admin_hidden else '' }}</td><td class="ps59-table-nowrap">{{ u.local_date|ui_date }}</td><td>{{ u.quota_label }}{% if u.limit_source == 'CUSTOM' %}<br><span class="ps-muted">CUSTOM CAP</span>{% endif %}</td><td><strong class="{{ u.remaining_class }}">{{ u.remaining_label }}</strong></td><td>{{ u.api_calls }}</td><td>{{ u.input_tokens }}</td><td>{{ u.output_tokens }}</td><td>{{ u.total_tokens }}</td></tr>{% else %}<tr><td colspan="8">No athlete usage yet.</td></tr>{% endfor %}</tbody></table></div><div class="ps-divider"></div><div class="ps-section-head"><h2 style="font-size:16px">Recent AI calls</h2><span class="ps-count">{{ ai_usage.recent|length }}</span></div><div class="ps-table-wrap ps-ai-recent"><table class="ps-table"><thead><tr><th>TIME · OWNER LOCAL</th><th>ATHLETE</th><th>TYPE</th><th>PROVIDER</th><th>MODEL</th><th>SOURCE</th><th>STATUS</th><th>INPUT</th><th>OUTPUT</th><th>PROMPT CHARS</th><th>COST MAP</th><th>EST. COST</th><th>TOTAL TOKENS</th></tr></thead><tbody>{% for e in ai_usage.recent %}<tr><td>{{ e.created_at_utc|admin_dt }}</td><td>{{ e.username or '—' }}</td><td>{{ e.call_type }}</td><td>{{ e.provider }}</td><td>{{ e.model }}</td><td>{{ e.credential_source or '—' }}</td><td>{{ e.status|upper }}</td><td>{{ e.input_tokens if e.input_tokens is not none else '—' }}</td><td>{{ e.output_tokens if e.output_tokens is not none else '—' }}</td><td>{{ e.prompt_chars if e.prompt_chars is not none else '—' }}</td><td>{% if e.prompt_profile_rows %}<details><summary style="cursor:pointer;white-space:nowrap">Breakdown</summary><div style="min-width:310px;padding:8px 0">{% if e.estimated_cost %}<div style="padding:6px 0 8px;margin-bottom:6px;border-bottom:1px solid rgba(0,229,255,.28)"><div style="display:flex;justify-content:space-between;gap:16px"><span style="font-weight:700">Estimated API cost</span><strong style="white-space:nowrap">{{ e.estimated_cost.total_label }}</strong></div><div style="font-size:11px;opacity:.76;margin-top:3px">Input {{ e.estimated_cost.input_label }} + output {{ e.estimated_cost.output_label }} · {{ e.estimated_cost.rate_label }}</div><div style="font-size:10px;opacity:.58;margin-top:2px">Standard uncached paid text list price · catalog {{ e.estimated_cost.catalog_date }} · displayed in EUR ({{ e.estimated_cost.fx_label }}; reference {{ e.estimated_cost.fx_reference_date }}). Actual billing may differ with FX movement, free tier, caching, batch/fast mode, regional pricing or taxes.</div></div>{% else %}<div style="font-size:11px;opacity:.7;padding:3px 0 7px">Estimated API cost unavailable for this model/token record.</div>{% endif %}{% for p in e.prompt_profile_rows %}<div style="display:flex;justify-content:space-between;gap:16px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)"><span>{{ p.label }}</span><strong style="white-space:nowrap">{{ p.chars }}{% if p.pct is not none %} · {{ p.pct }}%{% endif %}</strong></div>{% endfor %}{% if e.evidence_profile_rows %}<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,229,255,.28);font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.75">Data / evidence submap</div>{% for p in e.evidence_profile_rows %}<div style="display:flex;justify-content:space-between;gap:16px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)"><span>↳ {{ p.label }}</span><strong style="white-space:nowrap">{{ p.chars }}{% if p.pct is not none %} · {{ p.pct }}% of data{% endif %}</strong></div>{% endfor %}{% if e.base_evidence_profile_rows %}<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.16);font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.75">Base evidence submap</div>{% for p in e.base_evidence_profile_rows %}<div style="display:flex;justify-content:space-between;gap:16px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)"><span>↳↳ {{ p.label }}</span><strong style="white-space:nowrap">{{ p.chars }}{% if p.pct is not none %} · {{ p.pct }}% of base{% endif %}</strong></div>{% endfor %}{% endif %}{% endif %}</div></details>{% else %}—{% endif %}</td><td>{% if e.estimated_cost %}<strong>{{ e.estimated_cost.total_label }}</strong>{% else %}—{% endif %}</td><td>{{ e.total_tokens if e.total_tokens is not none else '—' }}</td></tr>{% else %}<tr><td colspan="13">No AI calls recorded yet.</td></tr>{% endfor %}</tbody></table></div></div></section>
 <section class="ps-card" style="margin-top:16px"><div class="ps-section-head"><h2>Invitation history</h2><span class="ps-count">{{ codes|length }}</span></div><div class="ps-table-wrap"><table class="ps-table"><thead><tr><th>PREFIX</th><th>TYPE</th><th>STATUS</th><th>CREATED</th><th>EXPIRY</th><th>REDEEMED AT</th><th>REDEEMED BY</th><th>NOTE</th></tr></thead><tbody>{% for c in codes %}<tr><td>{{ c.code_prefix }}…</td><td>{{ c.license_type }}</td><td><span class="ps-pill {{ c.status }}">{{ c.status }}</span></td><td>{{ c.created_at_utc|admin_dt }}</td><td>{{ c.expires_at_utc|admin_expiry }}</td><td>{{ c.redeemed_at_utc|admin_dt }}</td><td><strong>{{ c.redeemed_by_username or '—' }}</strong></td><td>{{ c.note or '—' }}</td></tr>{% else %}<tr><td colspan="8">No invitation codes yet.</td></tr>{% endfor %}</tbody></table></div></section>
 <section class="ps-card ps-accordion" style="margin-top:16px"><button class="ps-accordion-trigger" type="button" data-accordion-target="security-audit-panel" aria-expanded="false"><span class="ps-accordion-copy"><strong>Security & privacy audit</strong><small>{{ audits|length }} most recent events · includes beta-QA consent changes and admin audit downloads</small></span><span class="ps-accordion-meta"><span class="ps-count">{{ audits|length }}</span><span class="ps-accordion-icon" aria-hidden="true">+</span></span></button><div class="ps-accordion-panel" id="security-audit-panel" hidden><div class="ps-table-wrap ps-audit-scroll"><table class="ps-table"><thead><tr><th>TIME</th><th>ACTION</th><th>ACTOR</th><th>TARGET</th><th>IP</th></tr></thead><tbody>{% for a in audits %}<tr><td>{{ a.created_at_utc|admin_dt }}</td><td>{{ a.action }}</td><td>{{ a.actor_username or 'system' }}</td><td>{{ a.target_username or '—' }}</td><td>{{ a.ip_address or '—' }}</td></tr>{% else %}<tr><td colspan="5">No audit events yet.</td></tr>{% endfor %}</tbody></table></div></div></section>
@@ -11813,6 +11827,76 @@ def admin_intervals_wbal_probe(activity_id):
         "activity_truth": _v79_activity_truth_summary(interval_truth),
         "wbal": summary, "ai_calls": 0, "note": "Read-only Intervals + Activity Truth diagnostic; no AI provider call."
     })
+# INC141 — Read-only Neon Free-plan usage via the project details endpoint.
+# Optional credentials: never use database credentials for Neon management APIs.
+_NEON_USAGE_CACHE = {"at": None, "data": None}
+_NEON_USAGE_LIMIT_DEFAULT_BYTES = 5_000_000_000  # Free public transfer; override if Neon changes the plan.
+
+
+def _inc141_neon_usage():
+    """Return verified Neon byte counters. Never synthesize a zero on API failure."""
+    key = (os.environ.get("THE_LAB_NEON_MONITOR_API_KEY") or os.environ.get("NEON_API_KEY") or "").strip()
+    configured = [
+        ("THE LAB PRODUCT", (os.environ.get("THE_LAB_NEON_PRODUCT_PROJECT_ID") or "damp-hall-01625798").strip()),
+        ("The Lab", (os.environ.get("THE_LAB_NEON_OWNER_PROJECT_ID") or "crimson-dust-67125651").strip()),
+    ]
+    missing = not key or any(not ident for _, ident in configured)
+    if missing:
+        return {"ready": False, "error": "Configure server-side Neon monitor API key and both production project IDs.", "projects": []}
+    if any(not re.fullmatch(r"[a-z0-9-]{1,60}", ident) for _, ident in configured):
+        return {"ready": False, "error": "Invalid project ID configuration.", "projects": []}
+    now = datetime.now(timezone.utc)
+    cached_at = _NEON_USAGE_CACHE.get("at")
+    if cached_at and _NEON_USAGE_CACHE.get("data") and (now - cached_at).total_seconds() < 900:
+        return _NEON_USAGE_CACHE["data"]
+    try:
+        limit = int(os.environ.get("THE_LAB_NEON_FREE_TRANSFER_LIMIT_BYTES") or _NEON_USAGE_LIMIT_DEFAULT_BYTES)
+        if limit <= 0: raise ValueError("Invalid Neon transfer limit")
+        rows = []
+        periods = set()
+        for name, project_id in configured:
+            res = requests.get(
+                "https://console.neon.tech/api/v2/projects/" + project_id,
+                headers={"Authorization": "Bearer " + key, "Accept": "application/json"},
+                timeout=5,
+            )
+            res.raise_for_status()
+            payload = res.json()
+            project = payload.get("project") if isinstance(payload, dict) and isinstance(payload.get("project"), dict) else payload
+            if not isinstance(project, dict) or project.get("id") != project_id:
+                raise ValueError("Neon project ID mismatch")
+            raw = project.get("data_transfer_bytes")
+            start, end = project.get("consumption_period_start"), project.get("consumption_period_end")
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0 or not start or not end:
+                raise ValueError("Missing verified transfer counter or billing period")
+            period_start = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
+            period_end = datetime.fromisoformat(str(end).replace("Z", "+00:00"))
+            if period_start.tzinfo is None or period_end.tzinfo is None or not period_start <= now < period_end:
+                raise ValueError("Neon reported an invalid/outdated billing period")
+            periods.add((str(start), str(end)))
+            pct = 100.0 * raw / limit
+            # Forecast is only a linear trend, not an official Neon measurement.
+            elapsed = max((now - period_start).total_seconds(), 1)
+            duration = (period_end - period_start).total_seconds()
+            forecast = min(9999.0, pct * duration / elapsed)
+            rows.append({"name": name, "bytes": raw, "gb": round(raw / 1_000_000_000, 3),
+                         "pct": round(pct, 1), "bar_pct": min(pct, 100),
+                         "remaining_gb": round(max(0, limit - raw) / 1_000_000_000, 3),
+                         "forecast_pct": round(forecast, 1),
+                         "risk": "critical" if pct >= 95 else "high" if pct >= 85 else "warning" if pct >= 70 or forecast >= 100 else "ok",
+                         "period_start": str(start)[:10], "period_end": str(end)[:10]})
+        if len(periods) != 1:
+            raise ValueError("Production projects report different consumption periods")
+        result = {"ready": True, "projects": rows, "sampled_at": now.strftime("%Y-%m-%d %H:%M UTC"),
+                  "limit_gb": limit / 1_000_000_000, "error": None}
+        _NEON_USAGE_CACHE.update(at=now, data=result)
+        return result
+    except Exception as exc:
+        # Do not return a previous month as current data; never leak credentials or response bodies.
+        app.logger.warning("INC141 Neon usage not available (%s)", type(exc).__name__)
+        return {"ready": False, "projects": [], "error": "Neon usage temporarily unavailable (" + type(exc).__name__ + ")."}
+
+
 @app.route("/admin")
 def admin_control_center():
     admin = require_admin()
@@ -11839,7 +11923,7 @@ def admin_control_center():
     athlete_count = sum(1 for row in users if row.get("role") != "admin")
     render_args = dict(
         product_css=PRODUCT_SIMPLE_CSS, users=users, hidden_users=hidden_users, codes=codes, audits=audits, ai_usage=ai_usage, athlete_count=athlete_count,
-        storage=get_storage_metrics(global_view=True), new_code=session.pop("new_access_code", None),
+        storage=get_storage_metrics(global_view=True), neon_usage=_inc141_neon_usage(), new_code=session.pop("new_access_code", None),
         reset_credential=session.pop("password_reset_credential", None),
         notice=session.pop("admin_notice", None), error=admin_error,
         today_iso=get_rome_now().date().isoformat(),
