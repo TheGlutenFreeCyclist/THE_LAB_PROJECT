@@ -70950,6 +70950,48 @@ def _inc146_retry_reason(plan, ledger, evidence_ledger, snapshot_day):
     return None, None
 
 
+# INC150 / BU proposal: observational history is a selector INPUT, never a
+# presentation veto or a claim that a named activity proves completed mechanics.
+# The original selector/issuer still choose and authenticate all work and watts.
+INC150_SCHEMA = 'NOVA-INC150-PRIOR-EXPOSURE-SELECTOR-CONTEXT-1'
+
+
+def _inc150_preselection_exposures(goal, dimension, ledger, evidence_ledger, snapshot_day):
+    """Prepare conservative, bounded owner-scoped candidate exclusions.
+
+    Trust resolved Intervals repeated-work observations for a mechanical match;
+    a same-named completed event is only a *selection caution* (not proof of
+    intervals, adherence or a completed prescription). In either case, ask the
+    ORIGINAL selector to consider a distinct canonical workout *before* it
+    compiles or signs the future Card 3, instead of suppressing a signed card.
+    """
+    eligible = [t for t in _NOVA_WORKOUT_LIBRARY if isinstance(t, dict)
+                and t.get('goal') == goal and dimension in set(t.get('dimensions') or ())
+                and not t.get('adaptive_only')]
+    excluded = {}
+    audit = []
+    for tpl in eligible:
+        wid = str(tpl.get('id') or '')
+        if not wid:
+            continue
+        mechanical = _inc140_candidate_replay(evidence_ledger, None, wid, snapshot_day)
+        if mechanical.get('blocks_future_card') is True:
+            excluded[wid] = 'RECENT_VERIFIED_SAME_STRUCTURE'
+            audit.append({'workout_id': wid, 'reason': 'RECENT_VERIFIED_SAME_STRUCTURE',
+                          'evidence_level': 'VERIFIED_WORK_AND_RECOVERY',
+                          'observed_dates': sorted({str(x.get('date')) for x in
+                              (mechanical.get('matches') or []) if isinstance(x,dict)})})
+            continue
+        named = _inc143_recent_named_completion({
+            'microcycle_ledger': ledger, 'inc140_snapshot_date': snapshot_day}, wid)
+        if named:
+            excluded[wid] = 'RECENT_NAMED_ACTIVITY_SELECTION_CAUTION'
+            audit.append({'workout_id': wid, 'reason': 'RECENT_NAMED_ACTIVITY_SELECTION_CAUTION',
+                          'evidence_level': 'NAME_ONLY_NOT_MECHANICAL_PROOF',
+                          'observed_dates': [named['observed_date']]})
+    return excluded, audit
+
+
 def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
         evidence_ledger=None, power_model=None, ftp_anchor=None,
         aerobic_metabolic_range=None, training_definitions=None,
@@ -70970,25 +71012,31 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
             training_definitions=training_definitions,
             compiler_args=compiler_args, planning_context=planning_context,
             training_state=training_state, active_offer=active_offer)
-    first = original()
-    if not isinstance(first, dict):
-        return first
-    if (not owner_user_id or active_offer
-        or _nova_inc079_explicit_injury_restriction(planning_context)):
-        return first
+    # Exact same original producer, but seed its exclusion context with
+    # completed-work observations BEFORE first ranking. No second selector.
     goal = str((decision or {}).get('goal_key') or (road or {}).get('goal_key') or '').upper()
     dim = str(((road or {}).get('scientific_progression') or {}).get('dimension') or
               (decision or {}).get('dimension') or '').upper()
-    if not goal or not dim:
+    today = get_rome_now().date().isoformat()
+    skip = (not owner_user_id or active_offer or not goal or not dim or
+            _nova_inc079_explicit_injury_restriction(planning_context))
+    historic, historic_audit = ({}, []) if skip else _inc150_preselection_exposures(
+        goal, dim, ledger, evidence_ledger, today)
+    inherited = set(_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get())
+    token = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(inherited | set(historic)))
+    try:
+        first = original()
+    finally:
+        _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
+    if not isinstance(first, dict) or skip:
         return first
     eligible = {str(t['id']) for t in _NOVA_WORKOUT_LIBRARY
                 if t.get('goal') == goal and dim in set(t.get('dimensions') or ())
                 and not t.get('adaptive_only')}
     # Only a source-selected candidate can be excluded.  Original selection
     # + physiological gates get a new chance; no arbitrary catalogue fallback.
-    excluded = set()
+    excluded = set(historic)
     attempted = []
-    today = get_rome_now().date().isoformat()
     plan = first
     for trial in range(len(eligible) + 1):
         issue, proof = _inc146_retry_reason(plan, ledger, evidence_ledger, today)
@@ -71003,6 +71051,11 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
                     excluded_prior_candidates=[p['workout_id'] for p in attempted],
                     producer_action=('DISTINCT_CANONICAL_RESELECTION' if attempted else 'UNCHANGED'))
                 result['inc140_exposure_check'] = replay
+            result['inc150_history_selection'] = {
+                'schema': INC150_SCHEMA, 'state': 'SELECTED_AFTER_HISTORY_PREFLIGHT',
+                'preexcluded': historic_audit, 'selected_workout_id': wid,
+                'date': today, 'source': 'ORIGINAL_CANONICAL_SCIENTIFIC_PRODUCER',
+                'watt_target_fabricated': False, 'mechanical_proof_inferred_from_name': False}
             result['inc146_coverage'] = {
                 'schema': INC146_SCHEMA, 'state': 'COMPILED_PENDING_FINAL_ATTESTATION',
                 'goal_key': goal, 'workout_id': wid,
@@ -71017,7 +71070,7 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
         excluded.add(wid)
         attempted.append({'workout_id': wid, 'reason': issue})
         token = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(
-            set(_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()) | excluded))
+            inherited | excluded))
         try:
             alternative = original()
         finally:
@@ -71041,6 +71094,11 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
             excluded_prior_candidates=[p['workout_id'] for p in attempted],
             reselection_attempts=attempted)
         failed['inc140_exposure_check'] = replay
+    failed['inc150_history_selection'] = {
+        'schema': INC150_SCHEMA, 'state': 'NO_DISTINCT_SCIENTIFIC_DOSE_NO_GO',
+        'preexcluded': historic_audit, 'date': today,
+        'source': 'ORIGINAL_CANONICAL_SCIENTIFIC_PRODUCER',
+        'watt_target_fabricated': False, 'mechanical_proof_inferred_from_name': False}
     failed['inc146_coverage'] = {
         'schema': INC146_SCHEMA, 'state': 'PRODUCER_COVERAGE_FAILED_NO_GO',
         'goal_key': goal, 'reason': (_inc146_retry_reason(plan, ledger, evidence_ledger, today)[0]
@@ -71108,7 +71166,8 @@ def _nova_inc051_attest_future_snapshot(data, owner_user_id):
 
 APP_VERSION += ' · INC146 SCIENCE PRODUCER COVERAGE RETRY + VERIFIED POWER COPY + NO-GO AUDIT'
 APP_VERSION += ' · INC147 SINGLE CARD/TRUTH/BOOKING PROJECTION · NO TEST SNAPSHOTS'
-APP_VERSION += ' · INC149 SIGNED FUTURE QUALITY TAKES PRECEDENCE OVER CHRONOLOGICAL SLOT FAILURE' 
+APP_VERSION += ' · INC149 SIGNED FUTURE QUALITY TAKES PRECEDENCE OVER CHRONOLOGICAL SLOT FAILURE'
+APP_VERSION += ' · INC150 VERIFIED AND NAMED RECENT EXPOSURE FED INTO ORIGINAL SELECTOR BEFORE FIRST RANKING' 
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
