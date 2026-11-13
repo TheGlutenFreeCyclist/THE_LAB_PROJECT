@@ -15,7 +15,7 @@ import statistics
 import uuid
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, time
 from zoneinfo import ZoneInfo
 import requests
 try:
@@ -11500,6 +11500,20 @@ ADMIN_PAGE = """
 {% if athlete_count == 0 %}<div class="ps-muted" style="padding:16px 2px">No athlete accounts yet.</div>{% endif %}</div>
 {% for u in users %}{% if u.role == 'admin' %}<div class="ps59-owner-card"><div class="ps59-owner-main"><strong>{{ u.username }}</strong><span>Owner account · personal workspace stays on the dedicated owner data path.</span><span>{% if u.birth_date_ready %}DOB {{ u.birth_date_display }} · age {{ u.age_years }}{% else %}<strong style="color:#ffd38a">DOB REQUIRED BEFORE SNAPSHOT</strong>{% endif %}</span></div><div class="ps59-owner-meta"><span class="ps59-mini good">OWNER</span><span class="ps59-mini">{{ u.active_sessions }} ACTIVE SESSION{{ '' if u.active_sessions == 1 else 'S' }}</span><form class="ps59-owner-dob" method="post" action="{{ url_for('admin_update_birth_date', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label class="ps-field"><span>DATE OF BIRTH · REQUIRED</span><input name="birth_date" type="date" autocomplete="bday" max="{{ today_iso }}" value="{{ u.birth_date or '' }}" required></label><button class="ps-btn primary" type="submit">Save DOB</button></form></div></div>{% endif %}{% endfor %}</section>
 {% if hidden_users %}<section class="ps-card ps-accordion" style="margin-top:16px"><button class="ps-accordion-trigger" type="button" data-accordion-target="archived-users-panel" aria-expanded="false"><span class="ps-accordion-copy"><strong>Archived athletes</strong><small>Inactive accounts removed from the main roster. Data and history are preserved.</small></span><span class="ps-accordion-meta"><span class="ps-count">{{ hidden_users|length }}</span><span class="ps-accordion-icon" aria-hidden="true">+</span></span></button><div class="ps-accordion-panel" id="archived-users-panel" hidden><div class="ps59-hidden-list">{% for u in hidden_users %}<div class="ps59-hidden-row"><div><strong>{{ u.username }}</strong><small>{{ u.status|upper }} · {{ u.last_login_at_utc|admin_dt if u.last_login_at_utc else 'never logged in' }} · {{ 'report available' if u.report_generated else 'no report' }}</small></div><form method="post" action="{{ url_for('admin_user_visibility', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="visibility" value="restore"><button class="ps-btn restore small" type="submit">Restore to roster</button></form></div>{% endfor %}</div></div></section>{% endif %}
+<section class="ps-card" style="margin-top:16px" id="neon-infrastructure-monitor">
+<div class="ps-section-head"><h2>Neon infrastructure · monthly public transfer</h2><span class="ps-count">OFFICIAL API</span></div>
+<p class="ps59-usage-note">Read-only counters from Neon project details (Free compatible). Each production project is monitored independently; the 5 GB default limit is configurable. Historical October consumption cannot be recovered from this current-month counter. Data refreshes at most every 15 minutes while Admin is viewed.</p>
+{% if neon_usage.ready %}
+<div class="ps-ai-stats"><div class="ps-ai-stat"><span>PUBLIC TRANSFER QUOTA / PROJECT</span><strong>{{ '%.2f'|format(neon_usage.limit_gb) }} GB</strong></div><div class="ps-ai-stat"><span>READ AT</span><strong style="font-size:15px">{{ neon_usage.sampled_at }}</strong></div></div>
+{% for p in neon_usage.projects %}
+<div style="padding:14px;margin:11px 0;border:1px solid rgba(155,185,205,.2);border-radius:13px">
+<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px"><strong>{{ p.name }}</strong><strong style="color:{{ '#ffb27c' if p.risk != 'ok' else '#aef3ce' }}">{{ p.pct }}% · {{ p.gb }} GB</strong></div>
+<div style="height:10px;margin:11px 0 7px;border-radius:8px;background:rgba(255,255,255,.12);overflow:hidden"><div style="height:100%;width:{{ p.bar_pct }}%;background:{{ '#ff9a68' if p.risk != 'ok' else '#49d9b0' }}"></div></div>
+<div class="ps-muted">{{ p.remaining_gb }} GB remaining · Linear month-end forecast: {{ p.forecast_pct }}% · period {{ p.period_start }} to {{ p.period_end }} (exclusive)</div>
+{% if p.risk != 'ok' %}<div class="ps-error" style="margin-top:8px">{% if p.risk == 'critical' %}CRITICAL: Public network transfer near/exceeding quota.{% elif p.pct >= 85 %}HIGH WARNING: Public network transfer above 85%.{% elif p.pct >= 70 %}WARNING: Public network transfer above 70%.{% else %}WARNING: Current pace projects quota exhaustion before reset.{% endif %}</div>{% endif %}
+</div>{% endfor %}
+{% else %}<div class="ps-error">Official usage unavailable: {{ neon_usage.error }} No zero or estimated figure is presented as an official Neon counter.</div>{% endif %}
+</section>
 <section class="ps-card ps-accordion" style="margin-top:16px"><button class="ps-accordion-trigger" type="button" data-accordion-target="ai-usage-panel" aria-expanded="false"><span class="ps-accordion-copy"><strong>AI usage monitor</strong><small>Owner + athlete API cost visibility · per-athlete caps · BYOK unlimited by THE LAB</small></span><span class="ps-accordion-meta"><span class="ps-count">{{ ai_usage.today_api_calls }}</span><span class="ps-accordion-icon" aria-hidden="true">+</span></span></button><div class="ps-accordion-panel" id="ai-usage-panel" hidden><div class="ps-ai-stats"><div class="ps-ai-stat"><span>OWNER-FUNDED API CALLS TODAY</span><strong>{{ ai_usage.today_owner_funded_calls }}</strong></div><div class="ps-ai-stat"><span>ALL API REQUESTS TODAY</span><strong>{{ ai_usage.today_api_calls }}</strong></div><div class="ps-ai-stat"><span>TOKENS REPORTED TODAY</span><strong>{{ ai_usage.today_tokens }}</strong></div><div class="ps-ai-stat"><span>DEFAULT GATEWAY</span><strong>{{ ai_usage.mode }}</strong></div></div><p class="ps59-usage-note">Top counters include the owner account and athletes so cost monitoring cannot hide owner Snapshots. The quota table below remains athlete-only: owner calls are uncapped and never consume an athlete allowance. Defaults remain Standard {{ ai_usage.standard_daily_limit }}/day and Managed {{ ai_usage.managed_daily_limit }} premium + Standard fallback when configured.</p><div class="ps-table-wrap"><table class="ps-table"><thead><tr><th>ATHLETE</th><th>LOCAL DATE</th><th>POLICY / USED</th><th>REMAINING</th><th>API CALLS</th><th>INPUT TOKENS</th><th>OUTPUT TOKENS</th><th>TOTAL TOKENS</th></tr></thead><tbody>{% for u in ai_usage.athletes %}<tr><td><strong>{{ u.username }}</strong>{{ ' · archived' if u.admin_hidden else '' }}</td><td class="ps59-table-nowrap">{{ u.local_date|ui_date }}</td><td>{{ u.quota_label }}{% if u.limit_source == 'CUSTOM' %}<br><span class="ps-muted">CUSTOM CAP</span>{% endif %}</td><td><strong class="{{ u.remaining_class }}">{{ u.remaining_label }}</strong></td><td>{{ u.api_calls }}</td><td>{{ u.input_tokens }}</td><td>{{ u.output_tokens }}</td><td>{{ u.total_tokens }}</td></tr>{% else %}<tr><td colspan="8">No athlete usage yet.</td></tr>{% endfor %}</tbody></table></div><div class="ps-divider"></div><div class="ps-section-head"><h2 style="font-size:16px">Recent AI calls</h2><span class="ps-count">{{ ai_usage.recent|length }}</span></div><div class="ps-table-wrap ps-ai-recent"><table class="ps-table"><thead><tr><th>TIME · OWNER LOCAL</th><th>ATHLETE</th><th>TYPE</th><th>PROVIDER</th><th>MODEL</th><th>SOURCE</th><th>STATUS</th><th>INPUT</th><th>OUTPUT</th><th>PROMPT CHARS</th><th>COST MAP</th><th>EST. COST</th><th>TOTAL TOKENS</th></tr></thead><tbody>{% for e in ai_usage.recent %}<tr><td>{{ e.created_at_utc|admin_dt }}</td><td>{{ e.username or '—' }}</td><td>{{ e.call_type }}</td><td>{{ e.provider }}</td><td>{{ e.model }}</td><td>{{ e.credential_source or '—' }}</td><td>{{ e.status|upper }}</td><td>{{ e.input_tokens if e.input_tokens is not none else '—' }}</td><td>{{ e.output_tokens if e.output_tokens is not none else '—' }}</td><td>{{ e.prompt_chars if e.prompt_chars is not none else '—' }}</td><td>{% if e.prompt_profile_rows %}<details><summary style="cursor:pointer;white-space:nowrap">Breakdown</summary><div style="min-width:310px;padding:8px 0">{% if e.estimated_cost %}<div style="padding:6px 0 8px;margin-bottom:6px;border-bottom:1px solid rgba(0,229,255,.28)"><div style="display:flex;justify-content:space-between;gap:16px"><span style="font-weight:700">Estimated API cost</span><strong style="white-space:nowrap">{{ e.estimated_cost.total_label }}</strong></div><div style="font-size:11px;opacity:.76;margin-top:3px">Input {{ e.estimated_cost.input_label }} + output {{ e.estimated_cost.output_label }} · {{ e.estimated_cost.rate_label }}</div><div style="font-size:10px;opacity:.58;margin-top:2px">Standard uncached paid text list price · catalog {{ e.estimated_cost.catalog_date }} · displayed in EUR ({{ e.estimated_cost.fx_label }}; reference {{ e.estimated_cost.fx_reference_date }}). Actual billing may differ with FX movement, free tier, caching, batch/fast mode, regional pricing or taxes.</div></div>{% else %}<div style="font-size:11px;opacity:.7;padding:3px 0 7px">Estimated API cost unavailable for this model/token record.</div>{% endif %}{% for p in e.prompt_profile_rows %}<div style="display:flex;justify-content:space-between;gap:16px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)"><span>{{ p.label }}</span><strong style="white-space:nowrap">{{ p.chars }}{% if p.pct is not none %} · {{ p.pct }}%{% endif %}</strong></div>{% endfor %}{% if e.evidence_profile_rows %}<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,229,255,.28);font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.75">Data / evidence submap</div>{% for p in e.evidence_profile_rows %}<div style="display:flex;justify-content:space-between;gap:16px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)"><span>↳ {{ p.label }}</span><strong style="white-space:nowrap">{{ p.chars }}{% if p.pct is not none %} · {{ p.pct }}% of data{% endif %}</strong></div>{% endfor %}{% if e.base_evidence_profile_rows %}<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.16);font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.75">Base evidence submap</div>{% for p in e.base_evidence_profile_rows %}<div style="display:flex;justify-content:space-between;gap:16px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)"><span>↳↳ {{ p.label }}</span><strong style="white-space:nowrap">{{ p.chars }}{% if p.pct is not none %} · {{ p.pct }}% of base{% endif %}</strong></div>{% endfor %}{% endif %}{% endif %}</div></details>{% else %}—{% endif %}</td><td>{% if e.estimated_cost %}<strong>{{ e.estimated_cost.total_label }}</strong>{% else %}—{% endif %}</td><td>{{ e.total_tokens if e.total_tokens is not none else '—' }}</td></tr>{% else %}<tr><td colspan="13">No AI calls recorded yet.</td></tr>{% endfor %}</tbody></table></div></div></section>
 <section class="ps-card" style="margin-top:16px"><div class="ps-section-head"><h2>Invitation history</h2><span class="ps-count">{{ codes|length }}</span></div><div class="ps-table-wrap"><table class="ps-table"><thead><tr><th>PREFIX</th><th>TYPE</th><th>STATUS</th><th>CREATED</th><th>EXPIRY</th><th>REDEEMED AT</th><th>REDEEMED BY</th><th>NOTE</th></tr></thead><tbody>{% for c in codes %}<tr><td>{{ c.code_prefix }}…</td><td>{{ c.license_type }}</td><td><span class="ps-pill {{ c.status }}">{{ c.status }}</span></td><td>{{ c.created_at_utc|admin_dt }}</td><td>{{ c.expires_at_utc|admin_expiry }}</td><td>{{ c.redeemed_at_utc|admin_dt }}</td><td><strong>{{ c.redeemed_by_username or '—' }}</strong></td><td>{{ c.note or '—' }}</td></tr>{% else %}<tr><td colspan="8">No invitation codes yet.</td></tr>{% endfor %}</tbody></table></div></section>
 <section class="ps-card ps-accordion" style="margin-top:16px"><button class="ps-accordion-trigger" type="button" data-accordion-target="security-audit-panel" aria-expanded="false"><span class="ps-accordion-copy"><strong>Security & privacy audit</strong><small>{{ audits|length }} most recent events · includes beta-QA consent changes and admin audit downloads</small></span><span class="ps-accordion-meta"><span class="ps-count">{{ audits|length }}</span><span class="ps-accordion-icon" aria-hidden="true">+</span></span></button><div class="ps-accordion-panel" id="security-audit-panel" hidden><div class="ps-table-wrap ps-audit-scroll"><table class="ps-table"><thead><tr><th>TIME</th><th>ACTION</th><th>ACTOR</th><th>TARGET</th><th>IP</th></tr></thead><tbody>{% for a in audits %}<tr><td>{{ a.created_at_utc|admin_dt }}</td><td>{{ a.action }}</td><td>{{ a.actor_username or 'system' }}</td><td>{{ a.target_username or '—' }}</td><td>{{ a.ip_address or '—' }}</td></tr>{% else %}<tr><td colspan="5">No audit events yet.</td></tr>{% endfor %}</tbody></table></div></div></section>
@@ -11813,6 +11827,76 @@ def admin_intervals_wbal_probe(activity_id):
         "activity_truth": _v79_activity_truth_summary(interval_truth),
         "wbal": summary, "ai_calls": 0, "note": "Read-only Intervals + Activity Truth diagnostic; no AI provider call."
     })
+# INC141 — Read-only Neon Free-plan usage via the project details endpoint.
+# Optional credentials: never use database credentials for Neon management APIs.
+_NEON_USAGE_CACHE = {"at": None, "data": None}
+_NEON_USAGE_LIMIT_DEFAULT_BYTES = 5_000_000_000  # Free public transfer; override if Neon changes the plan.
+
+
+def _inc141_neon_usage():
+    """Return verified Neon byte counters. Never synthesize a zero on API failure."""
+    key = (os.environ.get("THE_LAB_NEON_MONITOR_API_KEY") or os.environ.get("NEON_API_KEY") or "").strip()
+    configured = [
+        ("THE LAB PRODUCT", (os.environ.get("THE_LAB_NEON_PRODUCT_PROJECT_ID") or "damp-hall-01625798").strip()),
+        ("The Lab", (os.environ.get("THE_LAB_NEON_OWNER_PROJECT_ID") or "crimson-dust-67125651").strip()),
+    ]
+    missing = not key or any(not ident for _, ident in configured)
+    if missing:
+        return {"ready": False, "error": "Configure server-side Neon monitor API key and both production project IDs.", "projects": []}
+    if any(not re.fullmatch(r"[a-z0-9-]{1,60}", ident) for _, ident in configured):
+        return {"ready": False, "error": "Invalid project ID configuration.", "projects": []}
+    now = datetime.now(timezone.utc)
+    cached_at = _NEON_USAGE_CACHE.get("at")
+    if cached_at and _NEON_USAGE_CACHE.get("data") and (now - cached_at).total_seconds() < 900:
+        return _NEON_USAGE_CACHE["data"]
+    try:
+        limit = int(os.environ.get("THE_LAB_NEON_FREE_TRANSFER_LIMIT_BYTES") or _NEON_USAGE_LIMIT_DEFAULT_BYTES)
+        if limit <= 0: raise ValueError("Invalid Neon transfer limit")
+        rows = []
+        periods = set()
+        for name, project_id in configured:
+            res = requests.get(
+                "https://console.neon.tech/api/v2/projects/" + project_id,
+                headers={"Authorization": "Bearer " + key, "Accept": "application/json"},
+                timeout=5,
+            )
+            res.raise_for_status()
+            payload = res.json()
+            project = payload.get("project") if isinstance(payload, dict) and isinstance(payload.get("project"), dict) else payload
+            if not isinstance(project, dict) or project.get("id") != project_id:
+                raise ValueError("Neon project ID mismatch")
+            raw = project.get("data_transfer_bytes")
+            start, end = project.get("consumption_period_start"), project.get("consumption_period_end")
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0 or not start or not end:
+                raise ValueError("Missing verified transfer counter or billing period")
+            period_start = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
+            period_end = datetime.fromisoformat(str(end).replace("Z", "+00:00"))
+            if period_start.tzinfo is None or period_end.tzinfo is None or not period_start <= now < period_end:
+                raise ValueError("Neon reported an invalid/outdated billing period")
+            periods.add((str(start), str(end)))
+            pct = 100.0 * raw / limit
+            # Forecast is only a linear trend, not an official Neon measurement.
+            elapsed = max((now - period_start).total_seconds(), 1)
+            duration = (period_end - period_start).total_seconds()
+            forecast = min(9999.0, pct * duration / elapsed)
+            rows.append({"name": name, "bytes": raw, "gb": round(raw / 1_000_000_000, 3),
+                         "pct": round(pct, 1), "bar_pct": min(pct, 100),
+                         "remaining_gb": round(max(0, limit - raw) / 1_000_000_000, 3),
+                         "forecast_pct": round(forecast, 1),
+                         "risk": "critical" if pct >= 95 else "high" if pct >= 85 else "warning" if pct >= 70 or forecast >= 100 else "ok",
+                         "period_start": str(start)[:10], "period_end": str(end)[:10]})
+        if len(periods) != 1:
+            raise ValueError("Production projects report different consumption periods")
+        result = {"ready": True, "projects": rows, "sampled_at": now.strftime("%Y-%m-%d %H:%M UTC"),
+                  "limit_gb": limit / 1_000_000_000, "error": None}
+        _NEON_USAGE_CACHE.update(at=now, data=result)
+        return result
+    except Exception as exc:
+        # Do not return a previous month as current data; never leak credentials or response bodies.
+        app.logger.warning("INC141 Neon usage not available (%s)", type(exc).__name__)
+        return {"ready": False, "projects": [], "error": "Neon usage temporarily unavailable (" + type(exc).__name__ + ")."}
+
+
 @app.route("/admin")
 def admin_control_center():
     admin = require_admin()
@@ -11839,7 +11923,7 @@ def admin_control_center():
     athlete_count = sum(1 for row in users if row.get("role") != "admin")
     render_args = dict(
         product_css=PRODUCT_SIMPLE_CSS, users=users, hidden_users=hidden_users, codes=codes, audits=audits, ai_usage=ai_usage, athlete_count=athlete_count,
-        storage=get_storage_metrics(global_view=True), new_code=session.pop("new_access_code", None),
+        storage=get_storage_metrics(global_view=True), neon_usage=_inc141_neon_usage(), new_code=session.pop("new_access_code", None),
         reset_credential=session.pop("password_reset_credential", None),
         notice=session.pop("admin_notice", None), error=admin_error,
         today_iso=get_rome_now().date().isoformat(),
@@ -22151,6 +22235,8 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
             open_seq=[d for d in (graph.get("sequence") or ()) if not _v82_question_exit_satisfied(question_state,d)]
             dim=(open_seq or list(graph.get("sequence") or ("FRESH_CAPACITY",)))[0]; scores[dim]=50.0; reasons[dim]="Insufficient evidence to rank a more specific unresolved adaptation question."
     _nova_r134_rank_science_after_recent_transfer(scores, reasons, goal, evidence_ledger, roadmap)
+    dose_feasibility = _nova_inc133_rank_supported_questions(
+        goal, scores, road, evidence_ledger)
     ranked=sorted(scores,key=lambda k:(-scores[k],(graph.get("sequence") or ()).index(k) if k in (graph.get("sequence") or ()) else 999))
     dim=ranked[0]; arch=list((graph.get("architectures") or {}).get(dim) or ())
     evidence=["TID_ELITE","CYCLIST_TRAINING_DISTRIBUTION","LONG_TERM_DEVELOPMENT"]
@@ -22166,7 +22252,7 @@ def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_pr
     margin=(scores[ranked[0]]-scores[ranked[1]]) if len(ranked)>1 else 30
     confidence="HIGH" if dim=="NONE" else ("HIGH" if scores[dim]>=85 and margin>=12 else ("MEDIUM" if scores[dim]>=70 else "LOW"))
     dose_contract=_v504_scientific_dose_contract(goal,dim,feat)
-    return {"schema":"V4.8.74-R72-1","available":True,"goal_key":goal,"primary_anchor":graph.get("anchor"),"dimension":dim,"open_question":reasons.get(dim),"candidate_architectures":arch,"ranked_questions":ranked_questions,"confidence":confidence,"evidence_ids":evidence,"evidence":[{"id":k,**_V503_SCIENCE_EVIDENCE[k]} for k in evidence if k in _V503_SCIENCE_EVIDENCE],"dose_contract":dose_contract,"signals":{"fresh_anchor":fresh_anchor,"repeatability_strong":repeat_strong,"quality_sessions":feat["quality_sessions"],"repeatability_sessions":feat.get("repeatability_sessions"),"repeatability_strong_sessions":feat.get("repeatability_strong_sessions"),"repeatability_efforts":((evidence_ledger or {}).get("counts") or {}).get("repeatability_efforts") if isinstance(evidence_ledger,dict) else None,"evidence_ledger_schema":(evidence_ledger or {}).get("schema") if isinstance(evidence_ledger,dict) else None,"question_state_schema":(question_state or {}).get("schema") if isinstance(question_state,dict) else None,"closed_questions":list((question_state or {}).get("closed_dimensions") or []) if isinstance(question_state,dict) else [],"evidence_scope":(evidence_ledger or {}).get("scope") if isinstance(evidence_ledger,dict) else None,"active_load_recovery_seen":feat["active_load_recovery"],"recovery_under_load_exposures":feat.get("recovery_under_load_exposures"),"recovery_under_load_successes":feat.get("recovery_under_load_successes"),"max_successful_recovery_ratio":feat.get("max_successful_recovery_ratio"),"preloaded_quality_seen":feat["preloaded_quality"],"long_session_seen":feat["long_session"],"race_transfer_seen":feat["race_transfer"],"high_dose_progressed":high_progressed,"moderate_dose_progressed":moderate_progressed,"validation_due":validation_due,"checkpoint_role":role,"latest_repeatability_signature":feat.get("latest_repeatability_signature"),"repeatability_signature_streak":int(feat.get("repeatability_signature_streak") or 0),"structure_saturated":bool(structure_saturated)},"guardrail":"Specificity first: science selects the adaptation question; athlete data doses the progression. Change one dominant stress variable at a time when an architecture is novel. Recovery/spacing decides executability, not adaptation purpose. Product score thresholds and dose ramps are conservative heuristics, not physiological laws."}
+    return {"schema":"V4.8.74-R72-1","available":True,"dose_feasibility":dose_feasibility,"goal_key":goal,"primary_anchor":graph.get("anchor"),"dimension":dim,"open_question":reasons.get(dim),"candidate_architectures":arch,"ranked_questions":ranked_questions,"confidence":confidence,"evidence_ids":evidence,"evidence":[{"id":k,**_V503_SCIENCE_EVIDENCE[k]} for k in evidence if k in _V503_SCIENCE_EVIDENCE],"dose_contract":dose_contract,"signals":{"fresh_anchor":fresh_anchor,"repeatability_strong":repeat_strong,"quality_sessions":feat["quality_sessions"],"repeatability_sessions":feat.get("repeatability_sessions"),"repeatability_strong_sessions":feat.get("repeatability_strong_sessions"),"repeatability_efforts":((evidence_ledger or {}).get("counts") or {}).get("repeatability_efforts") if isinstance(evidence_ledger,dict) else None,"evidence_ledger_schema":(evidence_ledger or {}).get("schema") if isinstance(evidence_ledger,dict) else None,"question_state_schema":(question_state or {}).get("schema") if isinstance(question_state,dict) else None,"closed_questions":list((question_state or {}).get("closed_dimensions") or []) if isinstance(question_state,dict) else [],"evidence_scope":(evidence_ledger or {}).get("scope") if isinstance(evidence_ledger,dict) else None,"active_load_recovery_seen":feat["active_load_recovery"],"recovery_under_load_exposures":feat.get("recovery_under_load_exposures"),"recovery_under_load_successes":feat.get("recovery_under_load_successes"),"max_successful_recovery_ratio":feat.get("max_successful_recovery_ratio"),"preloaded_quality_seen":feat["preloaded_quality"],"long_session_seen":feat["long_session"],"race_transfer_seen":feat["race_transfer"],"high_dose_progressed":high_progressed,"moderate_dose_progressed":moderate_progressed,"validation_due":validation_due,"checkpoint_role":role,"latest_repeatability_signature":feat.get("latest_repeatability_signature"),"repeatability_signature_streak":int(feat.get("repeatability_signature_streak") or 0),"structure_saturated":bool(structure_saturated)},"guardrail":"Specificity first: science selects the adaptation question; athlete data doses the progression. Change one dominant stress variable at a time when an architecture is novel. Recovery/spacing decides executability, not adaptation purpose. Product score thresholds and dose ramps are conservative heuristics, not physiological laws."}
 def _v503_scientific_progression_text(x):
     if not (x or {}).get("available"): return "SCIENTIFIC COACH MEMORY: unavailable."
     if str((x or {}).get("dimension") or "").upper()=="NONE":
@@ -29527,6 +29613,7 @@ def analyze():
             replay_bundle["nova_replay_fixture"] = nova_replay_fixture
             snapshot_fault_stage = "SAVE_REPORT"
             saved_report_meta = save_latest_report(data, qa_replay_bundle=replay_bundle)
+            g.r142_saved_snapshot_stamp = saved_report_meta.get("generated_at_utc")
         except Exception as report_exc:
             # A failed/uncertain commit must never be displayed as a valid new Snapshot.
             _r177_best_effort_ai_status(snapshot_ai_event_id, "save_error", report_exc.__class__.__name__)
@@ -67356,14 +67443,30 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None,
         exclusions.add(wid)
     # Ordinary producer normally supplies EASY_ONLY on catalog exhaustion.
     # Never resurrect an unverified HARD in a bounded-search edge case.
-    return {'schema': INC111_SCHEMA, 'available': True, 'authority': 'NOVA',
-            'action': decision.get('action'), 'dimension': dimensions,
-            'goal_key': goal, 'status': 'EASY_ONLY', 'workout_id': None,
-            'hard_prescription_available': False,
-            'fail_closed_reason': 'ORIGINAL_SCIENCE_ALL_CANDIDATES_REJECTED',
-            'selected_slot_index': None, 'raw_sessions': [], 'sessions': [],
-            'inc111_science_gate': INC111_SCHEMA,
-            'inc111_rejected_candidates': refused}
+    # INC142: The original emergency fallback reconstructed only a small
+    # fragment of the canonical prescription and silently dropped
+    # `ai_authority=EXPLANATION_ONLY`. R87 correctly vetoed every affected
+    # Snapshot as AI_AUTHORITY_ESCALATION. Preserve the untouched canonical
+    # producer's authority contract; discard every rejected HARD session and
+    # re-enter the normal compiler with ordinary safe aerobic slots.
+    # Do NOT manufacture `ai_authority` here: if the original contract is
+    # missing or invalid, the downstream authority validator must still veto.
+    fallback = dict(result)
+    fallback_library = dict(fallback.get('workout_library') or {})
+    fallback_library.update({
+        'reason': 'ORIGINAL_SCIENCE_ALL_CANDIDATES_REJECTED',
+        'selected_id': None, 'selected_signature': None,
+    })
+    return dict(fallback,
+        status='EASY_ONLY', source='ORIGINAL_SCIENCE_FAIL_CLOSED',
+        workout_id=None, contract_id=None, selected_slot_index=None,
+        hard_prescription_available=False,
+        fail_closed_reason='ORIGINAL_SCIENCE_ALL_CANDIDATES_REJECTED',
+        raw_sessions=[_v84_easy_raw(slot, decision) for slot in
+                      (clock.get('next_slots') or []) if isinstance(slot, dict)],
+        sessions=[], workout_library=fallback_library,
+        inc111_science_gate=INC111_SCHEMA,
+        inc111_rejected_candidates=refused)
 
 
 # INC113 / protect the existing Card1/2 + Recovery authority guards for
@@ -67631,6 +67734,9 @@ _R142_UI_BEFORE = _v4891_prepare_snapshot_for_ui
 
 def _r142_quality_identity(data):
     d = data if isinstance(data, dict) else {}
+    specific = (d.get('inc132_dual_quality') or {}).get('quality_specific') or {}
+    if specific.get('complete') and specific.get('workout_id'):
+        return specific['workout_id'], 3
     index = d.get('inc120_quality_duplicate_card')
     if index in (1, 2):
         cards = d.get('nova_inc110_chronological_cards') or []
@@ -67649,20 +67755,57 @@ def _r142_quality_identity(data):
     return None, None
 
 
-def _r142_report_binding(report, owner_id):
-    raw = (report or {}).get('data') or {}
-    d = _v4891_prepare_snapshot_for_ui(raw)
+def _r142_report_binding(report, owner_id, target=None, prepared=None):
+    d = prepared if prepared is not None else _v4891_prepare_snapshot_for_ui(
+        (report or {}).get('data') or {})
     wid, card = _r142_quality_identity(d)
+    if target == 'TEMPO':
+        tempo = (d.get('inc132_dual_quality') or {}).get('quality_integrative') or {}
+        wid, card = (tempo.get('workout_id') if tempo.get('complete') else None), 2
     goal = str(((d.get('nova_decision') or {}).get('goal_key') or
                 (d.get('adaptive_roadmap') or {}).get('goal_key') or '')).upper()
     stamp = str(report.get('generated_at_utc') or report.get('generated_at_local') or '')
     if not wid or not stamp or not owner_id or not goal:
         return None
     raw_key = '|'.join((R142_AVAILABILITY_SCHEMA, str(owner_id), stamp, goal, wid, str(card)))
+    if target == 'TEMPO':
+        raw_key += '|TEMPO'
     token = hmac.new(str(SECRET_KEY).encode('utf-8'), raw_key.encode('utf-8'),
                      hashlib.sha256).hexdigest()
-    return {'token': token, 'workout_id': wid, 'card': card, 'goal': goal,
-            'report_stamp': stamp}
+    binding = {'token': token, 'workout_id': wid, 'card': card, 'goal': goal,
+               'report_stamp': stamp}
+    dual = d.get('inc132_dual_quality') or {}
+    quality = dual.get('quality_integrative' if target == 'TEMPO' else 'quality_specific') or {}
+    plan = d.get('future_quality_plan') or {}
+    if target == 'TEMPO':
+        plan = plan.get('inc132_integrative') or {}
+    verified_id = quality.get('workout_id') if quality.get('complete') else None
+    if target != 'TEMPO':
+        view = d.get('nova_card3_workout_view') or {}
+        if view.get('verified_future_plan'):
+            verified_id = view.get('workout_id')
+    if verified_id == plan.get('workout_id') == wid:
+        binding['archived_workout'] = _inc137_workout_copy(plan)
+    return binding
+
+
+def _inc137_workout_copy(plan):
+    work = plan.get('workout') or {}
+    band = work.get('power_prescription') or {}
+    composition = work.get('session_composition') or {}
+    template = _R19696_LIBRARY_INDEX.get(plan.get('workout_id')) or {}
+    if plan.get('dose_kind') == 'FIRST_TEMPO_FTP_ADVISORY':
+        pattern = 'STANDARD'
+        reps, work_s, recovery_s = band.get('reps'), band.get('work_seconds'), band.get('recovery_seconds')
+    else:
+        pattern = template.get('pattern')
+        reps, work_s, recovery_s = template.get('reps'), template.get('work_s'), template.get('recovery_s')
+    phases = [[b.get('type'), b.get('duration_seconds', b.get('seconds'))]
+              for b in composition.get('blocks') or []]
+    return {'title': work.get('title'), 'pattern': pattern, 'reps': reps,
+            'work_s': work_s, 'recovery_s': recovery_s, 'phases': phases,
+            'total_seconds': composition.get('total_seconds'),
+            'low_watts': band.get('low_watts'), 'high_watts': band.get('high_watts')}
 
 
 def _r142_intents(owner_id):
@@ -67700,6 +67843,79 @@ def load_planning_items(active_only=True, limit=100, owner_user_id=None):
     return ordinary[:int(limit)]
 
 
+
+# INC138 — Presentation of an athlete's saved workout planning window.
+# Compare expiration with the last saved Snapshot, not page reload time.  This
+# retains the existing badge until the next Snapshot after the daypart ends.
+def _inc138_snapshot_clock(report):
+    raw = str((report or {}).get('generated_at_utc') or
+              (report or {}).get('generated_at_local') or '').strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ROME_TZ)
+        return parsed.astimezone(ROME_TZ)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _inc138_end_of_daypart(local_date, daypart):
+    try:
+        day = date.fromisoformat(str(local_date or ''))
+    except (TypeError, ValueError):
+        return None
+    end_hour = {'MORNING': 12, 'AFTERNOON': 17, 'EVENING': 24}.get(
+        str(daypart or '').upper())
+    if end_hour is None:
+        return None
+    if end_hour == 24:
+        return datetime.combine(day + timedelta(days=1), time.min, ROME_TZ)
+    return datetime.combine(day, time(hour=end_hour), ROME_TZ)
+
+
+def _inc138_current_plan(intents, workout_id, goal_key, report):
+    snapshot_time = _inc138_snapshot_clock(report)
+    if snapshot_time is None:
+        return None  # Do not assert an active plan without a report clock.
+    candidates = sorted((i for i in intents if isinstance(i, dict)),
+        key=lambda i: str(i.get('saved_at_utc') or ''), reverse=True)
+    for i in candidates:
+        if (i.get('kind') != 'PLAN' or i.get('scope') != 'ONCE'
+            or i.get('workout_id') != workout_id
+            or str(i.get('goal_key') or '').upper() != goal_key):
+            continue
+        expiry = _inc138_end_of_daypart(i.get('local_date'), i.get('daypart'))
+        if expiry is None or snapshot_time >= expiry:
+            continue
+        label = 'Planned for %s · %s' % (
+            date.fromisoformat(i['local_date']).strftime('%d %b %Y'),
+            i['daypart'].title())
+        return dict(i, planned_label=label)
+    return None
+
+
+def _inc138_is_future_window(plan, now):
+    expiry = _inc138_end_of_daypart(plan.get('local_date'), plan.get('daypart'))
+    return expiry is not None and now.astimezone(ROME_TZ) < expiry
+
+
+def _inc138_deactivate_replaced(owner, chosen, new_id, now):
+    # Only supersede still-open alternatives to this workout. Past entries
+    # survive for INC136/137 historical evidence and interval reconciliation.
+    for prior in _r142_intents(owner):
+        if (prior.get('id') == new_id or prior.get('kind') != 'PLAN'
+            or prior.get('scope') != 'ONCE'
+            or prior.get('workout_id') != chosen['workout_id']
+            or str(prior.get('goal_key') or '').upper() != chosen['goal_key']
+            or not _inc138_is_future_window(prior, now)):
+            continue
+        _data_execute(owner, 'UPDATE planning_items SET active=0 '
+            'WHERE id=? AND user_id=? AND kind=? AND note LIKE ?',
+            (prior['id'], str(owner), 'OTHER', _R142_PREFIX + '%'))
+
+
 def _r142_intent_record_id(owner_id, kind, scope, workout_id):
     identity = ('R142|%s|%s|%s|%s' %
                 (owner_id, kind, scope, workout_id if scope == 'ONCE' else 'GLOBAL'))
@@ -67711,6 +67927,10 @@ def _r142_write_intent(owner_id, obj):
     wid = obj['workout_id']
     item_id = _r142_intent_record_id(owner_id, kind, scope, wid)
     target = obj.get('local_date') or get_rome_now().date().isoformat()
+    if obj.get('archived_workout'):
+        # Keep distinct planned days and make repeated saves for the same slot idempotent.
+        identity = '|'.join((item_id, target, obj['daypart']))
+        item_id = hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]
     note = _R142_PREFIX + json.dumps(obj, ensure_ascii=False, sort_keys=True,
                                      separators=(',', ':'))
     if len(note) > 2100:
@@ -67879,34 +68099,46 @@ def _v4891_prepare_snapshot_for_ui(data):
     return displayed
 
 
-def _r142_page_state():
-    if (not has_request_context() or request.endpoint not in ('home', 'last_report')
+@app.context_processor
+def _r142_template_context():
+    states = {'nova_r142_state': {'active': False}, 'nova_tempo_state': {'active': False},
+              'nova_planning_toast': None}
+    if (not has_request_context() or request.endpoint not in ('home', 'last_report', 'analyze')
         or not session.get('auth_token') or not session.get('user_id')):
-        return {'active': False}
+        return states
+    snapshot_stamp = getattr(g, 'r142_saved_snapshot_stamp', None)
+    if request.endpoint == 'analyze' and (request.method != 'POST' or not snapshot_stamp):
+        return states
     try:
         owner = str(session['user_id'])
         report = load_latest_report(include_payload=True, owner_user_id=owner)
-        binding = _r142_report_binding(report, owner) if report else None
-        if not binding:
-            return {'active': False}
-        binding['active'] = True
-        items = _r142_intents(owner)
-        items = [i for i in items if i.get('scope') == 'USUAL' or
-                 i.get('workout_id') == binding['workout_id']]
-        items.sort(key=lambda i: str(i.get('saved_at_utc') or ''), reverse=True)
-        binding['latest_intent'] = items[0] if items else None
-        binding['usual_limit'] = next((i for i in items if i.get('kind') == 'TOO_LONG'
-                                       and i.get('scope') == 'USUAL'), None)
-        binding['feedback'] = session.pop('r142_quality_notice', None)
-        return binding
+        if not report or (snapshot_stamp and report.get('generated_at_utc') != snapshot_stamp):
+            return states
+        prepared = _v4891_prepare_snapshot_for_ui(report.get('data') or {})
+        items = sorted(_r142_intents(owner), key=lambda i: str(i.get('saved_at_utc') or ''),
+                       reverse=True)
+        if request.endpoint == 'last_report':
+            states['nova_planning_toast'] = session.pop('inc138_planning_toast', None)
+        for key, target, notice in (
+            ('nova_r142_state', None, 'r142_quality_notice'),
+            ('nova_tempo_state', 'TEMPO', 'r142_tempo_notice'),
+        ):
+            binding = _r142_report_binding(report, owner, target, prepared=prepared)
+            if not binding:
+                continue
+            matching = [i for i in items if i.get('scope') == 'USUAL' or
+                        i.get('workout_id') == binding['workout_id']]
+            binding['active'] = True
+            binding['latest_intent'] = matching[0] if matching else None
+            binding['planned_intent'] = _inc138_current_plan(
+                items, binding['workout_id'], binding['goal'], report)
+            binding['usual_limit'] = next((i for i in matching if i.get('kind') == 'TOO_LONG'
+                                          and i.get('scope') == 'USUAL'), None)
+            binding['feedback'] = session.pop(notice, None)
+            states[key] = binding
     except Exception:
         app.logger.exception('R142 availability context unavailable')
-        return {'active': False}
-
-
-@app.context_processor
-def _r142_template_context():
-    return {'nova_r142_state': _r142_page_state()}
+    return states
 
 
 @app.route('/quality/intent', methods=['POST'])
@@ -67914,10 +68146,12 @@ def r142_quality_intent():
     if not require_login():
         return redirect(url_for('login'))
     owner = str(session.get('user_id') or '')
+    target = 'TEMPO' if request.form.get('planning_target') == 'TEMPO' else None
+    notice_key = 'r142_tempo_notice' if target else 'r142_quality_notice'
     feedback = 'Request was not saved. Please review your latest Snapshot.'
     try:
         report = load_latest_report(include_payload=True, owner_user_id=owner)
-        binding = _r142_report_binding(report, owner) if report else None
+        binding = _r142_report_binding(report, owner, target) if report else None
         posted = str(request.form.get('offer_binding') or '')
         if (not binding or len(posted) != 64 or
             not hmac.compare_digest(posted, binding['token'])):
@@ -67949,6 +68183,9 @@ def r142_quality_intent():
                 raise ValueError('Choose a date within the next 90 days.')
             if part not in ('MORNING','AFTERNOON','EVENING'):
                 raise ValueError('Choose morning, afternoon or evening.')
+            if (kind == 'PLAN' and _inc138_end_of_daypart(day, part)
+                    <= get_rome_now().astimezone(ROME_TZ)):
+                raise ValueError('That planning window has already passed. Choose an upcoming date or time of day.')
             existing = _R142_PLANNING_ITEMS_BEFORE(active_only=True, limit=300,
                                                    owner_user_id=owner)
             for item in existing:
@@ -67969,16 +68206,40 @@ def r142_quality_intent():
                'saved_at_utc':now, 'status':'REQUEST_SAVED_PENDING_NEXT_SNAPSHOT',
                'not_an_execution_authorization':True,
                'not_a_calendar_event':True, 'not_an_observed_activity':True}
-        _r142_write_intent(owner, obj)
-        feedback = ('Your availability request was saved. The existing Training engine will '
-                    'reassess it in the next Snapshot. Your current report is unchanged; '
-                    'this is not permission to execute a hard session.')
+        if kind == 'PLAN' and binding.get('archived_workout'):
+            obj['archived_workout'] = binding['archived_workout']
+        prior = None
+        if kind == 'PLAN':
+            prior = _inc138_current_plan(_r142_intents(owner), binding['workout_id'],
+                                         binding['goal'], report)
+            same_choice = (prior and prior.get('local_date') == day
+                           and prior.get('daypart') == part
+                           and prior.get('minutes') == minutes)
+            if (prior and not same_choice and
+                str(request.form.get('overwrite_plan_id') or '') != prior['id']):
+                raise ValueError('This workout is already planned. Confirm that you want to replace its existing planning.')
+        item_id = _r142_write_intent(owner, obj)
+        if kind == 'PLAN':
+            _inc138_deactivate_replaced(owner, obj, item_id, get_rome_now())
+            session['inc138_planning_toast'] = {
+                'heading': 'WORKOUT PLANNED SUCCESSFULLY',
+                'detail': ('Your workout is planned for %s · %s. Nova will reassess '
+                           'it at your next Snapshot.' %
+                           (date.fromisoformat(day).strftime('%d %b %Y'), part.title()))}
+            feedback = None
+        else:
+            feedback = ('Your availability request was saved. The existing Training engine will '
+                        'reassess it in the next Snapshot. Your current report is unchanged; '
+                        'this is not permission to execute a hard session.')
     except ValueError as exc:
         feedback = str(exc)[:240]
     except Exception:
         app.logger.exception('R142 quality planning request save failed')
         feedback = 'Your request could not be saved. Please retry from the latest report.'
-    session['r142_quality_notice'] = feedback
+    if feedback:
+        session[notice_key] = feedback
+    else:
+        session.pop(notice_key, None)
     return redirect(url_for('last_report'), code=303)
 
 
@@ -67989,10 +68250,12 @@ def r142_quality_clear_usual():
     if not require_login():
         return redirect(url_for('login'))
     owner = str(session.get('user_id') or '')
+    target = 'TEMPO' if request.form.get('planning_target') == 'TEMPO' else None
+    notice_key = 'r142_tempo_notice' if target else 'r142_quality_notice'
     msg = 'The usual limit was not changed. Please reload your latest report.'
     try:
         report = load_latest_report(include_payload=True, owner_user_id=owner)
-        binding = _r142_report_binding(report, owner) if report else None
+        binding = _r142_report_binding(report, owner, target) if report else None
         posted = str(request.form.get('offer_binding') or '')
         if not binding or not hmac.compare_digest(posted, binding['token']):
             raise ValueError('The quality offer has changed. Reload the latest report.')
@@ -68009,7 +68272,7 @@ def r142_quality_clear_usual():
     except Exception:
         app.logger.exception('R142 usual limit revocation failed')
         msg = 'The usual limit could not be removed. Please retry.'
-    session['r142_quality_notice'] = msg
+    session[notice_key] = msg
     return redirect(url_for('last_report'), code=303)
 
 _R142_PANEL = r'''{% if data and not is_preview and not qa_mode and not download_mode
@@ -68090,11 +68353,16 @@ _R142_EASY_NOTE = r'''{% if not is_quality_slot and s and data.nova_r142_plan_ui
     <h4 class="r148-quality-why-heading">WHY EASY ENDURANCE TODAY?</h4>
     <p class="r148-quality-why-copy">{{ data.nova_r142_plan_ui.easy_explanation|upper|e }}</p>
   </div>
+  {% if not is_preview and not qa_mode and not download_mode
+    and nova_r142_state.active
+    and data.nova_r142_plan_ui.workout_id == nova_r142_state.workout_id
+    and (not quality_already_shown or (data.inc132_dual_quality and data.inc132_dual_quality.quality_specific)) %}
   <a class="r148-quality-note-action" href="#r142-plan-your-quality"><span aria-hidden="true">📅</span> PLAN YOUR NEXT QUALITY</a>
+  {% endif %}
 </section>
 {% endif %}'''
 HOME_PAGE = HOME_PAGE.replace(_R142_CARD_ARTICLE_END,
-    _R142_EASY_NOTE + '\n{% if is_quality_slot and not quality_already_shown %}' +
+    _R142_EASY_NOTE + '\n{% if is_quality_slot and (not quality_already_shown or (data.inc132_dual_quality and data.inc132_dual_quality.quality_specific)) %}' +
     _R142_PANEL + '{% endif %}\n' + _R142_CARD_ARTICLE_END, 1)
 _R142_PANEL_ANCHOR = '{% endfor %}\n</div>\n<style>'
 if HOME_PAGE.count(_R142_PANEL_ANCHOR) != 1:
@@ -68115,10 +68383,10 @@ APP_VERSION = ('THE LAB · R196.9.142 · INC122 QUALITY AVAILABILITY REQUEST '
 _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download_mode
   and nova_r142_state.active and data.nova_r142_plan_ui
   and data.nova_r142_plan_ui.workout_id == nova_r142_state.workout_id %}
-<section id="r142-plan-your-quality" class="r143-quality-entry" aria-label="Plan your next quality workout">
+<section id="r142-plan-your-quality" class="r143-quality-entry" aria-label="Plan your next quality workout"{% if nova_r142_state.planned_intent %} data-inc138-existing-plan="{{ nova_r142_state.planned_intent.id|e }}"{% endif %}>
   {% if nova_r142_state.feedback %}
   <p class="r143-planning-notice" role="status">{{ nova_r142_state.feedback|e }}</p>
-  {% elif nova_r142_state.latest_intent %}
+  {% elif nova_r142_state.latest_intent and nova_r142_state.latest_intent.kind == 'TOO_LONG' %}
   <p class="r143-planning-notice" role="status">Availability saved: {{ nova_r142_state.latest_intent.minutes|e }} min · pending next Snapshot.</p>
   {% endif %}
   {% set r145_observation = data.quality_intent_reconciliation or {} %}
@@ -68139,20 +68407,31 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
         <div><p class="r143-dialog-kicker">YOUR NEXT QUALITY · AVAILABILITY</p><h3 id="r143-dialog-title">Plan your next quality</h3></div>
         <button type="button" class="r143-close-dialog" data-r143-close aria-label="Close planning dialog">×</button>
       </header>
+      <div class="inc138-overwrite-warning" data-inc138-overwrite hidden role="group" aria-label="Confirm replacing the existing workout plan">
+        <strong>THIS WORKOUT IS ALREADY PLANNED</strong>
+        <p>{{ nova_r142_state.planned_intent.planned_label if nova_r142_state.planned_intent else '' }}</p>
+        <p>Creating a new planning entry will replace your previous choice for this workout. Do you want to change it?</p>
+        <div class="inc138-overwrite-actions">
+          <button type="button" data-inc138-keep>Keep existing plan</button>
+          <button type="button" data-inc138-change>Change planning</button>
+        </div>
+      </div>
+      <div data-inc138-edit-fields>
       <p id="r143-dialog-description" class="r143-dialog-summary">{% if data.nova_r142_plan_ui.card in (1, 2) %}This quality is already displayed in Card {{ data.nova_r142_plan_ui.card }}. Card 3 remains inactive. {% endif %}Your workout requires <strong>{{ data.nova_r142_plan_ui.required_minutes or 'a full canonical session' }}{% if data.nova_r142_plan_ui.required_minutes %} min{% endif %}</strong>{% if data.nova_r142_plan_ui.learned_minutes %}; Nova currently estimates <strong>{{ data.nova_r142_plan_ui.learned_minutes }} min</strong> from your usual training{% endif %}. Changing your availability does not book or approve it.</p>
       <fieldset class="r143-choice-group" aria-label="Choose an availability request">
         <legend>What would you like to tell Nova?</legend>
-        <label class="r143-choice"><input type="radio" name="r143_intent_mode" value="PLAN" checked><span><strong>I can make time for this workout</strong><small>Tell Nova when you have a suitable training window.</small></span></label>
-        <label class="r143-choice"><input type="radio" name="r143_intent_mode" value="TOO_LONG"><span><strong>This workout is too long for me</strong><small>Tell Nova your available duration instead.</small></span></label>
+        <label class="r143-choice"><input type="radio" name="r143_intent_mode" data-r143-mode value="PLAN" checked><span><strong>I can make time for this workout</strong><small>Tell Nova when you have a suitable training window.</small></span></label>
+        <label class="r143-choice"><input type="radio" name="r143_intent_mode" data-r143-mode value="TOO_LONG"><span><strong>This workout is too long for me</strong><small>Tell Nova your available duration instead.</small></span></label>
       </fieldset>
       <div class="r143-plan-fields" data-r143-section="PLAN">
         <form method="post" action="{{ url_for('r142_quality_intent') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="offer_binding" value="{{ nova_r142_state.token|e }}">
           <input type="hidden" name="intent_kind" value="PLAN"><input type="hidden" name="scope" value="ONCE">
+          <input type="hidden" name="overwrite_plan_id" value="{{ nova_r142_state.planned_intent.id|e if nova_r142_state.planned_intent else '' }}">
           <div class="r143-fields-grid">
-            <label>Day <input type="date" name="local_date" min="{{ today_iso }}" value="{{ today_iso }}" required></label>
-            <label>Time of day <select name="daypart" required><option value="MORNING">Morning</option><option value="AFTERNOON">Afternoon</option><option value="EVENING" selected>Evening</option></select></label>
+            <label>Day <input type="date" name="local_date" min="{{ today_iso }}" value="{{ nova_r142_state.planned_intent.local_date if nova_r142_state.planned_intent and nova_r142_state.planned_intent.local_date >= today_iso else today_iso }}" required></label>
+            <label>Time of day <select name="daypart" required><option value="MORNING"{% if nova_r142_state.planned_intent and nova_r142_state.planned_intent.daypart == 'MORNING' %} selected{% endif %}>Morning</option><option value="AFTERNOON"{% if nova_r142_state.planned_intent and nova_r142_state.planned_intent.daypart == 'AFTERNOON' %} selected{% endif %}>Afternoon</option><option value="EVENING"{% if not nova_r142_state.planned_intent or nova_r142_state.planned_intent.daypart == 'EVENING' %} selected{% endif %}>Evening</option></select></label>
           </div>
           <label>Available minutes <input type="number" inputmode="numeric" name="minutes" min="15" max="360" value="{{ data.nova_r142_plan_ui.required_minutes|round|int if data.nova_r142_plan_ui.required_minutes else 75 }}" required></label>
           <button type="submit" class="r143-submit">Save availability request</button>
@@ -68182,6 +68461,7 @@ _R143_PANEL = r'''{% if data and not is_preview and not qa_mode and not download
       </form>
       {% endif %}
       <p class="r143-disclaimer">Nova will reassess this request during the <strong>next Snapshot</strong>. The current report stays unchanged. The training engine alone decides; Nova Health cannot approve or veto the workout. This request never shortens canonical intervals, recoveries or the durability preload, and is <strong>not permission to perform a hard session</strong>.</p>
+      </div>
     </div>
   </dialog>
 </section>
@@ -68266,16 +68546,21 @@ _R143_SCRIPT = r'''<script>
 (function(){
   'use strict';
   function init(){
-    var root=document.getElementById('r142-plan-your-quality');
-    if(!root)return;
+    document.querySelectorAll('.r143-quality-entry').forEach(bind);
+  }
+  function bind(root){
     var open=root.querySelector('[data-r143-open]');
-    var dlg=root.querySelector('#r143-quality-dialog');
+    var dlg=root.querySelector('.r143-quality-dialog');
     if(!open||!dlg)return;
     var close=dlg.querySelector('[data-r143-close]');
-    var choices=dlg.querySelectorAll('input[name="r143_intent_mode"]');
+    var choices=dlg.querySelectorAll('input[data-r143-mode]');
     var sections=dlg.querySelectorAll('[data-r143-section]');
     var shortScope=dlg.querySelector('[data-r143-short-scope]');
     var onceFields=dlg.querySelector('[data-r143-once-fields]');
+    var overwriteWarning=dlg.querySelector('[data-inc138-overwrite]');
+    var editFields=dlg.querySelector('[data-inc138-edit-fields]');
+    var keep=dlg.querySelector('[data-inc138-keep]');
+    var change=dlg.querySelector('[data-inc138-change]');
     function syncScope(){
       if(!shortScope||!onceFields)return;
       var once=shortScope.value==='ONCE';
@@ -68283,7 +68568,7 @@ _R143_SCRIPT = r'''<script>
       onceFields.querySelectorAll('input,select').forEach(function(input){input.disabled=!once;});
     }
     function syncMode(){
-      var selected=dlg.querySelector('input[name="r143_intent_mode"]:checked');
+      var selected=dlg.querySelector('input[data-r143-mode]:checked');
       var mode=selected?selected.value:'PLAN';
       sections.forEach(function(node){
         var active=node.getAttribute('data-r143-section')===mode;
@@ -68296,9 +68581,14 @@ _R143_SCRIPT = r'''<script>
     if(shortScope)shortScope.addEventListener('change',syncScope);
     open.addEventListener('click',function(){
       syncMode();
+      var isReplacing=!!root.getAttribute('data-inc138-existing-plan');
+      if(overwriteWarning&&editFields){
+        overwriteWarning.hidden=!isReplacing;
+        editFields.hidden=isReplacing;
+      }
       if(typeof dlg.showModal==='function')dlg.showModal();
       else{dlg.setAttribute('open','');dlg.classList.add('r143-fallback-open');}
-      var first=dlg.querySelector('input[name="r143_intent_mode"]:checked');
+      var first=isReplacing?keep:dlg.querySelector('input[data-r143-mode]:checked');
       if(first)first.focus();
     });
     function dismiss(){
@@ -68307,6 +68597,14 @@ _R143_SCRIPT = r'''<script>
       open.focus();
     }
     if(close)close.addEventListener('click',dismiss);
+    if(keep)keep.addEventListener('click',dismiss);
+    if(change)change.addEventListener('click',function(){
+      overwriteWarning.hidden=true;
+      editFields.hidden=false;
+      syncMode();
+      var first=dlg.querySelector('input[data-r143-mode]:checked');
+      if(first)first.focus();
+    });
     dlg.addEventListener('click',function(event){if(event.target===dlg)dismiss();});
     dlg.addEventListener('close',function(){open.focus();});
     syncMode();
@@ -68351,16 +68649,29 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
             day = date.fromisoformat(str(entry.get('local_date') or '')[:10])
         except (TypeError, ValueError):
             continue
-        if 0 <= (today - day).days <= 2:
+        age = (today - day).days
+        # INC140: legacy requests without archived copies remain eligible within
+        # the owner-scoped, verified activity horizon. Historical PLAN alone
+        # is not execution evidence: the source-lap, exact structure,
+        # time/daypart, ambiguity and non-adherence checks below still apply.
+        if age >= 0 and (age <= 42 or entry.get('archived_workout')):
             recent.append(entry)
     if not recent:
         return base
     recent.sort(key=lambda e: str(e.get('saved_at_utc') or ''), reverse=True)
+    matched = {}
+    ambiguous = set()
+    archived_slots = {(e.get('workout_id'), e.get('local_date'), e.get('daypart'))
+                      for e in recent if e.get('archived_workout')}
     for entry in recent:
         wid = str(entry.get('workout_id') or '')
         goal = str(entry.get('goal_key') or '').upper()
-        template = _R19696_LIBRARY_INDEX.get(wid)
-        if (not template or template.get('goal') != goal
+        archived = entry.get('archived_workout')
+        slot = (wid, entry.get('local_date'), entry.get('daypart'))
+        if not archived and slot in archived_slots:
+            continue
+        template = archived or _R19696_LIBRARY_INDEX.get(wid)
+        if (not template or (not archived and template.get('goal') != goal)
                 or template.get('pattern') not in {'STANDARD', 'SUSTAINED'}):
             continue
         saved = _v139_parse_local_dt(entry.get('saved_at_utc'))
@@ -68422,7 +68733,7 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
                     and recovery_seconds > 0 and observed_recovery > 0
                     and abs(observed_work - work_seconds) <= _R145_INTERVAL_TOLERANCE_SECONDS
                     and abs(observed_recovery - recovery_seconds) <= _R145_INTERVAL_TOLERANCE_SECONDS
-                    and 0 < duration <= declared + 0.5):
+                    and math.isfinite(duration) and duration > 0):
                 continue
             matches[activity_id] = {**base, 'state': 'OBSERVED_AFTER_SAVED_AVAILABILITY',
                     'intent_local_date': entry['local_date'],
@@ -68438,8 +68749,27 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
                     'interval_tolerance_seconds': _R145_INTERVAL_TOLERANCE_SECONDS,
                     'source': rep_source + ' + OWNER_SCOPED_SAVED_INTENT',
                     'meaning': 'OBSERVED_EXECUTION_NOT_RETROACTIVE_CLEARANCE'}
-        if len(matches) == 1:
-            return next(iter(matches.values()))
+            if archived:
+                result = matches[activity_id]
+                result['archived_workout'] = archived
+                watts = rep.get('watts') or []
+                low, high = archived.get('low_watts'), archived.get('high_watts')
+                if (len(watts) == reps and all(type(w) in (int, float) and math.isfinite(w) and w > 0 for w in watts)
+                        and type(low) in (int, float) and type(high) in (int, float) and 0 < low <= high):
+                    result['observed_work_watts'] = watts
+                    result['reps_in_planned_power_range'] = sum(low <= w <= high for w in watts)
+        if len(matches) > 1:
+            ambiguous.update(matches)
+        elif matches:
+            activity_id, result = next(iter(matches.items()))
+            if activity_id in matched:
+                ambiguous.add(activity_id)
+            else:
+                matched[activity_id] = result
+    verified = {key: result for key, result in matched.items() if key not in ambiguous}
+    if verified:
+        latest = next(iter(verified.values()))
+        return {**latest, 'by_activity': verified}
     return {**base, 'state': 'NO_VERIFIED_OBSERVED_MATCH',
             'latest_intent_date': recent[0].get('local_date')}
 
@@ -69064,14 +69394,36 @@ _INC132_CARD2_VIEW='''{% set dual = data.inc132_dual_quality or {} %}
 <p><b>Workout and recovery:</b> {{ zi.structure|e }}</p>
 <p><b>Power range from verified Tempo efforts:</b> {{ zi.power_display|e }}</p>
 <p><b>Purpose:</b> {{ zi.why|e }}</p>
-<p><b>Indoor fueling:</b> {{ (zi.fueling or {}).get('display')|e }}</p>
-<p><b>Outdoor fueling:</b> {{ (zi.fueling or {}).get('outdoor_display')|e }}</p>
 <small>{% if dual.quality_specific %}Choose this session as an alternative to Card 3.{% else %}Optional Tempo session. Card 3 still needs evidence for its specific workout.{% endif %} Check your readiness before riding.</small>
 </div>
 {% endif %}
 {% if not show_tempo or s %}
 {% if show_tempo %}<details class="inc132-calendar-preserved"><summary>Session already on your plan</summary>{% endif %}
 '''
+# Both cards use the existing availability dialog, with distinct report bindings.
+_INC132_TEMPO_PANEL = (
+    _R143_PANEL.replace('nova_r142_state', 'nova_tempo_state')
+    .replace('data.nova_r142_plan_ui', 'tempo_planning')
+    .replace('r142-plan-your-quality', 'r142-plan-your-tempo')
+    .replace('r143-quality-dialog"', 'r143-tempo-dialog"')
+    .replace('class="r143-tempo-dialog"', 'class="r143-quality-dialog"')
+    .replace('r143-dialog-title', 'r143-tempo-title')
+    .replace('r143-dialog-description', 'r143-tempo-description')
+    .replace('r143_intent_mode', 'r143_tempo_mode')
+    .replace('Plan your next quality', 'Plan this Tempo workout')
+    .replace('<input type="hidden" name="offer_binding"',
+             '<input type="hidden" name="planning_target" value="TEMPO">'
+             '<input type="hidden" name="offer_binding"')
+    .replace('{% set r145_observation = data.quality_intent_reconciliation or {} %}',
+             '{% set r145_observation = {} %}')
+)
+_INC132_TEMPO_PANEL = (
+    "{% set tempo_planning = {'workout_id': zi.workout_id, 'required_minutes': zi.duration_minutes} %}"
+    + _INC132_TEMPO_PANEL
+)
+_INC132_CARD2_VIEW = _INC132_CARD2_VIEW.replace(
+    '{% endif %}\n{% if not show_tempo or s %}',
+    _INC132_TEMPO_PANEL + '{% endif %}\n{% if not show_tempo or s %}', 1)
 HOME_PAGE=HOME_PAGE.replace(_INC132_CARD_ENTRY,_INC132_CARD2_VIEW+_INC132_CARD_ENTRY,1)
 _INC132_CARD_CLOSE='</article>\n{% endif %}\n{% if not is_quality_slot or'
 assert HOME_PAGE.count(_INC132_CARD_CLOSE)==1,'INC132_DUAL_BODY_END_DRIFT'
@@ -69296,6 +69648,7 @@ def _v4891_prepare_snapshot_for_ui(data):
         integrative['dose_label']='Power range from verified Tempo efforts'
         integrative['first_exposure']=False
     dual['quality_integrative']=integrative;result['inc132_dual_quality']=dual
+    result['nova_r142_plan_ui'] = _r142_card_copy(result)
     return result
 
 # Only change a single label in Card2; Card3 markup and rendering stay intact.
@@ -69304,7 +69657,594 @@ assert HOME_PAGE.count(_INC132_C2_FIRST_OLD_LABEL)==1,'INC132_FIRST_CARD2_LABEL_
 HOME_PAGE=HOME_PAGE.replace(_INC132_C2_FIRST_OLD_LABEL,
     '<b>{{ zi.dose_label|default("Power range from verified Tempo efforts")|e }}:</b>',1)
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION += " · INC132 CARD 2 TEMPO AND EXECUTION ENGLISH COPY CANDIDATE"
+APP_VERSION += " · INC133 COMPLETE QUALITY PLANNING · INC134 SNAPSHOT PLANNING CONTROLS"
+
+def _nova_inc133_rank_supported_questions(goal, scores, road, evidence_ledger):
+    """Keep the existing rank among open questions with a replayable dose.
+
+    This runs inside the scientific owner, before decision, producer and
+    compiler. An unavailable dose defers a question for this evaluation only.
+    It never closes the question or changes evidence and power calculations.
+    """
+    ranking = sorted(scores, key=lambda dimension: -scores[dimension])
+    excluded = {'NONE', 'VALIDATE', 'REVALIDATION', 'EXTENSION_OR_REVALIDATION',
+                'RECOVERY_UNDER_LOAD'}
+    if not ranking or ranking[0] in excluded or not evidence_ledger:
+        return None
+    attempts = []
+    for dimension in ranking:
+        if dimension in excluded:
+            return None
+        candidate_road = dict(road or {})
+        candidate_road['scientific_progression'] = dict(
+            candidate_road.get('scientific_progression') or {}, dimension=dimension)
+        template, proof = _nova_inc088_scientific_candidate(
+            goal, dimension, evidence_ledger, None, candidate_road,
+            today=get_rome_now().date())
+        attempts.append({'dimension': dimension, 'rank_score': scores[dimension],
+                         'workout_id': (template or {}).get('id'),
+                         'reason': proof.get('reason')})
+        if template is not None:
+            if dimension == ranking[0]:
+                return None
+            for attempt in attempts[:-1]:
+                scores.pop(attempt['dimension'], None)
+            return {'schema': 'NOVA-INC133-SUPPORTED-OPEN-QUESTION-1',
+                    'selected_dimension': dimension, 'attempts': attempts,
+                    'evidence_unchanged': True, 'execution_authorized': False}
+    return {'schema': 'NOVA-INC133-SUPPORTED-OPEN-QUESTION-1',
+            'selected_dimension': None, 'attempts': attempts,
+            'evidence_unchanged': True, 'execution_authorized': False}
+
+
+# INC135: the visible Tempo workout owns its Session Fuel presentation.
+_INC135_FUEL_HEAD = '<div class="v23-fuel-head"><span>🥤</span><strong>SESSION FUEL</strong>{% if n %}<b>{{ n.session_demand }}</b>{% endif %}</div>'
+assert HOME_PAGE.count(_INC135_FUEL_HEAD) == 1, 'INC135_SESSION_FUEL_HEAD_DRIFT'
+_inc135_fuel_start = HOME_PAGE.index(_INC135_FUEL_HEAD)
+_inc135_fuel_body = _inc135_fuel_start + len(_INC135_FUEL_HEAD)
+_inc135_fuel_end = HOME_PAGE.index('\n</div>\n{% endif %}\n{% endfor %}', _inc135_fuel_body)
+_INC135_TEMPO_FUEL = """
+{% set has_planned_fuel = n or (data.quality_fuel_chronological_card == loop.index0 and data.quality_direction_fuel) %}
+{% if show_tempo %}
+<div class="v23-fuel-meta">TEMPO/Z3 · {{ zi.duration_minutes|round(1) }} min</div>
+<div class="v23-fuel-copy"><b>Indoor:</b> {{ zi.fueling.display|e }}</div>
+<div class="v23-fuel-copy"><b>Outdoor:</b> {{ zi.fueling.outdoor_display|e }}</div>
+{% if has_planned_fuel %}<details class="inc132-calendar-preserved"><summary>Fuel for the session already on your plan</summary>{% endif %}
+{% endif %}
+{% if not show_tempo or has_planned_fuel %}
+"""
+HOME_PAGE = (
+    HOME_PAGE[:_inc135_fuel_start]
+    + _INC135_FUEL_HEAD.replace('{% if n %}', '{% if n and not show_tempo %}')
+    + _INC135_TEMPO_FUEL
+    + HOME_PAGE[_inc135_fuel_body:_inc135_fuel_end]
+    + '\n{% endif %}{% if show_tempo and has_planned_fuel %}</details>{% endif %}'
+    + HOME_PAGE[_inc135_fuel_end:]
+)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += " · INC135 TEMPO SESSION FUEL"
+
+
+# INC136: elapsed time describes a match without grading the warm-up or cool-down.
+_INC136_HISTORY_UNLINKED = '<div class="v184-evidence-detail">No causally linked THE LAB prescription for this activity.</div>'
+assert HOME_PAGE.count(_INC136_HISTORY_UNLINKED) == 1, 'INC136_HISTORY_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC136_HISTORY_UNLINKED, """
+{% set observation = data.quality_intent_reconciliation or {} %}
+{% set observed_plan = (observation.by_activity or {}).get(b.activity_id, observation) %}
+{% if observed_plan.state == 'OBSERVED_AFTER_SAVED_AVAILABILITY'
+      and observed_plan.activity_id == b.activity_id %}
+<div class="v184-evidence-detail">
+<strong>Planned workout structure matched</strong> · {{ observed_plan.observed_reps }} intervals ·
+{{ observed_plan.observed_duration_min|round(1) }} min total / {{ observed_plan.declared_minutes|round(1) }} min available.
+{% if observed_plan.archived_workout %}
+<div>{{ observed_plan.archived_workout.title|e }} · {{ observed_plan.observed_recovery_seconds|round(0)|int }} s between intervals</div>
+{% if observed_plan.reps_in_planned_power_range is defined %}
+<div>{{ observed_plan.reps_in_planned_power_range }}/{{ observed_plan.observed_reps }} intervals at
+{{ observed_plan.archived_workout.low_watts }}–{{ observed_plan.archived_workout.high_watts }} W ·
+Measured: {{ observed_plan.observed_work_watts|join(', ') }} W</div>
+{% endif %}
+{% endif %}
+</div>
+{% else %}
+""" + _INC136_HISTORY_UNLINKED + """
+{% endif %}
+""", 1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += " · INC136 MAIN SET MATCH · INC137 PLANNED WORKOUT ARCHIVE"
+
+
+# INC138 · Success toast, live green card pills, overwrite confirmation UI.
+_INC138_CARD2_PILL = '<span class="v4-session-pill">YOU CHOOSE WHEN · UNSCHEDULED</span>'
+assert HOME_PAGE.count(_INC138_CARD2_PILL) == 1, 'INC138_CARD2_PILL_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC138_CARD2_PILL, '''{% if nova_tempo_state is defined and nova_tempo_state.planned_intent %}
+<span class="v4-session-pill inc138-planned-pill">{{ nova_tempo_state.planned_intent.planned_label|e }}</span>
+{% else %}''' + _INC138_CARD2_PILL + '{% endif %}', 1)
+_INC138_CARD3_PILL = '''<span class="v4-session-pill">{{ 'YOU CHOOSE WHEN · NOT BOOKED' if card3.verified_offer else 'NOT SCHEDULED · EXECUTION RECHECK REQUIRED' }}</span>'''
+assert HOME_PAGE.count(_INC138_CARD3_PILL) == 1, 'INC138_CARD3_PILL_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC138_CARD3_PILL, '''{% if nova_r142_state is defined and nova_r142_state.planned_intent %}
+<span class="v4-session-pill inc138-planned-pill">{{ nova_r142_state.planned_intent.planned_label|e }}</span>
+{% else %}''' + _INC138_CARD3_PILL + '{% endif %}', 1)
+# Card 3 can also show a future structure without a verified personal dose.
+# Planning availability remains visible, while the separate not-cleared
+# execution notice and all scientific checks remain unchanged.
+for _inc138_original in (
+    '<span class="v4-session-pill">NO VERIFIED PERSONAL DOSE · NOT EXECUTABLE</span>',
+    '<span class="v4-session-pill">SCIENTIFIC STRUCTURE · NOT CLEARED TO EXECUTE</span>',
+    '<span class="v4-session-pill">PLANNED STRUCTURE · NOT CLEARED FOR EXECUTION</span>',
+):
+    if HOME_PAGE.count(_inc138_original) > 1:
+        raise RuntimeError('INC138_CARD3_ALTERNATE_PILL_MULTIPLICITY')
+    if _inc138_original in HOME_PAGE:
+        HOME_PAGE = HOME_PAGE.replace(_inc138_original,
+            '{% if nova_r142_state is defined and nova_r142_state.planned_intent %}'
+            '<span class="v4-session-pill inc138-planned-pill">{{ nova_r142_state.planned_intent.planned_label|e }}</span>'
+            '{% else %}' + _inc138_original + '{% endif %}', 1)
+_INC138_TOAST_ANCHOR = "{% if request.args.get('notice') %}<div class=\"v13-toast\""
+assert HOME_PAGE.count(_INC138_TOAST_ANCHOR) == 1, 'INC138_TOAST_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC138_TOAST_ANCHOR,
+    '''{% if nova_planning_toast and not is_preview and not download_mode %}
+<div class="v13-toast" id="v13-toast" role="status" aria-live="polite">
+  <span class="v13-toast-icon">✓</span>
+  <div><strong>{{ nova_planning_toast.heading|e }}</strong><small>{{ nova_planning_toast.detail|e }}</small></div>
+</div>{% endif %}
+''' + _INC138_TOAST_ANCHOR, 1)
+_INC138_STYLES = '''<style>
+.v4-session-pill.inc138-planned-pill{display:inline-flex!important;align-items:center!important;
+  max-width:100%;white-space:normal!important;line-height:1.4!important;
+  color:#bafad1!important;background:rgba(15,127,61,.28)!important;
+  border:1px solid rgba(68,218,119,.72)!important;
+  border-radius:999px;padding:6px 11px;font-weight:800!important}
+.inc138-overwrite-warning{padding:14px;border:1px solid rgba(255,199,103,.58);
+  border-radius:11px;background:rgba(110,70,24,.16);margin:10px 0 15px}
+.inc138-overwrite-warning strong{font-size:13px;color:#ffd18b;letter-spacing:.04em}
+.inc138-overwrite-warning p{font-size:13px;line-height:1.5;color:#dfedf6;margin:9px 0}
+.inc138-overwrite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:16px}
+.inc138-overwrite-actions button{padding:11px 9px;min-height:46px;cursor:pointer;
+  border:1px solid rgba(152,181,204,.48);border-radius:8px;background:#163446;
+  color:#edf7fc;font:inherit;font-size:12px;font-weight:750}
+.inc138-overwrite-actions [data-inc138-change]{background:#e9b66b;color:#172531;border-color:#f5ce91}
+@media(max-width:370px){.inc138-overwrite-actions{grid-template-columns:1fr}}
+</style>'''
+assert HOME_PAGE.count('</head>') == 1, 'INC138_STYLE_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace('</head>', _INC138_STYLES + '\n</head>', 1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += ' · INC138 PLANNING STATUS + EXPLICIT REPLACEMENT + SNAPSHOT EXPIRY'
+
+# INC139 · UI-only: quality link audit clarity and a single upcoming Z2
+# recovery card unless a matching, currently displayed Card 2/3 quality has
+# been planned. This reads existing snapshot display rows and the INC138
+# owner-bound plan context. No execution ledger, clinical/nutrition maths,
+# coach, issuer, calendar, intent persistence or stored snapshot is modified.
+_INC139_EXEC_CARD_START = '<article class="v48-adherence-card v196957-execution" aria-label="Nova verified quality execution">'
+_INC139_EXEC_CARD_END = '</article>'
+assert HOME_PAGE.count(_INC139_EXEC_CARD_START) == 1, 'INC139_EXEC_CARD_ANCHOR_DRIFT'
+_inc139_start = HOME_PAGE.index(_INC139_EXEC_CARD_START)
+_inc139_end = HOME_PAGE.index(_INC139_EXEC_CARD_END, _inc139_start) + len(_INC139_EXEC_CARD_END)
+_INC139_EXEC_CARD = '''<article class="v48-adherence-card v196957-execution inc139-execution" aria-label="Nova quality prescription matching status">
+{% set nx = td.get('nova_execution') or {} %}
+{% set nx_completed = nx.get('completed', 0)|int %}
+{% set nx_missed = nx.get('confirmed_missed', 0)|int %}
+{% set nx_unresolved = nx.get('unresolved', 0)|int %}
+{% set nx_unlinked = nx.get('unlinked_observed_quality', 0)|int %}
+{% set nx_due = nx_completed + nx_missed %}
+{% set nx_scored = nx.get('available') and nx.get('score') is not none and nx_unresolved == 0 and nx_due > 0 %}
+<div class="inc139-exec-heading">
+  <span class="v196957-eyebrow">🎯 NOVA QUALITY · LINK AUDIT</span>
+  <strong class="v196957-state">{% if nx_unlinked or nx_unresolved %}EXECUTION LINKS TO REVIEW{% elif nx_scored %}CONFIRMED QUALITY LINKS{% else %}QUALITY LINKS NOT YET VERIFIABLE{% endif %}</strong>
+  <small class="v196957-subtitle">Only independently matched prescriptions are scored. Observed quality sessions without a confirmed prescription link are shown separately, not counted as missed.</small>
+</div>
+<div class="inc139-exec-stats" aria-label="Quality prescription and observation counts">
+  <div><strong>{{ nx_completed }}</strong><span>Completed & linked prescriptions</span></div>
+  <div class="{% if nx_unlinked %}needs-review{% endif %}"><strong>{{ nx_unlinked }}</strong><span>Observed quality sessions without a link</span></div>
+  <div><strong>{{ nx_missed }}</strong><span>Confirmed missed prescriptions</span></div>
+</div>
+{% if nx_scored %}
+<p class="inc139-exec-scoped-rate">{{ nx_completed }} of {{ nx_due }} adjudicated prescriptions completed · <strong>{{ nx.get('score')|int }}%</strong> <span>within this limited group, not across all training.</span></p>
+{% elif nx_unresolved > 0 %}
+<p class="inc139-exec-scoped-rate">{{ nx_unresolved }} prescription–activity link{{ '' if nx_unresolved == 1 else 's' }} unresolved · no percentage issued.</p>
+{% else %}
+<p class="inc139-exec-scoped-rate">No confirmed, matured quality prescriptions currently eligible for a percentage.</p>
+{% endif %}
+{% if nx.get('window_start') and nx.get('window_end') %}<p class="v196957-scope">Rolling prescription window · {{ nx.window_start|ui_date }} – {{ nx.window_end|ui_date }}.{% if nx.get('last_linked_prescription_date') %} Last linked prescription · {{ nx.last_linked_prescription_date|ui_date }}.{% endif %}{% if nx_unlinked and nx.get('last_unlinked_observed_date') %} Latest unlinked observed quality · {{ nx.last_unlinked_observed_date|ui_date }}.{% endif %}</p>{% endif %}
+<p class="v196957-scope"><strong>What changes these numbers?</strong> New confirmed prescription–activity links, explicit missed outcomes, and the moving date window. Z2, rest and unlinked activity are not part of the scored denominator. A planned workout by itself is not a completed workout.</p>
+</article>'''
+HOME_PAGE = HOME_PAGE[:_inc139_start] + _INC139_EXEC_CARD + HOME_PAGE[_inc139_end:]
+
+# Replace only the Jinja presentation loop, keeping each canonical nutrition
+# object's contents untouched. Recoveries don't become newly scheduled just
+# because a planning intent exists; only an exact workout-ID match is eligible.
+_INC139_RECOVERY_LOOP_START = '<div class="v23-recovery-grid">\n{% for recovery_row in data.nova_recovery_display_rows %}'
+_INC139_RECOVERY_LOOP_END = '</div>\n<div class="v8-science v23-science">'
+assert HOME_PAGE.count(_INC139_RECOVERY_LOOP_START) == 1, 'INC139_RECOVERY_START_DRIFT'
+_inc139_rstart = HOME_PAGE.index(_INC139_RECOVERY_LOOP_START)
+_inc139_rend = HOME_PAGE.index(_INC139_RECOVERY_LOOP_END, _inc139_rstart)
+_inc139_original = HOME_PAGE[_inc139_rstart:_inc139_rend]
+assert _inc139_original.count('data-nova-recovery-source=') == 1, 'INC139_RECOVERY_BODY_DRIFT'
+assert _inc139_original.count('{% endfor %}') == 1, 'INC139_RECOVERY_LOOP_DRIFT'
+_inc139_body = _inc139_original.split('{% for recovery_row in data.nova_recovery_display_rows %}\n', 1)[1].rsplit('{% endfor %}', 1)[0]
+_inc139_body = _inc139_body.replace(
+    '<div class="v23-recovery-slot">{% if dated_session and dated_session.date %}{{ dated_session.date[8:10] }}/{{ dated_session.date[5:7] }}/{{ dated_session.date[:4] }} · {% endif %}{{ n.slot }}</div>',
+    '<div class="v23-recovery-slot">{% if r139_plan %}{{ r139_plan.planned_label|e }} · conditional post-workout guidance{% else %}{% if dated_session and dated_session.date %}{{ dated_session.date[8:10] }}/{{ dated_session.date[5:7] }}/{{ dated_session.date[:4] }} · {% endif %}{{ n.slot }}{% endif %}</div>', 1)
+_inc139_body = _inc139_body.replace(
+    '{% if recovery_row.conditional %}<small class="v26-first-feed-note">UNSCHEDULED QUALITY · recovery guidance applies only after this exact workout is completed. No calendar booking or execution clearance.</small>{% else %}<small class="v26-first-feed-note">First recovery feeding — not total ride replacement.</small>{% endif %}',
+    '''{% if r139_plan %}<small class="v26-first-feed-note">PLANNED QUALITY · guidance applies only after the exact workout is completed. The plan is not execution clearance.</small>{% elif recovery_row.conditional %}<small class="v26-first-feed-note">UNSCHEDULED QUALITY · recovery guidance applies only after this exact workout is completed. No calendar booking or execution clearance.</small>{% else %}<small class="v26-first-feed-note">First recovery feeding — not total ride replacement.</small>{% endif %}''', 1)
+assert 'conditional post-workout guidance' in _inc139_body and 'PLANNED QUALITY' in _inc139_body, 'INC139_RECOVERY_LABEL_DRIFT'
+_INC139_RECOVERY_LOOP = '''{% set r139_card2 = nova_tempo_state.planned_intent if nova_tempo_state is defined and nova_tempo_state.planned_intent else none %}
+{% set r139_card3 = nova_r142_state.planned_intent if nova_r142_state is defined and nova_r142_state.planned_intent else none %}
+{% set r139_display = namespace(easy=false) %}
+{% set r139_shown_quality_ids = [] %}
+<div class="inc139-recovery-intro" aria-label="Recovery card display policy">
+  {% if r139_card2 or r139_card3 %}Next easy-session recovery plus guidance for any matching planned quality shown in this Snapshot. Planning does not grant execution clearance.
+  {% else %}Your next easy-session recovery is shown once. Extra quality recovery guidance appears only when you plan a matching Nova workout.{% endif %}
+</div>
+<div class="v23-recovery-grid inc139-recovery-grid">
+{% for recovery_row in data.nova_recovery_display_rows or [] %}
+{% set n = recovery_row.nutrition or {} %}
+{% set dated_session = recovery_row.session or {} %}
+{% set r139_kind = n.get('kind', '')|upper %}
+{% set r139_intensity = dated_session.get('intensity_class', '')|lower %}
+{% set r139_easy = r139_kind in ('RECOVERY', 'ENDURANCE') or (r139_kind not in ('VO2', 'THRESHOLD', 'TEMPO', 'RACE', 'SPRINT', 'HARD') and r139_intensity in ('recovery', 'endurance', 'easy')) %}
+{% set r139_plan = r139_card2 if r139_card2 and recovery_row.workout_id and recovery_row.workout_id == r139_card2.workout_id else r139_card3 if r139_card3 and recovery_row.workout_id and recovery_row.workout_id == r139_card3.workout_id else none %}
+{% set r139_show_quality = r139_plan and not r139_easy and recovery_row.workout_id not in r139_shown_quality_ids %}
+{% set r139_show_easy = r139_easy and not r139_display.easy %}
+{% if r139_show_easy or r139_show_quality %}
+{% if r139_show_easy %}{% set r139_display.easy = true %}{% endif %}
+{% if r139_show_quality %}{% set _ = r139_shown_quality_ids.append(recovery_row.workout_id) %}{% endif %}
+''' + _inc139_body + '''{% endif %}
+{% endfor %}
+</div>
+{% if not r139_display.easy %}<p class="inc139-recovery-note">No upcoming easy-session recovery estimate is available in this Snapshot. No generic Z2 target has been invented.</p>{% endif %}
+{% if (r139_card2 and r139_card2.workout_id not in r139_shown_quality_ids) or (r139_card3 and r139_card3.workout_id not in r139_shown_quality_ids) %}<p class="inc139-recovery-note">A quality workout is planned, but this Snapshot contains no post-workout recovery estimate matched to that exact workout. Check its workout-specific Session Fuel guidance; no substitute recovery target is inferred.</p>{% endif %}
+'''
+HOME_PAGE = HOME_PAGE[:_inc139_rstart] + _INC139_RECOVERY_LOOP + HOME_PAGE[_inc139_rend:]
+# The original loop's closing </div> still begins the retained suffix. Remove
+# that duplicate while preserving the following independent science section.
+assert HOME_PAGE.count('</div>\n<div class="v8-science v23-science">') >= 1
+# The old closing div is now redundant immediately after the new note block.
+HOME_PAGE = HOME_PAGE.replace('''</p>{% endif %}
+</div>
+<div class="v8-science v23-science">''', '''</p>{% endif %}
+<div class="v8-science v23-science">''', 1)
+
+_INC139_HEAD_COPY = ('Your first recovery meal is scaled to the exercise and the time available before the next demand. '
+                   'Carbs and protein get specific targets when useful; fat stays at normal meal intake because there is no robust recovery-specific gram target.')
+assert HOME_PAGE.count(_INC139_HEAD_COPY) == 1, 'INC139_RECOVERY_COPY_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC139_HEAD_COPY,
+    'One upcoming easy-session recovery card, with additional guidance only for a quality you have actually planned. The immediate RECOVERY NOW guidance above remains independent. Nutrition amounts and timing are unchanged.', 1)
+
+_INC139_STYLES = '''<style>
+.inc139-execution{padding:18px 17px}
+.inc139-execution .inc139-exec-heading{max-width:670px}
+.inc139-execution .inc139-exec-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:15px}
+.inc139-execution .inc139-exec-stats>div{min-width:0;padding:12px;border:1px solid rgba(84,210,219,.18);border-radius:12px;background:rgba(43,115,134,.055)}
+.inc139-execution .inc139-exec-stats>div.needs-review{border-color:rgba(244,179,85,.38);background:rgba(185,116,39,.07)}
+.inc139-execution .inc139-exec-stats strong{display:block;color:#e5f8fb;font-size:28px;line-height:1.15}
+.inc139-execution .inc139-exec-stats .needs-review strong{color:#f1c487}
+.inc139-execution .inc139-exec-stats span{display:block;color:#9ab3c1;font-size:11px;line-height:1.45;margin-top:5px}
+.inc139-execution .inc139-exec-scoped-rate{font-size:12px;color:#c6dbe5;margin:13px 0 0}
+.inc139-execution .inc139-exec-scoped-rate strong{color:#b0edf0}
+.inc139-execution .inc139-exec-scoped-rate span{color:#9fb4c2}
+.inc139-recovery-intro{font-size:12px;line-height:1.6;color:#b8dce5;border-left:3px solid rgba(77,211,224,.55);padding:8px 11px;margin:6px 0 14px;background:rgba(77,211,224,.045)}
+.inc139-recovery-note{font-size:12px;color:#b4c6d4;line-height:1.55;padding:10px 12px;border:1px solid rgba(255,255,255,.1);border-radius:10px;margin:12px 0}
+@media(max-width:540px){.inc139-execution .inc139-exec-stats{grid-template-columns:1fr}.inc139-execution .inc139-exec-stats>div{display:flex;align-items:center;gap:12px}.inc139-execution .inc139-exec-stats strong{font-size:24px}.inc139-execution .inc139-exec-stats span{margin:0}}
+</style>'''
+assert HOME_PAGE.count('</head>') == 1, 'INC139_STYLE_ANCHOR_DRIFT'
+HOME_PAGE = HOME_PAGE.replace('</head>', _INC139_STYLES + '\n</head>', 1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += ' · INC139 EXECUTION LINK UI + CONCISE PLANNED-ONLY RECOVERY'
+
+
+# INC140 · VERIFIED HISTORICAL EXPOSURE & FUTURE CARD CONSISTENCY
+# Scope: read-only, owner-scoped canonical observation replay. No retrospective
+# prescription fulfillment, no watt reconstruction, no new quality issuance.
+INC140_SCHEMA = 'NOVA-INC140-VERIFIED-EXPOSURE-FUTURE-COHERENCE-1'
+INC140_RECENT_DAYS = 28   # restrict repetition within the active evidence horizon
+INC140_TRUST_SOURCES = frozenset(('DEVICE_LAPS','ICU_INTERVALS_CANONICAL'))
+_INC140_PRIOR_FUTURE = _nova_inc050_future_quality
+_INC140_PRIOR_CARD3 = _nova_r1969104_canonical_card3
+_INC140_PRIOR_UI = _v4891_prepare_snapshot_for_ui
+_INC140_PRIOR_BIND = _r142_report_binding
+_INC140_PRIOR_ATTEST = _nova_inc051_attest_future_snapshot
+
+
+def _inc140_verified_exposures(evidence_ledger, previous_blocks=None):
+    """All currently loaded resolved, independent repeated-work observations.
+
+    Dedup by ORIGINAL activity id; never turn saved availability, activity
+    title, raw fallback or a single max-power PB into proof of repeated work.
+    An unavailable source remains unknown, not zero evidence and not a PASS.
+    """
+    ev = evidence_ledger if isinstance(evidence_ledger, dict) else {}
+    repeatability = ev.get('repeatability')
+    src = repeatability.get('events') or [] if isinstance(repeatability, dict) else []
+    observations = {}
+    for row in src if isinstance(src, list) else []:
+        if not isinstance(row, dict):
+            continue
+        origin = str(row.get('activity_truth_source') or row.get('source') or '').upper()
+        aid = str(row.get('activity_id') or '')
+        if (not aid or origin not in INC140_TRUST_SOURCES or
+            row.get('activity_truth_status') != 'RESOLVED' or row.get('strong') is not True):
+            continue
+        observation = row
+        try:
+            when = date.fromisoformat(str(observation.get('date') or '')[:10])
+            reps = int(observation['reps'])
+            work = float(observation['interval_secs'])
+            rest = float(observation['recovery_secs'])
+        except (TypeError, ValueError, KeyError, OverflowError):
+            continue
+        if not (reps > 1 and all(math.isfinite(v) and v > 0 for v in (work, rest))):
+            continue
+        observations[aid] = {'date': when.isoformat(), 'activity_id': aid,
+            'source': origin, 'reps': reps, 'work_seconds': work,
+            'recovery_seconds': rest, 'observation': 'VERIFIED_STRUCTURE_NOT_ADHERENCE'}
+    # Older or differently serialized exports may have the verified source
+    # under Previous Training Blocks, exactly like an ordinary current event.
+    for block in previous_blocks or []:
+        if not isinstance(block, dict) or block.get('quality_relevant') is not True:
+            continue
+        aid = str(block.get('activity_id') or '')
+        if not aid or aid in observations:
+            continue
+        origin_truth = block.get('activity_truth') or {}
+        rep = block.get('repeatability') or {}
+        if not isinstance(origin_truth, dict) or not isinstance(rep, dict):
+            continue
+        origin = str(origin_truth.get('source') or '').upper()
+        if (not isinstance(origin_truth, dict) or not isinstance(rep, dict)
+            or origin_truth.get('status') != 'RESOLVED'
+            or origin not in INC140_TRUST_SOURCES
+            or str(rep.get('source') or '').upper() != origin):
+            continue
+        if rep.get('recovery_observation_complete') is False:
+            continue
+        try:
+            when = date.fromisoformat(str(block.get('date') or '')[:10])
+            reps = int(rep['reps'])
+            work = float(rep['interval_secs'])
+            rest = float(rep['recovery_secs'])
+        except (TypeError, ValueError, KeyError, OverflowError):
+            continue
+        if reps <= 1 or not all(math.isfinite(v) and v > 0 for v in (work, rest)):
+            continue
+        observations[aid] = {'date': when.isoformat(), 'activity_id': aid,
+            'source': origin, 'reps': reps, 'work_seconds': work,
+            'recovery_seconds': rest, 'observation': 'VERIFIED_STRUCTURE_NOT_ADHERENCE'}
+    return sorted(observations.values(), key=lambda e:(e['date'],e['activity_id']),reverse=True)
+
+
+def _inc140_candidate_replay(evidence_ledger, blocks, workout_id, snapshot_date):
+    """Compare the *complete* observed index, not just the last HARD.
+
+    Only an exact canonical STANDARD/SUSTAINED work/recovery structure may
+    withhold a duplicate future advisory. Preload is deliberately UNKNOWN:
+    matching repetitions does not prove it happened or imply a new lever.
+    """
+    base={'schema':INC140_SCHEMA,'read_only':True,
+          'scope':'VERIFIED_OWNER_SNAPSHOT_ACTIVITY_EVIDENCE',
+          'state':'NO_PROVEN_RECENT_SAME_STRUCTURE',
+          'blocks_future_card':False,'retrospective_fulfillment':False,
+          'preload_verified':False,'history_complete':False,'matches':[]}
+    tpl = _R19696_LIBRARY_INDEX.get(str(workout_id or ''))
+    if not isinstance(tpl, dict) or str(tpl.get('pattern') or '').upper() not in {'STANDARD','SUSTAINED'}:
+        return dict(base, state='TEMPLATE_NOT_COMPARABLE')
+    try:
+        now_day = date.fromisoformat(str(snapshot_date)[:10])
+        reps=int(tpl['reps']); work=float(tpl['work_s']); rest=float(tpl['recovery_s'])
+    except (TypeError, ValueError, KeyError, OverflowError):
+        return dict(base,state='INVALID_TEMPLATE_OR_SNAPSHOT_CLOCK')
+    if reps <= 1 or not all(math.isfinite(v) and v > 0 for v in (work,rest)):
+        return dict(base,state='INVALID_CANONICAL_STRUCTURE')
+    observed = _inc140_verified_exposures(evidence_ledger,blocks)
+    matches=[]
+    for row in observed:
+        age = (now_day-date.fromisoformat(row['date'])).days
+        if (0 <= age <= INC140_RECENT_DAYS and row['reps'] == reps
+            and abs(row['work_seconds']-work) <= _R145_INTERVAL_TOLERANCE_SECONDS
+            and abs(row['recovery_seconds']-rest) <= 15.0):
+            matches.append(dict(row, days_ago=age))
+    if matches:
+        return dict(base,state='RECENT_VERIFIED_SAME_STRUCTURE',
+                    blocks_future_card=True,matches=matches[:12],
+                    matched_count=len(matches),candidate_workout_id=str(workout_id),
+                    reason='RECENT_OBSERVED_CANONICAL_WORK_REQUIRES_NEW_COACHING_PURPOSE')
+    return dict(base, examined_verified_events=len(observed))
+
+
+def _inc140_report_replay(data, workout_id=None, snapshot_date=None):
+    d=data if isinstance(data,dict) else {}
+    if workout_id is None:
+        plan=d.get('future_quality_plan') or {}
+        workout_id = plan.get('workout_id') if isinstance(plan,dict) else None
+    if not workout_id:
+        return None
+    plan=d.get('future_quality_plan') or {}
+    producer=(plan.get('inc140_exposure_check') or {}) if isinstance(plan,dict) else {}
+    known_dates=[str(row.get('date') or '')[:10] for row in (d.get('previous_training_blocks') or [])
+                 if isinstance(row,dict) and row.get('date')]
+    day=(snapshot_date or d.get('inc140_snapshot_date')
+         or producer.get('as_of_date') or (max(known_dates) if known_dates else None)
+         or get_rome_now().date().isoformat())
+    return _inc140_candidate_replay(d.get('evidence_ledger'),
+                                   d.get('previous_training_blocks'),workout_id,day)
+
+
+def _nova_inc050_future_quality(owner_user_id,decision,clock,road,ledger,
+        evidence_ledger=None,power_model=None,ftp_anchor=None,
+        aerobic_metabolic_range=None,training_definitions=None,
+        compiler_args=None,planning_context=None,training_state=None,
+        active_offer=None):
+    """Re-select inside the ORIGINAL scientific producer if the future
+    candidate repeats a verified recent work/recovery architecture.
+
+    Do not replace the canonical selector or loosen its watt/provenance gates.
+    The existing Card2 proposal remains independently available even if no
+    distinct, fully compiled Card3 candidate is found. A bounded retry cannot
+    loop indefinitely or poison a contextvar for another owner/request.
+    """
+    def original():
+        return _INC140_PRIOR_FUTURE(owner_user_id,decision,clock,road,ledger,
+            evidence_ledger=evidence_ledger,power_model=power_model,
+            ftp_anchor=ftp_anchor,aerobic_metabolic_range=aerobic_metabolic_range,
+            training_definitions=training_definitions,compiler_args=compiler_args,
+            planning_context=planning_context,training_state=training_state,
+            active_offer=active_offer)
+    plan=original()
+    if (not owner_user_id or not isinstance(plan,dict)
+        or plan.get('status') != 'COMPILED_UNSCHEDULED'
+        or plan.get('schema') != INC091_SCHEMA):
+        return plan
+    today=get_rome_now().date().isoformat()
+    initial=plan
+    excluded=set()
+    attempts=[]
+    for _ in range(4):
+        wid=str(plan.get('workout_id') or '')
+        replay=_inc140_candidate_replay(evidence_ledger,None,wid,today)
+        if replay.get('blocks_future_card') is not True:
+            stamped=dict(plan)
+            replay['as_of_date']=today
+            replay['excluded_prior_candidates']=sorted(excluded)
+            replay['producer_action']='DISTINCT_CANONICAL_RESELECTION' if excluded else 'UNCHANGED'
+            stamped['inc140_exposure_check']=replay
+            return stamped
+        if not wid or wid in excluded:
+            break
+        excluded.add(wid)
+        attempts.append({'workout_id':wid,'reason':replay.get('reason')})
+        token=_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(
+            set(_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()) | excluded))
+        try:
+            alternative=original()  # original selector, original replay, no invented dose
+        finally:
+            _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
+        if (not isinstance(alternative,dict)
+            or alternative.get('schema') != INC091_SCHEMA
+            or alternative.get('status') != 'COMPILED_UNSCHEDULED'
+            or not alternative.get('workout_id')
+            or str(alternative['workout_id']) in excluded):
+            break
+        plan=alternative
+    # No distinct, scientifically compiled alternative. Keep the original
+    # signed candidate solely as a forensic audit object; every consumer below
+    # suppresses it and the server rejects attempts to plan it.
+    failed=dict(initial)
+    proof=_inc140_candidate_replay(evidence_ledger,None,initial.get('workout_id'),today)
+    proof.update(as_of_date=today,producer_action='WITHHELD_NO_DISTINCT_VERIFIED_ALTERNATIVE',
+                 excluded_prior_candidates=sorted(excluded),
+                 reselection_attempts=attempts)
+    failed['inc140_exposure_check']=proof
+    return failed
+
+
+def _nova_inc051_attest_future_snapshot(data,owner_user_id):
+    # Snapshot-born observation receipt is dated before issuer attestation;
+    # this NEVER turns earlier availability into a fulfilled prescription.
+    if isinstance(data,dict) and owner_user_id:
+        data['inc140_snapshot_date']=get_rome_now().date().isoformat()
+    attested=_INC140_PRIOR_ATTEST(data,owner_user_id)
+    if isinstance(data,dict) and owner_user_id:
+        exposures=_inc140_verified_exposures(data.get('evidence_ledger'),
+                                             data.get('previous_training_blocks'))
+        data['inc140_observation_index']={
+            'schema':INC140_SCHEMA,'read_only':True,
+            'scope':'CURRENT_OWNER_VERIFIED_SOURCE_ONLY',
+            'verified_structure_events':len(exposures),
+            'last_verified_structure_date':exposures[0]['date'] if exposures else None,
+            'prescription_links_created':0,'prior_availability_is_not_adherence':True,
+            'missing_raw_history_is_not_proof_of_no_training':True}
+    return attested
+
+
+def _inc140_safe_card3(card, proof):
+    old=card if isinstance(card,dict) else {}
+    goal=str(old.get('goal_key') or '').upper()
+    return dict(old, schema=INC140_SCHEMA, state='RECENT_EXPOSURE_REASSESS',
+        title='Next quality · new progression needed',workout_id=None,
+        verified_offer=False,verified_future_plan=False,planned_quality=False,
+        offer_structure_only=False,direction_only=True,inc120_quality_intent=False,
+        execution_authorized_by_preview=False,is_scheduled=False,
+        execution_clearance='NOT_CLEARED_FOR_EXECUTION',
+        structure=None,execution=None,purpose=None,phases=[],
+        personalized_watts=None,power_source=None,
+        reason=('Nova has verified a comparable repeated-work session in the recent activity '
+                'history. The future candidate would repeat its work/recovery structure '
+                'without a separately verified new training lever; a distinct quality '
+                'must pass the canonical selector and day-of checks.'),
+        goal_explanation=('Recent verified repeated work is recorded, but no new distinct '
+                          'hard workout has been cleared. Continue the currently issued '
+                          'easy/recovery guidance and reassess at the next Snapshot.'),
+        inc140_evidence=proof,goal_key=goal)
+
+
+def _inc140_ui_guard(data, output):
+    d=data if isinstance(data,dict) else {}
+    if not isinstance(output,dict): return output
+    old=output.get('nova_card3_workout_view') or {}
+    if not isinstance(old,dict) or old.get('verified_offer') is True:
+        return output  # Never replace an authentically issued canonical workout.
+    candidate=str(old.get('workout_id') or '')
+    plan=d.get('future_quality_plan') or {}
+    if not candidate and isinstance(plan,dict):
+        candidate=str(plan.get('workout_id') or '')
+    if not candidate:return output
+    # A fresh issuer marker is advisory only; recheck the actual currently
+    # stored resolved history so pasted / stale / foreign labels cannot block.
+    proof=_inc140_report_replay(d,candidate)
+    if not proof or proof.get('blocks_future_card') is not True:return output
+    updated=dict(output)
+    updated['inc140_future_quality_guard']=proof
+    updated['nova_card3_workout_view']=_inc140_safe_card3(old,proof)
+    dual=updated.get('inc132_dual_quality')
+    if isinstance(dual,dict):
+        dual=dict(dual)
+        dual['quality_specific']=None
+        if dual.get('recommended_priority') == 'CARD3':
+            dual['recommended_priority']=None
+            dual['reason_code']='RECENT_VERIFIED_CARD3_EXPOSURE_REQUIRES_DISTINCT_PURPOSE'
+        updated['inc132_dual_quality']=dual
+    # Never show conditional recovery for the rejected Card3 candidate.
+    rows=updated.get('nova_recovery_display_rows')
+    if isinstance(rows,list):
+        updated['nova_recovery_display_rows']=[row for row in rows
+            if not (isinstance(row,dict) and row.get('workout_id') == candidate
+                    and row.get('conditional') is True)]
+    updated['quality_direction_fuel']=None
+    direction=dict(updated.get('next_quality_direction') or {})
+    direction.update(title='Next quality · new progression needed',
+        referenced_canonical_template_id=None,
+        source='INC140_RECENT_CANONICAL_EXPOSURE_HOLD',
+        direction_only=True,is_a_prescription=False,is_scheduled=False,
+        execution_authorized_by_preview=False,
+        suggested_date=None,suggested_time=None)
+    updated['next_quality_direction']=direction
+    updated['nova_r142_plan_ui']=None
+    return updated
+
+
+def _nova_r1969104_canonical_card3(data,expected_owner_user_id=None):
+    prior=_INC140_PRIOR_CARD3(data,expected_owner_user_id)
+    return _inc140_ui_guard(data,{'nova_card3_workout_view':prior}).get('nova_card3_workout_view',prior)
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    prior=_INC140_PRIOR_UI(data)
+    return _inc140_ui_guard(data,prior)
+
+
+def _r142_report_binding(report,owner_id,target=None,prepared=None):
+    # Server-side hard gate protects even old signed report form tokens and
+    # direct POST requests; Card2 remains an independent matching workout.
+    view=prepared if isinstance(prepared,dict) else _v4891_prepare_snapshot_for_ui(
+        (report or {}).get('data') or {})
+    if target != 'TEMPO' and isinstance(view,dict):
+        if (view.get('inc140_future_quality_guard') or {}).get('blocks_future_card'):
+            return None
+    return _INC140_PRIOR_BIND(report,owner_id,target,prepared=view)
+
+APP_VERSION += ' · INC140 VERIFIED HISTORY + NO-LOOP FUTURE GUARD'
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
