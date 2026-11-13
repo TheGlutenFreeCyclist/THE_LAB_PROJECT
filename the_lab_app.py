@@ -70422,5 +70422,208 @@ def _r142_report_binding(report,owner_id,target=None,prepared=None):
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION += ' · INC143 RECENT NAMED CARD3 REPEAT REVIEW'
 
+# INC144 / DTM BP — one saved Snapshot, one visible Card 2/Card 3 truth
+# for both deterministic and AI chat. Read-only display/explanation adapter.
+# No new goals, workouts, rankings, power, timing, DB writes or issuance.
+INC144_SCHEMA = 'NOVA-INC144-CHAT-VISIBLE-CARDS-1'
+_INC144_GROUNDED_BEFORE = _v119_grounded_answer
+_INC144_CHAT_CONTEXT_BEFORE = build_ai_coach_chat_context
+_INC144_AI_CHAT_BEFORE = ask_ai_coach_chat
+_INC144_CHAT_FACTS = ContextVar("nova_inc144_ui_facts", default=None)
+
+
+def _inc144_card_truth(snapshot, prepared=None):
+    """Derive explanatory facts from the SAME final UI projection as HOME_PAGE.
+
+    This never treats future_quality_plan / nova_prescription / next_sessions as
+    a second authority for an unseen Card 3. Chronological Card 2 stays separate
+    from the optional, attested Tempo offer displayed in that same card.
+    """
+    if not isinstance(snapshot, dict):
+        return None
+    ui = prepared if isinstance(prepared, dict) else _v4891_prepare_snapshot_for_ui(snapshot)
+    if not isinstance(ui, dict):
+        return None
+    dual = ui.get('inc132_dual_quality') or {}
+    dual = dual if isinstance(dual, dict) else {}
+    tempo = dual.get('quality_integrative') or {}
+    tempo = tempo if isinstance(tempo, dict) else {}
+    chrono = ui.get('nova_inc110_chronological_cards') or []
+    if not isinstance(chrono, list):
+        chrono = []
+    second = chrono[1] if len(chrono) > 1 else None
+    if tempo.get('complete') is True and tempo.get('workout_id'):
+        card2 = {'state': 'ATTESTED_TEMPO_OPTION',
+                 'title': str(tempo.get('title') or ''),
+                 'note': str(tempo.get('execution_disclaimer') or ''),
+                 'scheduled': False, 'executable_now': False}
+    elif isinstance(second, dict) and second.get('title'):
+        card2 = {'state': 'CHRONOLOGICAL_SESSION',
+                 'title': str(second.get('title') or ''),
+                 'scheduled': bool(second.get('is_scheduled')),
+                 'executable_now': False}
+    else:
+        card2 = {'state': 'AWAITING_CHRONOLOGICAL_SESSION', 'title': None,
+                 'scheduled': False, 'executable_now': False}
+
+    c3 = ui.get('nova_card3_workout_view') or {}
+    c3 = c3 if isinstance(c3, dict) else {}
+    duplicate = ui.get('inc120_quality_duplicate_card')
+    if duplicate in (1, 2) and not dual.get('quality_specific'):
+        card3 = {'state': 'ALREADY_IN_CARD_1_OR_2', 'title': None,
+                 'already_in_card': duplicate, 'executable_now': False}
+    else:
+        review = ui.get('inc143_recent_named_completion_review')
+        review = review if isinstance(review, dict) else None
+        card3 = {'state': str(c3.get('state') or 'NO_ISSUED_QUALITY'),
+                 'title': str(c3.get('title') or '') or None,
+                 'workout_id': c3.get('workout_id'),
+                 'verified_offer': c3.get('verified_offer') is True,
+                 'execution_clearance': c3.get('execution_clearance'),
+                 'reason': str(c3.get('reason') or ''),
+                 'review': review,
+                 'executable_now': False}
+        # Even if an issuer has genuinely signed an offer, a same-named
+        # completion is NOT scientific proof that the new offer progresses it.
+        if card3['verified_offer'] and card3['workout_id']:
+            card3['same_name_recently_completed'] = _inc143_recent_named_completion(
+                snapshot, card3['workout_id'])
+    return {'schema': INC144_SCHEMA, 'card2': card2, 'card3': card3,
+            'source': 'FINAL_SAVED_SNAPSHOT_UI_PROJECTION'}
+
+
+def _inc144_card_intent(question, facts):
+    if not isinstance(facts, dict):
+        return None
+    q = str(question or '').casefold().strip()
+    if not q or len(q) > 1200:
+        return None
+    for a, b in (('à','a'),('è','e'),('é','e'),('ì','i'),('ò','o'),('ù','u')):
+        q=q.replace(a,b)
+    if re.search(r'\b(?:cards?|sched[ae]|schermat[ae])\s*2\s*(?:e|and|&|/|,)\s*3\b',q):
+        return 'BOTH_CARDS'
+    c2 = bool(re.search(r'\b(?:card|scheda|schermata)\s*(?:2|due|seconda|second|two)\b|\b(?:seconda|second)\s*(?:card|scheda)\b',q))
+    c3 = bool(re.search(r'\b(?:card|scheda|schermata)\s*(?:3|tre|terza|third|three)\b|\b(?:terza|third)\s*(?:card|scheda)\b',q))
+    if c2 and c3: return 'BOTH_CARDS'
+    if c2: return 'CARD2'
+    if c3: return 'CARD3'
+    # No named workout is globally forbidden. These questions are intercepted
+    # only when the latest displayed Card 3 is itself under recent-name review.
+    review=(facts.get('card3') or {}).get('review')
+    if isinstance(review,dict) and re.search(
+            r'\b(?:quality|qualita|progression\w*|progress\w*|progres\w*|'
+            r'ripet\w*|repet\w*|duplicat\w*|workout|session\w*|sedut\w*|allenament\w*|'
+            r'3\s*[x×]\s*5)\b',q):
+        return 'REVIEWED_QUALITY'
+    # A named repeat in a genuinely signed offer also merits a transparent
+    # explanation, not an automatic "new progression" claim.
+    signed=(facts.get('card3') or {}).get('same_name_recently_completed')
+    if signed and re.search(r'\b(?:repeat\w*|ripet\w*|progress\w*|progres\w*|duplicat\w*)\b|\b\d+\s*[x×]\s*\d+\b',q):
+        return 'CARD3'
+    return None
+
+
+def _inc144_card_lines(facts, italian=False):
+    card2=facts['card2']; card3=facts['card3']
+    if card2['state']=='ATTESTED_TEMPO_OPTION':
+        two=(f"Card 2: opzione Tempo «{card2['title']}», distinta dalla card 3; non è prenotata né autorizzata automaticamente."
+             if italian else f"Card 2: the distinct Tempo option '{card2['title']}' is shown; it is not booked or automatically cleared for execution.")
+    elif card2['state']=='CHRONOLOGICAL_SESSION':
+        two=(f"Card 2: sessione cronologica «{card2['title']}»; non equivale a un'altra quality autorizzata."
+             if italian else f"Card 2: the chronological session '{card2['title']}' is displayed; this is not a separate quality clearance.")
+    else:
+        two=("Card 2: visibile, ma nessuna seconda sessione stabilita nello Snapshot."
+             if italian else "Card 2: visible, but no second chronological session is established in this Snapshot.")
+    if card3['state']=='ALREADY_IN_CARD_1_OR_2':
+        idx=card3['already_in_card']
+        three=(f"Card 3: segnaposto inattivo; la quality è già nella card {idx}. Non è una seconda prescrizione."
+               if italian else f"Card 3: inactive placeholder; the quality is already in Card {idx}, not a second prescription.")
+    elif isinstance(card3.get('review'),dict):
+        three=("Card 3: progressione distinta in verifica. Un'attività con lo stesso titolo è stata completata di recente; il nome da solo non certifica ripetute e recuperi, quindi qui non ci sono nuova dose, watt, fueling, prenotazione né autorizzazione."
+               if italian else "Card 3: distinct progression under review. A same-named activity was recently completed; its title alone does not verify actual work and recovery, so this card contains no new dose, watts, fueling, booking or clearance.")
+    elif card3.get('title'):
+        title=card3['title']
+        if card3.get('verified_offer'):
+            three=(f"Card 3: «{title}» è un'offerta effettivamente verificata dal sistema; non implica autorizzazione all'esecuzione senza ricontrollo."
+                   if italian else f"Card 3: '{title}' is a system-verified offer; execution still requires the applicable recheck.")
+        else:
+            three=(f"Card 3: «{title}» è lo stato/direzione visualizzato, non una nuova prescrizione eseguibile."
+                   if italian else f"Card 3: '{title}' is the displayed status/direction, not a newly executable prescription.")
+        if card3.get('same_name_recently_completed'):
+            three+=(" Lo stesso titolo compare tra le attività completate recentemente: ciò non dimostra una nuova progressione. Serve una motivazione scientifica specifica, non un'etichetta nuova."
+                    if italian else " The same title occurs in a recently completed activity; that is not proof of a new progression. A concrete scientific purpose is needed, not a fresh label.")
+    else:
+        three=("Card 3: visibile, ma non esiste una nuova quality verificata ed eseguibile in questo Snapshot."
+               if italian else "Card 3: visible, but no new verified executable quality is established in this Snapshot.")
+    return two, three
+
+
+def _inc144_card_answer(question, snapshot, prepared=None):
+    facts=_inc144_card_truth(snapshot,prepared)
+    intent=_inc144_card_intent(question,facts)
+    if not intent:
+        return None
+    italian=bool(re.search(r'\b(?:perche|perché|come|scheda|schermata|ripet|allenament|sedut|qualita|qualità|devo|faccio|nuova)\w*\b',str(question or ''),re.I))
+    two,three=_inc144_card_lines(facts,italian)
+    body=(two+' '+three) if intent=='BOTH_CARDS' else (two if intent=='CARD2' else three)
+    if intent in ('CARD3','BOTH_CARDS','REVIEWED_QUALITY'):
+        body+=(' Le card derivano dallo stesso Snapshot salvato: una domanda in chat non cambia calendario, sedute o motore di selezione.'
+               if italian else ' Both cards reflect the same saved Snapshot; a chat question does not modify the calendar, sessions or selector.')
+    return {'schema': INC144_SCHEMA, 'intent':intent, 'answer':body,
+            'source':'VISIBLE_SNAPSHOT_CARDS','ai_call_used':False,
+            'evidence_fields':['nova_inc110_chronological_cards','inc132_dual_quality',
+                               'nova_card3_workout_view','inc143_recent_named_completion_review']}
+
+
+def _v119_grounded_answer(question,snapshot):
+    # One answer path for saved-report grounded chat AND live AI chat endpoint.
+    # Existing unrelated roadmap/QA intents keep their original meaning.
+    if isinstance(snapshot,dict):
+        projection=_inc144_card_answer(question,snapshot)
+        if projection is not None:
+            return projection
+    return _INC144_GROUNDED_BEFORE(question,snapshot)
+
+
+def build_ai_coach_chat_context(snapshot):
+    # This snapshot has already been provider-sanitized by the original caller.
+    # The UI adapter only reads the final view; it does not add provider data.
+    base=_INC144_CHAT_CONTEXT_BEFORE(snapshot)
+    # ask_ai_coach_chat sets the verified facts from the ORIGINAL saved report
+    # before provider privacy sanitization; never re-attest sanitized source.
+    facts=_INC144_CHAT_FACTS.get()
+    if facts is None:
+        facts=_inc144_card_truth(snapshot)  # direct builder callers/tests
+    if not facts:
+        return base
+    two,three=_inc144_card_lines(facts,False)
+    return base + ('\n\nACTUAL CURRENT DISPLAY — CARD 2 AND CARD 3 (highest priority '
+        'for what the athlete can see; overrides older raw future-quality '
+        'proposals, historical anchors and chronological drafts):\n- '+two+'\n- '+three+
+        '\nAn already completed same-named activity is not evidence of a new '
+        'progression. Do not describe a suppressed/under-review Card 3 workout '
+        'as currently prescribed or executable. A verified signed offer must '
+        'not be silently revoked, but neither a title nor a signature alone '
+        'proves the newest session is a different stimulus. Card 2 Tempo is '
+        'independent. Never invent an alternate workout or override the visible '
+        'card status in conversational output.\n')
+
+def ask_ai_coach_chat(question, snapshot, history=None, report_meta=None):
+    # Scoped across the actual provider call: no cross-user/global mutable cache.
+    # Original user snapshot (not provider-safe redaction) is the UI authority.
+    truth=_inc144_card_truth(snapshot)
+    token=_INC144_CHAT_FACTS.set(truth)
+    try:
+        return _INC144_AI_CHAT_BEFORE(question,snapshot,history=history,
+                                      report_meta=report_meta)
+    finally:
+        _INC144_CHAT_FACTS.reset(token)
+
+
+# Exact original page renderer is unchanged. INC121 already renders three
+# articles, including Card 2 awaiting-plan and Card 3 grey on duplication.
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += ' · INC144 CHAT ↔ VISIBLE CARD2/CARD3 CONTRACT'
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
