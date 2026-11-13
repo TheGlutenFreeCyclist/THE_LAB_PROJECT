@@ -1,0 +1,105 @@
+name: NOVA INC153 Render TEST runtime smoke (NO OWNER SNAPSHOT)
+on:
+  push:
+    branches:
+      - fix/neon-report-egress-r196999
+    paths:
+      - .github/workflows/nova-inc153-render-test-release-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-and-public-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout TEST branch
+        uses: actions/checkout@v4
+
+      - name: Candidate identity and syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "def037a2b210cb36cd73e62b1fff069c2ef997c0f757bf711bafb2d8f0e3ec8b  the_lab_app.py" | sha256sum -c -
+          python -m py_compile the_lab_app.py
+          echo "PASS: candidate runtime SHA and Python syntax"
+
+      - name: Public Render TEST HTTP and authentication-boundary smoke
+        shell: bash
+        run: |
+          python - <<'PY'
+          import time
+          from urllib.request import Request, build_opener, HTTPRedirectHandler
+          from urllib.error import HTTPError, URLError
+          from html.parser import HTMLParser
+
+          root = "https://the-lab-nova-test.onrender.com"
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+          opener = build_opener(NoRedirect())
+          class CardParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.cards = 0
+                  self.copy = 0
+              def handle_starttag(self, tag, attrs):
+                  a = dict(attrs)
+                  if tag == 'article' and 'v23-session-card' in (a.get('class') or '').split():
+                      self.cards += 1
+                  if 'data-copy-workout' in a:
+                      self.copy += 1
+          def probe(path, expected, method="GET", check=None, attempts=4):
+              last = None
+              for attempt in range(attempts):
+                  try:
+                      request = Request(root + path, method=method, headers={'User-Agent':'NOVA-INC153-TEST-RELEASE-GATE/1.0'})
+                      try:
+                          resp = opener.open(request, timeout=35)
+                          code = resp.status
+                      except HTTPError as exc:
+                          resp = exc
+                          code = exc.code
+                      body = resp.read()
+                      if code not in expected:
+                          raise AssertionError(f'{path} returned {code}, expected {expected}')
+                      if check:
+                          check(resp, body)
+                      print(f'PASS {method} {path}: HTTP {code}, bytes={len(body)}')
+                      return
+                  except (URLError, TimeoutError, AssertionError) as exc:
+                      last = str(exc)
+                      if attempt + 1 < attempts:
+                          time.sleep(8)
+              raise AssertionError(f'{method} {path}: {last}')
+          probe('/healthz', (204,), method='HEAD')
+          probe('/healthz', (204,), method='GET', check=lambda r,b: (
+              (not b) or (_ for _ in ()).throw(AssertionError('healthz must have no body'))
+          ))
+          probe('/', (302,303), check=lambda r,b: (
+              ('/login' in (r.headers.get('Location') or '')) or (_ for _ in ()).throw(AssertionError('root is not redirecting to login'))
+          ))
+          probe('/last-report', (302,303), check=lambda r,b: (
+              ('/login' in (r.headers.get('Location') or '')) or (_ for _ in ()).throw(AssertionError('unauthenticated last-report exposed'))
+          ))
+          probe('/login', (200,),check=lambda r,b: (
+              (b'html' in b[:500].lower()) or (_ for _ in ()).throw(AssertionError('no HTML login page'))
+          ))
+          def demo_preview(r,body):
+              parsed = CardParser()
+              parsed.feed(body.decode('utf-8', 'replace'))
+              assert parsed.cards == 3, f'preview should render three visible cards; got {parsed.cards}'
+              assert parsed.copy >= 1, f'preview has no copy controls'
+              print(f'PASS synthetic public preview: card-count={parsed.cards}, copy-controls={parsed.copy}')
+          probe('/preview',(200,), check=demo_preview)
+          print('LIVE_TEST_PUBLIC_SMOKE=PASS')
+          print('AUTHENTIC_OWNER_CARD3=NOT_TESTED; SCIENTIFIC_RATIFICATION=NOT_ATTESTED; MAIN_GO=NOT_CERTIFIED')
+          PY
+
+      - name: Gate interpretation (no false release authorization)
+        shell: bash
+        run: |
+          echo 'This job verifies public Render TEST only, not an authenticated owner Snapshot.'
+          echo 'Do not claim MAIN_GO=YES from a green job without the DTM owner-scoped and scientific gates.'
