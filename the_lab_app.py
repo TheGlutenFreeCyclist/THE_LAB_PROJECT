@@ -65618,6 +65618,94 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
 # of that label is not itself a measurement. Check the ORIGINAL owner-scoped
 # event ledger and replay the original watt model before the new issuer can
 # sign an athlete-facing quality. No new watts are computed or overridden.
+# INC151 / BW candidate: reuse the original measured-repeats watt band.
+# A future LONGER interval is NOT a verified identical repeat: accept only
+# one adjacent canonical duration step, with no increase in total measured
+# work, one independently resolved completed repeat set, and no increase in
+# measured work watts. This is exploratory, never an execution clearance.
+# These constraints require DTM scientific review before production release.
+INC151_SCHEMA = 'NOVA-INC151-EXPLORATORY-MEASURED-REPEAT-TRANSFER-1'
+
+
+def _nova_inc151_measured_transfer_proof(t, w, b, event):
+    """Conservative mechanical proof for a *future exploratory* interval.
+
+    No title/PB/FTP assertion, no owner binding shortcut, no watt formula;
+    canonical model and issuer independent replay remain in force.
+    """
+    try:
+        if not all(isinstance(x, dict) for x in (t,w,b,event)):
+            return False
+        if (str(t.get('id') or '')!=str(w.get('nova_workout_id') or '')
+            or str(t.get('pattern') or '').upper() not in {'STANDARD','SUSTAINED','SHORT_POWER'}
+            or str(w.get('nova_prescription_dimension') or '').upper() not in set(t.get('dimensions') or ())
+            or b.get('repeatability_state')!='NOT_VERIFIED_FOR_THIS_WORKOUT'
+            or b.get('repeatability_reason')!='SHORTER_INTERVAL_TRANSFER'
+            or b.get('power_target_mode')!='EXPLORATORY_RANGE'
+            or b.get('confidence')!='LOW'
+            or b.get('scoring_policy')!='STRUCTURE_ONLY_POWER_DESCRIPTIVE'
+            or b.get('exploratory') is not True
+            or b.get('non_punitive') is not True
+            or b.get('target_watts') is not None
+            or b.get('observed_repeated_work_is_direct_evidence') is not False
+            or b.get('observed_single_best_is_repeatability_proof') is not False
+            or b.get('recovery_duration_comparable') is not True
+            or event.get('strong') is not True
+            or event.get('activity_truth_status')!='RESOLVED'
+            or str(event.get('activity_truth_source') or '').upper()
+                    not in {'DEVICE_LAPS','ICU_INTERVALS_CANONICAL'}
+            or event.get('recovery_observation_complete') is not True
+            or str(event.get('activity_id') or '') != str(b.get('activity_id') or '')
+            or str(event.get('date') or '')[:10] != str(b.get('activity_date') or '')[:10]):
+            return False
+        def finite(v):
+            return float(v) if type(v) in (int,float) and math.isfinite(float(v)) else None
+        work = finite(t.get('work_s'))
+        observed_work = finite(event.get('interval_secs'))
+        template_reps = finite(t.get('reps'))
+        observed_reps = finite(event.get('reps'))
+        low = finite(b.get('low_watts'))
+        high = finite(b.get('high_watts'))
+        observed_avg = finite(event.get('avg_watts'))
+        recovery = finite(t.get('recovery_s'))
+        observed_recovery = finite(event.get('recovery_secs'))
+        pair_count = finite(event.get('recovery_pair_count'))
+        pair_expected = finite(event.get('recovery_pair_expected'))
+        cv = finite(event.get('cv_pct'))
+        if any(x is None for x in (work,observed_work,template_reps,observed_reps,
+            low,high,observed_avg,recovery,observed_recovery,pair_count,
+            pair_expected,cv)):
+            return False
+        # Only the NEXT higher duration appearing in this canonical goal and
+        # dimension: no arbitrary athlete-specific growth constant.
+        goal=str(t.get('goal') or '')
+        dimension=str(w.get('nova_prescription_dimension') or '')
+        durations=sorted({float(row.get('work_s')) for row in _NOVA_WORKOUT_LIBRARY
+            if isinstance(row,dict) and str(row.get('goal') or '')==goal
+            and dimension in set(row.get('dimensions') or ())
+            and str(row.get('pattern') or '')==str(t.get('pattern') or '')
+            and not row.get('adaptive_only') and type(row.get('work_s')) in (int,float)
+            and math.isfinite(float(row['work_s'])) and float(row['work_s'])>observed_work})
+        if (not durations or work!=durations[0] or work<=observed_work
+            or work*template_reps>observed_work*observed_reps
+            or not 2<=template_reps<=observed_reps
+            or pair_count!=pair_expected or pair_expected!=observed_reps-1
+            or not 0<=cv<=6
+            or not 70<=observed_avg<=1200
+            or not 0<low<high<=observed_avg
+            or recovery<=0 or observed_recovery<0
+            or observed_recovery>recovery+min(20.0,max(5.0,recovery*0.05))
+            or b.get('work_seconds')!=int(work)
+            or b.get('evidence_interval_seconds')!=int(observed_work)
+            or abs(observed_recovery-float(b.get('observed_recovery_seconds') or -1))>0.1
+            or abs(observed_avg-float(b.get('observed_repeated_avg_watts') or -1))>0.1
+            or not str(event.get('activity_id') or '')):
+            return False
+        return True
+    except (ValueError,TypeError,KeyError,OverflowError,ArithmeticError,AttributeError):
+        return False
+
+
 INC083_ISSUER_SCHEMA = 'NOVA-R196.9.127-ORIGINAL-SCIENCE-REPLAY-1'
 INC080_SCHEMA = 'NOVA-R196.9.127-ISSUER-HMAC-EVIDENCE-3'
 _INC083_PRIOR_ISSUER = _nova_r196956_build_offer
@@ -65668,6 +65756,7 @@ def _nova_inc083_science_replay(work, evidence_ledger, ftp_anchor,
         a=finite(event.get(x));b=finite(band.get(y))
         if a is None or b is None or abs(a-b)>0.1:
             return failure('REPEATED_WORK_EVENT_AND_ISSUED_PROOF_MISMATCH_'+x.upper())
+    measured_transfer = _nova_inc151_measured_transfer_proof(t, w, band, event)
     if (finite(event.get('reps')) is None
         or finite(band.get('reps')) is None
         or finite(event.get('reps'))<finite(band.get('reps'))
@@ -65676,7 +65765,7 @@ def _nova_inc083_science_replay(work, evidence_ledger, ftp_anchor,
         or (band.get('repeatability_state') not in {'VERIFIED_COMPARABLE_REPEATS',
                                                    'SUPPORTED_BY_LONGER_REPEATS'}
             and not _nova_inc100_independent_numeric_repeats_for_new_preload(
-                t, w, band, event))):
+                t, w, band, event) and not measured_transfer)):
         return failure('ORIGINAL_REPETITION_STRUCTURE_OR_DATE_NOT_VERIFIED')
     try:
         clock_day=(today if isinstance(today,date) else get_rome_now().date())
@@ -65699,16 +65788,26 @@ def _nova_inc083_science_replay(work, evidence_ledger, ftp_anchor,
         or replay.get('high_watts')!=band.get('high_watts')
         or replay.get('observed_repeated_avg_watts')!=band.get('observed_repeated_avg_watts')
         or replay.get('observed_recovery_seconds')!=band.get('observed_recovery_seconds')
-        or replay.get('recovery_duration_comparable') is not True):
+        or replay.get('recovery_duration_comparable') is not True
+        # Issuer cannot silently turn exploratory shorter-repeat transfer
+        # into an already VERIFIED identical-dose or graded power contract.
+        or any(replay.get(k)!=band.get(k) for k in (
+            'repeatability_state','repeatability_reason','power_target_mode',
+            'exploratory','non_punitive','scoring_policy','target_watts',
+            'reps','work_seconds','evidence_interval_seconds'))):
         return failure('CANONICAL_WATT_REPLAY_DIFFERS_FROM_ISSUED_BAND')
     separate_preload = _nova_inc100_independent_numeric_repeats_for_new_preload(
         t, w, band, event)
     return {'schema':INC083_ISSUER_SCHEMA,'state':'PASS','accepted':True,
-            'reason':'ORIGINAL_COMPLETED_REPETITION_LEDGER_REPLAY_MATCHED',
+            'reason':('EXPLORATORY_MEASURED_REPEAT_TRANSFER_REPLAY_MATCHED' if measured_transfer
+                else 'ORIGINAL_COMPLETED_REPETITION_LEDGER_REPLAY_MATCHED'),
             'source':'ORIGINAL_CANONICAL_WATT_MODEL_REPLAY',
-            'inc100_numeric_repeat_dose':('VERIFIED_BASE_REPEATS_NEW_PRELOAD_EXPLORATORY'
-                 if separate_preload else 'INHERITED_VERIFIED_REPEATABILITY'),
-            'inc100_new_preload_execution_preverified':False if separate_preload else None}
+            'inc151_transfer_schema': INC151_SCHEMA if measured_transfer else None,
+            'repeatability_at_new_duration_verified':False if measured_transfer else None,
+            'inc100_numeric_repeat_dose':('MEASURED_SHORTER_REPEATS_NEW_DURATION_EXPLORATORY'
+                if measured_transfer else ('VERIFIED_BASE_REPEATS_NEW_PRELOAD_EXPLORATORY'
+                if separate_preload else 'INHERITED_VERIFIED_REPEATABILITY')),
+            'inc100_new_preload_execution_preverified':False if (separate_preload or measured_transfer) else None}
 
 
 def _nova_inc083_build_offer(*args,**kwargs):
@@ -66006,7 +66105,11 @@ def _nova_inc091_render_native(tpl, goal, dim, band, ftp_anchor, power_model=Non
     # original model's verified repeatability now proves a numeric range.
     main = str(raw.get('main_set') or '')
     main = main.replace('No measured same-duration benchmark or justified power target is available; use free/resistance mode and preserve the prescribed workout structure and purpose.',
-        'Completed comparable repetitions support the personal calculated work range below; use free/resistance mode and preserve the original repeat structure.')
+        ('Shorter completed repetitions support an exploratory *longer* interval range; '
+         'the longer repetition and any added aerobic preload have NOT been performed or verified. '
+         'Use free/resistance mode; no watts pass/fail grading applies.'
+         if band.get('repeatability_reason') == 'SHORTER_INTERVAL_TRANSFER'
+         else 'Completed comparable repetitions support the personal calculated work range below; use free/resistance mode and preserve the original repeat structure.'))
     main = main + (' Personal work range (calculated from comparable repeats, '
         f'not an observed single-effort PB): {band["low_watts"]}–{band["high_watts"]} W; '
         'not an execution clearance or pass/fail target.')
@@ -66081,7 +66184,9 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
         compiled_workout_digest=_nova_inc050_workout_digest(work),
         required_window_minutes=comp['total_seconds']/60,
         actual_known_window_minutes=None,
-        dose_evidence_state='ORIGINAL_REPEATED_WORK_REPLAYED',
+        dose_evidence_state=('MEASURED_SHORTER_REPEATS_EXPLORATORY_LONGER_WORK_NOT_VERIFIED'
+            if band.get('repeatability_reason') == 'SHORTER_INTERVAL_TRANSFER'
+            else 'ORIGINAL_REPEATED_WORK_REPLAYED'),
         origin_proof=origin,reason_codes=['FUTURE_COMPLETE_DOSE_NOT_EXECUTION_CLEARANCE'],
         execution_authorized=False,not_scheduled=True,not_issued=True,
         adds_calendar_event=False,adds_ledger_row=False,
@@ -71168,6 +71273,28 @@ APP_VERSION += ' · INC146 SCIENCE PRODUCER COVERAGE RETRY + VERIFIED POWER COPY
 APP_VERSION += ' · INC147 SINGLE CARD/TRUTH/BOOKING PROJECTION · NO TEST SNAPSHOTS'
 APP_VERSION += ' · INC149 SIGNED FUTURE QUALITY TAKES PRECEDENCE OVER CHRONOLOGICAL SLOT FAILURE'
 APP_VERSION += ' · INC150 VERIFIED AND NAMED RECENT EXPOSURE FED INTO ORIGINAL SELECTOR BEFORE FIRST RANKING' 
+
+APP_VERSION += ' · INC151 BW EXPERIMENTAL MEASURED-REPEAT SCIENTIFIC TRANSFER CANDIDATE (NO MAIN GO)'
+
+# INC152 / CB-UI: preserve the existing Card 2+3 booking/date/toast contract.
+# The Tempo title was introduced after the original Card 2 clipboard button,
+# which still copied the OLD chronological session rather than the visible
+# Tempo/Z3 workout. Mirror the established v150 copy control on the *visible*
+# Tempo title. This is a presentation-only correction: no changes to science,
+# workout identity, owner binding, CSRF, stored booking, or Card 3 dose gate.
+_INC152_TEMPO_TITLE_ANCHOR = '<h3>{{ zi.title|e }}</h3>'
+assert HOME_PAGE.count(_INC152_TEMPO_TITLE_ANCHOR) == 1, 'INC152_TEMPO_TITLE_ANCHOR_DRIFT'
+_INC152_TEMPO_TITLE_WITH_COPY = (
+    '<div class="v150-workout-title-row">'
+    '<h3>{{ zi.title|e }}</h3>'
+    '<button class="v150-copy-workout" type="button" '
+    'data-copy-workout="{{ zi.title|e }}" aria-label="Copy workout name" '
+    'title="Copy workout name">⧉<span>Copy</span></button></div>'
+)
+HOME_PAGE = HOME_PAGE.replace(
+    _INC152_TEMPO_TITLE_ANCHOR, _INC152_TEMPO_TITLE_WITH_COPY, 1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += ' · INC152 CARD2 VISIBLE TEMPO COPY + CARD2/CARD3 PLANNING QA (MAIN NO-GO)'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
