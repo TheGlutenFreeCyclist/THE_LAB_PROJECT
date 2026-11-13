@@ -1,0 +1,28 @@
+name: NOVA INC153 exact TEST-only patch application
+on:
+  push:
+    branches: [fix/neon-report-egress-r196999]
+    paths: ['.inc153-stage/INC153.patch']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/fix/neon-report-egress-r196999'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify original, patch, final code and commit TEST only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object the_lab_app.py)" = da596aa6ccbb41df0a41aa8986bd793ad75f8a4a
+          echo 'c292639632c461efe29fd4721e6fceb1b0b64f4de3fa46a582e478a91850a0a8  .inc153-stage/INC153.patch' | sha256sum -c -
+          git apply --check .inc153-stage/INC153.patch
+          git apply .inc153-stage/INC153.patch
+          echo 'def037a2b210cb36cd73e62b1fff069c2ef997c0f757bf711bafb2d8f0e3ec8b  the_lab_app.py' | sha256sum -c -
+          python3 -m py_compile the_lab_app.py
+          git config user.name 'NOVA TEST QA'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add the_lab_app.py
+          git commit -m 'test: stage INC153 exact runtime for Render TEST'
+          git push origin HEAD:refs/heads/fix/neon-report-egress-r196999
