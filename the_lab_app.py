@@ -70488,6 +70488,17 @@ def _inc144_card_truth(snapshot, prepared=None):
         if card3['verified_offer'] and card3['workout_id']:
             card3['same_name_recently_completed'] = _inc143_recent_named_completion(
                 snapshot, card3['workout_id'])
+    # INC147: future science detail is owned by this SAME card-truth
+    # producer; a later chat-only wrapper can no longer reinterpret Card3.
+    plan = snapshot.get('future_quality_plan') or {}
+    if (card3.get('state') != 'ALREADY_IN_CARD_1_OR_2'
+        and c3.get('verified_future_plan') is True
+        and card3.get('workout_id') == plan.get('workout_id')
+        and _inc145_has_personal_watts(c3)):
+        card3.update(verified_future_plan=True,
+                     complete_unscheduled_scientific_offer=True,
+                     personal_power_watts=c3.get('personalized_watts'),
+                     execution_clearance='RECHECK_DAY_OF_EXECUTION')
     return {'schema': INC144_SCHEMA, 'card2': card2, 'card3': card3,
             'source': 'FINAL_SAVED_SNAPSHOT_UI_PROJECTION'}
 
@@ -70555,6 +70566,17 @@ def _inc144_card_lines(facts, italian=False):
     else:
         three=("Card 3: visibile, ma non esiste una nuova quality verificata ed eseguibile in questo Snapshot."
                if italian else "Card 3: visible, but no new verified executable quality is established in this Snapshot.")
+    # INC147: the chat always describes the same verified future proposal
+    # shown in Card3, rather than layering a second interpretation after it.
+    if card3.get('complete_unscheduled_scientific_offer'):
+        title = str(card3.get('title') or '')
+        watts = str(card3.get('personal_power_watts') or '')
+        three = (f"Card 3: «{title}» è una quality futura completa compilata dal motore canonico, "
+                 f"con potenza personale {watts}. Non è prenotata e richiede una verifica "
+                 'delle condizioni prima di essere svolta.' if italian else
+                 f"Card 3: '{title}' is a complete future quality compiled by the canonical "
+                 f"science producer with personalized {watts}. It is not booked and requires "
+                 'a day-of execution check.')
     return two, three
 
 
@@ -70725,20 +70747,46 @@ def _inc145_dose_safe_projection(snapshot,prepared):
     return out
 
 
+def _inc147_canonical_card_projection(data, base):
+    """One final Card3 decision, shared by display, chat and planning.
+
+    Reuse the EXISTING INC140/143/145 scientific observations in their
+    historic order, once. No new training gate, fallback watts or workout
+    selector; previous wrappers are bypassed by the active runtime path.
+    """
+    verified = _inc140_ui_guard(data, base)
+    distinct = _inc143_ui_guard(data, verified)
+    return _inc145_dose_safe_projection(data, distinct)
+
+
 def _v4891_prepare_snapshot_for_ui(data):
-    return _inc145_dose_safe_projection(data,_INC145_PRIOR_UI(data))
+    # Start before INC140, not at the last wrapper in the 33-layer chain.
+    # All downstream consumers receive the identical owner-scoped decision.
+    return _inc147_canonical_card_projection(data, _INC140_PRIOR_UI(data))
 
 
-def _r142_report_binding(report,owner_id,target=None,prepared=None):
-    # A stale signed token cannot resurrect the previously displayed
-    # incomplete Card3. A separately attested Tempo request remains eligible.
-    if target=='TEMPO':
-        return _INC145_PRIOR_BIND(report,owner_id,target,prepared=prepared)
-    raw=(report or {}).get('data') or {}
-    projection=_inc145_dose_safe_projection(raw, prepared) if isinstance(prepared,dict) else _v4891_prepare_snapshot_for_ui(raw)
-    if (projection or {}).get('inc145_dose_gate'):
+def _r142_report_binding(report, owner_id, target=None, prepared=None):
+    """Planning uses precisely the same final projection as the three cards.
+
+    The legacy original binder still owns the HMAC and calendar context.
+    The three previous INC140/143/145 booking wrappers are bypassed; no
+    unsigned Card3 can bypass the final view, including a stale POST token.
+    """
+    raw = (report or {}).get('data') or {}
+    view = (_inc147_canonical_card_projection(raw, prepared) if isinstance(prepared,dict)
+            else _v4891_prepare_snapshot_for_ui(raw))
+    if not isinstance(view, dict):
         return None
-    return _INC145_PRIOR_BIND(report,owner_id,target,prepared=projection)
+    if target != 'TEMPO':
+        card = view.get('nova_card3_workout_view') or {}
+        if ((view.get('inc140_future_quality_guard') or {}).get('blocks_future_card')
+            or isinstance(view.get('inc143_recent_named_completion_review'),dict)
+            or bool(view.get('inc145_dose_gate'))
+            or card.get('state') in ('VERIFIED_RECENT_STRUCTURE_REVIEW',
+                                   'RECENT_NAMED_COMPLETION_REVIEW',
+                                   'PERSONAL_DOSE_PENDING')):
+            return None
+    return _INC140_PRIOR_BIND(report, owner_id, target, prepared=view)
 
 
 def _inc144_card_intent(question,facts):
@@ -70784,7 +70832,11 @@ APP_VERSION += ' · INC145 CARD3 NO QUALITY WITHOUT VERIFIED WATT DOSE'
 # existing owner-bound producer; watt arithmetic, templates, signatures,
 # fueling and clinical restrictions remain owned by that producer.
 INC146_SCHEMA = 'NOVA-INC146-UPSTREAM-COVERAGE-AND-DOSE-SEMANTICS-1'
-_INC146_PRIOR_FUTURE = _nova_inc050_future_quality
+# INC147: one bounded science retry, not INC140 nested inside INC146.
+# Start from the canonical owner-scoped producer captured before INC140.
+# INC140 verified exposure and INC143 nominal evidence remain checked inside
+# _inc146_retry_reason; the original selector/compiler/provenance are intact.
+_INC146_PRIOR_FUTURE = _INC140_PRIOR_FUTURE
 _INC146_PRIOR_ATTEST = _nova_inc051_attest_future_snapshot
 _INC146_PRIOR_HAS_WATTS = _inc145_has_personal_watts
 _INC146_PRIOR_CHAT_TRUTH = _inc144_card_truth
@@ -70890,6 +70942,14 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
         wid = str((plan or {}).get('workout_id') or '') if isinstance(plan, dict) else ''
         if issue is None:
             result = dict(plan)
+            # The INC140 receipt is recorded here, before the original
+            # attester signs the FINAL report. No second retry wrapper runs.
+            if result.get('schema') == INC091_SCHEMA and result.get('status') == 'COMPILED_UNSCHEDULED':
+                replay = _inc140_candidate_replay(evidence_ledger, None, wid, today)
+                replay.update(as_of_date=today,
+                    excluded_prior_candidates=[p['workout_id'] for p in attempted],
+                    producer_action=('DISTINCT_CANONICAL_RESELECTION' if attempted else 'UNCHANGED'))
+                result['inc140_exposure_check'] = replay
             result['inc146_coverage'] = {
                 'schema': INC146_SCHEMA, 'state': 'COMPILED_PENDING_FINAL_ATTESTATION',
                 'goal_key': goal, 'workout_id': wid,
@@ -70916,6 +70976,18 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
             break  # The original selector cannot progress: do not loop.
         plan = alternative
     failed = dict(first) if isinstance(first, dict) else {}
+    if (failed.get('schema') == INC091_SCHEMA
+        and failed.get('status') == 'COMPILED_UNSCHEDULED'
+        and failed.get('workout_id')):
+        # Preserve the old INC140 forensic marker when a duplicate is
+        # unresolved. A failed suggestion is never issued or booked.
+        replay = _inc140_candidate_replay(
+            evidence_ledger, None, failed['workout_id'], today)
+        replay.update(as_of_date=today,
+            producer_action='WITHHELD_NO_DISTINCT_VERIFIED_ALTERNATIVE',
+            excluded_prior_candidates=[p['workout_id'] for p in attempted],
+            reselection_attempts=attempted)
+        failed['inc140_exposure_check'] = replay
     failed['inc146_coverage'] = {
         'schema': INC146_SCHEMA, 'state': 'PRODUCER_COVERAGE_FAILED_NO_GO',
         'goal_key': goal, 'reason': (_inc146_retry_reason(plan, ledger, evidence_ledger, today)[0]
@@ -70981,41 +71053,8 @@ def _nova_inc051_attest_future_snapshot(data, owner_user_id):
     return result
 
 
-def _inc144_card_truth(snapshot, prepared=None):
-    facts = _INC146_PRIOR_CHAT_TRUTH(snapshot, prepared)
-    if not isinstance(facts, dict):
-        return facts
-    view = prepared if isinstance(prepared, dict) else _v4891_prepare_snapshot_for_ui(snapshot)
-    card = (view or {}).get('nova_card3_workout_view') or {}
-    plan = (snapshot or {}).get('future_quality_plan') or {}
-    c3 = facts.get('card3') or {}
-    if (c3.get('state') != 'ALREADY_IN_CARD_1_OR_2'
-        and card.get('verified_future_plan') is True
-        and card.get('workout_id') == plan.get('workout_id')
-        and _inc145_has_personal_watts(card)):
-        c3 = dict(c3, verified_future_plan=True,
-                  complete_unscheduled_scientific_offer=True,
-                  personal_power_watts=card.get('personalized_watts'),
-                  execution_clearance='RECHECK_DAY_OF_EXECUTION')
-    return dict(facts, card3=c3)
-
-
-def _inc144_card_lines(facts, italian=False):
-    original = _INC146_PRIOR_CHAT_LINES(facts, italian)
-    three = (facts or {}).get('card3') or {}
-    if not three.get('complete_unscheduled_scientific_offer'):
-        return original
-    title = str(three.get('title') or '')
-    watts = str(three.get('personal_power_watts') or '')
-    replacement = (f"Card 3: «{title}» è una quality futura completa compilata dal motore canonico, "
-                   f"con potenza personale {watts}. Non è prenotata e richiede una verifica "
-                   'delle condizioni prima di essere svolta.' if italian else
-                   f"Card 3: '{title}' is a complete future quality compiled by the canonical "
-                   f"science producer with personalized {watts}. It is not booked and requires "
-                   'a day-of execution check.')
-    return original[0], replacement
-
 APP_VERSION += ' · INC146 SCIENCE PRODUCER COVERAGE RETRY + VERIFIED POWER COPY + NO-GO AUDIT'
+APP_VERSION += ' · INC147 SINGLE CARD/TRUTH/BOOKING PROJECTION · NO TEST SNAPSHOTS'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
