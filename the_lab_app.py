@@ -70246,5 +70246,181 @@ def _r142_report_binding(report,owner_id,target=None,prepared=None):
 APP_VERSION += ' · INC140 VERIFIED HISTORY + NO-LOOP FUTURE GUARD'
 
 
+# INC143 — CARD 3 RECENTLY COMPLETED NAMED QUALITY (display/booking safety)
+# DTM v1.0.80: Read-only observation of the active owner's existing microcycle
+# ledger. Do not misrepresent a completed 3x5 as a *new* workout merely because
+# a future-card catalogue identity matches its title. A NAME is not mechanical
+# repeatability proof: INC140 remains the sole structural proof/reselection
+# path. Do not edit canonical science, signed offers, ledger, Intervals or DB.
+INC143_SCHEMA = 'NOVA-INC143-RECENT-NAMED-QUALITY-DIRECTION-1'
+INC143_NAMED_WINDOW_DAYS = 7
+_INC143_PRIOR_UI = _v4891_prepare_snapshot_for_ui
+_INC143_PRIOR_BIND = _r142_report_binding
+
+
+def _inc143_title_key(value):
+    # Equality only: do not conflate 5x3 with 3x5, or another goal's name.
+    return re.sub(r'\s+', ' ', str(value or '').casefold().strip()
+                  .replace('\u00d7', 'x').replace('\u22c5', ' ')).strip()
+
+
+def _inc143_snapshot_day(data):
+    d = data if isinstance(data, dict) else {}
+    ledger = d.get('microcycle_ledger') or {}
+    clock = d.get('coach_clock') or {}
+    revision = (ledger.get('revision_history') or []) if isinstance(ledger,dict) else []
+    fallback = (revision[-1].get('at_local') if revision and isinstance(revision[-1],dict)
+                else None)
+    candidates = (d.get('inc140_snapshot_date'),
+                  clock.get('iso') if isinstance(clock,dict) else None,
+                  fallback)
+    for value in candidates:
+        if not isinstance(value,str):
+            continue
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            continue
+    return None  # No runtime-now fallback: old reports keep their own history.
+
+
+def _inc143_recent_named_completion(data,workout_id):
+    """A *reported named* completion; never certify its interval mechanics.
+
+    Requires a current owner's persisted microcycle ledger, original Intervals
+    completed source, same canonical full title/goal, and an actual recent date.
+    Blank/broken/foreign-looking history never becomes negative science proof.
+    """
+    d=data if isinstance(data,dict) else {}
+    ledger=d.get('microcycle_ledger') or {}
+    tpl=_R19696_LIBRARY_INDEX.get(str(workout_id or ''))
+    if not isinstance(ledger,dict) or not isinstance(tpl,dict):
+        return None
+    goal=str(tpl.get('goal') or '').upper()
+    if str(ledger.get('primary_goal') or '').upper()!=goal:
+        return None
+    today=_inc143_snapshot_day(d)
+    if today is None:return None
+    title=_inc143_title_key(tpl.get('title'))
+    if not title:return None
+    cycle_start,cycle_end=None,None
+    try:
+        if ledger.get('cycle_start'):cycle_start=date.fromisoformat(str(ledger['cycle_start'])[:10])
+        if ledger.get('cycle_end'):cycle_end=date.fromisoformat(str(ledger['cycle_end'])[:10])
+    except ValueError:
+        return None
+    if cycle_start and today<cycle_start:return None
+    if cycle_end and today>cycle_end:return None
+    items=ledger.get('completed_hard_sessions') or []
+    if not isinstance(items,list):return None
+    for item in items:
+        if not isinstance(item,dict):continue
+        if str(item.get('source') or '').upper()!='INTERVALS_COMPLETED':continue
+        if _inc143_title_key(item.get('name'))!=title:continue
+        try:
+            observed=date.fromisoformat(str(item.get('date') or '')[:10])
+        except ValueError:
+            continue
+        age=(today-observed).days
+        if not 0<=age<=INC143_NAMED_WINDOW_DAYS:continue
+        if cycle_start and observed<cycle_start:continue
+        if cycle_end and observed>cycle_end:continue
+        return {'schema':INC143_SCHEMA,'workout_id':str(workout_id),
+                'observed_date':observed.isoformat(),
+                'days_ago':age,'source':'MICROCYCLE_LEDGER_INTERVALS_COMPLETED',
+                'evidence_level':'NAMED_ACTIVITY_ONLY_NOT_VERIFIED_WORK_RECOVERY',
+                'mechanical_repeatability_verified':False,
+                'prescription_fulfillment_claimed':False}
+    return None
+
+
+def _inc143_ui_guard(data,ui):
+    if not isinstance(ui,dict):return ui
+    card=ui.get('nova_card3_workout_view') or {}
+    direction=ui.get('next_quality_direction') or {}
+    if not isinstance(card,dict) or not isinstance(direction,dict):return ui
+    # A valid issued/attested offer is not silently invalidated by a title.
+    if card.get('verified_offer') is True:return ui
+    # INC140 structural verification already took priority (stronger proof).
+    if (ui.get('inc140_future_quality_guard') or {}).get('blocks_future_card'):
+        return ui
+    identity=str(card.get('workout_id') or
+                 direction.get('referenced_canonical_template_id') or '')
+    if not identity:return ui
+    evidence=_inc143_recent_named_completion(data,identity)
+    if not evidence:return ui
+    # Do not mutate persisted science or propose the next-ranked catalogue
+    # session. Merely remove the misleading duplicate future Card3 display.
+    output=dict(ui)
+    goal=str(card.get('goal_key') or direction.get('goal_key') or '').upper()
+    title='Next quality · distinct progression under review'
+    reason=('A completed activity with this exact workout name is already '
+        'recorded in the current microcycle. Nova will not present the same '
+        'named structure as a new future quality until it has checked for '
+        'a genuinely distinct, scientifically supported purpose. The activity '
+        'name alone does not verify its interval/recovery mechanics. No new '
+        'hard workout or execution clearance has been issued.')
+    safe=dict(card, schema=INC143_SCHEMA,
+        state='RECENT_NAMED_COMPLETION_REVIEW',title=title,
+        workout_id=None,verified_offer=False,verified_future_plan=False,
+        offer_structure_only=False,planned_quality=False,direction_only=True,
+        inc120_quality_intent=False,personalized_watts=None,power_source=None,
+        structure=None,execution=None,purpose=None,phases=[],
+        execution_clearance='NOT_CLEARED_FOR_EXECUTION',
+        execution_authorized_by_preview=False,is_scheduled=False,
+        goal_key=goal,reason=reason,
+        goal_explanation='The next training stimulus needs a new evidence-based decision.',
+        inc143_recent_named_completion=evidence)
+    output['nova_card3_workout_view']=safe
+    new_direction=dict(direction)
+    new_direction.update(title=title,athlete_title=title,
+        athlete_explanation=reason,referenced_canonical_template_id=None,
+        source='INC143_RECENT_NAMED_COMPLETION_REVIEW',
+        direction_only=True,is_a_prescription=False,is_scheduled=False,
+        execution_authorized_by_preview=False,suggested_date=None,
+        suggested_time=None,adds_calendar_event=False,adds_workout_to_ledger=False)
+    output['next_quality_direction']=new_direction
+    output['quality_direction_fuel']=None
+    output['nova_r142_plan_ui']=None
+    dual=output.get('inc132_dual_quality')
+    if isinstance(dual,dict):
+        dual=dict(dual)
+        dual['quality_specific']=None
+        if dual.get('recommended_priority')=='CARD3':
+            dual['recommended_priority']=None
+            dual['reason_code']='RECENT_NAMED_QUALITY_REQUIRES_DISTINCT_PROGRESSION'
+        output['inc132_dual_quality']=dual
+    recovery=output.get('nova_recovery_display_rows')
+    if isinstance(recovery,list):
+        output['nova_recovery_display_rows']=[row for row in recovery
+            if not (isinstance(row,dict) and row.get('conditional') is True
+                    and row.get('workout_id')==identity)]
+    output['inc143_recent_named_completion_review']=evidence
+    return output
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    return _inc143_ui_guard(data,_INC143_PRIOR_UI(data))
+
+
+def _r142_report_binding(report,owner_id,target=None,prepared=None):
+    # Re-check the same current report/owner-facing evidence on POST. Old
+    # signed form tokens must not restore the misleading conditional Card 3.
+    data=(report or {}).get('data') or {}
+    view=(prepared if isinstance(prepared,dict) else
+          _v4891_prepare_snapshot_for_ui(data))
+    # A caller-provided prepared view must still pass the latest observation.
+    if isinstance(prepared,dict):
+        view=_inc143_ui_guard(data,view)
+    if target!='TEMPO' and isinstance(view,dict):
+        if isinstance(view.get('inc143_recent_named_completion_review'),dict):
+            return None
+    return _INC143_PRIOR_BIND(report,owner_id,target,prepared=view)
+
+# Keep the final card template on its existing single-source renderer. No
+# Jinja replacement, no endpoint addition, no database changes, no new dose.
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += ' · INC143 RECENT NAMED CARD3 REPEAT REVIEW'
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
