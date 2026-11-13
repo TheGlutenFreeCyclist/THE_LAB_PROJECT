@@ -67443,14 +67443,30 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None,
         exclusions.add(wid)
     # Ordinary producer normally supplies EASY_ONLY on catalog exhaustion.
     # Never resurrect an unverified HARD in a bounded-search edge case.
-    return {'schema': INC111_SCHEMA, 'available': True, 'authority': 'NOVA',
-            'action': decision.get('action'), 'dimension': dimensions,
-            'goal_key': goal, 'status': 'EASY_ONLY', 'workout_id': None,
-            'hard_prescription_available': False,
-            'fail_closed_reason': 'ORIGINAL_SCIENCE_ALL_CANDIDATES_REJECTED',
-            'selected_slot_index': None, 'raw_sessions': [], 'sessions': [],
-            'inc111_science_gate': INC111_SCHEMA,
-            'inc111_rejected_candidates': refused}
+    # INC142: The original emergency fallback reconstructed only a small
+    # fragment of the canonical prescription and silently dropped
+    # `ai_authority=EXPLANATION_ONLY`. R87 correctly vetoed every affected
+    # Snapshot as AI_AUTHORITY_ESCALATION. Preserve the untouched canonical
+    # producer's authority contract; discard every rejected HARD session and
+    # re-enter the normal compiler with ordinary safe aerobic slots.
+    # Do NOT manufacture `ai_authority` here: if the original contract is
+    # missing or invalid, the downstream authority validator must still veto.
+    fallback = dict(result)
+    fallback_library = dict(fallback.get('workout_library') or {})
+    fallback_library.update({
+        'reason': 'ORIGINAL_SCIENCE_ALL_CANDIDATES_REJECTED',
+        'selected_id': None, 'selected_signature': None,
+    })
+    return dict(fallback,
+        status='EASY_ONLY', source='ORIGINAL_SCIENCE_FAIL_CLOSED',
+        workout_id=None, contract_id=None, selected_slot_index=None,
+        hard_prescription_available=False,
+        fail_closed_reason='ORIGINAL_SCIENCE_ALL_CANDIDATES_REJECTED',
+        raw_sessions=[_v84_easy_raw(slot, decision) for slot in
+                      (clock.get('next_slots') or []) if isinstance(slot, dict)],
+        sessions=[], workout_library=fallback_library,
+        inc111_science_gate=INC111_SCHEMA,
+        inc111_rejected_candidates=refused)
 
 
 # INC113 / protect the existing Card1/2 + Recovery authority guards for
