@@ -70748,15 +70748,68 @@ def _inc145_dose_safe_projection(snapshot,prepared):
 
 
 def _inc147_canonical_card_projection(data, base):
-    """One final Card3 decision, shared by display, chat and planning.
+    """One authority for Card 3, chat and booking, including INC149 precedence.
 
-    Reuse the EXISTING INC140/143/145 scientific observations in their
-    historic order, once. No new training gate, fallback watts or workout
-    selector; previous wrappers are bypassed by the active runtime path.
+    Current-slot offer compilation and the independent, signed future-quality
+    contract are different objects. An unavailable chronological slot MUST NOT
+    erase a complete, owner-bound future workout. Use the ORIGINAL verified
+    future card presenter, not an independent selection or generated wattage.
+    Repetition and C07 checks remain downstream on the same projection.
     """
-    verified = _inc140_ui_guard(data, base)
-    distinct = _inc143_ui_guard(data, verified)
-    return _inc145_dose_safe_projection(data, distinct)
+    if not isinstance(base, dict):
+        return base
+    view = base
+    raw = data if isinstance(data, dict) else {}
+    plan = raw.get('future_quality_plan') or {}
+    before = base.get('nova_card3_workout_view') or {}
+    if (isinstance(plan, dict) and plan.get('schema') == INC091_SCHEMA
+        and plan.get('status') == 'COMPILED_UNSCHEDULED'
+        and not (isinstance(before, dict) and before.get('verified_offer') is True)):
+        # This presenter itself revalidates the authenticated owner, HMAC,
+        # original Intervals evidence and science. In particular, neither a
+        # persisted coverage PASS nor a plausible number is sufficient.
+        canonical = _nova_r1969104_canonical_card3(raw)
+        if (isinstance(canonical, dict)
+            and canonical.get('verified_future_plan') is True
+            and canonical.get('workout_id') == plan.get('workout_id')
+            and isinstance(plan.get('fueling'), dict)
+            and plan['fueling'].get('workout_id') == canonical['workout_id']
+            and plan['fueling'].get('display')):
+            view = dict(base)
+            view['nova_card3_workout_view'] = canonical
+            view['quality_direction_fuel'] = copy.deepcopy(plan['fueling'])
+            direction = dict(view.get('next_quality_direction') or {})
+            direction.update(title=canonical['title'],
+                athlete_title=canonical['title'],
+                athlete_explanation=canonical.get('reason'),
+                referenced_canonical_template_id=canonical['workout_id'],
+                source=INC091_SOURCE, direction_only=False,
+                is_a_prescription=True, is_scheduled=False,
+                suggested_date=None, suggested_time=None,
+                execution_authorized_by_preview=False)
+            view['next_quality_direction'] = direction
+            # Legacy INC120 sometimes marks ANY chronological HARD workout as
+            # a Card3 duplicate. C07 allows this ONLY for precisely the SAME
+            # fully compiled canonical quality, including its wattage/phases.
+            strict_c07 = next((i for i, row in enumerate((raw.get('next_sessions') or [])[:2])
+                if _nova_inc110_identical_chronological_dose(row, plan.get('workout'))), None)
+            if strict_c07 not in (0, 1):
+                view['inc120_quality_duplicate_card'] = None
+                view['inc120_quality_placement'] = 'CARD3_SIGNED_FUTURE_QUALITY'
+            else:
+                view['inc120_quality_duplicate_card'] = strict_c07 + 1
+                view['inc120_quality_placement'] = 'C07_IDENTICAL_CARD12_QUALITY'
+            view['inc149_future_quality_precedence'] = {
+                'schema': 'NOVA-INC149-SIGNED-FUTURE-QUALITY-AUTHORITY-1',
+                'state': 'SIGNED_FUTURE_WORKOUT_PUBLISHED',
+                'workout_id': canonical['workout_id'],
+                'chronological_offer_is_independent': True,
+                'new_power_target_computed': False,
+                'new_workout_selected': False,
+                'execution_clearance_granted': False}
+    verified = _inc140_ui_guard(raw, view)
+    distinct = _inc143_ui_guard(raw, verified)
+    return _inc145_dose_safe_projection(raw, distinct)
 
 
 def _v4891_prepare_snapshot_for_ui(data):
@@ -71055,6 +71108,7 @@ def _nova_inc051_attest_future_snapshot(data, owner_user_id):
 
 APP_VERSION += ' · INC146 SCIENCE PRODUCER COVERAGE RETRY + VERIFIED POWER COPY + NO-GO AUDIT'
 APP_VERSION += ' · INC147 SINGLE CARD/TRUTH/BOOKING PROJECTION · NO TEST SNAPSHOTS'
+APP_VERSION += ' · INC149 SIGNED FUTURE QUALITY TAKES PRECEDENCE OVER CHRONOLOGICAL SLOT FAILURE' 
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
