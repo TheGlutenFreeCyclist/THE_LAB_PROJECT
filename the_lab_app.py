@@ -70625,5 +70625,397 @@ def ask_ai_coach_chat(question, snapshot, history=None, report_meta=None):
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION += ' · INC144 CHAT ↔ VISIBLE CARD2/CARD3 CONTRACT'
 
+# INC145 / DTM BQ — NO SESSION-SHAPED CARD 3 WITHOUT A VERIFIED PERSONAL DOSE.
+# Tested against the 13 Nov 2026 beta CA (read-only). The saved RAW science,
+# original issuer, numbered canonical library and Card 2 are never changed.
+# A non-executable workout's reps/recoveries + a planning CTA are still an
+# implied prescription: fail closed in the *final* owner-scoped UI projection.
+INC145_SCHEMA = 'NOVA-INC145-CARD3-VERIFIED-DOSE-PRESENTATION-GATE-1'
+_INC145_PRIOR_UI = _v4891_prepare_snapshot_for_ui
+_INC145_PRIOR_BIND = _r142_report_binding
+_INC145_PRIOR_CARD_INTENT = _inc144_card_intent
+
+
+def _inc145_has_personal_watts(card):
+    """Presentation validation only; never manufactures or attests new watts.
+
+    The producer must already have verified the offer/future plan. A displayed
+    power number is necessary for a concrete cycling quality here, not proof
+    that its upstream scientific contract or day-of clearance is valid.
+    """
+    if not isinstance(card,dict):return False
+    shown = str(card.get('personalized_watts') or '').strip()
+    if not shown:return False
+    # Reject missing/non-numeric estimates and empty 'W' labels. Check only
+    # the dedicated personalized-work-target field, never PB/FTP/other text.
+    match=re.fullmatch(r'\s*(\d+(?:[.,]\d+)?)\s*(?:[–—\-]\s*(\d+(?:[.,]\d+)?)\s*)?W\s*',shown,re.I)
+    if not match:return False
+    try:
+        lo=float(match.group(1).replace(',','.'))
+        hi=float((match.group(2) or match.group(1)).replace(',','.'))
+    except (TypeError,ValueError,OverflowError):return False
+    return all(math.isfinite(x) for x in (lo,hi)) and 0 < lo <= hi <= 3000
+
+
+def _inc145_dose_safe_projection(snapshot,prepared):
+    if not isinstance(prepared,dict):return prepared
+    card=prepared.get('nova_card3_workout_view') or {}
+    if not isinstance(card,dict):return prepared
+    # Higher authorities / different representations stay unmodified:
+    # duplicated Card1/2 quality, INC140 verified structural review and
+    # INC143 recently named completed-workout review.
+    if (prepared.get('inc120_quality_duplicate_card') in (1,2)
+        and not ((prepared.get('inc132_dual_quality') or {}).get('quality_specific'))):
+        return prepared
+    if card.get('state') in ('RECENT_NAMED_COMPLETION_REVIEW',
+                              'VERIFIED_RECENT_STRUCTURE_REVIEW'):
+        return prepared
+    if (prepared.get('inc143_recent_named_completion_review') or
+        (prepared.get('inc140_future_quality_guard') or {}).get('blocks_future_card')):
+        return prepared
+    concrete=bool(card.get('workout_id') or card.get('structure') or
+                  card.get('planned_quality') or card.get('offer_structure_only') or
+                  card.get('verified_offer') or card.get('verified_future_plan'))
+    if not concrete:return prepared
+    signed=bool(card.get('verified_offer') is True or card.get('verified_future_plan') is True)
+    valid=signed and _inc145_has_personal_watts(card)
+    if valid:return prepared
+    # Preserve the signed offer, catalogue decision, RAW plan, execution
+    # evidence and history in the original report; withhold *only* this
+    # incomplete presentation and any request bound to that incomplete card.
+    out=dict(prepared)
+    reason=('Nova has not published a verified personalized watt target for '
+            'this specific quality structure. A canonical interval pattern, '
+            'an FTP estimate or a single-effort best is not a completed '
+            'workout prescription. No hard workout, date, session-fueling '
+            'target or execution clearance is being offered here.')
+    title='Next quality · personal power dose pending'
+    safe=dict(card, schema=INC145_SCHEMA, state='PERSONAL_DOSE_PENDING',
+        title=title, workout_id=None, structure=None, execution=None,
+        purpose=None, minimum_session_minutes=None,
+        personalized_watts=None, power_source=None,
+        verified_offer=False, verified_future_plan=False,
+        offer_structure_only=False, planned_quality=False,
+        inc120_quality_intent=False, direction_only=True,
+        phases=[], quality_power_read_only=False,
+        quality_power_preview=None, quality_power_source=None,
+        execution_clearance='NOT_CLEARED_FOR_EXECUTION',
+        execution_authorized_by_preview=False, is_scheduled=False,
+        goal_explanation='The next hard stimulus is pending a valid, workout-specific personal power dose.',
+        reason=reason)
+    out['nova_card3_workout_view']=safe
+    direction=dict(prepared.get('next_quality_direction') or {})
+    direction.update(title=title, athlete_title=title,
+        athlete_explanation=reason, referenced_canonical_template_id=None,
+        source='INC145_PERSONAL_DOSE_PENDING', direction_only=True,
+        is_a_prescription=False,is_scheduled=False,
+        suggested_date=None,suggested_time=None,
+        execution_authorized_by_preview=False,adds_calendar_event=False,
+        adds_workout_to_ledger=False)
+    out['next_quality_direction']=direction
+    out['nova_r142_plan_ui']=None
+    out['quality_direction_fuel']=None
+    out['inc145_dose_gate']={'schema':INC145_SCHEMA,
+        'state':'WITHHELD_INCOMPLETE_UI',
+        'reason':'MISSING_ATTESTED_WORKOUT_SPECIFIC_WATTS',
+        'suppressed_workout_id':card.get('workout_id'),
+        'raw_science_unchanged':True,'can_request_workout_planning':False,
+        'signed_raw_offer_retained_for_audit':signed}
+    # No change to Card 2/Tempo or any complete chronological session.
+    return out
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    return _inc145_dose_safe_projection(data,_INC145_PRIOR_UI(data))
+
+
+def _r142_report_binding(report,owner_id,target=None,prepared=None):
+    # A stale signed token cannot resurrect the previously displayed
+    # incomplete Card3. A separately attested Tempo request remains eligible.
+    if target=='TEMPO':
+        return _INC145_PRIOR_BIND(report,owner_id,target,prepared=prepared)
+    raw=(report or {}).get('data') or {}
+    projection=_inc145_dose_safe_projection(raw, prepared) if isinstance(prepared,dict) else _v4891_prepare_snapshot_for_ui(raw)
+    if (projection or {}).get('inc145_dose_gate'):
+        return None
+    return _INC145_PRIOR_BIND(report,owner_id,target,prepared=projection)
+
+
+def _inc144_card_intent(question,facts):
+    intent=_INC145_PRIOR_CARD_INTENT(question,facts)
+    if intent:return intent
+    card=(facts or {}).get('card3') or {}
+    if card.get('state')!='PERSONAL_DOSE_PENDING':return None
+    q=str(question or '').casefold()
+    if re.search(r'\b(?:quality|qualit[aà]|allenament\w*|workout\w*|sedut\w*|'
+                 r'session\w*|ripet\w*|repet\w*|watt\w*|potenz\w*|'
+                 r'prossim\w*|prescri\w*|next\s+ride)\b',q):
+        return 'CARD3'
+    return None
+
+# The complete original Jinja template always produces Card 1, 2 and 3.
+# Remove the misleading "Copy workout" button on the *direction-only* pending
+# display; other cards keep their original copy affordance.
+_INC145_PENDING_TITLE_START = (
+    '{% else %}\n<div class="v4-session-slot"><span class="v1962-quality-eyebrow">'
+    'QUALITY GOAL · NOT A PRESCRIBED WORKOUT</span></div>\n'
+    '<div class="v150-workout-title-row"><h3>{{ card3.title|e }}</h3>')
+assert HOME_PAGE.count(_INC145_PENDING_TITLE_START)==1, 'INC145_PENDING_TITLE_ANCHOR_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_INC145_PENDING_TITLE_START,
+    _INC145_PENDING_TITLE_START.replace(
+        '<div class="v150-workout-title-row"><h3>{{ card3.title|e }}</h3>',
+        '{% if card3.state == "PERSONAL_DOSE_PENDING" %}'
+        '<h3>{{ card3.title|e }}</h3>{% else %}'
+        '<div class="v150-workout-title-row"><h3>{{ card3.title|e }}</h3>'),1)
+_INC145_PENDING_COPY_TAIL=('aria-label="Copy workout name" title="Copy workout name">'
+                           '⧉<span>Copy</span></button></div>\n'
+                           '<div class="v4-session-meta"><span class="v4-session-pill">NO VERIFIED QUALITY WORKOUT</span></div>')
+assert HOME_PAGE.count(_INC145_PENDING_COPY_TAIL)==1,'INC145_PENDING_COPY_ANCHOR_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_INC145_PENDING_COPY_TAIL,
+    _INC145_PENDING_COPY_TAIL.replace('</button></div>\n','</button></div>{% endif %}\n'),1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += ' · INC145 CARD3 NO QUALITY WITHOUT VERIFIED WATT DOSE'
+
+
+# INC146 / DTM BR — RESTORE COMPLETE FUTURE QUALITY AT THE SCIENCE PRODUCER.
+# INC145 was a protective but insufficient presentation veto.  A complete
+# card must be ISSUED by the single original canonical source, not synthesized
+# or concealed by its consumer.  Every selection/retry below re-enters the
+# existing owner-bound producer; watt arithmetic, templates, signatures,
+# fueling and clinical restrictions remain owned by that producer.
+INC146_SCHEMA = 'NOVA-INC146-UPSTREAM-COVERAGE-AND-DOSE-SEMANTICS-1'
+_INC146_PRIOR_FUTURE = _nova_inc050_future_quality
+_INC146_PRIOR_ATTEST = _nova_inc051_attest_future_snapshot
+_INC146_PRIOR_HAS_WATTS = _inc145_has_personal_watts
+_INC146_PRIOR_CHAT_TRUTH = _inc144_card_truth
+_INC146_PRIOR_CHAT_LINES = _inc144_card_lines
+
+
+def _inc145_has_personal_watts(card):
+    """Accept ONLY the original compiler's exact, source-qualified W copy.
+
+    A literal `335–345 W (derived from comparable repeated work)` is not a
+    missing dose.  Keep this lexical gate necessary but not sufficient: the
+    upstream issuer remains responsible for owner proof, source, duration and
+    canonical fingerprint.  Arbitrary explanatory tails are not accepted.
+    """
+    if not isinstance(card, dict):
+        return False
+    shown = str(card.get('personalized_watts') or '').strip()
+    approved_tails = (
+        ' (derived from comparable repeated work)',
+        ' (exploratory, not a pass/fail threshold)',
+    )
+    for tail in approved_tails:
+        if shown.endswith(tail):
+            shown = shown[:-len(tail)]
+            break
+    return _INC146_PRIOR_HAS_WATTS({'personalized_watts': shown})
+
+
+def _inc146_retry_reason(plan, ledger, evidence_ledger, snapshot_day):
+    """Only evidence and the original producer, never a new science ranking."""
+    if not isinstance(plan, dict):
+        return 'NO_CANONICAL_PROPOSAL', None
+    wid = str(plan.get('workout_id') or '')
+    if not wid or wid not in _R19696_LIBRARY_INDEX:
+        return 'NO_CANONICAL_ID', None
+    if plan.get('schema') != INC091_SCHEMA or plan.get('status') != 'COMPILED_UNSCHEDULED':
+        return 'INCOMPLETE_SCIENTIFIC_DOSE', None
+    work = plan.get('workout') or {}
+    if not isinstance(work, dict):
+        return 'INCOMPLETE_SCIENTIFIC_DOSE', None
+    band = work.get('power_prescription') or {}
+    if not (isinstance(work, dict) and isinstance(band, dict)
+            and band.get('state') == 'PRESCRIBED'
+            and band.get('source') == 'COMPARABLE_VERIFIED_REPEATED_WORK'
+            and _nova_inc075_valid_compiled_duration(work)
+            and _nova_inc050_workout_digest(work) == plan.get('compiled_workout_digest')
+            and _v19696_execution_contract(work).get('ready')
+            and _nova_r196999_finite(band.get('low_watts')) is not None
+            and _nova_r196999_finite(band.get('high_watts')) is not None):
+        return 'INCOMPLETE_SCIENTIFIC_DOSE', None
+    exposure = _inc140_candidate_replay(evidence_ledger, None, wid, snapshot_day)
+    if exposure.get('blocks_future_card'):
+        return 'RECENT_VERIFIED_SAME_STRUCTURE', exposure
+    named = _inc143_recent_named_completion({
+        'microcycle_ledger': ledger, 'inc140_snapshot_date': snapshot_day}, wid)
+    if named:
+        return 'RECENT_NAMED_COMPLETION_REQUIRES_DISTINCT_SCIENCE', named
+    return None, None
+
+
+def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
+        evidence_ledger=None, power_model=None, ftp_anchor=None,
+        aerobic_metabolic_range=None, training_definitions=None,
+        compiler_args=None, planning_context=None, training_state=None,
+        active_offer=None):
+    """Retry the original canonical science until a supported distinct dose.
+
+    This is not a second selector and never estimates a watt.  A lack of
+    evidence is a producer coverage failure (release NO-GO), not a hidden
+    success/empty Card3.  A legitimate signed active offer or explicit injury
+    restriction is not overridden or re-issued by this process.
+    """
+    def original():
+        return _INC146_PRIOR_FUTURE(owner_user_id, decision, clock, road, ledger,
+            evidence_ledger=evidence_ledger, power_model=power_model,
+            ftp_anchor=ftp_anchor,
+            aerobic_metabolic_range=aerobic_metabolic_range,
+            training_definitions=training_definitions,
+            compiler_args=compiler_args, planning_context=planning_context,
+            training_state=training_state, active_offer=active_offer)
+    first = original()
+    if not isinstance(first, dict):
+        return first
+    if (not owner_user_id or active_offer
+        or _nova_inc079_explicit_injury_restriction(planning_context)):
+        return first
+    goal = str((decision or {}).get('goal_key') or (road or {}).get('goal_key') or '').upper()
+    dim = str(((road or {}).get('scientific_progression') or {}).get('dimension') or
+              (decision or {}).get('dimension') or '').upper()
+    if not goal or not dim:
+        return first
+    eligible = {str(t['id']) for t in _NOVA_WORKOUT_LIBRARY
+                if t.get('goal') == goal and dim in set(t.get('dimensions') or ())
+                and not t.get('adaptive_only')}
+    # Only a source-selected candidate can be excluded.  Original selection
+    # + physiological gates get a new chance; no arbitrary catalogue fallback.
+    excluded = set()
+    attempted = []
+    today = get_rome_now().date().isoformat()
+    plan = first
+    for trial in range(len(eligible) + 1):
+        issue, proof = _inc146_retry_reason(plan, ledger, evidence_ledger, today)
+        wid = str((plan or {}).get('workout_id') or '') if isinstance(plan, dict) else ''
+        if issue is None:
+            result = dict(plan)
+            result['inc146_coverage'] = {
+                'schema': INC146_SCHEMA, 'state': 'COMPILED_PENDING_FINAL_ATTESTATION',
+                'goal_key': goal, 'workout_id': wid,
+                'reselection_count': len(attempted),
+                'original_scientific_producer': True,
+                'watt_target_fabricated': False,
+                'athlete_slot_or_execution_cleared': False,
+            }
+            return result
+        if (wid not in eligible or wid in excluded or trial >= len(eligible)):
+            break
+        excluded.add(wid)
+        attempted.append({'workout_id': wid, 'reason': issue})
+        token = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(
+            set(_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get()) | excluded))
+        try:
+            alternative = original()
+        finally:
+            _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.reset(token)
+        if not isinstance(alternative, dict):
+            break
+        new_wid = str(alternative.get('workout_id') or '')
+        if not new_wid or new_wid in excluded:
+            break  # The original selector cannot progress: do not loop.
+        plan = alternative
+    failed = dict(first) if isinstance(first, dict) else {}
+    failed['inc146_coverage'] = {
+        'schema': INC146_SCHEMA, 'state': 'PRODUCER_COVERAGE_FAILED_NO_GO',
+        'goal_key': goal, 'reason': (_inc146_retry_reason(plan, ledger, evidence_ledger, today)[0]
+                               if isinstance(plan,dict) else 'NO_SCIENTIFIC_CANDIDATE'),
+        'reselection_count': len(attempted),
+        'attempted_candidate_ids': [p['workout_id'] for p in attempted],
+        'watt_target_fabricated': False, 'second_selector_used': False,
+        'card3_complete': False,
+    }
+    return failed
+
+
+def _nova_inc051_attest_future_snapshot(data, owner_user_id):
+    """Record an honest release gate *after* normal original issuer checks.
+
+    This audit does not populate Card3, retro-sign old offers or alter science.
+    It is deliberately visible in QA so a pending/blank card cannot pass the
+    acceptance test simply because the HTML contains three article elements.
+    """
+    result = _INC146_PRIOR_ATTEST(data, owner_user_id)
+    if not isinstance(data, dict) or not owner_user_id:
+        return result
+    dec = data.get('nova_decision') or {}
+    road = data.get('adaptive_roadmap') or {}
+    goal = str(dec.get('goal_key') or road.get('goal_key') or '').upper()
+    if not goal:
+        return result
+    restriction = _nova_inc079_explicit_injury_restriction(data.get('planning_context'))
+    if restriction:
+        state, reason = 'EXEMPT_EXPLICIT_ATHLETE_INJURY', restriction
+    else:
+        plan = data.get('future_quality_plan') or {}
+        if (_nova_inc091_eligible(data, plan, owner_user_id)
+            and (plan.get('inc140_exposure_check') or {}).get('blocks_future_card') is not True
+            and not _inc143_recent_named_completion(data, plan.get('workout_id'))):
+            state, reason = 'PASS_COMPLETE_VERIFIED_FUTURE_QUALITY', None
+        else:
+            offer = data.get('next_quality_offer') or {}
+            audit = data.get('quality_offer_integrity') or {}
+            offer_work = offer.get('workout') or {}
+            offer_id = str(offer.get('workout_id') or '')
+            issued_card = {'workout_id': offer_id, 'goal_key': goal,
+                           'verified_offer': True}
+            issued_fuel = (_nova_inc051_fuel_for_canonical_card3(data, issued_card)
+                           if offer_id else None)
+            if (_nova_inc076_seal_ok(offer, audit, owner_user_id)
+                and isinstance(offer_work, dict)
+                and _nova_r196956_structural_ok(offer_work)
+                and _nova_inc075_valid_compiled_duration(offer_work)
+                and _nova_r1969102_verified_personal_watts(offer_work, offer_id)
+                and isinstance(issued_fuel, dict)
+                and issued_fuel.get('workout_id') == offer_id
+                and issued_fuel.get('display')):
+                state, reason = 'PASS_VALID_COMPLETE_ACTIVE_OFFER', None
+            else:
+                state = 'FAIL_NO_COMPLETE_SCIENTIFIC_QUALITY_NO_GO'
+                reason = (plan.get('inc146_coverage') or {}).get('reason') or 'NO_ATTESTED_COMPLETE_DOSE'
+    data['inc146_quality_coverage_audit'] = {
+        'schema': INC146_SCHEMA, 'state': state, 'reason': reason,
+        'goal_key': goal, 'allows_production_go': state.startswith('PASS_'),
+        'checks_original_science': True, 'read_only': True,
+        'adds_calendar_event': False, 'changes_training_decision': False}
+    return result
+
+
+def _inc144_card_truth(snapshot, prepared=None):
+    facts = _INC146_PRIOR_CHAT_TRUTH(snapshot, prepared)
+    if not isinstance(facts, dict):
+        return facts
+    view = prepared if isinstance(prepared, dict) else _v4891_prepare_snapshot_for_ui(snapshot)
+    card = (view or {}).get('nova_card3_workout_view') or {}
+    plan = (snapshot or {}).get('future_quality_plan') or {}
+    c3 = facts.get('card3') or {}
+    if (c3.get('state') != 'ALREADY_IN_CARD_1_OR_2'
+        and card.get('verified_future_plan') is True
+        and card.get('workout_id') == plan.get('workout_id')
+        and _inc145_has_personal_watts(card)):
+        c3 = dict(c3, verified_future_plan=True,
+                  complete_unscheduled_scientific_offer=True,
+                  personal_power_watts=card.get('personalized_watts'),
+                  execution_clearance='RECHECK_DAY_OF_EXECUTION')
+    return dict(facts, card3=c3)
+
+
+def _inc144_card_lines(facts, italian=False):
+    original = _INC146_PRIOR_CHAT_LINES(facts, italian)
+    three = (facts or {}).get('card3') or {}
+    if not three.get('complete_unscheduled_scientific_offer'):
+        return original
+    title = str(three.get('title') or '')
+    watts = str(three.get('personal_power_watts') or '')
+    replacement = (f"Card 3: «{title}» è una quality futura completa compilata dal motore canonico, "
+                   f"con potenza personale {watts}. Non è prenotata e richiede una verifica "
+                   'delle condizioni prima di essere svolta.' if italian else
+                   f"Card 3: '{title}' is a complete future quality compiled by the canonical "
+                   f"science producer with personalized {watts}. It is not booked and requires "
+                   'a day-of execution check.')
+    return original[0], replacement
+
+APP_VERSION += ' · INC146 SCIENCE PRODUCER COVERAGE RETRY + VERIFIED POWER COPY + NO-GO AUDIT'
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
