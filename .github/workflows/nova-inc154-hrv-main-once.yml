@@ -51,8 +51,6 @@ jobs:
           # YAML block scalar removes 10 indentation spaces from every Python
           # source line; the closing quote above does not add extra code indent.
           # Normalize indentation explicitly to the source file shape.
-          old = '\n'.join(line[12:] if line.startswith('            ') else line for line in old.split('\n'))
-          new = '\n'.join(line[12:] if line.startswith('            ') else line for line in new.split('\n'))
           assert text.count(old) == 1, 'Advisor drift'
           text = text.replace(old, new, 1)
 
@@ -70,21 +68,17 @@ jobs:
               {% endif %}
               <div class="r196979-session-context"><span class="r196981-clock" aria-hidden="true">◷</span>{{ advisor.context|e }}</div>
           """
-          old = '\n'.join(line[12:] if line.startswith('            ') else line for line in old.split('\n'))
-          new = '\n'.join(line[12:] if line.startswith('            ') else line for line in new.split('\n'))
           assert text.count(old) == 1, 'Template drift'
           text = text.replace(old, new, 1)
 
           old = """.r196981-metric .r196979-chip-label{font-size:10px}.r196981-metric .r196979-chip-label small{margin-top:4px;color:#a7b8c4;font-size:9px}
-              .r196979-session-context"""
+          .r196979-session-context"""
           new = """.r196981-metric .r196979-chip-label{font-size:10px}.r196981-metric .r196979-chip-label small{margin-top:4px;color:#a7b8c4;font-size:9px}
-              .r196981-hrv-reference{display:flex;align-items:center;flex-wrap:wrap;gap:5px 12px;margin-top:8px;padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.022)}
-              .r196981-hrv-reference span{color:#9cb0be;font-size:9px;letter-spacing:.07em;font-weight:750}
-              .r196981-hrv-reference strong{color:#e2eaf2;font-size:11px}
-              .r196981-hrv-reference small{color:#a7b8c4;font-size:10px}
-              .r196979-session-context"""
-          old = '\n'.join(line[12:] if line.startswith('            ') else line for line in old.split('\n'))
-          new = '\n'.join(line[12:] if line.startswith('            ') else line for line in new.split('\n'))
+          .r196981-hrv-reference{display:flex;align-items:center;flex-wrap:wrap;gap:5px 12px;margin-top:8px;padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.022)}
+          .r196981-hrv-reference span{color:#9cb0be;font-size:9px;letter-spacing:.07em;font-weight:750}
+          .r196981-hrv-reference strong{color:#e2eaf2;font-size:11px}
+          .r196981-hrv-reference small{color:#a7b8c4;font-size:10px}
+          .r196979-session-context"""
           assert text.count(old) == 1, 'CSS drift'
           text = text.replace(old, new, 1)
           path.write_text(text, encoding='utf-8')
