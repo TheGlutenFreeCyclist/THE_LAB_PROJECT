@@ -1,0 +1,105 @@
+name: NOVA INC154 HRV baseline display-only main fix (one shot)
+on:
+  push:
+    branches:
+      - fix/neon-report-egress-r196999
+    paths:
+      - .github/workflows/nova-inc154-hrv-main-once.yml
+permissions:
+  contents: write
+concurrency:
+  group: nova-inc154-hrv-main
+  cancel-in-progress: false
+jobs:
+  guarded-main-fix:
+    if: github.ref == 'refs/heads/fix/neon-report-egress-r196999'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout MAIN (not TEST)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+          fetch-depth: 1
+      - name: Exact baseline, minimal HRV-only change, final hash, Python syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object the_lab_app.py)" = 1ee5c74833cab8f1574b79e9c102cb14a6c0b322
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          path = Path('the_lab_app.py')
+          text = path.read_text(encoding='utf-8')
+          assert hashlib.sha256(text.encode()).hexdigest() == 'def037a2b210cb36cd73e62b1fff069c2ef997c0f757bf711bafb2d8f0e3ec8b'
+          old = """    checks = [chip('Autonomic', '♥', autonomic, ''),
+                        chip('Sleep & recovery', '☾', recovery, ''),
+                        chip('Training load', '↗', load, ''),
+                        chip('HRV', '∿', hrv, ''),
+          """
+          new = """    # Display-only: the observatory's WATCH label is not an unreadable
+              # 'Unclassified' marker. Do not change hrv state or any tier/authority vote.
+              hrv_source = signals.get('hrv') or {}
+              hrv_copy = ('Monitor' if hrv == 'unknown' and isinstance(hrv_source, dict)
+                          and str(hrv_source.get('state') or '').upper() == 'WATCH' else '')
+              checks = [chip('Autonomic', '♥', autonomic, ''),
+                        chip('Sleep & recovery', '☾', recovery, ''),
+                        chip('Training load', '↗', load, ''),
+                        chip('HRV', '∿', hrv, hrv_copy),
+          """
+          # YAML block scalar removes 10 indentation spaces from every Python
+          # source line; the closing quote above does not add extra code indent.
+          # Normalize indentation explicitly to the source file shape.
+          old = '\n'.join(line[12:] if line.startswith('            ') else line for line in old.split('\n'))
+          new = '\n'.join(line[12:] if line.startswith('            ') else line for line in new.split('\n'))
+          assert text.count(old) == 1, 'Advisor drift'
+          text = text.replace(old, new, 1)
+
+          old = """    </div>
+              <div class="r196979-session-context"><span class="r196981-clock" aria-hidden="true">◷</span>{{ advisor.context|e }}</div>
+          """
+          new = """    </div>
+              {% set hrv_baseline = (data.personal_baselines or {}).get('hrv') or {} %}
+              {% if hrv_baseline.get('garmin') %}
+              <div class="r196981-hrv-reference" aria-label="Personal HRV baseline">
+                <span>HRV PERSONAL BASELINE</span>
+                <strong>{{ hrv_baseline.get('garmin')|e }}</strong>
+                {% if data.latest_hrv is defined and data.latest_hrv is not none %}<small>Latest {{ data.latest_hrv|e }} ms</small>{% endif %}
+              </div>
+              {% endif %}
+              <div class="r196979-session-context"><span class="r196981-clock" aria-hidden="true">◷</span>{{ advisor.context|e }}</div>
+          """
+          old = '\n'.join(line[12:] if line.startswith('            ') else line for line in old.split('\n'))
+          new = '\n'.join(line[12:] if line.startswith('            ') else line for line in new.split('\n'))
+          assert text.count(old) == 1, 'Template drift'
+          text = text.replace(old, new, 1)
+
+          old = """.r196981-metric .r196979-chip-label{font-size:10px}.r196981-metric .r196979-chip-label small{margin-top:4px;color:#a7b8c4;font-size:9px}
+              .r196979-session-context"""
+          new = """.r196981-metric .r196979-chip-label{font-size:10px}.r196981-metric .r196979-chip-label small{margin-top:4px;color:#a7b8c4;font-size:9px}
+              .r196981-hrv-reference{display:flex;align-items:center;flex-wrap:wrap;gap:5px 12px;margin-top:8px;padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.022)}
+              .r196981-hrv-reference span{color:#9cb0be;font-size:9px;letter-spacing:.07em;font-weight:750}
+              .r196981-hrv-reference strong{color:#e2eaf2;font-size:11px}
+              .r196981-hrv-reference small{color:#a7b8c4;font-size:10px}
+              .r196979-session-context"""
+          old = '\n'.join(line[12:] if line.startswith('            ') else line for line in old.split('\n'))
+          new = '\n'.join(line[12:] if line.startswith('            ') else line for line in new.split('\n'))
+          assert text.count(old) == 1, 'CSS drift'
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          assert hashlib.sha256(path.read_bytes()).hexdigest() == 'b3209e0e6141a2d922d4716fc9108a13b63a19bcf00321e68c975888c8eb0b1a'
+          print('PASS: exact INC154 HRV-only candidate')
+          PY
+          echo 'b3209e0e6141a2d922d4716fc9108a13b63a19bcf00321e68c975888c8eb0b1a  the_lab_app.py' | sha256sum -c -
+          test "$(git hash-object the_lab_app.py)" = e5b1fd11580b77938fed8378de4ed639e597c9c2
+          python3 -m py_compile the_lab_app.py
+          git diff --check
+          git config user.name 'NOVA HRV display QA'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -- the_lab_app.py
+          test "$(git diff --cached --name-only)" = the_lab_app.py
+          git commit -m 'fix(INC154): restore HRV baseline in Performance Systems'
+          git push origin HEAD:refs/heads/main
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$(git rev-parse HEAD)"
+          echo 'MAIN_UPDATED=YES; ONLY_FILE=the_lab_app.py; HRV_DISPLAY=RESTORED'
