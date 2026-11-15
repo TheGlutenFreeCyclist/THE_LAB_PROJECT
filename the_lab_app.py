@@ -60406,10 +60406,15 @@ def _nova_r196979_quality_day_advisor(data):
                    'unknown':'Unclassified', 'missing':'Unavailable'}[state]
         return {'label':label,'icon':icon,'value':value or display,'tone':color,
                 'state':state}
+    # Display-only: the observatory's WATCH label is not an unreadable
+    # 'Unclassified' marker. Do not change hrv state or any tier/authority vote.
+    hrv_source = signals.get('hrv') or {}
+    hrv_copy = ('Monitor' if hrv == 'unknown' and isinstance(hrv_source, dict)
+                and str(hrv_source.get('state') or '').upper() == 'WATCH' else '')
     checks = [chip('Autonomic', '♥', autonomic, ''),
               chip('Sleep & recovery', '☾', recovery, ''),
               chip('Training load', '↗', load, ''),
-              chip('HRV', '∿', hrv, ''),
+              chip('HRV', '∿', hrv, hrv_copy),
               chip('Resting HR', '♥', rhr, ''),
               chip('Sleep', '☾', sleep, '')]
     if vitals_state != 'missing':
@@ -60519,6 +60524,14 @@ _R196979_NEW_ADVISOR = '''{% set advisor = data.quality_day_advisor or {} %}
       {% endif %}
       {% endfor %}
     </div>
+    {% set hrv_baseline = (data.personal_baselines or {}).get('hrv') or {} %}
+    {% if hrv_baseline.get('garmin') %}
+    <div class="r196981-hrv-reference" aria-label="Personal HRV baseline">
+      <span>HRV PERSONAL BASELINE</span>
+      <strong>{{ hrv_baseline.get('garmin')|e }}</strong>
+      {% if data.latest_hrv is defined and data.latest_hrv is not none %}<small>Latest {{ data.latest_hrv|e }} ms</small>{% endif %}
+    </div>
+    {% endif %}
     <div class="r196979-session-context"><span class="r196981-clock" aria-hidden="true">◷</span>{{ advisor.context|e }}</div>
   </section>
 </div>
@@ -60554,6 +60567,10 @@ _R196979_NEW_ADVISOR = '''{% set advisor = data.quality_day_advisor or {} %}
 .r196981-metric{display:flex;align-items:flex-start;gap:7px;min-height:41px;padding:7px 7px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.022)}
 .r196981-metric-dot{display:block;flex:0 0 5px;width:5px;height:5px;border-radius:50%;background:var(--chip);margin-top:3px}
 .r196981-metric .r196979-chip-label{font-size:10px}.r196981-metric .r196979-chip-label small{margin-top:4px;color:#a7b8c4;font-size:9px}
+.r196981-hrv-reference{display:flex;align-items:center;flex-wrap:wrap;gap:5px 12px;margin-top:8px;padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.022)}
+.r196981-hrv-reference span{color:#9cb0be;font-size:9px;letter-spacing:.07em;font-weight:750}
+.r196981-hrv-reference strong{color:#e2eaf2;font-size:11px}
+.r196981-hrv-reference small{color:#a7b8c4;font-size:10px}
 .r196979-session-context{display:flex;align-items:baseline;gap:7px;color:#9cb0be;font-size:10px;line-height:1.5;margin:12px 0 0;padding-top:9px;border-top:1px solid rgba(255,255,255,.075)}
 .r196981-clock{font-size:15px;color:var(--cyan);line-height:1}
 @media(max-width:390px){.r196979-guide{padding:14px 12px 12px}.r196979-head{gap:9px}.r196979-status-icon{flex-basis:39px;width:39px;height:39px;font-size:21px}.r196979-guide-title{font-size:17px}.r196979-systems{gap:6px}.r196981-system{gap:8px;min-height:85px;padding:8px 6px 8px}.r196981-system-icon{width:21px;height:21px}.r196979-chip-label{font-size:10px}.r196979-chip-label small{font-size:9px}.r196981-metrics{gap:5px}.r196981-metric{padding:7px 5px;gap:5px}.r196981-metric .r196979-chip-label{font-size:9px}.r196981-metric .r196979-chip-label small{font-size:8px}}
