@@ -14350,8 +14350,14 @@ def _race_repeatability_from_block(block):
     block=block or {};rep=block.get("repeatability") or {}
     watts=[float(x) for x in (rep.get("watts") or []) if _num(x) is not None]
     interval_secs=_num(rep.get("interval_secs"));reps=int(_num(rep.get("reps")) or 0)
-    if reps>=3 and len(watts)>=3:
-        early=statistics.mean(watts[:2]);late=statistics.mean(watts[-2:])
+    truth=block.get('activity_truth') or {}
+    pair=(reps==2 and len(watts)==2 and rep.get('inc155_original_fit_pair') is True
+          and truth.get('status')=='RESOLVED' and truth.get('source')=='DEVICE_LAPS'
+          and truth.get('repeated_work_count')==2 and rep.get('source')=='DEVICE_LAPS'
+          and rep.get('recovery_observation_complete') is True
+          and rep.get('recovery_pair_count')==1 and rep.get('recovery_pair_expected')==1)
+    if (reps>=3 and len(watts)>=3) or pair:
+        early=watts[0] if pair else statistics.mean(watts[:2]);late=watts[-1] if pair else statistics.mean(watts[-2:])
         retention=_num(rep.get("late_rep_retention_pct"))
         if retention is None and early:retention=late/early*100
         cv=_num(rep.get("cv_pct"))
@@ -21525,6 +21531,33 @@ def _v125_original_fit_laps(content):
         return []
 
 
+def _inc155_two_work_probe_candidate(native):
+    """Permit one original FIT lookup for a plausible pair, not credit from auto intervals."""
+    if not isinstance(native, list):
+        return False
+    works = []
+    for i, row in enumerate(native):
+        if not isinstance(row, dict) or str(row.get('type') or '').upper() != 'WORK':
+            continue
+        sec = _num(row.get('moving_time') or row.get('elapsed_time'))
+        w = _num(row.get('average_watts'))
+        if sec is None or w is None or not math.isfinite(sec) or not math.isfinite(w):
+            return False
+        if sec >= 120:
+            works.append((i, sec, w))
+        elif sec >= 55:
+            return False
+    if len(works) != 2:
+        return False
+    (i, a, x), (j, b, y) = works
+    med = statistics.median((a, b))
+    between = native[i+1:j]
+    return bool(x > 0 and y > 0 and abs(a-b) <= max(30, .20*med)
+        and abs(x-y) <= .15*max(x,y) and between
+        and all(isinstance(r, dict) and str(r.get('type') or '').upper() == 'RECOVERY'
+                for r in between))
+
+
 def _v125_enrich_bounded_laps(activities, details, user_id=None):
     """One bounded original-file probe for latest unresolved repeated-work activity.
 
@@ -21539,12 +21572,14 @@ def _v125_enrich_bounded_laps(activities, details, user_id=None):
         if not _v4887_is_cycling_activity(a):continue
         native=d.get('icu_intervals') or []
         work=[r for r in native if isinstance(r,dict) and str(r.get('type') or '').upper()=='WORK']
-        if len(work)<3 or _v79_activity_interval_truth(d).get('status')=='RESOLVED':continue
-        secs=[_num(r.get('moving_time') or r.get('elapsed_time')) for r in work]
-        valid=[v for v in secs if v is not None and v>=120]
-        if len(valid)<3:continue
-        med=statistics.median(valid)
-        if sum(abs(v-med)<=max(15,med*.12) for v in valid)<2:continue
+        if _v79_activity_interval_truth(d).get('status')=='RESOLVED':continue
+        if not _inc155_two_work_probe_candidate(native):
+            if len(work)<3:continue
+            secs=[_num(r.get('moving_time') or r.get('elapsed_time')) for r in work]
+            valid=[v for v in secs if v is not None and v>=120]
+            if len(valid)<3:continue
+            med=statistics.median(valid)
+            if sum(abs(v-med)<=max(15,med*.12) for v in valid)<2:continue
         merged=dict(d)
         probe={'status':'ATTEMPTED','source':'ORIGINAL_ACTIVITY_FILE','ai_calls':0,
                'activity_id':aid,'lap_rows_found':0,'http_status':None,
@@ -21623,6 +21658,47 @@ def _v79_lap_candidates(detail):
     found.sort(key=lambda x: len(x["rows"]), reverse=True)
     return found
 
+def _inc155_original_fit_pair(rows, candidates, ftp, source, infer_work):
+    """Two actual FIT laps; no duration reconstruction, no title, no prescription proxy."""
+    if not infer_work or source != 'DEVICE_LAPS' or not ftp or not math.isfinite(ftp) or ftp <= 0 or len(candidates) != 2:
+        return None
+    left, right = candidates
+    first, last = left['_truth_pos'], right['_truth_pos']
+    seq = [dict(r) for r in rows if first <= r['_truth_pos'] <= last]
+    if len(seq) < 3 or any(r.get('_v125_record_origin') != 'ORIGINAL_FIT_LAP' for r in seq):
+        return None
+    durations = [r['moving_time'] for r in candidates]
+    watts = [r['average_watts'] for r in candidates]
+    if not all(math.isfinite(v) and v > 0 for v in durations+watts):
+        return None
+    nominal = int(round(statistics.median(durations)/15)*15)
+    if nominal < 120 or any(abs(v-nominal)>max(6,round(.04*nominal)) for v in durations):
+        return None
+    # Require all source laps inside the pair, with actual contiguous recorded timestamps.
+    if [r['_truth_pos'] for r in seq] != list(range(first,last+1)):
+        return None
+    for r in seq:
+        start, end = _num(r.get('fit_start_time')), _num(r.get('fit_end_time'))
+        if (start is None or end is None or not math.isfinite(start) or not math.isfinite(end)
+            or end <= start or abs((end-start)-r['moving_time']) > 3):
+            return None
+    if any(abs(_num(a['fit_end_time'])-_num(b['fit_start_time']))>2 for a,b in zip(seq,seq[1:])):
+        return None
+    recovery = seq[1:-1]
+    sec = sum(r['moving_time'] for r in recovery)
+    if sec < 20 or any(not math.isfinite(r['average_watts']) or r['average_watts'] < 0 for r in recovery):
+        return None
+    rw = sum(r['moving_time']*r['average_watts'] for r in recovery)/sec
+    if min(watts) < max(.88*ftp, rw+20, 1.08*rw) or any(r['average_watts'] >= .88*ftp for r in recovery):
+        return None
+    for i,r in enumerate(seq):
+        r['type'] = 'WORK' if i in (0,len(seq)-1) else 'RECOVERY'
+        r['_inc155_original_fit_pair'] = True
+    return {'sequence':seq,'work_rows':[seq[0],seq[-1]],'interval_secs':nominal,
+        'repeated_work_count':2,'source':source,'corrections':[],
+        'recovery_median_secs':sec,'confidence':'HIGH'}
+
+
 def _v79_repeated_work_pattern(raw_rows, ftp=None, source="UNKNOWN", infer_work=False, allow_trimmed=False):
     """Resolve one coherent repeated-work block from ordered interval/lap rows.
 
@@ -21654,6 +21730,8 @@ def _v79_repeated_work_pattern(raw_rows, ftp=None, source="UNKNOWN", infer_work=
             is_work = typ == "WORK"
         if is_work:
             work_candidates.append(row)
+    if len(work_candidates) == 2:
+        return _inc155_original_fit_pair(rows, work_candidates, ftp, source, infer_work)
     if len(work_candidates) < 3:
         return None
     groups = {}
@@ -21775,6 +21853,10 @@ def _v79_activity_interval_truth(detail):
     lap_candidates = _v79_lap_candidates(d)
     for candidate in lap_candidates:
         pattern = _v79_repeated_work_pattern(candidate.get("rows"), ftp=ftp, source="DEVICE_LAPS", infer_work=True, allow_trimmed=False)
+        if pattern and pattern.get('repeated_work_count') == 2:
+            # Resolve the new pair only from the original-file enrichment path.
+            if candidate.get('path') != 'source_laps' or d.get('_v125_source_lap_provenance') != 'ORIGINAL_ACTIVITY_FIT_LAP':
+                continue
         if pattern:
             return {
                 **pattern,
@@ -21784,6 +21866,16 @@ def _v79_activity_interval_truth(detail):
                 "source_lap_probe": d.get('_v125_source_lap_probe'),
                 "raw_icu_work_count": sum(1 for x in (d.get("icu_intervals") or []) if isinstance(x, dict) and str(x.get("type") or "WORK").upper() == "WORK"),
             }
+    # A generic lap array with identical duration/power may have been deduplicated
+    # before the parser-owned array. Recheck only the narrow original FIT pair.
+    if d.get('_v125_source_lap_provenance') == 'ORIGINAL_ACTIVITY_FIT_LAP':
+        pattern = _v79_repeated_work_pattern(d.get('source_laps'), ftp=ftp,
+            source='DEVICE_LAPS', infer_work=True, allow_trimmed=False)
+        if pattern and pattern.get('repeated_work_count') == 2:
+            return {**pattern, 'status':'RESOLVED', 'lap_path':'source_laps',
+                'lap_candidates_seen':len(lap_candidates), 'source_lap_probe':d.get('_v125_source_lap_probe'),
+                'raw_icu_work_count':sum(1 for x in (d.get('icu_intervals') or [])
+                    if isinstance(x,dict) and str(x.get('type') or 'WORK').upper()=='WORK')}
     native = [x for x in (d.get("icu_intervals") or []) if isinstance(x, dict)]
     pattern = _v79_repeated_work_pattern(native, ftp=ftp, source="ICU_INTERVALS_CANONICAL", infer_work=False, allow_trimmed=True)
     if pattern:
@@ -35705,6 +35797,8 @@ def _v144_probe_candidate(activities, details, prior_resolved_ids=None, scan_lim
             continue
         native = d.get("icu_intervals") or []
         work = [r for r in native if isinstance(r, dict) and str(r.get("type") or "").upper() == "WORK"]
+        if _inc155_two_work_probe_candidate(native):
+            return a
         if len(work) < 3:
             continue
         secs = [_num(r.get("moving_time") or r.get("elapsed_time")) for r in work]
@@ -37369,7 +37463,9 @@ def _v152_truth_owned_repeatability(truth, detail=None):
     """Build repeated-work metrics from the exact work rows already accepted by Activity Truth."""
     truth = truth or {}
     work = [dict(x) for x in (truth.get("work_rows") or []) if isinstance(x, dict)]
-    if len(work) < 3:
+    pair = len(work) == 2 and truth.get('source') == 'DEVICE_LAPS' and all(
+        r.get('_inc155_original_fit_pair') is True and r.get('_v125_record_origin') == 'ORIGINAL_FIT_LAP' for r in work)
+    if len(work) < 3 and not pair:
         return None
     work.sort(key=lambda x: int(x.get("_truth_pos") if x.get("_truth_pos") is not None else 10**9))
     watts = []
@@ -37414,8 +37510,8 @@ def _v152_truth_owned_repeatability(truth, detail=None):
         recoveries = [float(_num(truth.get("recovery_median_secs")))]
     first, last = watts[0], watts[-1]
     avg = statistics.mean(watts)
-    early = statistics.mean(watts[:2])
-    late = statistics.mean(watts[-2:])
+    early = watts[0] if pair else statistics.mean(watts[:2])
+    late = watts[-1] if pair else statistics.mean(watts[-2:])
     change = ((last - first) / first * 100.0) if first else None
     decay = max(0.0, -change) if change is not None else None
     cv = statistics.pstdev(watts) / avg * 100.0 if len(watts) > 1 and avg else 0.0
@@ -37436,6 +37532,7 @@ def _v152_truth_owned_repeatability(truth, detail=None):
         "late_rep_retention_pct": round(late/early*100.0, 1) if early else None,
         "source": str(truth.get("source") or "ACTIVITY_TRUTH"), "activity_truth_source": str(truth.get("source") or "ACTIVITY_TRUTH"),
         "r152_truth_owned": True,
+        **({"inc155_original_fit_pair": True} if pair and complete else {}),
     }
 
 
@@ -66480,6 +66577,15 @@ _INC095_TRUTH_BEFORE = _nova_inc091_truth
 
 
 def _v4879_repeatability_stats(intervals, source=None):
+    if source == 'DEVICE_LAPS' and isinstance(intervals, list) and intervals and all(
+        isinstance(r, dict) and r.get('_inc155_original_fit_pair') is True
+        and r.get('_v125_record_origin') == 'ORIGINAL_FIT_LAP' for r in intervals):
+        works = [r for r in intervals if r.get('type') == 'WORK']
+        if len(works) == 2:
+            nominal = int(round(statistics.median(r['moving_time'] for r in works)/15)*15)
+            rep = _v152_truth_owned_repeatability({'source':source,'work_rows':works,
+                'sequence':intervals,'interval_secs':nominal})
+            return rep if rep and rep.get('recovery_observation_complete') is True else None
     if str(source or '').upper() != 'ICU_RAW_WATTS_30_15':
         return _INC095_STATS_BEFORE(intervals, source=source)
     # Raw stream parsers may yield None/NaN in work OR float windows. Never
@@ -71312,6 +71418,8 @@ HOME_PAGE = HOME_PAGE.replace(
     _INC152_TEMPO_TITLE_ANCHOR, _INC152_TEMPO_TITLE_WITH_COPY, 1)
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION += ' · INC152 CARD2 VISIBLE TEMPO COPY + CARD2/CARD3 PLANNING QA (MAIN NO-GO)'
+
+APP_VERSION += ' · INC155 ORIGINAL FIT TWO-REP RECOGNITION (OFFLINE CANDIDATE)'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
