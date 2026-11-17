@@ -71421,5 +71421,568 @@ APP_VERSION += ' · INC152 CARD2 VISIBLE TEMPO COPY + CARD2/CARD3 PLANNING QA (M
 
 APP_VERSION += ' · INC155 ORIGINAL FIT TWO-REP RECOGNITION (OFFLINE CANDIDATE)'
 
+# INC156 · Card 2 / Card 3 workout presentation only.
+# Keep _v4891_prepare_snapshot_for_ui and every scientific/booking caller intact.
+# The already selected and validated template branch calls this read-only adapter.
+# No fallback to an alternative workout; malformed/ambiguous doses keep the old UI.
+
+def _inc156_number(value, *, zero=False):
+    if type(value) not in (int, float) or not math.isfinite(value):
+        return None
+    return value if (value >= 0 if zero else value > 0) else None
+
+
+def _inc156_time(seconds):
+    minutes, remainder = divmod(seconds, 60)
+    return (f'{int(minutes)} min' + (f' {remainder:g} s' if remainder else '')) if minutes else f'{remainder:g} s'
+
+
+def _inc156_watts(obj):
+    if not isinstance(obj, dict):
+        return None
+    lo = _inc156_number(obj.get('low_watts'))
+    hi = _inc156_number(obj.get('high_watts'))
+    if lo is not None or hi is not None or 'low_watts' in obj or 'high_watts' in obj:
+        return (lo, hi) if lo is not None and hi is not None and lo <= hi else None
+    target = _inc156_number(obj.get('target_watts'))
+    return (target, target) if target is not None else None
+
+
+def _inc156_watt_label(watts):
+    if watts is None:
+        return 'Power range unavailable'
+    lo, hi = watts
+    return f'{lo:g} W' if lo == hi else f'{lo:g}–{hi:g} W'
+
+
+def _inc156_display_reference(data):
+    """Read the existing snapshot's coaching estimate ONLY for graph colors.
+
+    No wall-clock fallback, data fetch, authority upgrade or prescription use.
+    This is not the athlete's configured provider zone table.
+    """
+    if not isinstance(data, dict):
+        return None
+    clock = data.get('coach_clock')
+    anchor = data.get('ftp_anchor')
+    if not isinstance(clock, dict) or not isinstance(anchor, dict):
+        return None
+    try:
+        day = date.fromisoformat(str(clock.get('iso') or '')[:10])
+        ref = _nova_power_coaching_reference(anchor, day)
+    except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError):
+        return None
+    if not isinstance(ref, dict) or ref.get('stale') is not False:
+        return None
+    watts = _inc156_number(ref.get('watts'))
+    return watts if watts is not None and 80 <= watts <= 600 else None
+
+
+def _inc156_graph_zone(upper_watts, reference_ftp):
+    """Standard FTP graphic bands; never consulted by a scientific caller."""
+    watts = _inc156_number(upper_watts)
+    ftp = _inc156_number(reference_ftp)
+    if watts is None or ftp is None or not 80 <= ftp <= 600:
+        return None
+    # Upper edges inclusive; compare watts*100 to FTP*percentage directly.
+    for i, pct in enumerate((55, 75, 90, 105, 120, 150), 1):
+        if watts * 100 <= ftp * pct:
+            return f'Z{i}'
+    return 'Z7'
+
+
+def _inc156_phase_style(zone, role):
+    # Only the bar paint/height; not a training-zone or workload decision.
+    zone_styles = {'Z1': ('#9299a3', 14), 'Z2': ('#438bda', 28),
+                   'Low Z2': ('#438bda', 28), 'Z1–Z2': ('#438bda', 28),
+                   'Z3': ('#38b982', 38), 'Z4': ('#e6bd40', 47),
+                   'Z5': ('#e25252', 56), 'Z6': ('#9b7cff', 62),
+                   'Z7': ('#b348a8', 64)}
+    if zone in zone_styles:
+        color, height = zone_styles[zone]
+        return color, height, False
+    return ('#637589', 55 if role == 'Work' else 24 if role in ('Warm-up', 'Preload', 'Aerobic fill', 'Endurance') else 14, True)
+
+
+def _inc156_profile(work, *, color_reference=None):
+    """Describe the current compiled workout; no science calls or mutation.
+
+    The upstream renderer has already decided visibility/identity. This function
+    only expands a signed/compiled, concrete timeline; unknown mechanisms or
+    contradictory bounds cause the caller to keep the original workout copy.
+    """
+    if not isinstance(work, dict):
+        return None
+    comp = work.get('session_composition')
+    if not isinstance(comp, dict) or comp.get('state') not in ('COMPLETE', 'COMPLETE_FUTURE_ADVISORY'):
+        return None
+    blocks = comp.get('blocks')
+    total = _inc156_number(comp.get('total_seconds'))
+    if total is None or total > 21600 or not isinstance(blocks, list) or not 1 <= len(blocks) <= 160:
+        return None
+    for k in ('total_min_low', 'total_min_high'):
+        if comp.get(k) is not None:
+            bound = _inc156_number(comp[k])
+            if bound is None or abs(bound * 60 - total) > .31:
+                return None
+    first = comp.get('state') == 'COMPLETE_FUTURE_ADVISORY'
+    if first and comp.get('schema') != INC132_CARD2_FIRST_SCHEMA:
+        return None
+    band = work.get('power_prescription') or {}
+    if not isinstance(band, dict):
+        return None
+    watts = _inc156_watts(band) if band.get('state') in ('PRESCRIBED', 'PROVISIONAL_FUTURE') else None
+    if band.get('state') == 'PRESCRIBED' and watts is None:
+        return None
+    if first and (band.get('state') != 'PROVISIONAL_FUTURE' or watts is None):
+        return None
+    # First Tempo carries its own already compiled pacing reference. Prefer it
+    # for paint only; never substitute a newer estimate into that prescription.
+    if first and band.get('source') == 'OWNER_ATTESTED_INTERVALS_FTP_FIRST_DOSE':
+        own_ftp = _inc156_number(band.get('ftp_watts'))
+        if own_ftp is not None and 80 <= own_ftp <= 600:
+            color_reference = own_ftp
+    wid = work.get('nova_workout_id')
+    template = _R19696_LIBRARY_INDEX.get(wid) if isinstance(wid, str) and wid else None
+    if not isinstance(template, dict):
+        template = None
+    # A catalogue identity is not a prescription. Only expand the exact
+    # versioned mechanical signature already present in the compiled workout.
+    if template is not None:
+        try:
+            if work.get('nova_template_signature') != _v109_template_signature(template):
+                template = None
+        except (ValueError, TypeError, KeyError, OverflowError):
+            return None
+    elif not first:
+        template = None
+    dimension = work.get('nova_prescription_dimension')
+    rows = []
+    source_seconds = 0
+    main_seen = 0
+    work_sum = recovery_sum = 0
+    labels = {'PREPARATION': 'Warm-up', 'AEROBIC_FILL': 'Aerobic fill',
+              'AEROBIC_TOPPER': 'Aerobic fill', 'COOLDOWN': 'Cooldown',
+              'CANONICAL_ENDURANCE': 'Endurance', 'WARMUP_EASY': 'Warm-up',
+              'TEMPO_WORK': 'Work', 'RECOVERY_EASY': 'Recovery', 'COOLDOWN_EASY': 'Cooldown',
+              'WORK': 'Work', 'RECOVERY': 'Recovery', 'FLOAT': 'Float', 'SET_RECOVERY': 'Set recovery'}
+    explicit_zones = {'Z1': 'Z1', 'Z2': 'Z2', 'LOW_Z2': 'Low Z2', 'LOW Z2': 'Low Z2',
+                      'Z1/Z2': 'Z1–Z2', 'Z1_TO_LOW_Z2': 'Z1–Z2', 'Z1–Z2': 'Z1–Z2',
+                      'Z3': 'Z3', 'Z4': 'Z4', 'Z5': 'Z5', 'Z6': 'Z6', 'Z7': 'Z7'}
+
+    def add(role, seconds, zone=None, phase_watts=None):
+        graph_zone = _inc156_graph_zone(phase_watts[1], color_reference) if phase_watts is not None else None
+        color, height, neutral = _inc156_phase_style(graph_zone or zone, role)
+        description = [role, _inc156_time(seconds), _inc156_watt_label(phase_watts)]
+        if zone:
+            description.append(zone)
+        if graph_zone:
+            description.append(f'Graph {graph_zone} · FTP ref {color_reference:g} W (visual estimate)')
+        elif not zone:
+            description.append('Zone unavailable')
+        detail = ' · '.join(description)
+        rows.append({'role': role, 'seconds': seconds, 'duration': _inc156_time(seconds),
+                     'zone': zone, 'graph_zone': graph_zone, 'watts': _inc156_watt_label(phase_watts),
+                     'has_watts': phase_watts is not None, 'color': color,
+                     'height': height, 'neutral': neutral, 'detail': detail})
+
+    def same(a, b):
+        return type(a) in (int, float) and type(b) in (int, float) and math.isfinite(a) and math.isfinite(b) and abs(a - b) < .001
+
+    for b in blocks:
+        if not isinstance(b, dict):
+            return None
+        seconds = _inc156_number(b.get('seconds' if first else 'duration_seconds'))
+        if seconds is None or seconds > total:
+            return None
+        source_seconds += seconds
+        typ = b.get('type')
+        if not isinstance(typ, str):
+            return None
+        phase_watts = _inc156_watts(b)
+        if any(k in b for k in ('low_watts', 'high_watts', 'target_watts')) and phase_watts is None:
+            return None
+        zone_key = b.get('zone') or b.get('intensity')
+        zone = explicit_zones.get(zone_key) if isinstance(zone_key, str) else None
+        if typ == 'CANONICAL_INTERVALS' and not first:
+            main_seen += 1
+            if main_seen != 1 or template is None or watts is None:
+                return None
+            if phase_watts is not None and phase_watts != watts:
+                return None
+            pattern = template.get('pattern')
+            q = _inc156_number(b.get('quality_work_seconds'), zero=True)
+            r = _inc156_number(b.get('recovery_seconds'), zero=True)
+            if q is None or r is None or not same(q + r, seconds):
+                return None
+            if pattern in ('STANDARD', 'SUSTAINED', 'SHORT_POWER', 'SPRINT'):
+                reps = template.get('reps')
+                ws = _inc156_number(template.get('work_s'))
+                rs = _inc156_number(template.get('recovery_s'), zero=True) if reps != 1 else 0
+                if (type(reps) is not int or not 1 <= reps <= 100 or ws is None or rs is None
+                    or not same(reps * ws, q) or not same((reps - 1) * rs, r)
+                    or not same(band.get('reps'), reps) or not same(band.get('work_seconds'), ws)
+                    or ('recovery_seconds' in band and not same(band['recovery_seconds'], rs))):
+                    return None
+                # Renderer _v109_render_library_workout explicitly calls
+                # STANDARD/SUSTAINED recovery Z1; other patterns only "easy".
+                rec_zone = 'Z1' if pattern in ('STANDARD', 'SUSTAINED') else None
+                work_zone = 'Z3' if template.get('work_domain') == 'TEMPO_Z3' else zone
+                for i in range(reps):
+                    add('Work', ws, work_zone, watts)
+                    if i < reps - 1 and rs > 0:
+                        add('Recovery', rs, rec_zone)
+            elif pattern in ('MICRO_30_15', 'SPRINT_CLUSTER'):
+                sets, reps = template.get('sets'), template.get('reps_per_set')
+                ws = _inc156_number(template.get('work_s'))
+                flt = _inc156_number(template.get('float_s'))
+                sr = _inc156_number(template.get('set_recovery_s'), zero=True) if sets != 1 else 0
+                if (type(sets) is not int or type(reps) is not int or not 1 <= sets <= 20 or not 1 <= reps <= 100
+                    or sets * reps > 100 or ws is None or flt is None or sr is None
+                    or not same(q, sets * reps * ws) or not same(r, sets * reps * flt + (sets - 1) * sr)
+                    or not same(band.get('reps'), sets * reps) or not same(band.get('work_seconds'), ws)):
+                    return None
+                for i in range(sets):
+                    for _ in range(reps):
+                        add('Work', ws, zone, watts)
+                        add('Float', flt)
+                    if i < sets - 1 and sr > 0:
+                        add('Set recovery', sr)
+            else:
+                # OVER_UNDER and unknown variable-load prescriptions cannot
+                # honestly be drawn as a constant rectangular power target.
+                return None
+            work_sum += q
+            recovery_sum += r
+        elif typ in labels:
+            role = labels[typ]
+            if first and typ not in ('WARMUP_EASY', 'TEMPO_WORK', 'RECOVERY_EASY', 'COOLDOWN_EASY'):
+                return None
+            if not first and typ in ('WARMUP_EASY', 'TEMPO_WORK', 'RECOVERY_EASY', 'COOLDOWN_EASY'):
+                return None
+            if typ == 'PREPARATION' and b.get('intensity') == 'AS_ORIGINALLY_PRESCRIBED':
+                # Durability prefix is explicitly defined in the unchanged
+                # canonical renderer (not parsed from athlete-facing prose).
+                if dimension == 'DURABILITY' and same(seconds, 1800) and template is not None:
+                    role, zone = 'Preload', 'Low Z2'
+                else:
+                    # Race-transfer surges / unstructured preparation.
+                    return None
+            if b.get('segments_seconds') is not None:
+                # No ordering or gap placement beyond the aggregate phase.
+                return None
+            if typ == 'TEMPO_WORK' and (phase_watts != watts or zone != 'Z3'):
+                return None
+            if role == 'Work':
+                if watts is not None and phase_watts != watts:
+                    return None
+                work_sum += seconds
+            if role in ('Recovery', 'Float', 'Set recovery'):
+                recovery_sum += seconds
+            add(role, seconds, zone, phase_watts)
+        else:
+            return None
+    if (not rows or len(rows) > 240 or not same(source_seconds, total)
+        or not same(sum(r['seconds'] for r in rows), total)):
+        return None
+    if 'primary_work_seconds' in comp and not same(comp['primary_work_seconds'], work_sum + sum(r['seconds'] for r in rows if r['role'] == 'Endurance')):
+        return None
+    if 'interval_recovery_seconds' in comp and not same(comp['interval_recovery_seconds'], recovery_sum):
+        return None
+    if first:
+        if not same(band.get('reps'), sum(r['role'] == 'Work' for r in rows)):
+            return None
+        if any(r['role'] == 'Work' and not same(r['seconds'], band.get('work_seconds')) for r in rows):
+            return None
+        if any(r['role'] == 'Recovery' and not same(r['seconds'], band.get('recovery_seconds')) for r in rows):
+            return None
+    # Preserve graphical widths exactly by duration. Very short phases can
+    # scroll within this small plot rather than expanding the entire card.
+    min_width = math.ceil(total / min(r['seconds'] for r in rows) * 10)
+    if min_width > 5000:
+        return None
+    # Compact summary in first-occurrence order; graph itself retains the
+    # complete chronological order, incl. inter-rep vs final micro floats.
+    grouped = {}
+    for row in rows:
+        key = (row['role'], row['seconds'], row['zone'], row['watts'])
+        if key not in grouped:
+            grouped[key] = dict(row, count=0)
+        grouped[key]['count'] += 1
+    if len(grouped) > 12:
+        return None
+    summary = []
+    for row in grouped.values():
+        count = row['count']
+        summary.append({'label': (f'{count} × ' if count > 1 else '') + row['duration'] + ' ' + row['role'],
+                        'target': row['watts'] if row['has_watts'] else row['zone'] or '—'})
+    exploratory = (first or band.get('exploratory') is True or band.get('confidence') == 'PROVISIONAL'
+                   or band.get('power_target_mode') == 'PROVISIONAL_RANGE'
+                   or band.get('repeatability_reason') == 'SHORTER_INTERVAL_TRANSFER')
+    return {'total_seconds': total, 'total_label': _inc156_time(total), 'rows': rows,
+            'summary': summary, 'min_width': min_width, 'exploratory': exploratory,
+            'neutral': any(r['neutral'] for r in rows)}
+
+
+def _inc156_workout_profile_read(data, visible, kind):
+    """The existing Jinja branch owns all visibility and authority decisions.
+
+    Match the selected view back to ITS compiled payload; never choose an
+    alternative from next_sessions or run verification/selection ourselves.
+    """
+    if not isinstance(data, dict) or not isinstance(visible, dict):
+        return None
+    if kind == 'CHRONO':
+        if visible.get('provisional_quality') or visible.get('restriction') not in (None, 'NONE'):
+            return None
+        return _inc156_profile(visible, color_reference=_inc156_display_reference(data))
+    wid = visible.get('workout_id')
+    if not isinstance(wid, str) or not wid:
+        return None
+    if kind == 'CARD3':
+        if visible.get('verified_offer') is True:
+            parent = data.get('next_quality_offer')
+        elif visible.get('verified_future_plan') is True:
+            parent = data.get('future_quality_plan')
+        else:
+            return None
+    elif kind == 'TEMPO' and visible.get('complete') is True:
+        future = data.get('future_quality_plan')
+        parent = future.get('inc132_integrative') if isinstance(future, dict) else None
+    else:
+        return None
+    if not isinstance(parent, dict) or parent.get('workout_id') != wid:
+        return None
+    work = parent.get('workout')
+    if not isinstance(work, dict) or work.get('nova_workout_id') != wid:
+        return None
+    if kind == 'CARD3':
+        if visible.get('title') != work.get('title') or visible.get('structure') != work.get('main_set'):
+            return None
+        # The formatted source copy may include explanatory qualifiers, but
+        # its exact watt range must match the compiled work (never a PB).
+        watts = _inc156_watts(work.get('power_prescription'))
+        display = visible.get('personalized_watts')
+        if (work.get('power_prescription') or {}).get('state') != 'PRESCRIBED' or watts is None or not isinstance(display, str) or not display.startswith(_inc156_watt_label(watts)):
+            return None
+    if kind == 'TEMPO':
+        watts = _inc156_watts(work.get('power_prescription'))
+        if watts is None or visible.get('power_display') != _inc156_watt_label(watts):
+            return None
+        if visible.get('first_exposure') is not True and (visible.get('title') != work.get('title') or visible.get('structure') != work.get('main_set')):
+            return None
+        if visible.get('first_exposure') is True and parent.get('dose_kind') != 'FIRST_TEMPO_FTP_ADVISORY':
+            return None
+    profile = _inc156_profile(work, color_reference=_inc156_display_reference(data))
+    if profile is None:
+        return None
+    if kind == 'CARD3' and not any(row['role'] == 'Work' and row['watts'] == _inc156_watt_label(watts) for row in profile['rows']):
+        return None
+    if kind == 'TEMPO':
+        minutes = _inc156_number(visible.get('duration_minutes'))
+        if minutes is None or abs(minutes * 60 - profile['total_seconds']) > .001:
+            return None
+    return profile
+
+
+def _inc156_workout_profile(data, visible, kind):
+    try:
+        return _inc156_workout_profile_read(data, visible, kind)
+    except (TypeError, ValueError, KeyError, ArithmeticError, AttributeError, IndexError):
+        return None
+
+
+_INC156_MACRO = '''{% macro inc156_profile_view(profile, future=false) -%}
+<div class="inc156-profile" data-inc156-profile role="group" aria-label="Canonical workout profile">
+  <div class="inc156-total"><strong>{{ profile.total_label|e }}</strong>{% if profile.exploratory %}<small>Exploratory range</small>{% endif %}</div>
+  <div class="inc156-summary" aria-label="Workout blocks">{% for item in profile.summary %}
+    <div><span>{{ item.label|e }}</span><b>{{ item.target|e }}</b></div>{% endfor %}</div>
+  <div class="inc156-scroll" aria-label="Workout timeline">
+    <div class="inc156-plot" style="min-width:{{ profile.min_width }}px">
+      {% for phase in profile.rows %}<button type="button" class="inc156-block{{ ' inc156-neutral' if phase.neutral else '' }}" style="--inc156-seconds:{{ phase.seconds }};--inc156-height:{{ phase.height }}px;--inc156-color:{{ phase.color }}" data-inc156-phase="{{ phase.detail|e }}" aria-label="{{ phase.detail|e }}" aria-pressed="false" title="{{ phase.detail|e }}"></button>{% endfor %}
+    </div>
+  </div>
+  <div class="inc156-axis"><span>0</span><span>Tap a block</span><span>{{ profile.total_label|e }}</span></div>
+  <div class="inc156-block-detail" data-inc156-detail hidden role="status" aria-live="polite"></div>
+  {% if profile.neutral %}<small class="inc156-key">Striped = zone unavailable</small>{% endif %}
+  {% if future %}<small class="inc156-clearance">Planning is not execution clearance.</small>{% endif %}
+</div>
+{%- endmacro %}
+'''
+
+_INC156_CSS = '''<style id="inc156-workout-profile-style">
+.inc156-status-row{display:flex;justify-content:flex-end;align-items:center;gap:5px;margin:0 0 7px;min-width:0}
+.inc156-status-row .inc156-plan-tag{display:inline-flex!important;max-width:100%;padding:4px 8px!important;border-radius:4px 4px 4px 4px!important;font-size:10px!important;line-height:1.25!important;font-weight:800;letter-spacing:.045em;overflow-wrap:anywhere;white-space:normal!important}
+.inc156-plan-tag.inc156-unplanned{background:#e6bd40!important;color:#2d240a!important;border:1px solid #ebc95d!important}
+.inc156-status-row .inc138-planned-pill{background:#164e35!important;color:#c2f8d3!important;border-color:#43aa72!important}
+.inc156-compact{border:0!important;padding:0!important;background:transparent!important;margin:8px 0 0!important}
+.inc156-profile{min-width:0;box-sizing:border-box;display:grid;gap:5px;color:var(--text,#edf2f7);margin:6px 0 7px;font-size:12px;text-align:left}
+.inc156-total{display:flex;align-items:baseline;flex-wrap:wrap;justify-content:space-between;gap:5px}
+.inc156-total strong{font-size:20px!important;line-height:1.15;color:var(--text,#edf2f7);letter-spacing:-.025em;text-transform:none!important}
+.inc156-total small{font-size:10px!important;color:#dfbf77!important;margin:0!important}
+.inc156-summary{display:grid;gap:2px;margin:1px 0 3px;font-variant-numeric:tabular-nums}
+.inc156-summary>div{display:flex;justify-content:space-between;align-items:baseline;gap:8px;line-height:1.3;min-width:0}
+.inc156-summary span{color:var(--muted,#b5c0cc);overflow-wrap:anywhere}.inc156-summary b{color:var(--text,#edf2f7);font-weight:700;text-align:right;flex:none}
+.inc156-scroll{max-width:100%;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;padding:2px 1px 3px}
+.inc156-plot{width:100%;height:66px;display:flex;align-items:flex-end;gap:0;isolation:isolate}
+.inc156-block{appearance:none;flex:var(--inc156-seconds) 1 0px;min-width:0;height:var(--inc156-height);padding:0!important;position:relative;border:0;border-radius:0;background:transparent;cursor:pointer;touch-action:manipulation}
+.inc156-block::before{content:'';position:absolute;inset:0 .5px;background:var(--inc156-color);border-radius:2px 2px 0 0}
+.inc156-block.inc156-neutral::before{background:repeating-linear-gradient(135deg,var(--inc156-color) 0,var(--inc156-color) 5px,#354456 5px,#354456 7px)}
+.inc156-block[aria-pressed="true"]::before{box-shadow:inset 0 0 0 2px #fff}.inc156-block:focus-visible{outline:2px solid white;outline-offset:1px;z-index:1}
+.inc156-axis{display:flex;justify-content:space-between;align-items:center;gap:4px;font-size:10px;color:var(--muted,#a6adb8);font-variant-numeric:tabular-nums;line-height:1.25}
+.inc156-block-detail{font-size:11px;line-height:1.35;padding:6px;border:1px solid var(--line,rgba(255,255,255,.15));border-radius:5px;overflow-wrap:anywhere}
+.inc156-block-detail[hidden]{display:none!important}.inc156-profile .inc156-key,.inc156-profile .inc156-clearance{display:block;font-size:10px!important;color:var(--muted,#a6adb8)!important;margin:0!important;line-height:1.25}
+.inc156-source-copy{font-size:11px;color:var(--muted,#a6adb8);margin:3px 0 0;min-width:0}.inc156-source-copy>summary{cursor:pointer;line-height:1.35;text-decoration:underline;text-underline-offset:2px;list-style:none}.inc156-source-copy>summary::-webkit-details-marker{display:none}.inc156-source-copy>summary:focus-visible{outline:2px solid var(--cyan,#45d7e8);outline-offset:3px}
+.inc156-source-copy:not([open])>*:not(summary){display:none!important}
+.inc156-compact~.r143-quality-entry .r143-duration-hint{display:none!important}
+@media(max-width:420px){.inc156-profile{font-size:11px}.inc156-total strong{font-size:18px!important}.inc156-status-row{margin-bottom:4px}.inc156-summary>div{gap:5px}}
+@media print{.inc156-source-copy>*{display:block!important}.inc156-scroll{overflow:visible}.inc156-plot{min-width:0!important}.inc156-block-detail{display:none!important}}
+</style>'''
+
+_INC156_SCRIPT = '''<script id="inc156-workout-profile-script">
+(function(){
+  'use strict';
+  function clear(root){
+    root.querySelectorAll('[data-inc156-phase][aria-pressed="true"]').forEach(function(b){b.setAttribute('aria-pressed','false');});
+    var detail=root.querySelector('[data-inc156-detail]');
+    if(detail){detail.hidden=true;detail.textContent='';}
+  }
+  document.addEventListener('click',function(e){
+    if(!(e.target instanceof Element))return;
+    var b=e.target.closest('[data-inc156-phase]');
+    var own=e.target.closest('[data-inc156-profile]');
+    document.querySelectorAll('[data-inc156-profile]').forEach(function(root){if(root!==own)clear(root);});
+    if(!b||!own)return;
+    var was=b.getAttribute('aria-pressed')==='true';clear(own);
+    if(!was){var detail=own.querySelector('[data-inc156-detail]');if(!detail)return;
+      b.setAttribute('aria-pressed','true');detail.textContent=b.getAttribute('data-inc156-phase');detail.hidden=false;}
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key!=='Escape')return;
+    document.querySelectorAll('[data-inc156-profile]').forEach(clear);
+  });
+})();
+</script>'''
+
+
+def _inc156_install_workout_ui(page):
+    # Atomic page-string transformation. The statuses, template gates and
+    # planning controls are those of INC138/INC152, not new decision paths.
+    def replace_once(src, old, new, label):
+        if src.count(old) != 1:
+            raise ValueError('INC156_TEMPLATE_DRIFT_' + label)
+        return src.replace(old, new, 1)
+
+    def restyle_section(src, start, end, kind, state, view_expr, profile_var):
+        if src.count(start) != 1:
+            raise ValueError('INC156_TEMPLATE_DRIFT_' + kind + '_START')
+        a = src.index(start)
+        z = src.index(end, a)
+        part = src[a:z]
+        title_start = part.index('<div class="v150-workout-title-row">')
+        meta_start = part.index('<div class="v4-session-meta">', title_start)
+        meta_end = part.index('</div>', meta_start) + len('</div>')
+        title = part[title_start:meta_start]
+        original_meta = part[meta_start:meta_end]
+        planned_expr = state + ' is defined and ' + state + '.planned_intent'
+        # Preserve exact original planned-label and lookup conditions.
+        ribbon = ('<div class="inc156-status-row">{% if ' + planned_expr + ' %}'
+                  '<span class="v4-session-pill inc138-planned-pill inc156-plan-tag">{{ ' + state + '.planned_intent.planned_label|e }}</span>'
+                  '{% else %}<span class="v4-session-pill inc156-plan-tag inc156-unplanned">TO BE PLANNED</span>{% endif %}</div>\n')
+        assigned = '{% set ' + profile_var + ' = nova_inc156_workout_profile(data, ' + view_expr + ', "' + kind + '") %}\n'
+        duration_fallback = ('{% if not ' + profile_var + ' %}<div class="v4-session-meta"><span class="v4-session-pill">{{ zi.duration_minutes|round(1) }} min total</span></div>{% endif %}' if kind == 'TEMPO' else '')
+        # If a compact profile cannot be represented, retain the original
+        # duration, scientific copy and non-clearance explanation (without
+        # the deprecated unplanned label; ribbon is still only presentation).
+        if '.planned_intent.planned_label|e' not in original_meta:
+            raise ValueError('INC156_TEMPLATE_DRIFT_' + kind + '_PLAN_LABEL')
+        part = part[:title_start] + assigned + ribbon + title + duration_fallback + part[meta_end:]
+        group_class = 'inc132-dual-work' if kind == 'TEMPO' else 'r1969102-canonical-copy r1969104-single-workout'
+        group = '<div class="' + group_class + '"'
+        opening = part.index(group)
+        opening_end = part.index('>', opening) + 1
+        # Card2 group is followed by the unchanged planning dialog; Card3's
+        # full existing group plus clarification ends at the next branch.
+        if kind == 'TEMPO':
+            closing = len(part)
+            tail = part[opening_end:closing]
+            close_at = tail.rfind('</div>')
+            if close_at < 0:
+                raise ValueError('INC156_TEMPO_GROUP_DRIFT')
+            original = tail[:close_at]
+            suffix = tail[close_at:]
+        else:
+            closing = len(part)
+            tail = part[opening_end:closing]
+            # preserve original whole group and legacy clarity outside it;
+            # move that closing div to after disclosure to retain one group.
+            marker = '</div>\n{% if card3.verified_future_plan %}'
+            if tail.count(marker) != 1:
+                raise ValueError('INC156_CARD3_GROUP_DRIFT')
+            i = tail.index(marker)
+            original = tail[:i] + '{% if not ' + profile_var + ' %}</div>{% endif %}' + tail[i+len('</div>'):]
+            suffix = ''
+        new_open = part[opening:opening_end].replace(group_class + '"', group_class + '{% if ' + profile_var + ' %} inc156-compact{% endif %}"', 1)
+        future_expr = 'true' if kind == 'TEMPO' else 'card3.verified_future_plan'
+        begin = ('{% if ' + profile_var + ' %}{{ inc156_profile_view(' + profile_var + ', ' + future_expr + ') }}'
+                 '<details class="inc156-source-copy"><summary aria-label="Show full canonical instructions">ⓘ Full instructions</summary>{% endif %}')
+        finish = '{% if ' + profile_var + ' %}</details>{% endif %}'
+        if kind == 'TEMPO':
+            begin = begin.replace('<details class=', '{% if dual.quality_specific %}<small>Alternative to Card 3 · not an additional session.</small>{% endif %}<details class=', 1)
+        else:
+            finish = '{% if ' + profile_var + ' %}</details></div>{% endif %}\n'
+        part = part[:opening] + new_open + begin + original + finish + suffix + part[closing:]
+        return src[:a] + part + src[z:]
+
+    page = restyle_section(page, '{% if show_tempo %}\n<div class="inc132-dual-role">',
+        '{% set tempo_planning', 'TEMPO', 'nova_tempo_state', 'zi', 'inc156_tempo')
+    page = restyle_section(page, '{% elif card3.verified_offer or card3.verified_future_plan %}',
+        '{% elif card3.offer_structure_only %}', 'CARD3', 'nova_r142_state', 'card3', 'inc156_card3')
+    # Chronological Card2: only its own already-visible verified contract.
+    # Leave Card1, alternate calendar session behind Tempo, provisional and
+    # non-representable sessions completely unchanged, including safety text.
+    anchor = '{% set chrono_phases = nova_verified_session_phases(s) %}'
+    page = replace_once(page, anchor,
+        anchor + '\n{% set inc156_chrono = nova_inc156_workout_profile(data, s, "CHRONO") if loop.index == 2 and not show_tempo and not is_quality_slot and not s.provisional_quality and athlete_view.workout_contract and athlete_view.workout_contract.ready and chrono_phases else none %}', 'CHRONO_SOURCE')
+    # Put the profile after the pre-existing contract and clearance notice;
+    # hide only redundant instructions/phase/reference prose on successful
+    # projection. Keep all forms, conditions and notices in their old positions.
+    start = '{% if chrono_phases %}\n<div class="r196999-workout-phases" role="group" aria-label="Verified workout timeline">'
+    end = '{% if s.provisional_quality and is_quality_slot %}</details>{% endif %}'
+    if page.count(start) != 1 or page.count(end) != 1:
+        raise ValueError('INC156_CHRONO_COPY_DRIFT')
+    i = page.index(start); j = page.index(end, i)
+    page = (page[:i] + '{% if inc156_chrono %}{{ inc156_profile_view(inc156_chrono) }}'
+            '<details class="inc156-source-copy"><summary aria-label="Show full canonical instructions">ⓘ Full instructions</summary>{% endif %}'
+            + page[i:j] + '{% if inc156_chrono %}</details>{% endif %}\n' + page[j:])
+    # Preserve planning trigger IDs, data attributes, forms, availability
+    # limits, dialog text, and booking logic. Change only button caption.
+    tempo_cta = '<span>Plan this Tempo workout</span>'
+    page = replace_once(page, tempo_cta,
+        '<span>{{ "Change plan" if nova_tempo_state.planned_intent else "Plan workout" }}</span>', 'TEMPO_CTA')
+    quality_cta = '<span>Plan your next quality</span>'
+    if page.count(quality_cta) != 2:
+        raise ValueError('INC156_QUALITY_CTA_DRIFT')
+    page = page.replace(quality_cta,
+        '<span>{{ ("Change plan" if nova_r142_state.planned_intent else "Plan workout") if data.nova_r142_plan_ui.card in (2,3) else "Plan your next quality" }}</span>')
+    page = replace_once(page, '</head>', _INC156_CSS + '\n</head>', 'CSS')
+    page = replace_once(page, '</body>', _INC156_SCRIPT + '\n</body>', 'SCRIPT')
+    return _INC156_MACRO + page
+
+
+# Keep the historical renderer intact if an unexpected template revision
+# cannot be patched. A failed presentation is never allowed to stop boot or
+# change a scientific gate; log it and retain the previous page wholesale.
+try:
+    _inc156_candidate_page = _inc156_install_workout_ui(HOME_PAGE)
+    app.jinja_env.parse(_inc156_candidate_page)
+except Exception as _inc156_error:  # Fail closed within UI installation only.
+    app.logger.warning('INC156 UI fallback: %s', _inc156_error)
+else:
+    app.jinja_env.globals['nova_inc156_workout_profile'] = _inc156_workout_profile
+    HOME_PAGE = _inc156_candidate_page
+    APP_VERSION += ' · INC156 CARD2/CARD3 WORKOUT PROFILE UI ONLY + GRAPH ZONES (OFFLINE CANDIDATE)'
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
