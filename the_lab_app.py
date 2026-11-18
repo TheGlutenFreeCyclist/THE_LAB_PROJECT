@@ -25520,6 +25520,21 @@ def _v4893_align_due_validation_to_window(raw_sessions, clock, adaptive_roadmap=
         if not isinstance(dt, datetime): continue
         if dt.date() == target_dt.date() and (target_dt.hour == 0 or dt >= target_dt):
             chosen = idx; break
+    move = _inc160_checkpoint_move(clock, road)
+    if move:
+        target = _v154_explicit_quality_target(clock, road, road.get('nova_decision') or {},
+                                               workout_id='VALIDATION_CONTRACT_V1')
+        i = (target or {}).get('index')
+        if (type(i) is int and 0 <= i < len(slots) and
+                slots[i].get('date') == move['target_date'] and
+                not slots[i].get('is_race') and
+                str(slots[i].get('restriction') or 'NONE').upper() == 'NONE' and
+                not _v196932_athlete_explicitly_unavailable(slots[i], q) and
+                not (slots[i].get('is_planned_training') and
+                     _training_profile_demand_class(slots[i].get('training_demand')) == 'EASY')):
+            chosen = i
+        if chosen is not None and str(slots[chosen].get('date') or '') < move['target_date']:
+            chosen = None
     if chosen is None:
         return rows
     rows[chosen] = {**prescription, "duration": rows[chosen].get("duration") or slots[chosen].get("duration_hint_label") or "Nova-selected duration",
@@ -30086,7 +30101,13 @@ def planning_add():
                 and str(x.get("prescription_status") or "ACTIVE").upper() not in {"CANCELLED","FULFILLED","SUPERSEDED"}), None)
             if not selected or not plan_id:
                 raise ValueError("This workout is no longer in the latest Snapshot. Generate a new Snapshot first")
-            if str(((snapshot.get("nova_decision") or {}).get("action") or "")).upper() != "TRAIN":
+            action = str(((snapshot.get("nova_decision") or {}).get("action") or "")).upper()
+            checkpoint = None
+            if postpone_id == "VALIDATION_CONTRACT_V1":
+                checkpoint = _inc160_checkpoint_binding(snapshot, selected)
+                if not checkpoint:
+                    raise ValueError("The latest Snapshot does not permit postponing this checkpoint")
+            elif action != "TRAIN":
                 raise ValueError("The latest Snapshot does not permit postponing this workout")
             planning = snapshot.get("planning_context") or {}
             if (target_date in (planning.get("blackout_dates") or []) or
@@ -30106,7 +30127,8 @@ def planning_add():
             prior_move_item = next((item for item in existing_items
                 if isinstance(item.get("nova_postponement"), dict)
                 and str(item["nova_postponement"].get("workout_id") or "") == postpone_id
-                and str(item["nova_postponement"].get("target_date") or "") == original_date), None)
+                and str(item["nova_postponement"].get("target_date") or "") == original_date
+                and (checkpoint is None or item["nova_postponement"].get("r27_checkpoint") == checkpoint)), None)
             prior_move = prior_move_item.get("nova_postponement") if prior_move_item else None
             original_binding_plan = str((prior_move or {}).get("original_plan_id") or plan_id)
             original_binding_date = str((prior_move or {}).get("original_date") or original_date)
@@ -30124,6 +30146,14 @@ def planning_add():
                 "workout_purpose": ((prior_move or {}).get("workout_purpose")
                     if prior_move else ((snapshot.get("nova_prescription") or {}).get("workout_library") or {}).get("purpose_consistency")),
             }
+            if checkpoint is not None:
+                binding["r27_checkpoint"] = checkpoint
+                occurrences = list((prior_move or {}).get("r27_occurrences") or [])
+                for occurrence in ({"plan_id": original_binding_plan, "date": original_binding_date},
+                                   {"plan_id": plan_id, "date": original_date}):
+                    if occurrence not in occurrences:
+                        occurrences.append(occurrence)
+                binding["r27_occurrences"] = occurrences
             title = "NOVA · " + str(selected.get("title") or "Coached quality")[:140]
             note = "NOVA_POSTPONE_V1:" + json.dumps(binding, ensure_ascii=False, separators=(",", ":"), default=_report_json_default)
             previous = next((item for item in existing_items if isinstance(item.get("nova_postponement"), dict)
@@ -38231,7 +38261,11 @@ def _v154_explicit_quality_target(coach_clock, adaptive_roadmap, nova_decision, 
     clock = coach_clock or {}
     all_plans = list(clock.get("postponed_workouts") or [])
     plans = [p for p in all_plans if isinstance(p, dict)
-             and (not workout_id or str(p.get("workout_id") or "") == str(workout_id))]
+             and (not workout_id or str(p.get("workout_id") or "") == str(workout_id))
+             and p.get("workout_id") != "VALIDATION_CONTRACT_V1"]
+    if workout_id == "VALIDATION_CONTRACT_V1":
+        move = _inc160_checkpoint_move(clock, adaptive_roadmap)
+        plans = [move] if move else []
     intent = clock.get("future_note_intent") if isinstance(clock.get("future_note_intent"), dict) else {}
     if plans:
         schedule = next((x for x in plans if isinstance(x, dict) and x.get("target_date")), None)
@@ -38276,6 +38310,11 @@ def _v154_explicit_quality_target(coach_clock, adaptive_roadmap, nova_decision, 
             continue
         if not _v152_slot_matches_human_part(slot, preferred):
             continue
+        if workout_id == "VALIDATION_CONTRACT_V1" and plans and (
+                _v196932_athlete_explicitly_unavailable(slot, q) or
+                (slot.get('is_planned_training') and
+                 _training_profile_demand_class(slot.get('training_demand')) == 'EASY')):
+            continue
         dt = _v154_slot_dt(slot)
         if dt is None:
             continue
@@ -38313,6 +38352,14 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
         coach_clock, adaptive_roadmap, nova_decision,
         workout_id=out.get("workout_id") or out.get("contract_id"))
     commitments = list((coach_clock or {}).get("postponed_workouts") or [])
+    is_r27 = (out.get("workout_id") or out.get("contract_id")) == "VALIDATION_CONTRACT_V1"
+    if is_r27:
+        commitments = [b for b in commitments if _inc160_checkpoint_move_matches(b, adaptive_roadmap)]
+        # R27 owns test eligibility. No generic quality fallback or saved dose
+        # reconstruction for a deferred checkpoint. Its issuer checks the date.
+        if not target or (commitments and not any(
+            b.get("target_date") == (target.get("slot") or {}).get("date") for b in commitments)):
+            return out
     if commitments and not target:
         slots = list((coach_clock or {}).get("next_slots") or [])
         try:
@@ -38362,7 +38409,7 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
         str(b.get("target_date") or "") == str((target.get("slot") or {}).get("date") or "")
         and str(b.get("workout_id") or "") == str(out.get("workout_id") or "")
         and isinstance(b.get("session"), dict)), None)
-    if saved:
+    if saved and not is_r27:
         old = saved["session"]
         if str(old.get("nova_workout_id") or "") == str(saved.get("workout_id") or ""):
             hard_raw = _v153_preserved_raw(old, (nova_decision or {}).get("dimension"))
@@ -38383,7 +38430,7 @@ def build_nova_prescription(nova_decision, coach_clock, adaptive_roadmap=None, m
     # that was already present in the requested slot.
     if requested_idx != current_idx:
         requested_easy = raw[requested_idx] if isinstance(raw[requested_idx], dict) else _v84_easy_raw(target.get("slot") or {}, nova_decision or {})
-        raw[current_idx] = requested_easy
+        raw[current_idx] = (_v84_easy_raw(list((coach_clock or {}).get("next_slots") or [])[current_idx], nova_decision or {}) if is_r27 else requested_easy)
         raw[requested_idx] = hard_raw
         out["raw_sessions"] = raw
         out["selected_slot_index"] = requested_idx
@@ -56111,6 +56158,9 @@ def _v196920_guard_native_r27(prescription,decision,road,clock,context,ledger,us
         str(slot.get('date') or '')[:10] not in set(ctx.get('no_intensity_dates') or []) and
         not _v196932_athlete_explicitly_unavailable(slot,window))
     upstream_safe=bool(slot_valid and not ctx.get('health_override') and
+        not _inc160_checkpoint_before_requested(clock, road, slot) and
+        not (_inc160_checkpoint_move(clock, road) and slot.get('is_planned_training') and
+             _training_profile_demand_class(slot.get('training_demand')) == 'EASY') and
         str((decision or {}).get('action') or '').upper()=='VALIDATE' and
         str(window.get('state') or '').upper() not in _R196918_NO_HARD and
         (cfg.get('mode')=='SUBMAX_DURABILITY' or (decision or {}).get('hard_session_allowed') is True))
@@ -56173,7 +56223,8 @@ def _v196920_prepare_consented_r27(snapshot,user_id=None,read_only=False,agreeme
     if not isinstance(slot,dict):
         return None,dict(base,state='R27_INVALID_CLOCK_SLOT',request_id=token)
     day=str(slot.get('date') or '')[:10]
-    if (not day or day in set(context.get('blackout_dates') or []) or
+    if (not day or _inc160_checkpoint_before_requested(clock, road, slot) or
+        day in set(context.get('blackout_dates') or []) or
         day in set(context.get('no_intensity_dates') or []) or slot.get('is_race') or
         str(slot.get('restriction') or 'NONE').upper()!='NONE' or
         _v196932_athlete_explicitly_unavailable(slot,window)):
@@ -56360,28 +56411,15 @@ HOME_PAGE=HOME_PAGE.replace(_R196932_HOME_ANCHOR,r"""{% if not is_preview and no
 {% set notice_snapshot = data if data else (consent_snapshot_data if consent_snapshot_data is defined else none) %}
 {% if notice_snapshot %}
 {% set missing_power_test = nova_missing_power_test_notice(notice_snapshot) %}
-{% if missing_power_test %}
-{% set notice_prescription = (notice_snapshot.get('nova_prescription') or {}) %}
-{% set notice_review = (notice_snapshot.get('evidence_cycle_review') or notice_prescription.get('evidence_cycle_review') or {}) %}
-{% set notice_rows = (data.get('next_sessions') or []) if data is mapping else [] %}
-{% set notice_first = (notice_rows[0] or {}) if notice_rows else {} %}
-{% set checkpoint_in_card1 = missing_power_test.kind == 'PRIMARY_R27' and notice_prescription.get('action') == 'VALIDATE' and notice_prescription.get('status') == 'PRESCRIBED' and notice_review.get('issued') == true and notice_review.get('selected_slot_index') == 0 and notice_review.get('canonical_plan_id') and notice_first is mapping and notice_first.get('nova_canonical_plan_id') == notice_review.get('canonical_plan_id') and notice_first.get('nova_workout_id') == 'VALIDATION_CONTRACT_V1' and notice_first.get('date') == notice_review.get('planned_date') and notice_first.get('nova_prescription_authority') == true and not notice_first.get('provisional_quality') and not notice_first.get('hidden') and notice_first.get('visible') != false %}
-{% if not checkpoint_in_card1 %}
-<section class="v196932-test-notice" role="status" aria-label="NOVA measurement status">
-<strong>{% if missing_power_test.state == 'SCHEDULED' %}Performance measurement{% else %}Measurement under review{% endif %}</strong>
-{% if missing_power_test.state == 'SCHEDULED' %}
-<p>{{ missing_power_test.date or 'Check your plan' }}{% if missing_power_test.start_minute is not none %} · {{ '%02d:%02d'|format(missing_power_test.start_minute // 60, missing_power_test.start_minute % 60) }}{% endif %} · {% if missing_power_test.kind == 'INITIAL_WORK_RECOVERY' %}Work and recovery measurement.{% if missing_power_test.reps %} {{ missing_power_test.reps }} × {{ missing_power_test.work_seconds }} s work, {{ missing_power_test.recovery_seconds }} s recovery.{% endif %}{% else %}See your prescribed session for the test details.{% endif %} Follow only the current session instructions; reassess if your condition or availability changes.</p>
-{% else %}<p>Not ready to ride. NOVA must confirm the session and current recovery first.</p>{% endif %}
-{% if missing_power_test.state == 'SCHEDULED' and missing_power_test.kind == 'INITIAL_WORK_RECOVERY' and missing_power_test.request_id %}
-<form method="post" action="{{ url_for('nova_initial_evidence') }}">
+{% if missing_power_test and missing_power_test.state == 'SCHEDULED' and missing_power_test.kind == 'INITIAL_WORK_RECOVERY' and missing_power_test.request_id %}
+<form class="v196932-test-notice" method="post" action="{{ url_for('nova_initial_evidence') }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="request_id" value="{{ missing_power_test.request_id }}">
 <label>Already completed this measurement? Link its own-account Intervals.icu activity ID:
 <input type="text" name="activity_id" maxlength="80" placeholder="i123456789" required></label>
 <button type="submit" name="decision" value="LINK_ACTIVITY">Link measured activity</button>
-</form>{% endif %}
-</section>
-{% endif %}{% endif %}{% endif %}{% endif %}
+</form>
+{% endif %}{% endif %}{% endif %}
 """ + _R196932_HOME_ANCHOR,1)
 BASE_CSS+="""\n.v196932-test-notice{padding:15px;margin:12px 0;border:1px solid rgba(119,197,215,.55);border-radius:12px}.v196932-test-notice strong{display:block;color:#a7e2f0}.v196932-test-notice p{font-size:13px;line-height:1.5}"""
 
@@ -57325,7 +57363,17 @@ def _nova_apply_athlete_postponements(ledger, user_id=None):
     out = copy.deepcopy(ledger)
     hist = out.get('prescription_history') or []
     applied = []
+    # The R27 contract ID is shared across checkpoints. Expand only stored
+    # occurrence identities; the ordinary quality deferral branch is unchanged.
+    projected_moves = []
     for move in moves:
+        projected_moves.append(move)
+        if move.get('workout_id') == 'VALIDATION_CONTRACT_V1':
+            for occurrence in move.get('r27_occurrences') or []:
+                if isinstance(occurrence, dict) and occurrence.get('plan_id') and occurrence.get('date'):
+                    if (occurrence['plan_id'], occurrence['date']) != (move.get('original_plan_id'), move.get('original_date')):
+                        projected_moves.append(dict(move, original_plan_id=occurrence['plan_id'], original_date=occurrence['date']))
+    for move in projected_moves:
         wid = str(move.get('workout_id') or '')
         original = str(move.get('original_date') or '')[:10]
         target = str(move.get('target_date') or '')[:10]
@@ -57341,8 +57389,8 @@ def _nova_apply_athlete_postponements(ledger, user_id=None):
                 continue
             if (str(row.get('date') or '')[:10] != original or
                     str(row.get('nova_workout_id') or row.get('nova_contract_id') or '') != wid or
-                    (row.get('nova_canonical_plan_id') and
-                     str(row.get('nova_canonical_plan_id')) != plan_id) or
+                    ((wid == 'VALIDATION_CONTRACT_V1' or row.get('nova_canonical_plan_id')) and
+                     str(row.get('nova_canonical_plan_id') or '') != plan_id) or
                     str(row.get('prescription_status') or '').upper() not in
                     {'ACTIVE','PLANNED','MISSED_UNEXECUTED','DEFERRED_BY_ATHLETE'} or
                     row.get('executed_activity_id') or row.get('fulfilled_at_local')):
@@ -57361,6 +57409,7 @@ def _nova_apply_athlete_postponements(ledger, user_id=None):
             if (isinstance(anchor, dict) and
                     str(anchor.get('date') or '')[:10] == original and
                     str(anchor.get('nova_workout_id') or anchor.get('nova_contract_id') or '') == wid and
+                    (wid != 'VALIDATION_CONTRACT_V1' or str(anchor.get('nova_canonical_plan_id') or '') == plan_id) and
                     not anchor.get('executed_activity_id')):
                 anchor['prescription_status'] = 'DEFERRED_BY_ATHLETE'
                 anchor['status'] = 'DEFERRED_BY_ATHLETE'
@@ -72324,6 +72373,86 @@ APP_VERSION += ' · INC157 CANONICAL R27 VALIDATION AUTHORITY RECONCILIATION (OF
 APP_VERSION += ' · INC157 R2 SEPARATE CANONICAL CHECKPOINT FROM FUTURE TRAINING (OFFLINE NO-GO)'
 APP_VERSION += ' · INC158 CHECKPOINT UI CLARITY ONLY'
 APP_VERSION += ' · INC159 CARD1 DIRECTION AND EXISTING WORKOUT PROFILE'
+
+
+# INC160: reuse R27 identity and R154/R196949 athlete deferral, not a new issuer.
+def _inc160_checkpoint_key(road):
+    cfg = _v4893_validation_contract(road)
+    if not cfg.get('available') or cfg.get('mode') != 'MAXIMAL' or not cfg.get('goal_key'):
+        return None
+    seconds = cfg.get('seconds')
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not math.isfinite(seconds) or seconds <= 0:
+        return None
+    return {'goal_key': cfg['goal_key'], 'seconds': float(seconds), 'mode': cfg['mode'],
+            'checkpoint_role': cfg.get('checkpoint_role') or 'PRIMARY'}
+
+
+def _inc160_checkpoint_binding(snapshot, selected):
+    """An issued maximal R27 occurrence; scope by owner report, not posted text."""
+    if not isinstance(snapshot, dict) or not isinstance(selected, dict):
+        return None
+    p = snapshot.get('nova_prescription') or {}
+    if not isinstance(p, dict):
+        return None
+    review = snapshot.get('evidence_cycle_review') or p.get('evidence_cycle_review') or {}
+    decision = snapshot.get('nova_decision') or {}
+    if not isinstance(review, dict) or not isinstance(decision, dict):
+        return None
+    key = _inc160_checkpoint_key(snapshot.get('adaptive_roadmap'))
+    rows = snapshot.get('next_sessions') or []
+    if not isinstance(rows, list):
+        return None
+    idx = review.get('selected_slot_index')
+    plan = review.get('canonical_plan_id')
+    if (not key or decision.get('action') not in {'TRAIN', 'VALIDATE'} or
+            p.get('status') != 'PRESCRIBED' or p.get('workout_id') != 'VALIDATION_CONTRACT_V1' or
+            not plan or p.get('canonical_plan_id') != plan or review.get('issued') is not True or
+            any(review.get(k) != key[k] for k in ('goal_key', 'mode', 'seconds')) or
+            type(idx) is not int or not 0 <= idx < len(rows) or not isinstance(rows[idx], dict) or
+            selected.get('nova_workout_id') != 'VALIDATION_CONTRACT_V1' or
+            selected.get('nova_canonical_plan_id') != plan or selected.get('date') != review.get('planned_date') or
+            selected.get('nova_prescription_authority') is not True or not selected.get('hard_spacing_relevant') or
+            selected.get('provisional_quality') or selected.get('hidden') or selected.get('visible') is False or
+            selected.get('executed_activity_id') or selected.get('fulfilled_at_local') or
+            str(selected.get('prescription_status') or 'ACTIVE').upper() in {'CANCELLED','FULFILLED','SUPERSEDED','WITHDRAWN'} or
+            any(rows[idx].get(k) != selected.get(k) for k in ('nova_workout_id', 'nova_canonical_plan_id', 'date')) or
+            not _v196920_validation_row(selected, key['goal_key'], key['seconds'])):
+        return None
+    return key
+
+
+def _inc160_checkpoint_move_matches(binding, road):
+    if not isinstance(binding, dict) or binding.get('workout_id') != 'VALIDATION_CONTRACT_V1':
+        return False
+    key = _inc160_checkpoint_key(road)
+    if not key or binding.get('r27_checkpoint') != key or not binding.get('original_plan_id'):
+        return False
+    try:
+        return date.fromisoformat(binding['target_date']) > date.fromisoformat(binding['original_date'])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _inc160_checkpoint_move(clock, road):
+    # If several valid commitments share a protocol, latest requested floor wins;
+    # no other workout, goal, duration, or PRIMARY/EXTENSION is affected.
+    today = _v166_clock_today(clock).isoformat()
+    matches = [b for b in (clock or {}).get('postponed_workouts') or []
+               if _inc160_checkpoint_move_matches(b, road) and b['target_date'] >= today]
+    return max(matches, key=lambda b: b['target_date']) if matches else None
+
+
+def _inc160_checkpoint_before_requested(clock, road, slot):
+    move = _inc160_checkpoint_move(clock, road)
+    return bool(move and (not isinstance(slot, dict) or
+                         str(slot.get('date') or '') < move['target_date']))
+
+
+_inc160_postpone_anchor = "{% if not is_quality_slot and not is_preview and not download_mode and not qa_mode and s.hard_spacing_relevant and not s.provisional_quality and s.nova_workout_id and s.nova_canonical_plan_id %}"
+assert HOME_PAGE.count(_inc160_postpone_anchor) == 1, 'INC160_POSTPONE_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_inc160_postpone_anchor, _inc160_postpone_anchor[:-3] + " and (s.nova_workout_id != 'VALIDATION_CONTRACT_V1' or nova_inc160_checkpoint_binding(data, s)) %}", 1)
+app.jinja_env.globals['nova_inc160_checkpoint_binding'] = _inc160_checkpoint_binding
+APP_VERSION += ' · INC160 CHECKPOINT POSTPONE AND CLEAN HOME'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
