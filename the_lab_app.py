@@ -56361,13 +56361,17 @@ HOME_PAGE=HOME_PAGE.replace(_R196932_HOME_ANCHOR,r"""{% if not is_preview and no
 {% if notice_snapshot %}
 {% set missing_power_test = nova_missing_power_test_notice(notice_snapshot) %}
 {% if missing_power_test %}
+{% set notice_prescription = (notice_snapshot.get('nova_prescription') or {}) %}
+{% set notice_review = (notice_snapshot.get('evidence_cycle_review') or notice_prescription.get('evidence_cycle_review') or {}) %}
+{% set notice_rows = (data.get('next_sessions') or []) if data is mapping else [] %}
+{% set notice_first = (notice_rows[0] or {}) if notice_rows else {} %}
+{% set checkpoint_in_card1 = missing_power_test.kind == 'PRIMARY_R27' and notice_prescription.get('action') == 'VALIDATE' and notice_prescription.get('status') == 'PRESCRIBED' and notice_review.get('issued') == true and notice_review.get('selected_slot_index') == 0 and notice_review.get('canonical_plan_id') and notice_first is mapping and notice_first.get('nova_canonical_plan_id') == notice_review.get('canonical_plan_id') and notice_first.get('nova_workout_id') == 'VALIDATION_CONTRACT_V1' and notice_first.get('date') == notice_review.get('planned_date') and notice_first.get('nova_prescription_authority') == true and not notice_first.get('provisional_quality') and not notice_first.get('hidden') and notice_first.get('visible') != false %}
+{% if not checkpoint_in_card1 %}
 <section class="v196932-test-notice" role="status" aria-label="NOVA measurement status">
-<strong>NOVA COACH · {% if missing_power_test.state == 'SCHEDULED' %}MEASUREMENT TEST SCHEDULED{% else %}MEASUREMENT CANDIDATE · NOT EXECUTABLE{% endif %}</strong>
-<p>{% if missing_power_test.state == 'SCHEDULED' %}NOVA has scheduled a {{ missing_power_test.kind }} measurement because {{ missing_power_test.reason }}.{% else %}NOVA is evaluating a {{ missing_power_test.kind }} measurement because {{ missing_power_test.reason }}.{% endif %}</p>
-<p><b>Date:</b> {{ missing_power_test.date or 'Awaiting verified slot' }}{% if missing_power_test.start_minute is not none %} · {{ '%02d:%02d'|format(missing_power_test.start_minute // 60, missing_power_test.start_minute % 60) }}{% endif %}. <b>Protocol:</b> {{ missing_power_test.protocol }}.</p>
-{% if missing_power_test.reps %}<p>{{ missing_power_test.reps }} × {{ missing_power_test.work_seconds }} seconds of controlled work, {{ missing_power_test.recovery_seconds }} seconds recovery.</p>{% endif %}
-<p>{{ missing_power_test.instruction }}{% if missing_power_test.state == 'PLANNED_PENDING_SAFETY' %} This is a planned test, not yet executable: current recovery and the canonical compiler must clear it before you ride.{% else %} If illness, safety or availability changes, update NOVA before riding.{% endif %}</p>
-<p>No acceptance checkbox or permission request. Only a canonically issued session is executable; completion must be verified from actual activity.</p>
+<strong>{% if missing_power_test.state == 'SCHEDULED' %}Performance measurement{% else %}Measurement under review{% endif %}</strong>
+{% if missing_power_test.state == 'SCHEDULED' %}
+<p>{{ missing_power_test.date or 'Check your plan' }}{% if missing_power_test.start_minute is not none %} · {{ '%02d:%02d'|format(missing_power_test.start_minute // 60, missing_power_test.start_minute % 60) }}{% endif %} · {% if missing_power_test.kind == 'INITIAL_WORK_RECOVERY' %}Work and recovery measurement.{% if missing_power_test.reps %} {{ missing_power_test.reps }} × {{ missing_power_test.work_seconds }} s work, {{ missing_power_test.recovery_seconds }} s recovery.{% endif %}{% else %}See your prescribed session for the test details.{% endif %} Follow only the current session instructions; reassess if your condition or availability changes.</p>
+{% else %}<p>Not ready to ride. NOVA must confirm the session and current recovery first.</p>{% endif %}
 {% if missing_power_test.state == 'SCHEDULED' and missing_power_test.kind == 'INITIAL_WORK_RECOVERY' and missing_power_test.request_id %}
 <form method="post" action="{{ url_for('nova_initial_evidence') }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -56377,7 +56381,7 @@ HOME_PAGE=HOME_PAGE.replace(_R196932_HOME_ANCHOR,r"""{% if not is_preview and no
 <button type="submit" name="decision" value="LINK_ACTIVITY">Link measured activity</button>
 </form>{% endif %}
 </section>
-{% endif %}{% endif %}{% endif %}
+{% endif %}{% endif %}{% endif %}{% endif %}
 """ + _R196932_HOME_ANCHOR,1)
 BASE_CSS+="""\n.v196932-test-notice{padding:15px;margin:12px 0;border:1px solid rgba(119,197,215,.55);border-radius:12px}.v196932-test-notice strong{display:block;color:#a7e2f0}.v196932-test-notice p{font-size:13px;line-height:1.5}"""
 
@@ -69183,8 +69187,7 @@ _R150_END_NEW='''<small>{{ card3.reason|e }}</small>
 </div>
 {% if card3.verified_future_plan %}
 <div class="r150-card3-clarity" role="note" aria-label="Future quality, not an execution authorization">
-  <strong class="r150-card3-clarity-head">WHY IS THIS QUALITY NOT CLEARED YET?</strong>
-  <p>THIS IS YOUR COMPLETE NEXT QUALITY, BUT IT IS NOT BOOKED OR CLEARED FOR TODAY. CURRENT SESSION GUIDANCE IS SEPARATE FROM THIS FUTURE PLAN. CONFIRM YOUR AVAILABLE TIME AND RECHECK THE EXECUTION CONDITIONS BEFORE HARD INTERVALS.</p>
+  <p>{% if card3.verified_future_plan and (data.get('future_quality_plan') or {}).get('inc157_future_training_question') and (data.get('nova_prescription') or {}).get('action') == 'VALIDATE' and ((data.get('evidence_cycle_review') or (data.get('nova_prescription') or {}).get('evidence_cycle_review') or {}).get('issued') == true) %}Current priority: the checkpoint. Reassess this future quality afterward; not cleared for today.{% else %}Future workout: choose a suitable window and recheck before riding. Not cleared for execution.{% endif %}</p>
 </div>
 {% endif %}
 {% elif card3.offer_structure_only %}'''
@@ -69761,7 +69764,7 @@ _INC132_CARD2_VIEW='''{% set dual = data.inc132_dual_quality or {} %}
 {% set zi = dual.quality_integrative or {} %}
 {% set show_tempo = loop.index == 2 and zi.complete and zi.workout_id %}
 {% if show_tempo %}
-<div class="inc132-dual-role">COMPLEMENTARY QUALITY · TEMPO/Z3{% if dual.recommended_priority == 'CARD2' %}<span>RECOMMENDED PRIORITY</span>{% endif %}</div>
+<div class="inc132-dual-role">COMPLEMENTARY QUALITY · TEMPO/Z3{% if dual.recommended_priority == 'CARD2' %}<span>FUTURE PRIORITY</span>{% endif %}</div>
 <h3>{{ zi.title|e }}</h3>
 <div class="v4-session-meta"><span class="v4-session-pill">{{ zi.duration_minutes|round(1) }} min total</span><span class="v4-session-pill">YOU CHOOSE WHEN · UNSCHEDULED</span></div>
 <div class="inc132-dual-work" role="group" aria-label="Attested integrative quality">
@@ -71948,7 +71951,7 @@ def _inc156_workout_profile(data, visible, kind):
         return None
 
 
-_INC156_MACRO = '''{% macro inc156_profile_view(profile, future=false) -%}
+_INC156_MACRO = '''{% macro inc156_profile_view(profile, future=false, checkpoint=false) -%}
 <div class="inc156-profile" data-inc156-profile role="group" aria-label="Canonical workout profile">
   <div class="inc156-total"><strong>{{ profile.total_label|e }}</strong>{% if profile.exploratory %}<small>Exploratory range</small>{% endif %}</div>
   <div class="inc156-summary" aria-label="Workout blocks">{% for item in profile.summary %}
@@ -71961,7 +71964,7 @@ _INC156_MACRO = '''{% macro inc156_profile_view(profile, future=false) -%}
   <div class="inc156-axis"><span>0</span><span>Tap a block</span><span>{{ profile.total_label|e }}</span></div>
   <div class="inc156-block-detail" data-inc156-detail hidden role="status" aria-live="polite"></div>
   {% if profile.neutral %}<small class="inc156-key">Striped = zone unavailable</small>{% endif %}
-  {% if future %}<small class="inc156-clearance">Planning is not execution clearance.</small>{% endif %}
+  {% if future %}<small class="inc156-clearance">{% if checkpoint %}Current priority: the checkpoint. Reassess this future quality afterward; not cleared for today.{% else %}Planning is not execution clearance.{% endif %}</small>{% endif %}
 </div>
 {%- endmacro %}
 '''
@@ -72080,7 +72083,8 @@ def _inc156_install_workout_ui(page):
             suffix = ''
         new_open = part[opening:opening_end].replace(group_class + '"', group_class + '{% if ' + profile_var + ' %} inc156-compact{% endif %}"', 1)
         future_expr = 'true' if kind == 'TEMPO' else 'card3.verified_future_plan'
-        begin = ('{% if ' + profile_var + ' %}{{ inc156_profile_view(' + profile_var + ', ' + future_expr + ') }}'
+        checkpoint_expr = ("card3.verified_future_plan and (data.get('future_quality_plan') or {}).get('inc157_future_training_question') and (data.get('nova_prescription') or {}).get('action') == 'VALIDATE' and ((data.get('evidence_cycle_review') or (data.get('nova_prescription') or {}).get('evidence_cycle_review') or {}).get('issued') == true)" if kind == 'CARD3' else 'false')
+        begin = ('{% if ' + profile_var + ' %}{{ inc156_profile_view(' + profile_var + ', ' + future_expr + ', ' + checkpoint_expr + ') }}'
                  '<details class="inc156-source-copy"><summary aria-label="Show full canonical instructions">ⓘ Full instructions</summary>{% endif %}')
         finish = '{% if ' + profile_var + ' %}</details>{% endif %}'
         if kind == 'TEMPO':
@@ -72144,6 +72148,7 @@ APP_VERSION += ' · INC157 CANONICAL R27 VALIDATION AUTHORITY RECONCILIATION (OF
 
 
 APP_VERSION += ' · INC157 R2 SEPARATE CANONICAL CHECKPOINT FROM FUTURE TRAINING (OFFLINE NO-GO)'
+APP_VERSION += ' · INC158 CHECKPOINT UI CLARITY ONLY'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
