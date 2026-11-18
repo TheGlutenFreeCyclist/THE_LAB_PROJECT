@@ -25370,7 +25370,7 @@ def _v4893_validation_contract(adaptive_roadmap=None):
         "target_watts_low": _rhythm_num(test.get("target_watts_low")), "target_watts_high": _rhythm_num(test.get("target_watts_high")),
         "checkpoint_role": str(test.get("checkpoint_role") or "PRIMARY").upper(), "primary_anchor_seconds": _rhythm_num(test.get("primary_anchor_seconds")),
     }
-def _v4893_validation_due(adaptive_roadmap=None, microcycle_ledger=None):
+def _v4893_validation_due(adaptive_roadmap=None, microcycle_ledger=None, *, canonical_decision=None):
     road = adaptive_roadmap if isinstance(adaptive_roadmap, dict) else {}
     test = road.get("test") if isinstance(road.get("test"), dict) else {}
     q = road.get("quality_window") if isinstance(road.get("quality_window"), dict) else {}
@@ -25391,7 +25391,63 @@ def _v4893_validation_due(adaptive_roadmap=None, microcycle_ledger=None):
     contract = _v4893_validation_contract(road)
     if contract.get("mode") == "SUBMAX_DURABILITY":
         return bool(stage_idx >= 3 and state == "WINDOW OPEN")
-    return bool((stage_idx >= 3) or (stage_idx >= 2 and decision in {"LOAD_IN_PROGRESS","REPEATED_DOMAIN_REQUIRES_JUSTIFICATION"}))
+    legacy_due = bool((stage_idx >= 3) or (stage_idx >= 2 and decision in {"LOAD_IN_PROGRESS","REPEATED_DOMAIN_REQUIRES_JUSTIFICATION"}))
+    if legacy_due:
+        return True
+    # INC157: the native R27 guard runs AFTER the canonical scientific decision.
+    # VALIDATE_OR_ABSORB is not itself permission to test. Reconcile only an
+    # already selected, matching evidence-gated stage-2 maximal checkpoint.
+    # Earlier legacy callers without that decision retain their exact behavior.
+    if stage_idx != 2 or decision != "VALIDATE_OR_ABSORB" or contract.get("mode") != "MAXIMAL":
+        return False
+    dec = canonical_decision if isinstance(canonical_decision, dict) else {}
+    science = road.get("scientific_progression")
+    stage = road.get("stage")
+    gate = road.get("stage_evidence_gate")
+    embedded = road.get("nova_decision")
+    if not all(isinstance(x, dict) for x in (science, stage, gate, embedded)):
+        return False
+    dim = dec.get("dimension")
+    goal = contract.get("goal_key")
+    if (not dec or dec.get("available") is not True or science.get("available") is not True
+            or dec.get("authority") != "NOVA_DECISION_ENGINE"
+            or any(embedded.get(k) != dec.get(k) for k in (
+                "available", "authority", "goal_key", "action", "dimension",
+                "hard_session_allowed", "quality_window_eligible", "stage_authority",
+                "roadmap_stage_index", "roadmap_stage_code"))
+            or dec.get("action") != "VALIDATE" or dec.get("hard_session_allowed") is not True
+            or dec.get("quality_window_eligible") is not True
+            or dim not in {"REVALIDATION", "EXTENSION_OR_REVALIDATION"}
+            or science.get("dimension") != dim or science.get("goal_key") != goal
+            or dec.get("goal_key") != goal or road.get("goal_key") != goal
+            or road.get("decision_action") != "VALIDATE" or road.get("decision_dimension") != dim
+            or gate.get("authority") != "EVIDENCE_GATED_ROADMAP"
+            or dec.get("stage_authority") != "EVIDENCE_GATED_ROADMAP"
+            or dec.get("roadmap_stage_index") != stage_idx
+            or not stage.get("code") or dec.get("roadmap_stage_code") != stage.get("code")
+            or q_state not in {"WATCH", "OPEN"} or q.get("decision_action") != "VALIDATE"
+            or q.get("decision_dimension") != dim or q.get("hard_session_allowed") is not True):
+        return False
+    # Preserve the original goal-owned protocol/ladder; never derive a test
+    # from the label, invent a duration or accept a different reference family.
+    field = (_V4873_ROADMAP_GOALS.get(goal) or {}).get("field_test") or {}
+    anchor = _rhythm_num(field.get("seconds"))
+    seconds = contract.get("seconds")
+    role = contract.get("checkpoint_role")
+    if (not anchor or field.get("mode") != "MAXIMAL" or not seconds
+            or test.get("mode") != "MAXIMAL" or _rhythm_num(test.get("seconds")) != seconds):
+        return False
+    if role == "PRIMARY":
+        return bool(dim == "REVALIDATION" and seconds == anchor)
+    if role != "EXTENSION" or dim != "EXTENSION_OR_REVALIDATION":
+        return False
+    ladder = _V502_CHECKPOINT_LADDERS.get(goal) or ()
+    step = test.get("extension_step")
+    return bool(test.get("primary_focus_preserved") is True
+                and test.get("consolidated_anchor") is True
+                and contract.get("primary_anchor_seconds") == anchor
+                and type(step) is int and 0 < step < len(ladder)
+                and ladder[0] == anchor and ladder[step] == seconds)
 def _v4893_reconcile_roadmap_validation(adaptive_roadmap=None, microcycle_ledger=None):
     road = adaptive_roadmap if isinstance(adaptive_roadmap, dict) else {}
     if not _v4893_validation_due(road, microcycle_ledger):
@@ -53454,7 +53510,7 @@ def _v196920_native_key(snapshot):
     slots=clock.get('next_slots') or []
     if (str(decision.get('action') or '').upper()!='VALIDATE' or
             type(idx) is not int or idx<0 or idx>=len(slots) or
-            not _v4893_validation_due(road,d.get('microcycle_ledger'))):
+            not _v4893_validation_due(road,d.get('microcycle_ledger'), canonical_decision=decision)):
         return None
     contract=_v4893_validation_contract(road)
     slot=slots[idx] if isinstance(slots[idx],dict) else {}
@@ -60008,13 +60064,88 @@ _R196977_REENTRY_ID = 'POST_SEVERE_INTENSITY_REENTRY_V1'
 
 _r196977_science_before = _v503_scientific_progression
 
+def _nova_ranked_future_training_question(science):
+    """Project the owner's existing ranked question, never re-score or select a workout.
+
+    A formal checkpoint and an unscheduled ordinary quality answer different
+    questions. Only a checkpoint-only leading dimension needs this projection.
+    Missing/ambiguous rank remains an honest coverage failure. No goal fallback.
+    """
+    if not isinstance(science, dict) or science.get('available') is not True:
+        return None
+    formal = {'REVALIDATION', 'EXTENSION_OR_REVALIDATION', 'VALIDATE'}
+    current = science.get('dimension')
+    goal = science.get('goal_key')
+    if (not isinstance(current, str) or not isinstance(goal, str)
+        or current not in formal or goal not in _V503_GOAL_GRAPH):
+        return None
+    ranked = science.get('ranked_questions')
+    if (not isinstance(ranked, list) or not ranked
+        or not all(isinstance(q, dict) for q in ranked)
+        or ranked[0].get('dimension') != current):
+        return None
+    dims = [q.get('dimension') for q in ranked]
+    if not all(isinstance(d, str) and d for d in dims) or len(set(dims)) != len(dims):
+        return None
+    signals = science.get('signals') or {}
+    if not isinstance(signals, dict):
+        return None
+    closed = set()
+    for items in (signals.get('closed_questions') or (), science.get('closed_dimensions') or ()):
+        if not isinstance(items, (list, tuple)) or not all(isinstance(d, str) for d in items):
+            return None
+        closed.update(items)
+    graph = _V503_GOAL_GRAPH[goal].get('architectures') or {}
+    for rank, q in enumerate(ranked, 1):
+        dim = q['dimension']
+        if dim in formal or dim == 'NONE':
+            continue
+        # Do not skip a contradictory train question to make a lower one fit.
+        if (dim in closed or dim not in graph or not isinstance(q.get('architectures'), list)
+            or not q['architectures'] or not all(isinstance(a, str) and a for a in q['architectures'])):
+            return None
+        return {'schema':'NOVA-INC157-RANKED-FUTURE-TRAINING-1',
+                'goal_key':goal, 'checkpoint_dimension':current,
+                'dimension':dim, 'canonical_rank':rank,
+                'source':'EXISTING_CANONICAL_SCIENCE_RANK'}
+    return None
+
+
+def _nova_future_training_context(road, goal=None):
+    """Read the immutable scientific owner's designation for future ONLY.
+
+    Compare it with the bound original rank. A projection is not a new
+    roadmap, clearance, decision or issue. The real roadmap is always used
+    for the producer context digest and persisted snapshot.
+    """
+    rd = road if isinstance(road, dict) else {}
+    sci = rd.get('scientific_progression') or {}
+    if not isinstance(sci, dict):
+        return rd, None
+    declared = sci.get('future_training_question')
+    expected = _nova_ranked_future_training_question(sci)
+    if (not expected or declared != expected
+        or rd.get('goal_key') != expected['goal_key']
+        or (goal is not None and goal != expected['goal_key'])):
+        return rd, None
+    # Only the scope consumed by existing future template/dose replay. No
+    # checkpoint dose-contract is copied into a different training question.
+    return dict(rd, scientific_progression={'goal_key':expected['goal_key'],
+                 'dimension':expected['dimension']}), expected
+
+
 def _v503_scientific_progression(goal_key, roadmap=None, ledger=None, session_progression=None,
         previous_blocks=None, performance_narrative=None, performance_evidence=None,
         aerobic_metabolic_range=None, evidence_ledger=None, question_state=None):
     out = _r196977_science_before(goal_key, roadmap, ledger, session_progression,
         previous_blocks, performance_narrative, performance_evidence,
         aerobic_metabolic_range,evidence_ledger=evidence_ledger,question_state=question_state)
-    if not isinstance(out,dict) or str(out.get('dimension') or '').upper()!='RECOVERY_UNDER_LOAD':
+    if not isinstance(out, dict):
+        return out
+    question = _nova_ranked_future_training_question(out)
+    if question is not None:
+        out = dict(out, future_training_question=question)
+    if str(out.get('dimension') or '').upper()!='RECOVERY_UNDER_LOAD':
         return out
     dose=out.get('dose_contract') or {}; p=dose.get('prescription') or {}
     if (dose.get('schema')!=R131_SCHEMA or dose.get('stage')!='POST_SEVERE_INTENSITY_REENTRY'
@@ -63784,7 +63915,8 @@ def _nova_inc056_plan_result(owner_user_id, decision, road, evidence_ledger,
     ctx = planning_context if isinstance(planning_context, dict) else {}
     state = training_state if isinstance(training_state, dict) else {}
     goal = str(dec.get('goal_key') or rd.get('goal_key') or '').upper()
-    scientific = rd.get('scientific_progression') or {}
+    future_road, future_question = _nova_future_training_context(rd, goal)
+    scientific = future_road.get('scientific_progression') or {}
     dimension = str((scientific if isinstance(scientific, dict) else {}).get('dimension')
                     or dec.get('dimension') or '').upper()
     action = str(dec.get('action') or '').upper()
@@ -63810,6 +63942,8 @@ def _nova_inc056_plan_result(owner_user_id, decision, road, evidence_ledger,
         'actual_available_minutes_not_upgraded': True,
         'workout': None,
     }
+    if future_question is not None:
+        result['inc157_future_training_question'] = future_question
     def blocked(code):
         result['reason_codes'] = [code]
         return result
@@ -66072,8 +66206,9 @@ def _nova_inc056_plan_result(owner_user_id, decision, road, evidence_ledger,
         return plan  # Existing authenticated offer, injury, other veto unchanged.
     goal = str(plan.get('goal_key') or '').upper()
     dim = str(plan.get('dimension') or '').upper()
+    future_road, _ = _nova_future_training_context(road, goal)
     candidate, proof = _nova_inc088_scientific_candidate(
-        goal,dim,evidence_ledger,training_definitions,road,ftp_anchor=None,
+        goal,dim,evidence_ledger,training_definitions,future_road,ftp_anchor=None,
         today=get_rome_now().date())
     out = dict(plan,inc088_selector_preflight=proof)
     if candidate is None:
@@ -66284,8 +66419,9 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
             'schema':INC091_SCHEMA,'state':'ORIGIN_NOT_ATTESTED',
             'reason':'LIVE_OWNER_BOUND_RESOLVED_SOURCE_REQUIRED',
             'complete_quality':False})
+    future_road, _ = _nova_future_training_context(road, original.get('goal_key'))
     work = _nova_inc091_compile_native(tpl,original,evidence_ledger,
-        ftp_anchor,road,power_model)
+        ftp_anchor,future_road,power_model)
     if work is None:
         return dict(original,inc091_integrity={'schema':INC091_SCHEMA,
             'state':'NATIVE_COMPILER_NOT_COMPLETE','complete_quality':False})
@@ -66360,12 +66496,17 @@ def _nova_inc091_eligible(data,plan,owner_user_id,require_seal=True):
         or data.get('next_quality_offer')
         or _nova_inc079_explicit_injury_restriction(data.get('planning_context'))):
         return False
+    future_road, question = _nova_future_training_context(data.get('adaptive_roadmap'), goal)
+    if (question != plan.get('inc157_future_training_question')
+        or (question is not None and (plan.get('dimension') != question['dimension']
+            or (data.get('nova_decision') or {}).get('goal_key') != goal))):
+        return False
     band = work.get('power_prescription') or {}
     if (dose.get('low_watts') != band.get('low_watts')
         or dose.get('high_watts') != band.get('high_watts')
         or dose.get('source') != band.get('source')
         or _nova_inc083_science_replay(work,data.get('evidence_ledger'),
-             data.get('ftp_anchor'),data.get('adaptive_roadmap')).get('accepted') is not True):
+             data.get('ftp_anchor'),future_road).get('accepted') is not True):
         return False
     # An unmodified report is not proof of RAW FIT origins: repeat the native
     # server owner+truth check at attestation and rendering time.
@@ -66447,6 +66588,8 @@ def _nova_r1969104_canonical_card3(data,expected_owner_user_id=None):
     low,high = power['low_watts'],power['high_watts']
     phases = _nova_r196999_phase_rows(work)
     if not phases: return old
+    if plan.get('inc157_future_training_question') is not None:
+        old = dict(old, dimension=plan['dimension'])
     return dict(old,state='FUTURE_COMPLETE_OWNER_BOUND',
         verified_offer=False,verified_future_plan=True,
         planned_quality=False,offer_structure_only=False,
@@ -69394,9 +69537,10 @@ def _nova_inc050_future_quality(owner_user_id,decision,clock,road,ledger,
         or not (compiled_card3 or _inc132_card3_numeric_dose_blocked(plan))):
         plan['inc132_integrative_state']='NOT_EVALUATED_WITHOUT_VERIFIED_CARD3'
         return plan
+    future_road, _ = _nova_future_training_context(road, plan.get('goal_key'))
     candidate,why=_inc132_build_integrative(str(plan.get('goal_key') or ''),
         str(plan.get('dimension') or ''),evidence_ledger,ftp_anchor,
-        road,power_model,owner_user_id)
+        future_road,power_model,owner_user_id)
     plan['inc132_integrative_state']=why
     if candidate is not None and candidate['workout_id']!=plan.get('workout_id'):
         plan['inc132_integrative']=candidate
@@ -69485,7 +69629,9 @@ def _inc132_validate_integrative(data,plan,owner_user_id,producer_request=True):
     evidence=data.get('evidence_ledger') or {}
     band=work.get('power_prescription') or {}
     dimension=tempo.get('dimension')
-    if dimension != ((data.get('adaptive_roadmap') or {}).get('scientific_progression') or {}).get('dimension'):
+    future_road, question = _nova_future_training_context(data.get('adaptive_roadmap'), plan.get('goal_key'))
+    if (question != plan.get('inc157_future_training_question')
+        or dimension != (future_road.get('scientific_progression') or {}).get('dimension')):
         return False
     expected=_inc132_measured_tempo_band(tpl,evidence,get_rome_now().date().isoformat(),dimension)
     if expected is None or expected!=band:return False
@@ -71243,7 +71389,8 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
     # Exact same original producer, but seed its exclusion context with
     # completed-work observations BEFORE first ranking. No second selector.
     goal = str((decision or {}).get('goal_key') or (road or {}).get('goal_key') or '').upper()
-    dim = str(((road or {}).get('scientific_progression') or {}).get('dimension') or
+    future_road, _ = _nova_future_training_context(road, goal)
+    dim = str((future_road.get('scientific_progression') or {}).get('dimension') or
               (decision or {}).get('dimension') or '').upper()
     today = get_rome_now().date().isoformat()
     skip = (not owner_user_id or active_offer or not goal or not dim or
@@ -71346,6 +71493,15 @@ def _nova_inc051_attest_future_snapshot(data, owner_user_id):
     It is deliberately visible in QA so a pending/blank card cannot pass the
     acceptance test simply because the HTML contains three article elements.
     """
+    if isinstance(data, dict):
+        proposed = data.get('future_quality_plan')
+        if isinstance(proposed, dict):
+            _, question = _nova_future_training_context(
+                data.get('adaptive_roadmap'), proposed.get('goal_key'))
+            if (question != proposed.get('inc157_future_training_question')
+                or (question is not None and (proposed.get('dimension') != question['dimension']
+                    or (data.get('nova_decision') or {}).get('goal_key') != question['goal_key']))):
+                data['future_quality_plan'] = None
     result = _INC146_PRIOR_ATTEST(data, owner_user_id)
     if not isinstance(data, dict) or not owner_user_id:
         return result
@@ -71983,6 +72139,11 @@ else:
     HOME_PAGE = _inc156_candidate_page
     APP_VERSION += ' · INC156 CARD2/CARD3 WORKOUT PROFILE UI ONLY + GRAPH ZONES (OFFLINE CANDIDATE)'
 
+
+APP_VERSION += ' · INC157 CANONICAL R27 VALIDATION AUTHORITY RECONCILIATION (OFFLINE CANDIDATE)'
+
+
+APP_VERSION += ' · INC157 R2 SEPARATE CANONICAL CHECKPOINT FROM FUTURE TRAINING (OFFLINE NO-GO)'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
