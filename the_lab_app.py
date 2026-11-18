@@ -70846,7 +70846,7 @@ def _inc144_card_truth(snapshot, prepared=None):
     c3 = ui.get('nova_card3_workout_view') or {}
     c3 = c3 if isinstance(c3, dict) else {}
     duplicate = ui.get('inc120_quality_duplicate_card')
-    if duplicate in (1, 2) and not dual.get('quality_specific'):
+    if duplicate in (1, 2) and not dual.get('quality_specific') and not (ui.get('inc159_card1_route') or {}).get('relocate_c07'):
         card3 = {'state': 'ALREADY_IN_CARD_1_OR_2', 'title': None,
                  'already_in_card': duplicate, 'executable_now': False}
     else:
@@ -71186,7 +71186,10 @@ def _inc147_canonical_card_projection(data, base):
                 'execution_clearance_granted': False}
     verified = _inc140_ui_guard(raw, view)
     distinct = _inc143_ui_guard(raw, verified)
-    return _inc145_dose_safe_projection(raw, distinct)
+    projected = _inc145_dose_safe_projection(raw, distinct)
+    projected = dict(projected)
+    projected['inc159_card1_route'] = _inc159_card1_route(projected)
+    return projected
 
 
 def _v4891_prepare_snapshot_for_ui(data):
@@ -72024,6 +72027,147 @@ _INC156_SCRIPT = '''<script id="inc156-workout-profile-script">
 </script>'''
 
 
+def _inc159_card1_route(data):
+    """Read-only presentation of already projected workouts; never select a dose or a day."""
+    try:
+        rows = data.get('nova_inc110_chronological_cards') or []
+        row = rows[0] if rows else None
+        if (not isinstance(row, dict) or row.get('hidden') is True or row.get('visible') is False
+            or row.get('provisional_quality') or row.get('is_race')
+            or str(row.get('restriction') or 'NONE').upper() != 'NONE'):
+            return None
+        pres = data.get('nova_prescription') or {}
+        action = (data.get('nova_decision') or {}).get('action') or pres.get('action')
+        if action not in ('TRAIN', 'MAINTAIN') or _nova_inc079_explicit_injury_restriction(data.get('planning_context') or {}):
+            return None
+        dual = data.get('inc132_dual_quality') or {}
+        c2 = dual.get('quality_integrative') or {}
+        c3 = data.get('nova_card3_workout_view') or {}
+        f3 = data.get('quality_direction_fuel') or {}
+        d = _nova_inc120_duplicate_index(data)
+        w2 = ((data.get('future_quality_plan') or {}).get('inc132_integrative') or {}).get('workout')
+        parent3 = data.get('next_quality_offer') if c3.get('verified_offer') is True else data.get('future_quality_plan')
+        w3 = (parent3 or {}).get('workout')
+        has2 = bool(c2.get('complete') is True and c2.get('workout_id') and c2.get('title')
+                    and c2.get('structure') and c2.get('power_display') and (c2.get('fueling') or {}).get('display')
+                    and isinstance(w2, dict) and w2.get('nova_workout_id') == c2['workout_id'])
+        has3 = bool((c3.get('verified_offer') is True or c3.get('verified_future_plan') is True)
+                    and c3.get('workout_id') and c3.get('title') and c3.get('structure')
+                    and _inc145_has_personal_watts(c3) and f3.get('display')
+                    and f3.get('workout_id') == c3.get('workout_id')
+                    and isinstance(w3, dict) and w3.get('nova_workout_id') == c3['workout_id']
+                    and not data.get('inc145_dose_gate') and not data.get('inc143_recent_named_completion_review')
+                    and not (data.get('inc140_future_quality_guard') or {}).get('blocks_future_card'))
+        issued = (action == 'TRAIN' and pres.get('status') == 'PRESCRIBED'
+                  and type(pres.get('selected_slot_index')) is int and pres['selected_slot_index'] == 0
+                  and row.get('nova_prescription_authority') is True and pres.get('canonical_plan_id')
+                  and row.get('nova_canonical_plan_id') == pres['canonical_plan_id']
+                  and row.get('nova_workout_id') == pres.get('workout_id'))
+        def same_dose(other):
+            return (_nova_inc110_identical_chronological_dose(row, other)
+                    and row.get('power_prescription') == other.get('power_prescription')
+                    and row.get('nova_contract_id') == other.get('nova_contract_id'))
+        if issued:
+            if has2 and isinstance(w2, dict) and c2['workout_id'] == row.get('nova_workout_id') and same_dose(w2):
+                return {'card': 2, 'mode': 'CURRENT', 'relocate_c07': False}
+            if (has3 and c3.get('verified_offer') is True and isinstance(w3, dict)
+                and c3['workout_id'] == row.get('nova_workout_id') and same_dose(w3)):
+                if d is None:
+                    return {'card': 3, 'mode': 'CURRENT', 'relocate_c07': False}
+                # Explicitly reverse ONLY verified same-dose C07 Card1 placement.
+                # Keep the original planning identity, slot and HMAC binding.
+                if (d == 0 and data.get('inc120_quality_duplicate_card') == 1
+                    and data.get('quality_fuel_chronological_card') == 0
+                    and _nova_r196993_card3_duplicate_index(data) == 0):
+                    return {'card': 3, 'mode': 'CURRENT', 'relocate_c07': True}
+        # A future comparison never decides when intensity is appropriate.
+        if str(row.get('intensity') or '').upper() != 'EASY' or row.get('hard_spacing_relevant'):
+            return None
+        priority = dual.get('recommended_priority')
+        if priority == 'CARD2' and has2:
+            return {'card': 2, 'mode': 'FUTURE', 'relocate_c07': False}
+        if priority in (None, 'CARD3') and d is None and has3 and c3.get('verified_future_plan') is True:
+            return {'card': 3, 'mode': 'FUTURE', 'relocate_c07': False}
+    except (TypeError, ValueError, KeyError, AttributeError, IndexError, ArithmeticError):
+        return None
+    return None
+
+
+def _inc159_card1_checkpoint(data, row):
+    """Use the issued R27 slot identity, not the presence of a HARD label."""
+    if not isinstance(data, dict) or not isinstance(row, dict):
+        return False
+    p = data.get('nova_prescription') or {}
+    if not isinstance(p, dict):
+        return False
+    r = data.get('evidence_cycle_review') or p.get('evidence_cycle_review') or {}
+    return bool(isinstance(p, dict) and isinstance(r, dict) and p.get('action') == 'VALIDATE'
+        and p.get('status') == 'PRESCRIBED' and r.get('issued') is True
+        and type(r.get('selected_slot_index')) is int and r['selected_slot_index'] == 0
+        and r.get('canonical_plan_id') and row.get('nova_canonical_plan_id') == r['canonical_plan_id']
+        and row.get('nova_workout_id') == 'VALIDATION_CONTRACT_V1'
+        and r.get('planned_date') and row.get('date') == r['planned_date']
+        and row.get('nova_prescription_authority') is True and not row.get('provisional_quality')
+        and not row.get('hidden') and row.get('visible') is not False
+        and str(row.get('restriction') or 'NONE').upper() == 'NONE' and not row.get('is_race'))
+
+
+def _inc159_card1_profile(data, row):
+    """Re-use the existing graph; R27's native minute timeline is display-only."""
+    try:
+        if not isinstance(row, dict) or row.get('is_race') or row.get('hidden') or row.get('visible') is False:
+            return None
+        if not _inc159_card1_checkpoint(data, row):
+            return _inc156_workout_profile(data, row, 'CHRONO')
+        comp = row.get('session_composition') or {}
+        if comp.get('schema') != 'V4.8.74-R27-1' or comp.get('state') != 'COMPLETE':
+            return None
+        lo = _inc156_number(comp.get('total_min_low')); hi = _inc156_number(comp.get('total_min_high'))
+        if lo is None or hi != lo or lo > 360:
+            return None
+        blocks = comp.get('blocks')
+        if not isinstance(blocks, list) or not 3 <= len(blocks) <= 6:
+            return None
+        styles = {'WARMUP': ('Warm-up', 'Z1–Z2'), 'PRE_TEST_EASY': ('Easy', 'Z1'),
+            'PRIMARY_VALIDATION': ('Test', 'Maximal effort'), 'IMMEDIATE_RECOVERY': ('Recovery', 'Z1'),
+            'AEROBIC_FILL': ('Aerobic fill', 'Low Z2'), 'COOLDOWN': ('Cooldown', 'Z1')}
+        expected_order = list(styles)
+        zones = {'WARMUP': 'Z1-Z2', 'PRE_TEST_EASY': 'Z1', 'PRIMARY_VALIDATION': 'MAXIMAL',
+                 'IMMEDIATE_RECOVERY': 'Z1', 'AEROBIC_FILL': 'LOW_Z2', 'COOLDOWN': 'Z1'}
+        out = []; last = -1
+        for b in blocks:
+            typ = b.get('type'); role, zone = styles[typ]; index = expected_order.index(typ)
+            if index <= last or b.get('intensity') != zones[typ]:
+                return None
+            last = index
+            mn = _inc156_number(b.get('duration_min'))
+            if typ == 'AEROBIC_FILL':
+                mn = _inc156_number(b.get('duration_min_low'))
+                if mn != b.get('duration_min_high'):
+                    return None
+            if mn is None:
+                return None
+            sec = round(mn * 60, 6)
+            if typ == 'PRIMARY_VALIDATION':
+                p = data.get('nova_prescription') or {}; review = data.get('evidence_cycle_review') or p.get('evidence_cycle_review') or {}
+                if sec != review.get('seconds') or abs(mn - comp.get('primary_duration_min', 0)) > .011:
+                    return None
+                color, height, neutral = '#e25252', 62, False
+            else:
+                color, height, neutral = _inc156_phase_style(zone, role)
+            out.append({'role': role, 'seconds': sec, 'duration': _inc156_time(sec), 'zone': zone,
+                        'watts': zone, 'has_watts': False, 'color': color, 'height': height, 'neutral': neutral,
+                        'detail': f'{role} · {_inc156_time(sec)} · {zone}'})
+        if not {'Warm-up', 'Test', 'Recovery', 'Cooldown'}.issubset({r['role'] for r in out}) or abs(sum(r['seconds'] for r in out) - lo * 60) > .01:
+            return None
+        return {'total_seconds': lo * 60, 'total_label': _inc156_time(lo * 60), 'rows': out,
+                'summary': [{'label': r['duration'] + ' ' + r['role'], 'target': r['zone']} for r in out],
+                'min_width': min(5000, math.ceil(lo * 60 / min(r['seconds'] for r in out) * 10)),
+                'exploratory': False, 'neutral': False}
+    except (TypeError, ValueError, KeyError, AttributeError, IndexError, ArithmeticError):
+        return None
+
+
 def _inc156_install_workout_ui(page):
     # Atomic page-string transformation. The statuses, template gates and
     # planning controls are those of INC138/INC152, not new decision paths.
@@ -72115,6 +72259,34 @@ def _inc156_install_workout_ui(page):
     page = (page[:i] + '{% if inc156_chrono %}{{ inc156_profile_view(inc156_chrono) }}'
             '<details class="inc156-source-copy"><summary aria-label="Show full canonical instructions">ⓘ Full instructions</summary>{% endif %}'
             + page[i:j] + '{% if inc156_chrono %}</details>{% endif %}\n' + page[j:])
+    # INC159: Card1 only, plus exact C07 visual relocation. No new prescription,
+    # no additional forms or plan/fuel objects. The existing binder is untouched.
+    page = replace_once(page, '<div class="v23-session-fuel-grid v23-count-3">',
+        '{% set inc159_route = data.inc159_card1_route or {} %}\n<div class="v23-session-fuel-grid v23-count-3">', 'INC159_ROUTE')
+    page = replace_once(page, '{% set quality_already_shown=is_quality_slot and upcoming.quality_index is not none and upcoming.quality_index < 2 %}',
+        '{% set quality_already_shown=is_quality_slot and upcoming.quality_index is not none and upcoming.quality_index < 2 and not (inc159_route.relocate_c07 and upcoming.quality_index == 0) %}', 'INC159_C07')
+    page = replace_once(page, '{% if is_quality_slot %} aria-label="Next quality session status"{% endif %}>',
+        '{% if loop.index in (2,3) %} id="nova-workout-card-{{ loop.index }}"{% endif %}{% if is_quality_slot %} aria-label="Next quality session status"{% endif %}>', 'INC159_LINK_TARGET')
+    before_chrono = '{% else %}\n<div class="v4-session-slot">{% if is_quality_slot %}<span class="v1962-quality-eyebrow">'
+    page = replace_once(page, before_chrono, '{% else %}\n{% if loop.index == 1 and nova_inc159_card1_checkpoint(data, s) %}<div class="v4-session-slot"><span class="v1962-quality-eyebrow" style="color:#f5a0a0">PERFORMANCE CHECKPOINT</span></div>{% endif %}\n<div class="v4-session-slot">{% if is_quality_slot %}<span class="v1962-quality-eyebrow">', 'INC159_CHECKPOINT')
+    page = replace_once(page, '{% set athlete_view = nova_athlete_view(s) %}',
+        '{% set inc159_current = loop.index == 1 and inc159_route.mode == "CURRENT" %}\n{% if loop.index == 1 and inc159_route.card in (2,3) %}<p class="inc159-direction"><a href="#nova-workout-card-{{ inc159_route.card }}">{{ "Workout details" if inc159_current else "Next quality (not cleared for today)" }} · Card {{ inc159_route.card }} ↗</a></p>{% endif %}\n{% set athlete_view = nova_athlete_view(s) %}', 'INC159_CHRONO_LINK')
+    page = replace_once(page, '{% if inc156_chrono %}{{ inc156_profile_view(inc156_chrono) }}<details class="inc156-source-copy">',
+        '{% if loop.index == 1 and not inc159_current and not s.provisional_quality %}{% set inc156_chrono = nova_inc159_card1_profile(data, s) %}{% endif %}{% if inc159_current %}<details class="inc156-source-copy"><summary>ⓘ Session instructions</summary>{% elif inc156_chrono %}{{ inc156_profile_view(inc156_chrono) }}<details class="inc156-source-copy">', 'INC159_GRAPH')
+    page = replace_once(page, '{% if inc156_chrono %}</details>{% endif %}\n{% if s.provisional_quality and is_quality_slot %}',
+        '{% if inc156_chrono or inc159_current %}</details>{% endif %}\n{% if s.provisional_quality and is_quality_slot %}', 'INC159_GRAPH_END')
+    page = replace_once(page, '{% if is_quality_slot and next_quality_offer and not quality_already_shown %}',
+        '{% if is_quality_slot and next_quality_offer and not quality_already_shown and not inc159_route.relocate_c07 %}', 'INC159_NO_SECOND_SESSION')
+    page = replace_once(page, '{% if is_quality_slot and (not quality_already_shown or (data.inc132_dual_quality and data.inc132_dual_quality.quality_specific)) %}{% if data and not is_preview',
+        '{% if is_quality_slot and (not quality_already_shown or (data.inc132_dual_quality and data.inc132_dual_quality.quality_specific)) and not (inc159_route.relocate_c07 and data.nova_r142_plan_ui and data.nova_r142_plan_ui.card in (1,2)) %}{% if data and not is_preview', 'INC159_SINGLE_PLANNER')
+    page = replace_once(page, '{% if not is_quality_slot and data.quality_fuel_chronological_card == loop.index0 and data.quality_direction_fuel %}',
+        '{% if loop.index == 1 and inc159_route.relocate_c07 and data.quality_fuel_chronological_card == 0 and data.quality_direction_fuel %}<div class="v23-fuel-copy"><a href="#nova-workout-card-3">Session fuel · Card 3</a></div>{% elif not is_quality_slot and data.quality_fuel_chronological_card == loop.index0 and data.quality_direction_fuel %}', 'INC159_FUEL')
+    page = replace_once(page, '<a class="r148-quality-note-action" href="#r142-plan-your-quality"><span aria-hidden="true">📅</span> PLAN YOUR NEXT QUALITY</a>',
+        '{% if loop.index != 1 or not inc159_route.card %}<a class="r148-quality-note-action" href="#r142-plan-your-quality"><span aria-hidden="true">📅</span> PLAN YOUR NEXT QUALITY</a>{% endif %}', 'INC159_NO_DUPLICATE_CTA')
+    # Only the Card1 explanation is compacted; keep the original reasons accessible.
+    page = replace_once(page, '<h4 class="r148-quality-why-heading">WHY EASY ENDURANCE TODAY?</h4>\n    <p class="r148-quality-why-copy">{{ data.nova_r142_plan_ui.easy_explanation|upper|e }}</p>',
+        '{% if loop.index == 1 %}<details class="inc156-source-copy"><summary>Why easy endurance?</summary><p>{{ data.nova_r142_plan_ui.easy_explanation|e }}</p></details>{% else %}<h4 class="r148-quality-why-heading">WHY EASY ENDURANCE TODAY?</h4>\n    <p class="r148-quality-why-copy">{{ data.nova_r142_plan_ui.easy_explanation|upper|e }}</p>{% endif %}', 'INC159_EASY_COPY')
+    page = page.replace('This quality is already displayed in Card {{ data.nova_r142_plan_ui.card }}. Card 3 remains inactive.', '{% if inc159_route.relocate_c07 %}Workout details are in Card 3; this is the same session.{% else %}This quality is already displayed in Card {{ data.nova_r142_plan_ui.card }}. Card 3 remains inactive.{% endif %}')
     # Preserve planning trigger IDs, data attributes, forms, availability
     # limits, dialog text, and booking logic. Change only button caption.
     tempo_cta = '<span>Plan this Tempo workout</span>'
@@ -72140,6 +72312,8 @@ except Exception as _inc156_error:  # Fail closed within UI installation only.
     app.logger.warning('INC156 UI fallback: %s', _inc156_error)
 else:
     app.jinja_env.globals['nova_inc156_workout_profile'] = _inc156_workout_profile
+    app.jinja_env.globals['nova_inc159_card1_checkpoint'] = _inc159_card1_checkpoint
+    app.jinja_env.globals['nova_inc159_card1_profile'] = _inc159_card1_profile
     HOME_PAGE = _inc156_candidate_page
     APP_VERSION += ' · INC156 CARD2/CARD3 WORKOUT PROFILE UI ONLY + GRAPH ZONES (OFFLINE CANDIDATE)'
 
@@ -72149,6 +72323,7 @@ APP_VERSION += ' · INC157 CANONICAL R27 VALIDATION AUTHORITY RECONCILIATION (OF
 
 APP_VERSION += ' · INC157 R2 SEPARATE CANONICAL CHECKPOINT FROM FUTURE TRAINING (OFFLINE NO-GO)'
 APP_VERSION += ' · INC158 CHECKPOINT UI CLARITY ONLY'
+APP_VERSION += ' · INC159 CARD1 DIRECTION AND EXISTING WORKOUT PROFILE'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
