@@ -67527,6 +67527,48 @@ def _nova_inc101_same_compiled_dose(row, authority):
     return False
 
 
+def _inc161_issued_checkpoint(data, index, row):
+    """Read-only admission of an already issued, persisted R27 MAXIMAL occurrence.
+
+    The owner-scoped report, existing INC160 binding and native final/ledger
+    attestations remain authoritative. This does not issue or clear a test.
+    Never add R27 to the training-quality duplicate list (C07).
+    """
+    if not isinstance(row, dict) or row.get('nova_workout_id') != 'VALIDATION_CONTRACT_V1':
+        return False
+    try:
+        if not _nova_inc051_verified_owner_id() or not _inc160_checkpoint_binding(data, row):
+            return False
+        review = data.get('evidence_cycle_review') or {}
+        p = data.get('nova_prescription') or {}
+        rows = data.get('next_sessions') or []
+        compiled = p.get('sessions') or []
+        ledger = data.get('microcycle_ledger') or {}
+        if (review.get('state') != 'R27_CANONICAL_TEST_ISSUED'
+            or review.get('persisted') is not True or not review.get('request_id')
+            or type(index) is not int or index != review.get('selected_slot_index')
+            or index != p.get('selected_slot_index') or not 0 <= index < len(rows)
+            or index >= len(compiled) or rows[index] != row
+            or row.get('nova_evidence_request_id') != review['request_id']
+            or row.get('nova_evidence_protocol') != 'R27_CANONICAL_CONSENTED'
+            or row.get('nova_evidence_mode') != review.get('mode')
+            or not isinstance(compiled[index], dict)):
+            return False
+        # Compare mechanics with the actual compiled occurrence, never merely a title.
+        if any(compiled[index].get(k) != row.get(k) for k in (
+            'nova_workout_id', 'nova_contract_id', 'nova_canonical_plan_id', 'date',
+            'main_set', 'duration', 'session_composition', 'nova_evidence_request_id')):
+            return False
+        final = _v196920_final_projection(rows, review, p)
+        fp = review.get('prescription_fingerprint')
+        if not fp or not final.get('issued') or final.get('prescription_fingerprint') != fp or review.get('ledger_fingerprint') != fp:
+            return False
+        saved = _v196920_attest_persisted_ledger(ledger, final)
+        return bool(saved.get('persisted') is True and saved.get('ledger_fingerprint') == fp)
+    except (TypeError, ValueError, KeyError, AttributeError, IndexError, ArithmeticError):
+        return False
+
+
 def _nova_inc101_recovery_projection(data):
     """Paired display rows; never mutate a stored scientific/ledger field.
 
@@ -67546,7 +67588,8 @@ def _nova_inc101_recovery_projection(data):
     for i, row in enumerate(rows if isinstance(rows, list) else []):
         if not isinstance(row, dict):
             continue
-        if _nova_inc101_is_unissued_nova_hard(row):
+        checkpoint = _inc161_issued_checkpoint(d, i, row)
+        if _nova_inc101_is_unissued_nova_hard(row) and not checkpoint:
             if not selected_id or not _nova_inc101_same_compiled_dose(row, work):
                 withheld.append(str(row.get('nova_workout_id') or 'UNIDENTIFIED'))
                 continue
@@ -67557,8 +67600,9 @@ def _nova_inc101_recovery_projection(data):
             continue
         displayed.append({'session': row, 'nutrition': n,
             'workout_id': str(row.get('nova_workout_id') or ''),
-            'source': 'VERIFIED_CANONICAL' if _nova_inc101_is_unissued_nova_hard(row)
-                      else 'ORIGINAL_CHRONOLOGICAL',
+            'source': ('R27_PERSISTED_CHECKPOINT' if checkpoint else
+                       'VERIFIED_CANONICAL' if _nova_inc101_is_unissued_nova_hard(row)
+                       else 'ORIGINAL_CHRONOLOGICAL'),
             'conditional': False})
     if selected_id and not matched:
         # The signed future or issuer's full compilation owns these mechanics.
@@ -67683,9 +67727,13 @@ def _nova_inc110_chronological_projection(data):
     authority, authority_source = _nova_inc110_attested_chronological_authority(d)
     excluded = []
     kept = []
+    checkpoints = []
     for index, row in enumerate(originals[:2]):
         # No new safety veto on EASY, independently supplied training, races.
         if not _nova_inc101_is_unissued_nova_hard(row):
+            continue
+        if _inc161_issued_checkpoint(d, index, row):
+            checkpoints.append(index + 1)
             continue
         if (_nova_inc110_identical_chronological_dose(row, authority)
             and authority_source in {'ISSUED_CANONICAL',
@@ -67703,6 +67751,7 @@ def _nova_inc110_chronological_projection(data):
             authority.get('nova_workout_id') if isinstance(authority, dict) else None),
         'suppressed_chronological_hard': excluded,
         'retained_identical_hard_workout_ids': kept,
+        'retained_r27_checkpoint_cards': checkpoints,
         'saved_next_sessions_unchanged': True,
         'saved_nutrition_plan_unchanged': True,
         'changed_calendar_ledger_or_science': False,
@@ -72453,6 +72502,7 @@ assert HOME_PAGE.count(_inc160_postpone_anchor) == 1, 'INC160_POSTPONE_DRIFT'
 HOME_PAGE = HOME_PAGE.replace(_inc160_postpone_anchor, _inc160_postpone_anchor[:-3] + " and (s.nova_workout_id != 'VALIDATION_CONTRACT_V1' or nova_inc160_checkpoint_binding(data, s)) %}", 1)
 app.jinja_env.globals['nova_inc160_checkpoint_binding'] = _inc160_checkpoint_binding
 APP_VERSION += ' · INC160 CHECKPOINT POSTPONE AND CLEAN HOME'
+APP_VERSION += ' · INC161 R27 CHRONOLOGICAL AUTHORITY ALIGNMENT'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
