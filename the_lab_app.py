@@ -69820,11 +69820,12 @@ def _nova_inc050_future_quality(owner_user_id,decision,clock,road,ledger,
     if not isinstance(plan,dict):return plan
     plan=dict(plan)
     plan['inc132_dual_schema']=INC132_DUAL_SCHEMA
-    # A missing numeric Card 3 dose leaves room for a separate Tempo advisory.
-    compiled_card3 = plan.get('status') == 'COMPILED_UNSCHEDULED' and plan.get('schema') == INC091_SCHEMA
-    if (_nova_inc079_explicit_injury_restriction(planning_context) or active_offer
-        or not (compiled_card3 or _inc132_card3_numeric_dose_blocked(plan))):
-        plan['inc132_integrative_state']='NOT_EVALUATED_WITHOUT_VERIFIED_CARD3'
+    # INC164 / BH-001, BH-002, BS-004: Card2 is an independently assessed
+    # branch of the same original scientific producer, NOT an effect of Card3.
+    # A blocked or recently completed Card3 must never skip Card2 production.
+    # Only an explicit athlete injury restriction can prevent both hard offers.
+    if _nova_inc079_explicit_injury_restriction(planning_context):
+        plan['inc132_integrative_state']='EXEMPT_EXPLICIT_ATHLETE_INJURY'
         return plan
     future_road, _ = _nova_future_training_context(road, plan.get('goal_key'))
     candidate,why=_inc132_build_integrative(str(plan.get('goal_key') or ''),
@@ -69952,10 +69953,11 @@ def _nova_inc051_attest_future_snapshot(data,owner_user_id):
                     'display':inside['display'],'outdoor_display':outside['display'],
                     'total_minutes_example':minutes,'read_only':True,
                     'execution_authorized':False,'is_scheduled':False}
-                if _inc132_card3_numeric_dose_blocked(plan):
-                    priority,reason=None,'CARD3_NUMERIC_DOSE_PENDING'
-                else:
+                if (plan.get('status')=='COMPILED_UNSCHEDULED'
+                    and plan.get('schema')==INC091_SCHEMA):
                     priority,reason=_inc132_priority(data,tempo,owner_user_id)
+                else:
+                    priority,reason=None,'CARD3_NOT_ATTESTED_CARD2_EVALUATED_INDEPENDENTLY'
                 plan['inc132_recommended_priority']=priority
                 plan['inc132_priority_reason']=reason
             except (ValueError,TypeError,AttributeError,KeyError):
@@ -70233,7 +70235,6 @@ def _inc132_validate_integrative(data,plan,owner_user_id,producer_request=True):
                     producer_request=producer_request)
     if not owner_user_id or not isinstance(data,dict):return False
     if (plan.get('inc132_dual_schema')!=INC132_DUAL_SCHEMA
-        or not (plan.get('status')=='COMPILED_UNSCHEDULED' or _inc132_card3_numeric_dose_blocked(plan))
         or tempo.get('schema')!=INC132_DUAL_SCHEMA
         or tempo.get('first_dose_schema')!=INC132_CARD2_FIRST_SCHEMA
         or tempo.get('role')!='CARD2'
@@ -72720,7 +72721,7 @@ def classify_training_family(activity):
         or 'tempo' not in str(a.get('name') or '').casefold()):
         return prior
     zones = a.get('icu_zone_times')
-    if not isinstance(zones,list) or len(zones) != 7:
+    if not isinstance(zones,list) or len(zones) not in (7,8):
         return prior
     try:
         seconds = [float(row['secs']) for row in zones]
@@ -72762,7 +72763,7 @@ def _inc163_independent_card2(data, existing):
     if not isinstance(tempo,dict) or not isinstance(tempo.get('workout'),dict):
         return existing
     owner = _nova_inc051_verified_owner_id()
-    if (not owner or data.get('next_quality_offer') or
+    if (not owner or
         _nova_inc079_explicit_injury_restriction(data.get('planning_context')) or
         str(data.get('future_quality_owner_scope') or '') != _nova_inc050_owner_scope(owner) or
         tempo.get('owner_scope') != _nova_inc050_owner_scope(owner) or
@@ -72784,10 +72785,9 @@ def _inc163_independent_card2(data, existing):
     card3 = existing.get('nova_card3_workout_view') or {}
     signed_card3 = (isinstance(card3,dict) and
         (card3.get('verified_future_plan') is True or card3.get('verified_offer') is True))
-    if signed_card3:
-        # Do not touch another issuer's originally verified Card3, including
-        # chronological placements and priority/booking already derived.
-        return existing
+    # The two roles are independent even when Card3 is already signed.
+    # Preserve the exact specific identity and all current booking/fueling
+    # data; only publish the separately validated Card2 branch below.
     out = dict(existing)
     dual = dict(prior_dual) if isinstance(prior_dual,dict) else {}
     opt = {'role':'CARD2', 'workout_id':tempo['workout_id'],
@@ -72801,10 +72801,19 @@ def _inc163_independent_card2(data, existing):
                      if tempo.get('dose_kind')=='FIRST_TEMPO_FTP_ADVISORY'
                      else 'Power range from verified Tempo efforts'),
         'execution_disclaimer':'Future alternative, not an issued or cleared workout.'}
+    specific = (dual.get('quality_specific') if signed_card3 else None)
+    if signed_card3 and not isinstance(specific,dict):
+        specific = {'role':'CARD3','workout_id':card3.get('workout_id'),
+                    'complete':True,'title':card3.get('title'),
+                    'fueling':out.get('quality_direction_fuel')}
+    # Only an actually verified specific receives a producer-backed priority.
+    priority = plan.get('inc132_recommended_priority') if signed_card3 else None
+    if priority not in {'CARD2','CARD3'}: priority=None
     dual.update(schema=INC132_DUAL_SCHEMA,owner_scope=_nova_inc050_owner_scope(owner),
-        quality_specific=None,quality_integrative=opt,
-        recommended_priority=None,
-        reason_code='CARD3_UNAVAILABLE_CARD2_OWN_EVIDENCE_VALID',
+        quality_specific=specific,quality_integrative=opt,
+        recommended_priority=priority,
+        reason_code=(plan.get('inc132_priority_reason') if priority else
+            'CARD3_UNAVAILABLE_CARD2_OWN_EVIDENCE_VALID'),
         execution_clearance='RECHECK_DAY_OF_EXECUTION',calendar_commitment=False)
     out['inc132_dual_quality'] = dual
     out['inc163_independent_tempo'] = {
@@ -72853,8 +72862,25 @@ HOME_PAGE=HOME_PAGE.replace(_INC163_CARD3_FALLBACK_MAIN,
     '<div class="v4-session-main">{% if data.inc163_independent_tempo %}Card 2 contains a separate Tempo/Z3 future option. A new goal-specific hard workout has not been issued in this Snapshot. The Tempo option is not permission to ride hard today.{% else %}{{ card3.goal_explanation|e }}{% endif %}</div>',1)
 HOME_PAGE=HOME_PAGE.replace(_INC163_CARD3_FALLBACK_REASON,
     '<div class="v4-session-why">{% if data.inc163_independent_tempo %}<details><summary>Why no additional goal-specific workout?</summary><p>{{ card3.reason|e }} No second hard workout is automatically added; recheck the training window and recovery before planning.</p></details>{% else %}{{ card3.reason|e }} No interval structure, session duration or personal watt target has been issued. Previous efforts are evidence, not execution targets.{% endif %}</div>',1)
+# INC164 / BH-001, BS-002 owner correction: Card2 is exclusively Tempo.
+# This is a presentation gate, NOT a stand-in for scientific compilation.
+# The only canonical Tempo content comes from the independent producer above.
+_INC164_CARD2_CHRONOLOGICAL = '{% if not show_tempo or s %}'
+assert HOME_PAGE.count(_INC164_CARD2_CHRONOLOGICAL)==1, 'INC164_CARD2_CHRONOLOGICAL_DRIFT'
+HOME_PAGE = HOME_PAGE.replace(_INC164_CARD2_CHRONOLOGICAL,
+    '{% if loop.index != 2 and (not show_tempo or s) %}',1)
+# Nothing in Card2 may present ABSORB, EASY or RECOVERY as an integrative dose.
+# A missing Tempo remains a visible RED science-coverage fault, never success.
+_INC164_CARD2_INTRO = '{% if show_tempo %}\n<div class="inc132-dual-role">'
+assert HOME_PAGE.count(_INC164_CARD2_INTRO)==1, 'INC164_CARD2_INTRO_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_INC164_CARD2_INTRO,
+    '{% if loop.index == 2 and not show_tempo %}'
+    '<div class="inc164-coverage-failure" role="status">'
+    'INTEGRATIVE QUALITY NOT PRODUCED · RELEASE GATE FAILED. '
+    'No ordinary session is a substitute for a Tempo/Z3 quality.'
+    '</div>{% endif %}\n'+_INC164_CARD2_INTRO,1)
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION += ' · INC163 TTT RACE POWER TRUTH + INDEPENDENT CARD2 ADVISORY (LOCAL CANDIDATE)'
+APP_VERSION += ' · INC163 TTT RACE POWER TRUTH + INDEPENDENT CARD2 ADVISORY (LOCAL CANDIDATE) · INC164 CARD2 PRODUCER DECOUPLING + CARD2-ONLY QUALITY GATE (TEST CANDIDATE)'
 
 
 if __name__ == "__main__":
