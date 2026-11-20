@@ -29580,15 +29580,23 @@ def analyze():
             microcycle_ledger, training_direction, previous_training_blocks)
         # INC-050: conditional next-quality dose is a detached scientific product,
         # never an actual booking, clearance, issued promise or ledger row.
-        _inc050_future_quality = _nova_inc050_future_quality(
-            owner_user_id=user['id'], decision=nova_decision, clock=coach_clock,
-            road=adaptive_roadmap, ledger=microcycle_ledger,
-            evidence_ledger=evidence_ledger, power_model=power_model,
-            ftp_anchor=ftp_anchor, aerobic_metabolic_range=aerobic_metabolic_range,
-            training_definitions=training_definitions,
-            compiler_args=_r196920_compile_args, planning_context=planning_context,
-            training_state=training_state,
-            active_offer=_r196956_offer)
+        # INC165 / DTM BH-001/BD-002: the producer already has an owner-bound
+        # resolved activity history; do not discard it when preselecting the
+        # future quality. Scope the auxiliary history ONLY to this invocation.
+        _inc165_blocks_token = _INC165_OWNER_BLOCKS.set((
+            str(user['id']), tuple(copy.deepcopy(previous_training_blocks or []))))
+        try:
+            _inc050_future_quality = _nova_inc050_future_quality(
+                owner_user_id=user['id'], decision=nova_decision, clock=coach_clock,
+                road=adaptive_roadmap, ledger=microcycle_ledger,
+                evidence_ledger=evidence_ledger, power_model=power_model,
+                ftp_anchor=ftp_anchor, aerobic_metabolic_range=aerobic_metabolic_range,
+                training_definitions=training_definitions,
+                compiler_args=_r196920_compile_args, planning_context=planning_context,
+                training_state=training_state,
+                active_offer=_r196956_offer)
+        finally:
+            _INC165_OWNER_BLOCKS.reset(_inc165_blocks_token)
         microcycle_ledger = _v4883_refresh_stimulus_ledger(microcycle_ledger, adaptive_roadmap)
         snapshot_fault_stage = "NUTRITION_PLAN"
         nutrition_plan = build_nutrition_plan(analysis.get("next_sessions"), metabolic_context)
@@ -68732,13 +68740,24 @@ def _r142_card_copy(data):
                    and not qi.get('offer_present'))
     time_proven = (duration_reason and required_min is not None and learned is not None
                    and required_min > learned and card == 3)
+    # INC165 / BH-001, BH-005, CI: a newly attested, UNSCHEDULED Card3
+    # supersedes an earlier slot-offer failure. Never tell the athlete Nova
+    # cannot issue that workout, or invent a time conflict from learned rhythm.
+    c3 = d.get('nova_card3_workout_view') or {}
+    future_verified = (isinstance(c3, dict) and c3.get('verified_future_plan') is True
+                       and c3.get('workout_id') == wid)
     if time_proven:
         explanation = ('Your next quality workout needs %s minutes, while Nova estimates %s minutes '
                        'from your usual training pattern. Nova kept this slot easy rather than '
                        'assuming you have more time.' % (required_min, round(learned,1)))
-        if alternation:
+        if alternation and not future_verified:
             explanation += (' Nova is also reviewing recent quality work; more time alone '
                             'does not guarantee another hard workout.')
+    elif future_verified and card == 3:
+        explanation = ('Card 3 contains your complete future goal-specific quality. '
+                       'It has not been assigned to this slot; Card 1 retains the '
+                       'separate easy-session guidance. No additional hard session '
+                       'is automatically scheduled.')
     elif alternation and card == 3:
         explanation = ('Nova is reviewing recent quality work before issuing another hard session. '
                        'A different schedule does not bypass scientific progression.')
@@ -71623,7 +71642,14 @@ def _inc146_retry_reason(plan, ledger, evidence_ledger, snapshot_day):
 INC150_SCHEMA = 'NOVA-INC150-PRIOR-EXPOSURE-SELECTOR-CONTEXT-1'
 
 
-def _inc150_preselection_exposures(goal, dimension, ledger, evidence_ledger, snapshot_day):
+# INC165: only the immediately executing owner may supply recent resolved
+# blocks to pre-selection. This is NOT a new data fetch, database write or
+# cross-request cache. All existing structural truth checks remain in INC140.
+_INC165_OWNER_BLOCKS = ContextVar('nova_inc165_owner_recent_blocks', default=None)
+
+
+def _inc150_preselection_exposures(goal, dimension, ledger, evidence_ledger, snapshot_day,
+                                    owner_user_id=None):
     """Prepare conservative, bounded owner-scoped candidate exclusions.
 
     Trust resolved Intervals repeated-work observations for a mechanical match;
@@ -71635,13 +71661,18 @@ def _inc150_preselection_exposures(goal, dimension, ledger, evidence_ledger, sna
     eligible = [t for t in _NOVA_WORKOUT_LIBRARY if isinstance(t, dict)
                 and t.get('goal') == goal and dimension in set(t.get('dimensions') or ())
                 and not t.get('adaptive_only')]
+    scoped = _INC165_OWNER_BLOCKS.get()
+    # Never consume unbound, stale or foreign owner activity history.
+    blocks = (scoped[1] if isinstance(scoped, tuple) and len(scoped) == 2
+              and owner_user_id is not None and scoped[0] == str(owner_user_id)
+              and isinstance(scoped[1], tuple) else ())
     excluded = {}
     audit = []
     for tpl in eligible:
         wid = str(tpl.get('id') or '')
         if not wid:
             continue
-        mechanical = _inc140_candidate_replay(evidence_ledger, None, wid, snapshot_day)
+        mechanical = _inc140_candidate_replay(evidence_ledger, blocks, wid, snapshot_day)
         if mechanical.get('blocks_future_card') is True:
             excluded[wid] = 'RECENT_VERIFIED_SAME_STRUCTURE'
             audit.append({'workout_id': wid, 'reason': 'RECENT_VERIFIED_SAME_STRUCTURE',
@@ -71689,7 +71720,7 @@ def _nova_inc050_future_quality(owner_user_id, decision, clock, road, ledger,
     skip = (not owner_user_id or active_offer or not goal or not dim or
             _nova_inc079_explicit_injury_restriction(planning_context))
     historic, historic_audit = ({}, []) if skip else _inc150_preselection_exposures(
-        goal, dim, ledger, evidence_ledger, today)
+        goal, dim, ledger, evidence_ledger, today, owner_user_id=owner_user_id)
     inherited = set(_NOVA_QUALITY_CANDIDATE_EXCLUSIONS.get())
     token = _NOVA_QUALITY_CANDIDATE_EXCLUSIONS.set(frozenset(inherited | set(historic)))
     try:
@@ -72880,7 +72911,7 @@ HOME_PAGE=HOME_PAGE.replace(_INC164_CARD2_INTRO,
     'No ordinary session is a substitute for a Tempo/Z3 quality.'
     '</div>{% endif %}\n'+_INC164_CARD2_INTRO,1)
 app.jinja_env.parse(HOME_PAGE)
-APP_VERSION += ' · INC163 TTT RACE POWER TRUTH + INDEPENDENT CARD2 ADVISORY (LOCAL CANDIDATE) · INC164 CARD2 PRODUCER DECOUPLING + CARD2-ONLY QUALITY GATE (TEST CANDIDATE)'
+APP_VERSION += ' · INC163 TTT RACE POWER TRUTH + INDEPENDENT CARD2 ADVISORY (LOCAL CANDIDATE) · INC164 CARD2 PRODUCER DECOUPLING + CARD2-ONLY QUALITY GATE (TEST CANDIDATE) · INC165 OWNER-BOUND RECENT EXPOSURE PRESELECTION'
 
 
 if __name__ == "__main__":
