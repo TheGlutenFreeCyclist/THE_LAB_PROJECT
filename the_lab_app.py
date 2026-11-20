@@ -19367,6 +19367,9 @@ def _rhythm_clock_profile(records, today, history_start=None):
     second_by_weekday = {i: [] for i in range(7)}
     duration_by_weekday = {i: [] for i in range(7)}
     first_all, second_all, duration_all = [], [], []
+    # Per-daypart observations on actual multi-session dates. Do not learn a
+    # combined daily time budget or infer a slot from this descriptive field.
+    distinct_parts = {i: {} for i in range(7)}
     for d, rows in by_day.items():
         rows = sorted(rows, key=lambda x: x["dt"])
         age = (today - d).days
@@ -19381,6 +19384,18 @@ def _rhythm_clock_profile(records, today, history_start=None):
             if row.get("duration_min"):
                 duration_by_weekday[d.weekday()].append((row["duration_min"], weight))
                 duration_all.append((row["duration_min"], weight))
+        buckets = {}
+        for row in rows:
+            minute = row.get("start_minute")
+            duration = row.get("duration_min")
+            if minute is None or not duration:
+                continue
+            part = "MORNING" if minute < 720 else ("AFTERNOON" if minute < 1020 else "EVENING")
+            buckets.setdefault(part, []).append((minute, duration))
+        if len(buckets) >= 2 and all(len(v) == 1 for v in buckets.values()):
+            for part, values in buckets.items():
+                minute, duration = values[0]
+                distinct_parts[d.weekday()].setdefault(part, []).append((minute, duration, weight))
     return {
         "first_start_min": {i: _rhythm_weighted_median(first_by_weekday[i]) for i in range(7)},
         "second_start_min": {i: _rhythm_weighted_median(second_by_weekday[i]) for i in range(7)},
@@ -19388,6 +19403,12 @@ def _rhythm_clock_profile(records, today, history_start=None):
         "overall_first_start_min": _rhythm_weighted_median(first_all),
         "overall_second_start_min": _rhythm_weighted_median(second_all),
         "overall_duration_min": _rhythm_weighted_median(duration_all),
+        "distinct_double_daypart_duration": {wd: {
+            part: {"days": len(samples),
+                   "start_minute": _rhythm_weighted_median([(m, w) for m, _, w in samples]),
+                   "duration_min": _rhythm_weighted_median([(d, w) for _, d, w in samples])}
+            for part, samples in parts.items() if len(samples) >= 3}
+            for wd, parts in distinct_parts.items()},
     }
 def _rhythm_training_gap(records, today):
     dates = sorted({r["date"] for r in records if r["date"] < today})
@@ -36902,28 +36923,101 @@ def _v149_promote_reconciled_validation(evidence, training_direction, previous_b
             continue
         pmin = _rhythm_num(plan.get("quality_reference_interval_min")) or _rhythm_num(plan.get("interval_minutes"))
         target_secs = int(round(float(pmin) * 60.0)) if pmin is not None and pmin > 0 else default_secs
-        # A deterministic validation contract must match the goal's configured primary checkpoint.
-        if abs(float(target_secs) - float(default_secs)) > max(2.0, min(30.0, default_secs * 0.05)):
+        # Preserve the primary checkpoint path; allow only a causally reconciled
+        # maximal extension of the goal-owned native ladder, never a label or PB.
+        extension = abs(float(target_secs) - float(default_secs)) > max(2.0, min(30.0, default_secs * 0.05))
+        event_secs = default_secs
+        prior_formal = None
+        if extension:
+            ladder = _V502_CHECKPOINT_LADDERS.get(goal) or ()
+            fp = str(rec.get("prescription_fingerprint") or "")
+            history = (microcycle_ledger or {}).get("prescription_history") or []
+            matched = [r for r in history if isinstance(r, dict) and str(r.get("prescription_fingerprint") or "") == fp]
+            try:
+                valid_date = date.fromisoformat(actual) <= today
+            except (TypeError, ValueError):
+                valid_date = False
+            if (not ladder or ladder[0] != default_secs or target_secs not in ladder[1:]
+                    or str(field.get("mode") or "").upper() != "MAXIMAL"
+                    or str((microcycle_ledger or {}).get("primary_goal") or "").upper() != goal
+                    or not fp or len(matched) != 1 or not valid_date
+                    or plan.get("prescription_status") != "FULFILLED"
+                    or plan.get("prescription_fingerprint") != fp or _v136_prescription_fingerprint(plan) != fp
+                    or plan.get("nova_workout_id") != "VALIDATION_CONTRACT_V1"
+                    or plan.get("nova_contract_id") != "VALIDATION_CONTRACT_V1"
+                    or not plan.get("nova_canonical_plan_id")
+                    or rec.get("canonical_plan_id") != plan.get("nova_canonical_plan_id")
+                    or rec.get("nova_workout_id") != plan.get("nova_workout_id")
+                    or str(rec.get("planned_date") or "")[:10] != str(plan.get("planned_date") or plan.get("date") or "")[:10]
+                    or str(plan.get("stimulus_role") or "").upper() != "VALIDATE"
+                    or str(plan.get("execution_match_basis") or "").upper() != "VALIDATION_SINGLE_EFFORT"
+                    or str(rec.get("match_basis") or "").upper() != "VALIDATION_SINGLE_EFFORT"
+                    or str(plan.get("executed_activity_id") or "") != aid
+                    or str(plan.get("actual_date") or "")[:10] != actual):
+                continue
+            event_secs = target_secs
+            same = [r for r in events if r.get("formal_validation")
+                    and str(r.get("activity_id") or "") == aid and str(r.get("date") or "")[:10] == actual
+                    and _rhythm_num(r.get("secs")) == event_secs]
+            if len(same) > 1:
+                continue  # Ambiguous prior evidence is not healed by inventing a winner.
+            prior_formal = same[0] if same else None
+            if prior_formal and (str(prior_formal.get("goal_key") or "").upper() != goal
+                    or str(prior_formal.get("validation_mode") or "").upper() != "MAXIMAL"
+                    or prior_formal.get("prescription_fingerprint") not in (None, "", fp)):
+                continue
+            if prior_formal and prior_formal.get("prescription_fingerprint") == fp:
+                continue
+        key = (aid, actual, int(event_secs))
+        if key in existing_keys and not extension:
             continue
-        key = (aid, actual, int(default_secs))
-        if key in existing_keys:
+        obs = _v149_exact_checkpoint_observation(out, previous_blocks, aid, actual, event_secs)
+        if not obs or (extension and (not math.isfinite(float(obs.get("watts") or 0)) or not 20 <= float(obs.get("watts") or 0) <= 2500)):
             continue
-        obs = _v149_exact_checkpoint_observation(out, previous_blocks, aid, actual, default_secs)
-        if not obs:
-            continue
+        if extension:
+            # A prior unlinked event is not an independent measurement. Verify
+            # the original activity's canonical work interval or exact native curve.
+            block = next((q for q in previous_blocks or [] if isinstance(q, dict)
+                          and str(q.get("activity_id") or "") == aid and str(q.get("date") or "")[:10] == actual), None)
+            interval = _v4896_validation_interval_match(block, event_secs, mode="MAXIMAL") if block and block.get("quality_relevant") else None
+            native = [r for r in (out.get("observed_efforts") or []) if isinstance(r, dict)
+                      and r.get("source") == "INTERVALS_ACTIVITY_POWER_CURVE" and r.get("rolling_window") is True
+                      and str(r.get("activity_id") or "") == aid and str(r.get("date") or "")[:10] == actual
+                      and _rhythm_num(r.get("secs")) == event_secs and _rhythm_num(r.get("watts")) is not None
+                      and 20 <= float(r["watts"]) <= 2500]
+            if not interval and not native:
+                continue
+            # INC162 R3: the presence of an independent measurement is
+            # not enough to authenticate a contradictory PB or stored event.
+            # Keep the upstream duration tolerance, but refuse discordant
+            # measurements rather than select the largest watt value.
+            measured = [float(r["watts"]) for r in native]
+            if interval:
+                iw = _rhythm_num(interval.get("watts"))
+                if iw is None or not math.isfinite(iw) or not 20 <= iw <= 2500:
+                    continue
+                measured.append(float(iw))
+            result_w = float(obs.get("watts"))
+            if any(abs(w - result_w) > 0.1000001 for w in measured):
+                continue
+            if prior_formal:
+                previous_w = _rhythm_num(prior_formal.get("watts"))
+                if (not interval or previous_w is None or not math.isfinite(previous_w)
+                        or abs(previous_w - float(interval["watts"])) > 0.1000001):
+                    continue
         prescription_ref = _rhythm_num(plan.get("quality_reference_watts"))
         if prescription_ref is None:
             prescription_ref = _rhythm_num(plan.get("stimulus_reference_power_watts"))
         result = float(obs.get("watts"))
         comparison = _v1955_checkpoint_comparison(
-            out.get("events") or [], result, default_secs, actual,
+            out.get("events") or [], result, event_secs, actual,
             observed_event=obs.get("source_event"), mode=field.get("mode") or "MAXIMAL",
         )
         formal = {
             "kind": "VALIDATION",
             "source": "PRESCRIPTION_FULFILLMENT + EXECUTION_RECONCILIATION + EXACT_CHECKPOINT_EVIDENCE",
             "date": actual,
-            "secs": int(default_secs),
+            "secs": int(event_secs),
             "watts": round(result, 1),
             "previous_watts": comparison["previous_watts"],
             "delta_w": comparison["delta_w"],
@@ -36938,7 +37032,7 @@ def _v149_promote_reconciled_validation(evidence, training_direction, previous_b
             "exact_checkpoint_duration": True,
             "activity_linked": True,
             "quality_linked": True,
-            "stimulus_domain": str(field.get("stimulus_domain") or _v4896_duration_domain(default_secs)).upper(),
+            "stimulus_domain": str(_v4896_duration_domain(event_secs) if extension else (field.get("stimulus_domain") or _v4896_duration_domain(default_secs))).upper(),
             "progression_signal": False,
             "formal_validation": True,
             "validation_mode": str(field.get("mode") or "MAXIMAL").upper(),
@@ -36954,8 +37048,17 @@ def _v149_promote_reconciled_validation(evidence, training_direction, previous_b
             "execution_match_confidence": rec.get("match_confidence") or plan.get("execution_match_confidence"),
             "reconciliation_schema": R149_SCHEMA,
         }
-        formal["id"] = _v4896_event_id(formal)
-        events.append(formal); existing_keys.add(key); promoted.append(formal)
+        if prior_formal:
+            # Enrich the one already measured event, preserving its ID, watts,
+            # scientific outcome, and source. Do not count it twice.
+            for name in ("prescription_fingerprint", "nova_workout_id", "canonical_plan_id", "planned_date",
+                         "execution_timing", "execution_match_basis", "execution_match_confidence", "reconciliation_schema"):
+                prior_formal[name] = formal[name]
+            formal = prior_formal
+        else:
+            formal["id"] = _v4896_event_id(formal)
+            events.append(formal)
+        existing_keys.add(key); promoted.append(formal)
     if not promoted:
         return out
     # Keep the same bounded evidence contract while making the newly fulfilled checkpoint authoritative.
@@ -36964,8 +37067,59 @@ def _v149_promote_reconciled_validation(evidence, training_direction, previous_b
     formal_events = [x for x in events if x.get("formal_validation")]
     latest = max(formal_events, key=lambda x: (str(x.get("date") or ""), float(x.get("watts") or 0)), default=None)
     out["events"] = events
+    if isinstance(out.get("display_event"), dict):
+        updated = next((e for e in promoted if e.get("id") == out["display_event"].get("id")), None)
+        if updated is not None:
+            out["display_event"] = dict(updated)
     out["last_validation"] = dict(latest) if latest else out.get("last_validation")
     out["latest_formal_validation"] = dict(latest) if latest else out.get("latest_formal_validation")
+    # Reproject the same canonical scientific cycle after a newly reconciled extension.
+    if any(int(x.get("secs") or 0) != default_secs for x in promoted):
+        try:
+            prior_effective_start = date.fromisoformat(str(out.get("effective_cycle_start") or "")[:10])
+        except (TypeError, ValueError):
+            prior_effective_start = None
+        effective_start = prior_effective_start
+        if latest:
+            try:
+                latest_day = date.fromisoformat(str(latest.get("date") or "")[:10])
+            except Exception:
+                latest_day = None
+            if latest_day is not None and today > latest_day:
+                next_cycle = latest_day + timedelta(days=1)
+                effective_start = max([d for d in (prior_effective_start, next_cycle) if d is not None]) if prior_effective_start else next_cycle
+        cycle_events = []
+        for x in events:
+            try:
+                d = date.fromisoformat(str(x.get("date") or "")[:10])
+            except Exception:
+                d = None
+            if d is not None and (effective_start is None or d >= effective_start) and not x.get("formal_validation"):
+                cycle_events.append(x)
+        strongest = max(
+            cycle_events,
+            key=lambda x:(int(x.get("tier") or 0),bool(x.get("goal_relevant")),str(x.get("date") or ""),float(x.get("watts") or 0)),
+            default=None,
+        )
+        display = latest if (latest and str(latest.get("date") or "") == today.isoformat()) else (strongest or latest)
+        if latest is not None and display is latest:
+            if latest.get("outcome") == "VALIDATED_GAIN":
+                summary = f"Formal checkpoint · {format_duration_label(int(latest.get('secs') or 0))} {float(latest.get('watts')):g} W · gain validated"
+            else:
+                summary = f"Formal checkpoint completed · {format_duration_label(int(latest.get('secs') or 0))} {float(latest.get('watts')):g} W"
+        elif strongest and int(strongest.get("tier") or 0) == 2:
+            summary = f"Goal-aligned quality PB · {format_duration_label(int(strongest.get('secs') or 0))} {float(strongest.get('watts')):g} W · observed during quality work"
+        elif strongest and strongest.get("race_transfer"):
+            summary = f"Race-useful transfer PB · {format_duration_label(int(strongest.get('secs') or 0))} {float(strongest.get('watts')):g} W · outside the primary goal duration"
+        elif strongest:
+            summary = f"Goal-relevant PB · {format_duration_label(int(strongest.get('secs') or 0))} {float(strongest.get('watts')):g} W · causality not assigned"
+        else:
+            summary = None
+        out.update(effective_cycle_start=effective_start.isoformat() if effective_start else None,
+                   current_cycle_events=cycle_events, strongest_current=strongest, display_event=display, summary=summary,
+                   progression_signal=any(x.get("progression_signal") for x in cycle_events),
+                   goal_aligned_quality_signal=any(int(x.get("tier") or 0)>=2 and x.get("progression_signal") for x in cycle_events),
+                   race_transfer_signal=any(x.get("race_transfer") and x.get("progression_signal") for x in cycle_events))
     if latest and str(latest.get("date") or "") == today.isoformat():
         out["display_event"] = dict(latest)
         if latest.get("outcome") == "VALIDATED_GAIN":
@@ -50247,19 +50401,26 @@ def _nova_quality_template_required_seconds(template, dimension):
 
 
 def _nova_quality_slot_declared_seconds(slot):
-    """The compiler receives slot duration; +15min feasibility cushions are NOT declared time."""
+    """Chronological fit envelope, not proof of athlete availability.
+
+    Explicit calendar/R142 limits stand on their own even without a learned
+    hint; conflicting hints cannot enlarge them. A learned envelope stays
+    conservative for a chronological offer, not a booked or explicit cap.
+    """
     s = slot if isinstance(slot, dict) else {}
-    value = _rhythm_num(s.get('duration_hint_min'))
-    if value is None:
-        value = _parse_duration_minutes(s.get('duration_hint_label'))
-    if value is None or not math.isfinite(float(value)) or float(value) <= 0:
-        return None
-    # Respect an explicit planned maximum even if a learned duration hint is longer.
+    def positive(value):
+        v = _rhythm_num(value)
+        return float(v) if v is not None and math.isfinite(float(v)) and float(v) > 0 else None
+    hint = positive(s.get('duration_hint_min'))
+    if hint is None:
+        hint = positive(_parse_duration_minutes(s.get('duration_hint_label')))
+    caps = []
     if s.get('is_planned_training') is True:
-        cap = _rhythm_num(s.get('expected_duration_max'))
-        if cap is not None and cap > 0:
-            value = min(float(value),float(cap))
-    return round(float(value) * 60)
+        caps.append(positive(s.get('expected_duration_max')))
+    if s.get('r142_availability_source') == 'ATHLETE_INTENT_NOT_ACTIVITY':
+        caps.append(positive(s.get('r142_confirmed_availability_minutes')))
+    values = [v for v in [hint] + caps if v is not None]
+    return math.floor(min(values) * 60 + 1e-9) if values else None
 
 
 def _v19699_select_workout_template(goal, dimension, evidence_ledger=None,
@@ -59372,6 +59533,33 @@ def _r196964_learned_duration(row, rhythm):
     if not _v4895_rhythm_duration_reliable(rhythm):
         return out
     n = _rhythm_num(out.get('duration_hint_min'))
+    # INC162 R3: the date/clock is already selected by the native scheduler.
+    # Distinct same-weekday multi-session measurements must not be averaged
+    # into one morning/evening duration; preserve explicit and PTO boundaries.
+    if (str(out.get('restriction') or 'NONE').upper() == 'NONE'
+            and out.get('availability_confirmed') is not True
+            and str(out.get('timing_confidence') or '').upper() in {'HIGH', 'MODERATE'}
+            and _rhythm_num((rhythm or {}).get('double_propensity')) is not None
+            and float(rhythm['double_propensity']) >= .45
+            and str(out.get('period') or '').upper() in {'RHYTHM', 'RHYTHM_SECOND', 'RHYTHM_ALTERNATE', 'SAME_DAY_SECOND'}):
+        try:
+            wd = date.fromisoformat(str(out.get('date') or '')[:10]).weekday()
+            minute = float(out['start_minute'])
+            part = 'MORNING' if minute < 720 else ('AFTERNOON' if minute < 1020 else 'EVENING')
+            per_wd = ((rhythm.get('clock_profile') or {}).get('distinct_double_daypart_duration') or {})
+            group = per_wd.get(wd) or per_wd.get(str(wd)) or {}
+            sample = group.get(part) or {}
+            length = float(sample['duration_min'])
+            if (int(sample['days']) >= 3 and abs(float(sample['start_minute']) - minute) <= 90
+                    and math.isfinite(length) and length > 0 and n is not None):
+                out.update(original_weekday_duration_hint_min=n, duration_hint_min=round(length, 1),
+                           duration_hint_label=_rhythm_format_duration(length),
+                           duration_estimate_source='DISTINCT_DOUBLE_DAYPART_HISTORY',
+                           duration_estimate_not_availability=True,
+                           duration_estimate_sample_days=int(sample['days']))
+                return out
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
     median = _rhythm_num((rhythm or {}).get('median_session_duration_min'))
     if n is None or median is None or not 0 < n < median:
         return out
@@ -72503,6 +72691,171 @@ HOME_PAGE = HOME_PAGE.replace(_inc160_postpone_anchor, _inc160_postpone_anchor[:
 app.jinja_env.globals['nova_inc160_checkpoint_binding'] = _inc160_checkpoint_binding
 APP_VERSION += ' · INC160 CHECKPOINT POSTPONE AND CLEAN HOME'
 APP_VERSION += ' · INC161 R27 CHRONOLOGICAL AUTHORITY ALIGNMENT'
+
+
+
+# INC163 — CA-confirmed TTT classification + independently evidenced Card 2.
+# No modifications to canonical training selection, science/attestation, issuer,
+# completion ledger, calendar, intake, per-athlete stored reports, or execution.
+# Source: consenting tester PRODUCT report 2026-11-19, evaluated READ ONLY.
+INC163_SCHEMA = 'NOVA-INC163-CA-TTT-AND-INDEPENDENT-QUALITY-VIEW-1'
+_INC163_BEFORE_CLASSIFIER = classify_training_family
+_INC163_BEFORE_UI = _v4891_prepare_snapshot_for_ui
+_INC163_BEFORE_BIND = _r142_report_binding
+
+
+def classify_training_family(activity):
+    """Do not let a race's event title 'Team Tempo' override native watts.
+
+    Only contradict an original *Tempo* label when competition is confirmed,
+    complete native Z1..Z7 exposure is available, and actual Z4+/Z5+ effort
+    proves that Tempo/Z3 is a false summary. Training named Tempo, races with
+    missing/uncertain power and every other family keep the previous behavior.
+    This does not change the independent RACE event kind, race-repeatability
+    exclusion, source activities or hard-spacing/permission classification.
+    """
+    prior = _INC163_BEFORE_CLASSIFIER(activity)
+    a = activity if isinstance(activity,dict) else {}
+    if (prior != 'Tempo' or not _v1954_confirmed_competition(a)
+        or 'tempo' not in str(a.get('name') or '').casefold()):
+        return prior
+    zones = a.get('icu_zone_times')
+    if not isinstance(zones,list) or len(zones) != 7:
+        return prior
+    try:
+        seconds = [float(row['secs']) for row in zones]
+        moving = float(a.get('moving_time') or a.get('elapsed_time') or 0)
+    except (TypeError,ValueError,KeyError,OverflowError):
+        return prior
+    total = sum(seconds)
+    if (not math.isfinite(moving) or moving <= 0 or not math.isfinite(total)
+        or any(not math.isfinite(s) or s < 0 for s in seconds)
+        or not 0.80 <= total/moving <= 1.10):
+        return prior
+    # % values are descriptive discriminators, not new quality dose/gates.
+    fraction_z4_plus = sum(seconds[3:])/total
+    fraction_z5_plus = sum(seconds[4:])/total
+    if fraction_z4_plus >= .45 and fraction_z5_plus >= .18:
+        return 'High Intensity / Mixed'
+    if fraction_z4_plus >= .50 and seconds[3] / total >= .35:
+        return 'Threshold'
+    return prior
+
+
+def _inc163_independent_card2(data, existing):
+    """Publish a *previously built* Card2 advisory if its own proof survives.
+
+    Card3 invalid, recently performed or withheld must not veto an otherwise
+    valid independent first Tempo dose. Do not promote Card3's unsent plan or
+    manufacture Tempo/threshold watts. Execution remains NOT AUTHORIZED.
+    Snapshot and the prior UI are never modified in-place.
+    """
+    if not isinstance(data,dict) or not isinstance(existing,dict):
+        return existing
+    prior_dual = existing.get('inc132_dual_quality') or {}
+    if isinstance(prior_dual,dict) and (prior_dual.get('quality_integrative') or {}).get('complete'):
+        return existing  # unchanged already valid dual view
+    plan = data.get('future_quality_plan') or {}
+    if not isinstance(plan,dict) or plan.get('inc132_dual_schema') != INC132_DUAL_SCHEMA:
+        return existing
+    tempo = plan.get('inc132_integrative') or {}
+    if not isinstance(tempo,dict) or not isinstance(tempo.get('workout'),dict):
+        return existing
+    owner = _nova_inc051_verified_owner_id()
+    if (not owner or data.get('next_quality_offer') or
+        _nova_inc079_explicit_injury_restriction(data.get('planning_context')) or
+        str(data.get('future_quality_owner_scope') or '') != _nova_inc050_owner_scope(owner) or
+        tempo.get('owner_scope') != _nova_inc050_owner_scope(owner) or
+        tempo.get('not_issued') is not True or tempo.get('execution_authorized') is not False or
+        not _inc132_validate_integrative(data,plan,owner,producer_request=False)):
+        return existing
+    fuel = tempo.get('fueling') or {}
+    if (not isinstance(fuel,dict) or fuel.get('workout_id') != tempo.get('workout_id')
+        or not fuel.get('display') or fuel.get('execution_authorized') is not False
+        or fuel.get('is_scheduled') is not False):
+        return existing
+    work = tempo['workout']; band = work.get('power_prescription') or {}
+    if not isinstance(band,dict):
+        return existing
+    lo,hi = band.get('low_watts'),band.get('high_watts')
+    if (type(lo) not in (int,float) or type(hi) not in (int,float)
+        or not all(math.isfinite(x) for x in (lo,hi)) or not 60 <= lo < hi <= 600):
+        return existing
+    card3 = existing.get('nova_card3_workout_view') or {}
+    signed_card3 = (isinstance(card3,dict) and
+        (card3.get('verified_future_plan') is True or card3.get('verified_offer') is True))
+    if signed_card3:
+        # Do not touch another issuer's originally verified Card3, including
+        # chronological placements and priority/booking already derived.
+        return existing
+    out = dict(existing)
+    dual = dict(prior_dual) if isinstance(prior_dual,dict) else {}
+    opt = {'role':'CARD2', 'workout_id':tempo['workout_id'],
+        'complete':True,'title':work.get('title'),
+        'structure':work.get('main_set'),'why':work.get('why'),
+        'power_display':f'{lo:g}–{hi:g} W',
+        'duration_minutes':tempo.get('duration_minutes'),
+        'fueling':copy.deepcopy(fuel),
+        'first_exposure':tempo.get('dose_kind')=='FIRST_TEMPO_FTP_ADVISORY',
+        'dose_label':('First-session power range based on your Intervals FTP'
+                     if tempo.get('dose_kind')=='FIRST_TEMPO_FTP_ADVISORY'
+                     else 'Power range from verified Tempo efforts'),
+        'execution_disclaimer':'Future alternative, not an issued or cleared workout.'}
+    dual.update(schema=INC132_DUAL_SCHEMA,owner_scope=_nova_inc050_owner_scope(owner),
+        quality_specific=None,quality_integrative=opt,
+        recommended_priority=None,
+        reason_code='CARD3_UNAVAILABLE_CARD2_OWN_EVIDENCE_VALID',
+        execution_clearance='RECHECK_DAY_OF_EXECUTION',calendar_commitment=False)
+    out['inc132_dual_quality'] = dual
+    out['inc163_independent_tempo'] = {
+        'schema':INC163_SCHEMA,'state':'CARD2_EVIDENCED_OPTION_VISIBLE',
+        'no_new_science':True,'card3_unchanged':True,'booking_not_execution':True}
+    # The original timeline and C3 remain intact. The R142 existing binding
+    # can offer availability intent for the EXACT already-attested Card2 only.
+    return out
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    return _inc163_independent_card2(data, _INC163_BEFORE_UI(data))
+
+
+def _r142_report_binding(report,owner_id,target=None,prepared=None):
+    if target != 'TEMPO':
+        return _INC163_BEFORE_BIND(report,owner_id,target,prepared=prepared)
+    # Trust the authenticated CURRENT raw report, not a supplied UI/POST view.
+    raw=(report or {}).get('data') or {}
+    actor=_nova_inc051_verified_owner_id()
+    if not actor or str(actor) != str(owner_id):
+        return None
+    view=_v4891_prepare_snapshot_for_ui(raw)
+    tempo=((view or {}).get('inc132_dual_quality') or {}).get('quality_integrative') or {}
+    plan=raw.get('future_quality_plan') or {}
+    if (not tempo.get('complete') or not tempo.get('workout_id')
+        or tempo['workout_id'] != (plan.get('inc132_integrative') or {}).get('workout_id')):
+        return None
+    return _INC163_BEFORE_BIND(report,owner_id,target,prepared=view)
+
+# The only template changes are conditional copy for evidence-proven Card2-only
+# displays. Everyone else sees the same original HOME_PAGE bytes per branch.
+_INC163_NO_WORKOUT_HEADER = '<span class="v1962-quality-eyebrow">QUALITY GOAL · NOT A PRESCRIBED WORKOUT</span>'
+_INC163_NO_WORKOUT_PILL = '<span class="v4-session-pill">NO VERIFIED QUALITY WORKOUT</span>'
+assert HOME_PAGE.count(_INC163_NO_WORKOUT_HEADER)==1,'INC163_CARD3_HEADER_DRIFT'
+assert HOME_PAGE.count(_INC163_NO_WORKOUT_PILL)==1,'INC163_CARD3_PILL_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_INC163_NO_WORKOUT_HEADER,
+    '<span class="v1962-quality-eyebrow">{{ "NEXT SPECIFIC QUALITY · REASSESSMENT" if data.inc163_independent_tempo else "QUALITY GOAL · NOT A PRESCRIBED WORKOUT" }}</span>',1)
+HOME_PAGE=HOME_PAGE.replace(_INC163_NO_WORKOUT_PILL,
+    '<span class="v4-session-pill">{{ "ALTERNATIVE QUALITY IN CARD 2" if data.inc163_independent_tempo else "NO VERIFIED QUALITY WORKOUT" }}</span>',1)
+_INC163_CARD3_FALLBACK_MAIN = '<div class="v4-session-main">{{ card3.goal_explanation|e }}</div>'
+_INC163_CARD3_FALLBACK_REASON = '<div class="v4-session-why">{{ card3.reason|e }} No interval structure, session duration or personal watt target has been issued. Previous efforts are evidence, not execution targets.</div>'
+assert HOME_PAGE.count(_INC163_CARD3_FALLBACK_MAIN)==1,'INC163_CARD3_MAIN_DRIFT'
+assert HOME_PAGE.count(_INC163_CARD3_FALLBACK_REASON)==1,'INC163_CARD3_WHY_DRIFT'
+HOME_PAGE=HOME_PAGE.replace(_INC163_CARD3_FALLBACK_MAIN,
+    '<div class="v4-session-main">{% if data.inc163_independent_tempo %}Card 2 contains a separate Tempo/Z3 future option. A new goal-specific hard workout has not been issued in this Snapshot. The Tempo option is not permission to ride hard today.{% else %}{{ card3.goal_explanation|e }}{% endif %}</div>',1)
+HOME_PAGE=HOME_PAGE.replace(_INC163_CARD3_FALLBACK_REASON,
+    '<div class="v4-session-why">{% if data.inc163_independent_tempo %}<details><summary>Why no additional goal-specific workout?</summary><p>{{ card3.reason|e }} No second hard workout is automatically added; recheck the training window and recovery before planning.</p></details>{% else %}{{ card3.reason|e }} No interval structure, session duration or personal watt target has been issued. Previous efforts are evidence, not execution targets.{% endif %}</div>',1)
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += ' · INC163 TTT RACE POWER TRUTH + INDEPENDENT CARD2 ADVISORY (LOCAL CANDIDATE)'
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
