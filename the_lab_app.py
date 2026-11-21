@@ -3026,7 +3026,7 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",
 }
 </style>
 {% if request.args.get('notice') %}<div class="v13-toast" id="v13-toast"><span class="v13-toast-icon">✓</span><div><strong>{{ request.args.get('notice') }}</strong><small>{{ request.args.get('detail','Saved') }}</small></div></div>{% endif %}
-{% if ai_setup_reminder and not is_preview and not report_mode and not qa_mode %}<div class="v4832-modal v4854-ai-reminder is-open" id="v4854-ai-reminder" role="dialog" aria-modal="true" aria-labelledby="v4854-ai-reminder-title"><div class="v4832-modal-backdrop"></div><div class="v4832-modal-panel" tabindex="-1"><div class="v4832-modal-head"><div class="v4832-modal-title">{% if ai_reminder_state.kind == 'OWNER_SPONSORED_PERSONAL_KEY_MISSING' %}<strong id="v4854-ai-reminder-title">THE LAB AI is currently provided</strong><span>Nova-only Snapshot is available without AI. Your free-form AI Coach chat currently uses {{ 'THE LAB Standard · Gemini' if ai_reminder_state.mode == 'STANDARD' else 'THE LAB Managed' }}; add a personal key only if you want to move that chat to BYOK.</span><em class="v4855-ai-reminder-mode">OWNER-FUNDED AI · PERSONAL KEY STILL NEEDED</em>{% elif ai_reminder_state.kind == 'PERSONAL_KEY_REQUIRED' %}<strong id="v4854-ai-reminder-title">Optional AI Coach key</strong><span>Generate Snapshot and the grounded Nova questions work without an AI key. Add your own API key only if you want to ask AI Coach free-form questions.</span>{% elif ai_reminder_state.kind == 'OWNER_SPONSORED_RUNTIME_UNAVAILABLE_PERSONAL_KEY_READY' %}<strong id="v4854-ai-reminder-title">THE LAB AI access is unavailable</strong><span>Your personal AI key is stored and tested, but the assigned owner-provided AI Coach lane is unavailable. Nova-only Snapshot continues to work; ask the owner to switch the optional chat to BYOK.</span>{% elif ai_reminder_state.kind == 'OWNER_SPONSORED_RUNTIME_UNAVAILABLE_PERSONAL_KEY_MISSING' %}<strong id="v4854-ai-reminder-title">AI access needs attention</strong><span>The assigned owner-provided AI Coach lane is unavailable. Nova-only Snapshot continues to work; you can add an optional personal key for AI Coach chat.</span>{% else %}<strong id="v4854-ai-reminder-title">AI access needs attention</strong><span>Optional AI Coach chat is currently unavailable. Nova-only Snapshot and grounded explanations work without an AI key.</span>{% endif %}</div></div><div class="v4854-ai-reminder-actions">{% if not ai_reminder_state.personal_ready %}<a class="v4-btn v4-btn-cyan" href="{{ url_for('athlete_setup') }}#personal-ai">Add my API key</a>{% elif not ai_reminder_state.runtime_ready %}<a class="v4-btn v4-btn-cyan" href="{{ url_for('athlete_setup') }}#personal-ai">View AI settings</a>{% endif %}<form method="post" action="{{ url_for('dismiss_ai_setup_reminder') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="v4-btn" type="submit">{% if ai_reminder_state.kind == 'OWNER_SPONSORED_PERSONAL_KEY_MISSING' %}Continue with THE LAB AI{% else %}Continue without AI{% endif %}</button></form></div></div></div>{% endif %}
+{% if ai_setup_reminder and not is_preview and not report_mode and not qa_mode %}<aside class="v4854-ai-inline" id="v4854-ai-reminder" role="status" aria-labelledby="v4854-ai-reminder-title"><div class="v4854-ai-inline-panel"><div class="v4832-modal-head"><div class="v4832-modal-title">{% if ai_reminder_state.kind == 'OWNER_SPONSORED_PERSONAL_KEY_MISSING' %}<strong id="v4854-ai-reminder-title">THE LAB AI is currently provided</strong><span>Nova-only Snapshot is available without AI. Your free-form AI Coach chat currently uses {{ 'THE LAB Standard · Gemini' if ai_reminder_state.mode == 'STANDARD' else 'THE LAB Managed' }}; add a personal key only if you want to move that chat to BYOK.</span><em class="v4855-ai-reminder-mode">OWNER-FUNDED AI · PERSONAL KEY STILL NEEDED</em>{% elif ai_reminder_state.kind == 'PERSONAL_KEY_REQUIRED' %}<strong id="v4854-ai-reminder-title">Optional AI Coach key</strong><span>Generate Snapshot and the grounded Nova questions work without an AI key. Add your own API key only if you want to ask AI Coach free-form questions.</span>{% elif ai_reminder_state.kind == 'OWNER_SPONSORED_RUNTIME_UNAVAILABLE_PERSONAL_KEY_READY' %}<strong id="v4854-ai-reminder-title">THE LAB AI access is unavailable</strong><span>Your personal AI key is stored and tested, but the assigned owner-provided AI Coach lane is unavailable. Nova-only Snapshot continues to work; ask the owner to switch the optional chat to BYOK.</span>{% elif ai_reminder_state.kind == 'OWNER_SPONSORED_RUNTIME_UNAVAILABLE_PERSONAL_KEY_MISSING' %}<strong id="v4854-ai-reminder-title">AI access needs attention</strong><span>The assigned owner-provided AI Coach lane is unavailable. Nova-only Snapshot continues to work; you can add an optional personal key for AI Coach chat.</span>{% else %}<strong id="v4854-ai-reminder-title">AI access needs attention</strong><span>Optional AI Coach chat is currently unavailable. Nova-only Snapshot and grounded explanations work without an AI key.</span>{% endif %}</div></div><div class="v4854-ai-reminder-actions">{% if not ai_reminder_state.personal_ready %}<a class="v4-btn v4-btn-cyan" href="{{ url_for('athlete_setup') }}#personal-ai">Add my API key</a>{% elif not ai_reminder_state.runtime_ready %}<a class="v4-btn v4-btn-cyan" href="{{ url_for('athlete_setup') }}#personal-ai">View AI settings</a>{% endif %}<form method="post" action="{{ url_for('dismiss_ai_setup_reminder') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="v4-btn" type="submit">{% if ai_reminder_state.kind == 'OWNER_SPONSORED_PERSONAL_KEY_MISSING' %}Continue with THE LAB AI{% else %}Continue without AI{% endif %}</button></form></div></div></aside>{% endif %}
 <div class="v4832-modal v4878-snapshot-guide" id="snapshot-guide-modal" role="dialog" aria-modal="true" aria-labelledby="snapshot-guide-title" hidden>
 <div class="v4832-modal-backdrop" data-v4832-close></div>
 <div class="v4832-modal-panel" tabindex="-1">
@@ -9014,7 +9014,8 @@ def _v4855_ai_reminder_state(status):
         kind = "NONE"
     fingerprint = f"{mode}|runtime={int(runtime_ready)}|personal={int(personal_ready)}|kind={kind}"
     return {
-        "needed": kind != "NONE",
+        # INC167: missing optional BYOK key must not block Nova-only Snapshot.
+        "needed": kind not in {"NONE", "PERSONAL_KEY_REQUIRED"},
         "kind": kind,
         "fingerprint": fingerprint,
         "mode": mode,
@@ -11123,6 +11124,17 @@ PRODUCT_SIMPLE_CSS += V4849_REQUEST_FEEDBACK_CSS
 V4854_ONBOARDING_CSS = r"""
 .v4854-ai-lock{display:grid;gap:4px;margin:0 0 12px;padding:12px 13px;border:1px solid rgba(255,171,46,.34);border-radius:13px;background:rgba(255,171,46,.07);color:#ffe0a6}.v4854-ai-lock strong{font-size:11px;letter-spacing:.06em}.v4854-ai-lock span{font-size:12px;line-height:1.45;color:#e7d3ae}.v4854-ai-reminder .v4832-modal-panel{max-width:560px}.v4854-ai-reminder-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:16px}.v4854-ai-reminder-actions form{margin:0}.v4854-ai-reminder-actions .v4-btn{min-height:42px}
 @media(max-width:560px){.v4854-ai-reminder-actions,.v4854-ai-reminder-actions form,.v4854-ai-reminder-actions .v4-btn{width:100%}}
+/* INC167: Optional AI Coach credentials must never block the training workspace.
+   An inline reminder retains the existing per-login dismissal and settings links. */
+.v4854-ai-inline{position:relative;z-index:1;width:min(760px,calc(100% - 32px));margin:14px auto 10px;pointer-events:auto}
+.v4854-ai-inline-panel{border:1px solid rgba(98,183,235,.24);border-radius:16px;background:linear-gradient(160deg,#0d141c,#0b1119);box-shadow:0 8px 24px rgba(0,0,0,.18);padding:15px 17px}
+.v4854-ai-inline .v4832-modal-head{padding:0;display:block}
+.v4854-ai-inline .v4832-modal-title strong{display:block;font-size:15px;line-height:1.3}
+.v4854-ai-inline .v4832-modal-title span{display:block;margin-top:5px;font-size:12px;line-height:1.5}
+.v4854-ai-inline .v4854-ai-reminder-actions{margin-top:12px}
+.v4854-ai-inline .v4854-ai-reminder-actions .v4-btn{display:inline-flex;align-items:center;justify-content:center;min-height:42px;text-align:center}
+@media(max-width:560px){.v4854-ai-inline{margin:10px auto 8px}.v4854-ai-inline-panel{padding:13px}}
+
 """
 BASE_CSS += V4854_ONBOARDING_CSS
 V4855_AI_OWNERSHIP_CSS = r"""
@@ -28055,7 +28067,11 @@ def build_ai_coach_chat_context(snapshot):
         _chat_context_section("POWER MODEL", power_model_text, snapshot.get("power_model")),
         _chat_context_section("FTP ANCHOR", ftp_anchor_text, snapshot.get("ftp_anchor")),
         _chat_context_section("PERFORMANCE BREAKTHROUGH", performance_breakthrough_text, snapshot.get("performance_breakthrough")),
-        _chat_context_section("CURRENT WEEK", week_memory_text, snapshot.get("week_memory")),
+        # INC166: chat and its week chips must describe the SAME verified work
+        # even when an old persisted report is read without a new Snapshot.
+        _chat_context_section("CURRENT WEEK", week_memory_text,
+            _inc166_reconcile_week_memory(snapshot.get("week_memory"),
+                snapshot.get("previous_training_blocks") or [])),
         _chat_context_section("PREVIOUS TRAINING BLOCKS", previous_training_blocks_text, snapshot.get("previous_training_blocks")),
         _chat_context_section("PERSONAL HEAT RESPONSE", heat_response_pattern_text, snapshot.get("heat_pattern")),
         _chat_context_section("CALENDAR / RESTRICTIONS", planning_context_text, snapshot.get("planning_context")),
@@ -29189,6 +29205,10 @@ def analyze():
                 progression_training_blocks[:8],subjective_activity_context)
         training_direction["nova_execution"] = _v1965_verified_quality_execution(microcycle_ledger, training_direction.get("started_on"), now=get_rome_now())
         progression_training_blocks=_v492_attach_execution_quality(progression_training_blocks,microcycle_ledger);previous_training_blocks=progression_training_blocks[:8];session_progression=_v491_session_progression(progression_training_blocks)
+        # INC166 / DTM CL-002, E3: week chips and their hard summary must use
+        # already-resolved owner snapshot blocks, not provider title keywords.
+        # Pure in-memory reconstruction: no extra fetch, persistence or Neon call.
+        week_memory = _inc166_reconcile_week_memory(week_memory, previous_training_blocks)
         snapshot_fault_stage = "EVIDENCE_LEDGER"
         evidence_ledger=build_evidence_ledger(
             repeatability_history_blocks or progression_training_blocks, overlay_blocks=progression_training_blocks,
@@ -72912,6 +72932,168 @@ HOME_PAGE=HOME_PAGE.replace(_INC164_CARD2_INTRO,
     '</div>{% endif %}\n'+_INC164_CARD2_INTRO,1)
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION += ' · INC163 TTT RACE POWER TRUTH + INDEPENDENT CARD2 ADVISORY (LOCAL CANDIDATE) · INC164 CARD2 PRODUCER DECOUPLING + CARD2-ONLY QUALITY GATE (TEST CANDIDATE) · INC165 OWNER-BOUND RECENT EXPOSURE PRESELECTION'
+
+
+
+# INC166 / DTM CL-002 + E3: week-memory UI and read-only legacy report repair.
+# The native Z1..Z7 times in the real tester TTT cover its actual ride; its
+# optional eighth provider bin is additional and MUST NOT be added to those
+# seven zones when checking duration coverage. Do not invent training-family
+# changes from title alone, or reclassify unverified activities.
+_INC166_CLASSIFY_BEFORE = classify_training_family
+_INC166_UI_BEFORE = _v4891_prepare_snapshot_for_ui
+
+
+def classify_training_family(activity):
+    prior = _INC166_CLASSIFY_BEFORE(activity)
+    a = activity if isinstance(activity, dict) else {}
+    if (prior != 'Tempo' or not _v1954_confirmed_competition(a)
+            or 'tempo' not in str(a.get('name') or '').casefold()):
+        return prior
+    zones = a.get('icu_zone_times')
+    if not isinstance(zones, list) or len(zones) != 8:
+        return prior
+    try:
+        native_seven = [float(row['secs']) for row in zones[:7]]
+        extra = float(zones[7]['secs'])
+        moving = float(a.get('moving_time') or a.get('elapsed_time') or 0)
+    except (TypeError, KeyError, ValueError, OverflowError):
+        return prior
+    total = sum(native_seven)
+    if (not all(math.isfinite(v) and v >= 0 for v in native_seven)
+            or not math.isfinite(extra) or extra < 0
+            or not math.isfinite(moving) or moving <= 0
+            or not 0.80 <= total / moving <= 1.10):
+        return prior
+    # Original INC163 science/classifier now sees exactly the seven valid zones.
+    # The extra provider bin and the activity itself remain UNMODIFIED.
+    seven_zone_activity = dict(a)
+    seven_zone_activity['icu_zone_times'] = zones[:7]
+    return _INC166_CLASSIFY_BEFORE(seven_zone_activity)
+
+
+def _inc166_reconcile_week_memory(week_memory, previous_training_blocks):
+    """Pure, fail-closed week display reconciliation from this report only.
+
+    Uses exact activity date+name+time and one distinct history block. It never
+    reads any other owner, fetches data, writes a report, changes the workout
+    selector, or infers a power zone from a title. Handles stored pre-INC166
+    Snapshots whose week-memory lacks activity_id.
+    """
+    if not isinstance(week_memory, dict) or not isinstance(previous_training_blocks, list):
+        return week_memory
+    raw_rows = week_memory.get('activities')
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return week_memory
+    block_keys = {}
+    for block in previous_training_blocks:
+        if not isinstance(block, dict):
+            continue
+        key = (str(block.get('date') or '')[:10], str(block.get('name') or '').strip(),
+               str(block.get('time') or '').strip())
+        if key[0] and key[1] and key[2] and str(block.get('activity_id') or '').strip():
+            block_keys.setdefault(key, []).append(block)
+    changed = 0
+    rows = []
+    for original in raw_rows:
+        if not isinstance(original, dict):
+            rows.append(original)
+            continue
+        row = original
+        key = (str(original.get('date') or '')[:10],
+               str(original.get('name') or '').strip(),
+               str(original.get('time') or '').strip())
+        matches = block_keys.get(key) or []
+        if len(matches) != 1:
+            rows.append(row)
+            continue
+        block = matches[0]
+        existing = str(original.get('family') or '')
+        new_family = None
+        new_short = None
+        if existing == 'Tempo' and _v1954_confirmed_competition(block):
+            zones = block.get('power_zones')
+            if isinstance(zones, list) and len(zones) in (7, 8):
+                try:
+                    seven = [float(n) for n in zones[:7]]
+                    duration = float(block.get('duration_min') or 0) * 60
+                except (TypeError, ValueError, OverflowError):
+                    seven, duration = [], 0
+                if (len(seven) == 7 and duration > 0
+                        and all(math.isfinite(z) and z >= 0 for z in seven)
+                        and 0.80 <= sum(seven) / duration <= 1.10):
+                    surrogate = {'name': block.get('name'), 'type': 'Ride',
+                                 'event_kind': 'RACE', 'moving_time': duration,
+                                 'icu_zone_times': [{'secs': z} for z in seven]}
+                    assessed = classify_training_family(surrogate)
+                    if assessed in ('High Intensity / Mixed', 'Threshold'):
+                        new_family = assessed
+                        new_short = 'Race · HI' if assessed == 'High Intensity / Mixed' else 'Race · Threshold'
+        elif (existing == 'Endurance / Z2' and not _v1954_confirmed_competition(block)
+              and block.get('quality_relevant') is True
+              and block.get('quality_basis') == 'MEASURED_REPEATED_5_TO_15_MIN_WORK_ABOVE_92PCT_FTP'):
+            truth = block.get('activity_truth') or {}
+            rep = block.get('repeatability') or {}
+            try:
+                ftp = float(block.get('ftp') or 0)
+                n = int(rep.get('reps') or 0)
+                secs = float(rep.get('interval_secs') or 0)
+                watts = [float(v) for v in (rep.get('watts') or [])]
+            except (TypeError, ValueError, OverflowError):
+                ftp, n, secs, watts = 0, 0, 0, []
+            if (truth.get('status') == 'RESOLVED'
+                    and truth.get('source') == 'DEVICE_LAPS'
+                    and rep.get('source') == 'DEVICE_LAPS'
+                    and 80 <= ftp <= 650 and n >= 2 and n == len(watts)
+                    and 300 <= secs <= 900
+                    and all(math.isfinite(w) and w >= .92 * ftp for w in watts)):
+                # The original filename can contain 'Z2 Block' even with
+                # independently measured high-power laps; never call it Z2.
+                new_family = 'Threshold' if min(watts) >= .95 * ftp else 'Verified Quality'
+                new_short = 'Threshold' if new_family == 'Threshold' else 'Quality'
+        if new_family and new_family != existing:
+            row = dict(original)
+            row['family'] = new_family
+            row['family_short'] = new_short
+            row['hard'] = True
+            changed += 1
+        rows.append(row)
+    if not changed:
+        return week_memory
+    # All aggregate labels are from the corrected rows; never keep stale
+    # 'Quality: Tempo', hard count or last hard after changing a chip.
+    hard = [r for r in rows if isinstance(r, dict) and r.get('hard')]
+    families = list(dict.fromkeys(str(r.get('family') or '') for r in hard if r.get('family')))
+    last = hard[-1] if hard else None
+    days = None
+    if last:
+        try:
+            days = (date.fromisoformat(str(week_memory.get('week_end'))) -
+                    date.fromisoformat(str(last.get('date')))).days
+        except (ValueError, TypeError):
+            days = week_memory.get('days_since_last_hard')
+    out = dict(week_memory)
+    out.update(activities=rows, hard_count=len(hard), hard_families=families,
+               hard_summary=', '.join(families), last_hard=last,
+               days_since_last_hard=days)
+    return out
+
+
+def _v4891_prepare_snapshot_for_ui(data):
+    existing = _INC166_UI_BEFORE(data)
+    if not isinstance(existing, dict):
+        return existing
+    stored = existing.get('week_memory')
+    corrected = _inc166_reconcile_week_memory(
+        stored, (data or {}).get('previous_training_blocks') or [])
+    if corrected is stored:
+        return existing
+    out = dict(existing)
+    out['week_memory'] = corrected
+    return out
+
+
+APP_VERSION += ' · INC166 WEEK MEMORY VERIFIED FAMILY CONSISTENCY · LEGACY VIEW REPAIR'
 
 
 if __name__ == "__main__":
