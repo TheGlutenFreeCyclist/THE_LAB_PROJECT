@@ -29097,13 +29097,39 @@ def analyze():
             _aid=str((_a or {}).get("id") or "");_day=str((_a or {}).get("start_date_local") or "")[:10]
             if _aid and _aid not in _repeat_seen and (not _block_start or not _day or _day>=_block_start):
                 _repeat_seen.add(_aid);repeatability_history_activities.append(_a)
+        # INC170: title is an inspection hint, never evidence. Admit bounded
+        # in-scope historical candidates even when summary quality is absent.
+        _inc170_goal = (strategy_plan or {}).get("primary_goal")
+        _inc170_scope = (strategy_plan or {}).get("started_on")
+        _inc170_race_ids = _inc170_confirmed_race_ids(coach_clock)
+        _inc170_prior = {}
+        if _inc170_goal in {"POWER_5", "VO2MAX"} and _inc170_scope:
+            try:
+                _inc170_prior = _inc170_prior_archive(load_latest_report(include_payload=True, owner_user_id=user["id"]), user["id"], _inc170_goal, _inc170_scope)
+            except Exception:
+                pass
+        _inc170_targets = _inc170_micro_candidates(cycling_history_activities,
+            _inc170_goal, _inc170_scope, _inc170_race_ids, prior=_inc170_prior)
+        for _a in _inc170_targets:
+            _aid = str(_a.get("id") or "")
+            if _aid not in _repeat_seen:
+                _repeat_seen.add(_aid);repeatability_history_activities.append(_a)
         _detail_pool=[];_detail_seen=set()
         for _a in list(cycling_recent_activities or [])+list(repeatability_history_activities or []):
             _aid=str((_a or {}).get("id") or "")
             if _aid and _aid not in _detail_seen:
                 _detail_seen.add(_aid);_detail_pool.append(_a)
         snapshot_fault_stage = "ACTIVITY_DETAILS"
-        shared_training_details = fetch_activity_details([a.get("id") for a in _detail_pool]) if _detail_pool else {}
+        shared_training_details = fetch_activity_details([a.get("id") for a in _detail_pool],
+            micro_target_ids=[str(a['id']) for a in _inc170_targets],
+            excluded_race_ids=_inc170_race_ids, fit_diagnostics=True) if _detail_pool else {}
+        # Summary-only admissions must not enter history as quality unless
+        # measured raw evidence (or the existing independent classifier) proves it.
+        repeatability_history_activities = [a for a in repeatability_history_activities
+            if str(a.get('id') or '') not in {str(t['id']) for t in _inc170_targets}
+            or _v196911_verified_micro(shared_training_details.get(str(a.get('id'))) or {})
+            or _v4895_activity_quality_truth(a,classify_training_family(a)).get('quality_relevant')
+            or any(str(r.get('id') or '')==str(a.get('id') or '') for r in cycling_recent_activities or [])]
         shared_training_details, garmin_vo2_contract_probe = _v89_enrich_garmin_vo2_details(
             cycling_season_activities, shared_training_details, max_single_fetches=1, max_fit_fetches=6, user_id=user["id"]
         ) if cycling_season_activities else ({}, {"status":"ABSENT","probe_used":False,"single_fetches":0,"original_fit_fetches":0})
@@ -29818,6 +29844,9 @@ def analyze():
                 latest_report_meta=get_latest_report_meta(), chat_context_meta=None, qa_mode=True, qa_meta=qa_report.get("qa_meta"),
                 qa_audit_markdown=qa_audit, qa_audit_filename=f"the_lab_qa_{'python' if python_qa else 'live'}_audit_{get_rome_now().strftime('%Y%m%d_%H%M')}.md",
             )
+        # INC170 R2: diagnostic sidecar composed after science/attestation and QA return.
+        # It is not part of the scientific decision or replay fixture.
+        data["inc170_diagnostic_continuity"] = _inc170_archive_safe(user["id"], _inc170_goal, _inc170_scope, _inc170_prior, _inc170_targets, shared_training_details, repeatability_history_blocks + progression_training_blocks, evidence_ledger)
         # The save operation is the only persistence boundary. Downstream metadata,
         # accounting or audit failures must never relabel a successful commit as failed.
         try:
@@ -35890,6 +35919,10 @@ def _v144_restore_resolved_truth(block, prior_block, prior_snapshot_at=None):
     if cur_status not in {"RAW_FALLBACK", "UNRESOLVED", "LEGACY_UNSPECIFIED", ""}:
         return block
     if not isinstance(prior_block.get("repeatability"), dict):
+        return block
+    # INC170: source revision is not authenticated by the available provider
+    # contract. Never revive cached micro evidence, even if complete.
+    if _inc170_is_micro_claim(prior_block):
         return block
     out = dict(block)
     out["activity_truth"] = _v4831_json_clone(prior)
@@ -51008,7 +51041,7 @@ def _v1969132_detect_raw_repeats(samples):
 _r196910_fetch_detail_baseline = fetch_activity_details
 
 
-def fetch_activity_details(activity_ids):
+def fetch_activity_details(activity_ids, *, micro_target_ids=(), excluded_race_ids=(), fit_diagnostics=False):
     details = _r196910_fetch_detail_baseline(activity_ids)
     if not isinstance(details, dict) or not details:
         return details
@@ -51020,17 +51053,19 @@ def fetch_activity_details(activity_ids):
     # a complete micro set; a workout name cannot certify a dose.
     chronological = sorted((d for d in details.values()
         if isinstance(d,dict) and d.get('id') and _v4887_is_cycling_activity(d)
-        and not _v1954_confirmed_competition(d)),
+        and not _v1954_confirmed_competition(d)
+        and str(d.get('id')) not in excluded_race_ids),
         key=lambda d: str(d.get('start_date_local') or ''), reverse=True)
     def stream_priority(d):
         title=str(d.get('name') or d.get('title') or '').lower()
         # A title schedules ONLY inspection. It never proves intervals or W.
         return bool(re.search(r'\b(?:interval|intervall|repet|ripet|hiit|vo2|power)\b|\d+\s*[x×]\s*\d+|\d+\s*[/\-]\s*\d+',title))
-    targeted=[d for d in chronological if stream_priority(d)][:3]
+    targeted=_inc170_stream_candidates(chronological, micro_target_ids, stream_priority)
     seen={str(d.get('id')) for d in targeted}
     recent=[d for d in chronological if str(d.get('id')) not in seen][:3]
     candidates=targeted+recent
     attempted = 0
+    _inc170_fit_ids = set(list(dict.fromkeys(str(a) for a in micro_target_ids))[:2]) if fit_diagnostics else set()
     for d in candidates:
         if attempted >= 6: break
         # Do not trust automatic ICU work boundaries to rule out raw micro sets.
@@ -51048,6 +51083,8 @@ def fetch_activity_details(activity_ids):
             samples = _v196910_raw_power_samples(response.json())
             if samples is None:
                 probe['status']='TIME_OR_WATTS_UNAVAILABLE'
+                if response.status_code==200 and aid in _inc170_fit_ids:
+                    out['_inc170_fit_diagnostic']=_inc170_fetch_fit_diagnostic(aid,d,runtime)
             else:
                 detected = _v196910_find_micro_30_15(samples)
                 general = None if detected else _v1969132_detect_raw_repeats(samples)
@@ -67136,6 +67173,8 @@ def _inc095_verified_micro_block(block):
 
 
 def build_evidence_ledger(previous_training_blocks, overlay_blocks=None, goal_key=None, scope_start=None):
+    previous_training_blocks, overlay_blocks = _inc170_reconcile_micro_inputs(
+        previous_training_blocks, overlay_blocks, scope_start)
     result=_INC095_LEDGER_BEFORE(previous_training_blocks,overlay_blocks,
         goal_key=goal_key,scope_start=scope_start)
     if not isinstance(result,dict):return result
@@ -73161,6 +73200,272 @@ HOME_PAGE = HOME_PAGE.replace('{{ linked.title|e }}', '{{ nova_public_workout_ti
 app.jinja_env.parse(HOME_PAGE)
 APP_VERSION += ' · INC169 CANONICAL PRELOAD PUBLIC NAMING + LEGACY NAME COMPATIBILITY'
 
+
+# INC170 candidate: bounded fresh acquisition and same-build evidence reconciliation.
+# No cached micro authority; no provider revision token has been validated.
+INC170_SCHEMA = 'INC170-FRESH-EVIDENCE-1'
+
+
+def _inc170_confirmed_race_ids(clock):
+    return {str(r.get('activity_id')) for r in ((clock or {}).get('completed_event_fulfillment') or [])
+            if isinstance(r,dict) and r.get('activity_id')
+            and str(r.get('kind') or '').upper()=='RACE'
+            and str(r.get('confidence') or '').upper()=='HIGH'}
+
+
+def _inc170_micro_candidates(activities, goal, scope_start, race_ids=(), now=None, prior=None):
+    # Only goals with an existing approved two-set micro template. Do not
+    # interpret a title as proof or extend the scientific evidence window.
+    if str(goal or '').upper() not in {'POWER_5','VO2MAX'} or not scope_start:
+        return []
+    try:
+        start=date.fromisoformat(str(scope_start)[:10]);today=(now or get_rome_now()).date()
+    except (TypeError,ValueError,AttributeError):return []
+    rows={}
+    for a in activities or []:
+        if not isinstance(a,dict) or not a.get('id') or not _v4887_is_cycling_activity(a):continue
+        aid=str(a['id'])
+        if aid in race_ids or _v1954_confirmed_competition(a):continue
+        try:day=date.fromisoformat(str(a.get('start_date_local') or '')[:10])
+        except ValueError:continue
+        if day<start or not 0<=(today-day).days<=42:continue
+        title=str(a.get('name') or a.get('title') or '')
+        if re.search(r'(?<!\d)30\s*(?:[/_:\-]|s\s*/\s*)\s*15(?!\d)',title,re.I):
+            rows.setdefault(aid,a)
+    return _inc170_rotate_candidates(sorted(rows.values(),key=lambda a:(str(a.get('start_date_local') or ''),str(a['id'])),reverse=True),prior)
+
+
+def _inc170_stream_candidates(chronological, micro_target_ids, stream_priority):
+    wanted=list(dict.fromkeys(str(a) for a in micro_target_ids))[:2]
+    by_id={str(d['id']):d for d in chronological}
+    picked=[by_id[a] for a in wanted if a in by_id]
+    seen={str(d['id']) for d in picked}
+    # Same three targeted + three recent budget, reserve up to two of the
+    # targeted slots; when there are no micro targets the baseline is identical.
+    return (picked+[d for d in chronological if str(d['id']) not in seen and stream_priority(d)])[:3]
+
+
+def _inc170_is_micro_claim(b):
+    b=b or {};t=b.get('activity_truth') or {};r=b.get('repeatability') or {}
+    return bool(b.get('micro_30_15_observed') or b.get('interval_structure_source')=='ICU_RAW_WATTS_30_15'
+        or t.get('source')=='ICU_RAW_WATTS_30_15' or r.get('source')=='ICU_RAW_WATTS_30_15'
+        or r.get('micro_recovery_proof_schema')==INC095_SCHEMA)
+
+
+def _inc170_reconcile_micro_inputs(base, overlay, scope_start=None):
+    # Called before ledger aggregations, on inputs of the same calculation.
+    # Only exact nonempty IDs, never dates/names. Explicit contradictions win.
+    base=list(base or []);overlay=list(overlay or []);groups={}
+    for b in base+overlay:
+        if not isinstance(b,dict) or not str(b.get('activity_id') or '').strip():continue
+        groups.setdefault(str(b['activity_id']),[]).append(b)
+    resolved={}
+    for aid,rows in groups.items():
+        if len(rows)<2 or not any(_inc095_verified_micro_block(b) for b in rows):continue
+        good=[b for b in rows if _inc095_verified_micro_block(b)]
+        days={str(b.get('date') or '')[:10] for b in rows}
+        identity_conflict=any(len({str(b[k]) for b in rows if b.get(k) is not None and str(b[k]).strip()})>1
+                              for k in ('owner_user_id','user_id','source_revision','provider_revision'))
+        # Do not let a race, conflict, different date, or incompatible resolved
+        # evidence be overwritten. The conservative conflict row has no dose.
+        bad=next((b for b in rows if _v1954_confirmed_competition(b) or
+            str((b.get('activity_truth') or {}).get('status') or '').upper() in {'CONFLICT','DELETED','CANCELLED','REVISED'}
+            or b.get('deleted') is True),None)
+        try:
+            fps={_nova_inc051_canonical_json({k:b.get(k) for k in ('activity_truth','micro_30_15_observed','repeatability')}) for b in good}
+        except (TypeError,ValueError,OverflowError):fps=set()
+        if bad is not None or identity_conflict or len(days)!=1 or '' in days or len(fps)!=1 or any(
+            str((b.get('activity_truth') or {}).get('status') or '').upper()=='RESOLVED'
+            and not _inc095_verified_micro_block(b) for b in rows):
+            chosen=dict(bad if bad is not None else rows[-1]);chosen['activity_truth']={'status':'CONFLICT','source':INC170_SCHEMA}
+            chosen['interval_structure_source']=INC170_SCHEMA
+            for k in ('micro_30_15_observed','repeatability','work_interval_evidence','partial_work_evidence'):
+                chosen.pop(k,None)
+            resolved[aid]=chosen
+        elif all(_inc095_verified_micro_block(b) or str((b.get('activity_truth') or {}).get('status') or '').upper() in {'RAW_FALLBACK','UNRESOLVED','LEGACY_UNSPECIFIED',''} for b in rows):
+            resolved[aid]=good[-1]
+    def project(rows):
+        return [resolved.get(str(b.get('activity_id')),b) if isinstance(b,dict) else b for b in rows]
+    return project(base),project(overlay)
+
+
+APP_VERSION += ' · INC170 CANDIDATE BOUNDED MICRO RECOVERY + CONFLICT SAFE OVERLAY'
+
+
+# INC170 R2: diagnostic continuity only; never feeds a science selector.
+INC170_ARCHIVE_SCHEMA = 'INC170-DIAGNOSTIC-CONTINUITY-2'
+INC170_FIT_SOURCE = 'ORIGINAL_ACTIVITY_FIT_RECORD_POWER_DIAGNOSTIC'
+
+
+def _inc170_prior_archive(report, owner, goal, scope):
+    data=(report or {}).get('data') if isinstance(report,dict) else None
+    a=data.get('inc170_diagnostic_continuity') if isinstance(data,dict) else None
+    if (not isinstance(a,dict) or a.get('schema')!=INC170_ARCHIVE_SCHEMA
+        or not owner or a.get('owner')!=str(owner) or a.get('goal')!=goal or a.get('scope')!=scope):
+        return {}
+    return a
+
+
+def _inc170_rotate_candidates(rows, prior):
+    # Last-inspected first-out, stable ordering for uninspected candidates.
+    # Never trust stored evidence as scientific authority. Stale/forged cursor
+    # can at worst affect the order of bounded read-only inspection.
+    previous=(prior or {}).get('inspection_order') or []
+    if not isinstance(previous,list):previous=[]
+    rank={a:i for i,a in enumerate(previous) if isinstance(a,str)}
+    return sorted(rows,key=lambda a:rank.get(str(a['id']),-1))[:2]
+
+
+def _inc170_archive(owner, goal, scope, prior, targets, details, blocks, ledger):
+    # Persist only evidence actually observed in this calculation. Historical
+    # archives are diagnostics, never inserted into blocks or evidence events.
+    if not owner or goal not in {'POWER_5','VO2MAX'} or not scope:return {}
+    ids=[str(a['id']) for a in targets]
+    old=(prior or {}).get('inspection_order') or []
+    old=old if isinstance(old,list) else []
+    order=list(dict.fromkeys(x for x in old if isinstance(x,str) and x not in ids))[-80:]+ids
+    valid={str(e.get('activity_id')) for e in ((ledger or {}).get('repeatability') or {}).get('events') or []
+           if e.get('micro_recovery_proof_schema')==INC095_SCHEMA}
+    proofs={}
+    for b in blocks or []:
+        aid=str(b.get('activity_id') or '')
+        if aid not in valid or not _inc095_verified_micro_block(b):continue
+        # Current raw stream probe is mandatory; never archive a resurrected block.
+        d=(details or {}).get(aid) or {}
+        if (d.get('_v196910_stream_probe') or {}).get('status')!='TWO_FULL_SETS_VERIFIED':continue
+        payload={k:_v4831_json_clone(b.get(k)) for k in ('activity_id','date','quality_relevant','interval_structure_source','activity_truth','micro_30_15_observed','repeatability','work_interval_evidence')}
+        proofs[aid]={'state':'FRESH_OBSERVATION_AT_SNAPSHOT_ONLY','proof':payload,
+            'sha256':hashlib.sha256(_nova_inc051_canonical_json(payload).encode()).hexdigest()}
+    # Keep old proof for audit, but explicitly mark it as not revalidated. Limit
+    # storage and retain only within the scientific window and current scope.
+    previous=(prior or {}).get('proofs') or {}
+    if isinstance(previous,dict):
+        for aid,item in previous.items():
+            if aid in proofs or not isinstance(item,dict):continue
+            p=item.get('proof') or {};d=(details or {}).get(aid) or {}
+            try:
+                day=date.fromisoformat(str(p.get('date'))[:10]); start=date.fromisoformat(str(scope)[:10]);today=get_rome_now().date()
+                if day<start or not 0<=(today-day).days<=42:continue
+                if str(p.get('activity_id'))!=aid or not _inc095_verified_micro_block(p):continue
+                if hashlib.sha256(_nova_inc051_canonical_json(p).encode()).hexdigest()!=item.get('sha256'):continue
+            except (TypeError,ValueError,AttributeError):continue
+            # Fresh inspection that fails or differs is not allowed to erase
+            # audit history, but it is explicitly marked historical/unvalidated.
+            status=(d.get('_v196910_stream_probe') or {}).get('status')
+            proofs[aid]={'state':'HISTORICAL_NOT_REVALIDATED','last_probe_status':status,'proof':p,'sha256':item['sha256']}
+    proofs=dict(sorted(proofs.items(),key=lambda kv:str(kv[1]['proof'].get('date') or ''),reverse=True)[:24])
+    return {'schema':INC170_ARCHIVE_SCHEMA,'owner':str(owner),'goal':goal,'scope':scope,
+            'numeric_prescription_authority':False,'inspection_order':order,'proofs':proofs,
+            'fit_diagnostics':{aid:(details[aid].get('_inc170_fit_diagnostic')) for aid in ids
+                if aid in details and details[aid].get('_inc170_fit_diagnostic')}}
+
+
+def _inc170_archive_safe(*args, **kwargs):
+    try:
+        return _inc170_archive(*args, **kwargs)
+    except Exception as exc:
+        return {'schema':INC170_ARCHIVE_SCHEMA,'status':'ARCHIVE_COMPOSITION_FAILED',
+                'numeric_prescription_authority':False,'error_type':type(exc).__name__}
+
+
+def _inc170_fit_crc(data):
+    crc=0
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):crc=(crc>>1)^ (0xA001 if crc&1 else 0)
+    return crc
+
+
+def _inc170_fit_record_samples(content):
+    # Strict single FIT (raw or gzip); refuse unsupported framing, malformed
+    # definitions, missing CRC, conflicts and impossible time bounds.
+    limit=4_000_000
+    raw=bytes(content)
+    if len(raw)>limit:raise ValueError('SIZE')
+    if raw[:2]==b'\x1f\x8b':
+        z=zlib.decompressobj(16+zlib.MAX_WBITS);raw=z.decompress(raw,limit+1)
+        if not z.eof or z.unused_data or z.unconsumed_tail or len(raw)>limit:raise ValueError('GZIP')
+    if len(raw)<14 or raw[0] not in (12,14) or raw[8:12]!=b'.FIT':raise ValueError('HEADER')
+    hs=raw[0];end=hs+int.from_bytes(raw[4:8],'little')
+    if end+2!=len(raw):raise ValueError('LENGTH')
+    if hs==14 and raw[12:14]!=b'\0\0' and _inc170_fit_crc(raw[:14])!=0:raise ValueError('HEADER_CRC')
+    if _inc170_fit_crc(raw)!=0:raise ValueError('FILE_CRC')
+    pos=hs;defs={};last=None;points={};activity=False;cycling=False
+    def take(n):
+        nonlocal pos
+        if n<0 or pos+n>end:raise ValueError('TRUNCATED')
+        v=raw[pos:pos+n];pos+=n;return v
+    def u8():return take(1)[0]
+    while pos<end:
+        h=u8();compressed=bool(h&128);loc=(h>>5)&3 if compressed else h&15
+        if not compressed and h&64:
+            reserved=u8();arch=u8()
+            if reserved!=0 or arch not in (0,1):raise ValueError('DEFINITION')
+            bo='big' if arch else 'little';glob=int.from_bytes(take(2),bo)
+            fields=[tuple(take(3)) for _ in range(u8())]
+            dev=[tuple(take(3)) for _ in range(u8())] if h&32 else []
+            if any(sz==0 for _,sz,_ in fields+dev) or len({f[0] for f in fields})!=len(fields):raise ValueError('FIELD')
+            defs[loc]=(glob,bo,fields,dev);continue
+        if loc not in defs:raise ValueError('UNDEFINED')
+        glob,bo,fields,dev=defs[loc];row={}
+        if compressed:
+            if last is None or not fields or fields[0]!=(253,4,0x86):raise ValueError('COMPRESSED_TIME')
+            ts=(last&~31)+(h&31);row[253]=ts+32 if ts<last else ts
+        for fid,sz,typ in fields:
+            if compressed and fid==253:continue
+            value=take(sz)
+            if (fid,sz,typ)==(253,4,0x86) or (glob==20 and (fid,sz,typ)==(7,2,0x84)) or (glob==0 and (fid,sz,typ)==(0,1,0)) or (glob==18 and (fid,sz,typ)==(5,1,0)):
+                v=int.from_bytes(value,bo)
+                if v!=(1<<(8*sz))-1:row[fid]=v
+        for _,sz,_ in dev:take(sz)
+        if 253 in row:last=row[253]
+        if glob==0 and row.get(0)==4:activity=True
+        if glob==18 and row.get(5)==2:cycling=True
+        if glob==20 and 253 in row:
+            ts=row[253];w=row.get(7)
+            if w is not None and not 0<=w<=1600:w=None
+            if ts in points and points[ts]!=w:raise ValueError('DUPLICATE_CONFLICT')
+            points[ts]=w
+            if len(points)>21600:raise ValueError('RECORD_LIMIT')
+    if not activity or not cycling or len(points)<480:raise ValueError('NOT_CYCLING_ACTIVITY')
+    first=min(points);last=max(points)
+    if last-first>=21600:raise ValueError('TIME_BOUND')
+    samples=[None]*(last-first+1)
+    for ts,w in points.items():samples[ts-first]=w
+    return samples,first,hashlib.sha256(raw).hexdigest()
+
+
+def _inc170_fetch_fit_diagnostic(aid, detail, runtime):
+    out={'source':INC170_FIT_SOURCE,'numeric_prescription_authority':False,'status':'UNAVAILABLE'}
+    try:
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',aid):return out
+        # No redirect: do not forward credentials to an unrelated host. Bound
+        # decompressed transport bytes; abort on oversize before buffering more.
+        deadline=_r196910_time.monotonic()+8.0
+        with requests.get(f'https://intervals.icu/api/v1/activity/{aid}/file',
+                headers=get_intervals_headers(runtime),timeout=(2.0,4.0),stream=True,allow_redirects=False) as r:
+            if r.status_code!=200:return dict(out,http_status=r.status_code)
+            raw=bytearray()
+            for chunk in r.iter_content(chunk_size=65536):
+                if _r196910_time.monotonic()>deadline:return dict(out,status='TIME_LIMIT')
+                raw.extend(chunk)
+                if len(raw)>4_000_000:return dict(out,status='SIZE_LIMIT')
+        samples,first,digest=_inc170_fit_record_samples(raw)
+        utc=datetime(1989,12,31,tzinfo=timezone.utc)+timedelta(seconds=first)
+        day=date.fromisoformat(str(detail.get('start_date_local') or '')[:10])
+        # Date check is only a sanity check, not an identity proof. UTC and
+        # local dates may differ at midnight; no use for numerical authority.
+        if abs((utc.date()-day).days)>1:return dict(out,status='DATE_MISMATCH')
+        t=_v196910_find_micro_30_15(samples)
+        if not t:return dict(out,status='NO_COMPLETE_PATTERN',fit_sha256=digest)
+        return dict(out,status='MEASURED_PATTERN_DIAGNOSTIC_ONLY',fit_sha256=digest,
+            sets=t['sets'],reps_per_set=t['reps_per_set'],repeated_work_count=t['repeated_work_count'],
+            work_s=t['work_s'],float_s=t['float_s'],set_recovery_s=t['set_recovery_s'])
+    except Exception as e:
+        return dict(out,status='FIT_REJECTED',error_type=type(e).__name__)
+
+
+APP_VERSION += ' · INC170 R2 DIAGNOSTIC CONTINUITY + BOUNDED FIT'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
