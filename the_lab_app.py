@@ -72261,8 +72261,14 @@ def _inc156_profile(work, *, color_reference=None):
                 # canonical renderer (not parsed from athlete-facing prose).
                 if dimension == 'DURABILITY' and same(seconds, 1800) and template is not None:
                     role, zone = 'Preload', 'Low Z2'
+                elif (dimension == 'RACE_TRANSFER' and wid == 'P5D_2X15_30_15'
+                      and template is not None and template.get('pattern') == 'MICRO_30_15'
+                      and same(seconds, 1200) and zone is None and phase_watts is None):
+                    # Aggregate duration is canonical; surge timing/power is not.
+                    # Reuse the existing neutral, clickable bar, never invent a curve.
+                    role = 'Preload'
                 else:
-                    # Race-transfer surges / unstructured preparation.
+                    # Other unstructured preparation remains fail-closed.
                     return None
             if b.get('segments_seconds') is not None:
                 # No ordering or gap placement beyond the aggregate phase.
@@ -72276,6 +72282,9 @@ def _inc156_profile(work, *, color_reference=None):
             if role in ('Recovery', 'Float', 'Set recovery'):
                 recovery_sum += seconds
             add(role, seconds, zone, phase_watts)
+            if (typ == 'PREPARATION' and role == 'Preload' and dimension == 'RACE_TRANSFER'
+                and wid == 'P5D_2X15_30_15'):
+                rows[-1]['detail'] += ' \u00b7 Aggregate phase; surge timing and power unavailable. See full instructions.'
         else:
             return None
     if (not rows or len(rows) > 240 or not same(source_seconds, total)
