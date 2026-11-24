@@ -56833,6 +56833,64 @@ def _v117_select_quality_window(candidates, last_end, spacing, cadence, extra_de
 R196938_TITLE_SCHEMA = 'V4.9.138-R196.9.38-ATHLETE-PUBLIC-WORKOUT-TITLE-1'
 
 
+def _inc169_preload_public_title(workout, title=None):
+    """Public naming only. Do not alter the signed canonical title or dose.
+
+    The existing R81 classifier recognizes the word preload. Add it only when
+    the original compiled DURABILITY prescription actually contains the
+    canonical 30-minute low-Z2 preparation, not a generic warm-up or a goal.
+    """
+    w = workout if isinstance(workout, dict) else {}
+    base = str(title if title is not None else (w.get('title') or '')).strip()
+    if (not base or not w.get('nova_workout_id') or w.get('provisional_quality')
+        or w.get('hard_spacing_relevant') is not True
+        or w.get('nova_prescription_dimension') != 'DURABILITY'
+        or str(w.get('restriction') or 'NONE').upper() != 'NONE'):
+        return base
+    comp = w.get('session_composition')
+    if not isinstance(comp, dict) or comp.get('state') != 'COMPLETE':
+        return base
+    blocks = comp.get('blocks')
+    if not isinstance(blocks, list) or len(blocks) < 2:
+        return base
+    prep, intervals = blocks[:2]
+    if (not isinstance(prep, dict) or not isinstance(intervals, dict)
+        or prep.get('type') != 'PREPARATION'
+        or prep.get('duration_seconds') != 1800
+        or prep.get('intensity') != 'AS_ORIGINALLY_PRESCRIBED'
+        or intervals.get('type') != 'CANONICAL_INTERVALS'
+        or not re.search(r'\b30\s*min\s+low[- ]?Z2\s+aerobic\s+preload\b',
+                         str(w.get('main_set') or ''), re.I)):
+        return base
+    if re.search(r'\bpre[- ]?load\b', base, re.I):
+        return base
+    return base + ' · 30 min preload'
+
+
+def _inc169_base_named_title(value):
+    # Only remove our exact terminal naming annotation for the existing
+    # conservative named-exposure guards. Never treat a name as mechanics.
+    return re.sub(r'\s*·\s*30\s+min\s+preload\s*$', '', str(value or ''), flags=re.I).strip()
+
+
+def _inc169_card3_public_title(data, card):
+    c = card if isinstance(card, dict) else {}
+    title = str(c.get('title') or '')
+    d = data if isinstance(data, dict) else {}
+    if c.get('verified_offer') is True:
+        parent = d.get('next_quality_offer')
+    elif c.get('verified_future_plan') is True:
+        parent = d.get('future_quality_plan')
+    else:
+        return title
+    work = parent.get('workout') if isinstance(parent, dict) else None
+    if (not isinstance(work, dict) or not c.get('workout_id')
+        or work.get('nova_workout_id') != c['workout_id']
+        or str(work.get('title') or '') != title):
+        return title
+    return _inc169_preload_public_title(work, title)
+
+
 def _v196934_session_copy_name(session, display_title=None):
     """Only the human title is copied; immutable prescription IDs stay internal.
 
@@ -56847,7 +56905,7 @@ def _v196934_session_copy_name(session, display_title=None):
     if (display_title and s.get('nova_workout_id') == 'RECOVERY_UNDER_LOAD_EVIDENCE_DOSE_V1'
             and s.get('hard_spacing_relevant') and not s.get('provisional_quality')):
         return str(display_title).strip()
-    return title
+    return _inc169_preload_public_title(s, title)
 
 
 def _nova_public_workout_title(session):
@@ -59678,7 +59736,7 @@ def _r196966_recent_exposures(evidence_ledger, candidate_date):
         if source not in _R196966_TRUSTED_ACTIVITY_SOURCES:
             continue
         aid = str(event.get('activity_id') or '').strip()
-        name = _r196966_normalize_title(event.get('name'))
+        name = _r196966_normalize_title(_inc169_base_named_title(event.get('name')))
         if not aid or not name:
             continue
         try:
@@ -61960,9 +62018,7 @@ def _nova_public_workout_title(session):
     s=session if isinstance(session,dict) else {}
     actual=str(s.get('title') or '').strip()
     previous=_r196993_public_title_before(s)
-    if actual and previous and str(previous).strip()!=actual:
-        return actual
-    return actual or previous
+    return _inc169_preload_public_title(s, actual or previous)
 
 app.jinja_env.globals['nova_public_workout_title'] = _nova_public_workout_title
 
@@ -61980,8 +62036,9 @@ def _v196926_final_attestation(sessions,prescription):
         previous=str(row.get('copy_workout_name') or '').strip()
         # An athlete-facing copy name is required to agree with the title
         # displayed in the canonical chronological card.
-        if previous!=title:
-            row['copy_workout_name']=title
+        public_title=_inc169_preload_public_title(row, title)
+        if previous!=public_title:
+            row['copy_workout_name']=public_title
             row['copy_workout_name_schema']=R196938_TITLE_SCHEMA
         wid=str(row.get('nova_workout_id') or row.get('nova_contract_id') or '').strip()
         canonical='THE LAB · '+(wid+' · ' if wid else '')+title
@@ -71019,7 +71076,7 @@ def _inc143_recent_named_completion(data,workout_id):
     for item in items:
         if not isinstance(item,dict):continue
         if str(item.get('source') or '').upper()!='INTERVALS_COMPLETED':continue
-        if _inc143_title_key(item.get('name'))!=title:continue
+        if _inc143_title_key(_inc169_base_named_title(item.get('name')))!=title:continue
         try:
             observed=date.fromisoformat(str(item.get('date') or '')[:10])
         except ValueError:
@@ -71179,7 +71236,7 @@ def _inc144_card_truth(snapshot, prepared=None):
         review = ui.get('inc143_recent_named_completion_review')
         review = review if isinstance(review, dict) else None
         card3 = {'state': str(c3.get('state') or 'NO_ISSUED_QUALITY'),
-                 'title': str(c3.get('title') or '') or None,
+                 'title': _inc169_card3_public_title(ui, c3) or None,
                  'workout_id': c3.get('workout_id'),
                  'verified_offer': c3.get('verified_offer') is True,
                  'execution_clearance': c3.get('execution_clearance'),
@@ -73094,6 +73151,15 @@ def _v4891_prepare_snapshot_for_ui(data):
 
 
 APP_VERSION += ' · INC166 WEEK MEMORY VERIFIED FAMILY CONSISTENCY · LEGACY VIEW REPAIR'
+
+
+# INC169: presentation only, same projector for the visible title and Copy.
+# Keep Card2, planning and all owner/issuer gates unchanged.
+app.jinja_env.globals['nova_inc169_card3_public_title'] = _inc169_card3_public_title
+HOME_PAGE = HOME_PAGE.replace('{{ card3.title|e }}', '{{ nova_inc169_card3_public_title(data, card3)|e }}')
+HOME_PAGE = HOME_PAGE.replace('{{ linked.title|e }}', '{{ nova_public_workout_title(linked)|e }}')
+app.jinja_env.parse(HOME_PAGE)
+APP_VERSION += ' · INC169 CANONICAL PRELOAD PUBLIC NAMING + LEGACY NAME COMPATIBILITY'
 
 
 if __name__ == "__main__":
