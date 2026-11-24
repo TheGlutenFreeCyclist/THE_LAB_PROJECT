@@ -72301,8 +72301,8 @@ def _inc156_profile(work, *, color_reference=None):
             return None
         if any(r['role'] == 'Recovery' and not same(r['seconds'], band.get('recovery_seconds')) for r in rows):
             return None
-    # Preserve graphical widths exactly by duration. Very short phases can
-    # scroll within this small plot rather than expanding the entire card.
+    # Legacy complexity guard retained for profile admission; INC172 uses
+    # a fitted schematic layout instead of this pixel width for rendering.
     min_width = math.ceil(total / min(r['seconds'] for r in rows) * 10)
     if min_width > 5000:
         return None
@@ -72403,13 +72403,13 @@ _INC156_MACRO = '''{% macro inc156_profile_view(profile, future=false, checkpoin
   <div class="inc156-summary" aria-label="Workout blocks">{% for item in profile.summary %}
     <div><span>{{ item.label|e }}</span><b>{{ item.target|e }}</b></div>{% endfor %}</div>
   <div class="inc156-scroll" aria-label="Workout timeline">
-    <div class="inc156-plot" style="min-width:{{ profile.min_width }}px">
+    <div class="inc156-plot" style="--inc156-count:{{ profile.rows|length }}">
       {% for phase in profile.rows %}<button type="button" class="inc156-block{{ ' inc156-neutral' if phase.neutral else '' }}" style="--inc156-seconds:{{ phase.seconds }};--inc156-height:{{ phase.height }}px;--inc156-color:{{ phase.color }}" data-inc156-phase="{{ phase.detail|e }}" aria-label="{{ phase.detail|e }}" aria-pressed="false" title="{{ phase.detail|e }}"></button>{% endfor %}
     </div>
   </div>
-  <div class="inc156-axis"><span>0</span><span>Tap a block</span><span>{{ profile.total_label|e }}</span></div>
+  <div class="inc156-axis"><span>0</span><span title="Block widths are schematic; tap for exact duration">Tap a block · schematic</span><span>{{ profile.total_label|e }}</span></div>
   <div class="inc156-block-detail" data-inc156-detail hidden role="status" aria-live="polite"></div>
-  {% if profile.neutral %}<small class="inc156-key">Striped = zone unavailable</small>{% endif %}
+  {% if profile.neutral %}<small class="inc156-key">Slate gray = zone unavailable</small>{% endif %}
   {% if future %}<small class="inc156-clearance">{% if checkpoint %}Current priority: the checkpoint. Reassess this future quality afterward; not cleared for today.{% else %}Planning is not execution clearance.{% endif %}</small>{% endif %}
 </div>
 {%- endmacro %}
@@ -72421,18 +72421,18 @@ _INC156_CSS = '''<style id="inc156-workout-profile-style">
 .inc156-plan-tag.inc156-unplanned{background:#e6bd40!important;color:#2d240a!important;border:1px solid #ebc95d!important}
 .inc156-status-row .inc138-planned-pill{background:#164e35!important;color:#c2f8d3!important;border-color:#43aa72!important}
 .inc156-compact{border:0!important;padding:0!important;background:transparent!important;margin:8px 0 0!important}
-.inc156-profile{min-width:0;box-sizing:border-box;display:grid;gap:5px;color:var(--text,#edf2f7);margin:6px 0 7px;font-size:12px;text-align:left}
+.inc156-profile{min-width:0;max-width:100%;box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr);gap:5px;color:var(--text,#edf2f7);margin:6px 0 7px;font-size:12px;text-align:left}
 .inc156-total{display:flex;align-items:baseline;flex-wrap:wrap;justify-content:space-between;gap:5px}
 .inc156-total strong{font-size:20px!important;line-height:1.15;color:var(--text,#edf2f7);letter-spacing:-.025em;text-transform:none!important}
 .inc156-total small{font-size:10px!important;color:#dfbf77!important;margin:0!important}
 .inc156-summary{display:grid;gap:2px;margin:1px 0 3px;font-variant-numeric:tabular-nums}
 .inc156-summary>div{display:flex;justify-content:space-between;align-items:baseline;gap:8px;line-height:1.3;min-width:0}
 .inc156-summary span{color:var(--muted,#b5c0cc);overflow-wrap:anywhere}.inc156-summary b{color:var(--text,#edf2f7);font-weight:700;text-align:right;flex:none}
-.inc156-scroll{max-width:100%;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;padding:2px 1px 3px}
-.inc156-plot{width:100%;height:66px;display:flex;align-items:flex-end;gap:0;isolation:isolate}
-.inc156-block{appearance:none;flex:var(--inc156-seconds) 1 0px;min-width:0;height:var(--inc156-height);padding:0!important;position:relative;border:0;border-radius:0;background:transparent;cursor:pointer;touch-action:manipulation}
+.inc156-scroll{width:100%;max-width:100%;min-width:0;padding:2px 1px 3px}
+.inc156-plot{width:100%;min-width:0;max-width:100%;height:66px;display:flex;align-items:flex-end;gap:0;isolation:isolate}
+.inc156-block{appearance:none;flex:var(--inc156-seconds) 1 min(8px,calc(70% / var(--inc156-count)));min-width:0;margin:0!important;height:var(--inc156-height);padding:0!important;position:relative;border:0;border-radius:0;background:transparent;cursor:pointer;touch-action:manipulation}
 .inc156-block::before{content:'';position:absolute;inset:0 .5px;background:var(--inc156-color);border-radius:2px 2px 0 0}
-.inc156-block.inc156-neutral::before{background:repeating-linear-gradient(135deg,var(--inc156-color) 0,var(--inc156-color) 5px,#354456 5px,#354456 7px)}
+.inc156-block.inc156-neutral::before{background:var(--inc156-color)}
 .inc156-block[aria-pressed="true"]::before{box-shadow:inset 0 0 0 2px #fff}.inc156-block:focus-visible{outline:2px solid white;outline-offset:1px;z-index:1}
 .inc156-axis{display:flex;justify-content:space-between;align-items:center;gap:4px;font-size:10px;color:var(--muted,#a6adb8);font-variant-numeric:tabular-nums;line-height:1.25}
 .inc156-block-detail{font-size:11px;line-height:1.35;padding:6px;border:1px solid var(--line,rgba(255,255,255,.15));border-radius:5px;overflow-wrap:anywhere}
@@ -73475,6 +73475,7 @@ def _inc170_fetch_fit_diagnostic(aid, detail, runtime):
 
 
 APP_VERSION += ' · INC170 R2 DIAGNOSTIC CONTINUITY + BOUNDED FIT'
+APP_VERSION += ' · INC172 FITTED WORKOUT GRAPH'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
