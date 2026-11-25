@@ -44236,12 +44236,12 @@ def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None
     candidates=[]
     events=((evidence_ledger or {}).get('repeatability') or {}).get('events') or []
     for e in events:
-        if not isinstance(e,dict) or e.get('strong') is not True:
+        if not isinstance(e,dict) or not (e.get('strong') is True or (e.get('strong') is False and e.get('activity_truth_status') == 'RESOLVED' and _v1943_finite(e.get('decay_pct'), 3.0, 3.5) is not None)):
             continue
         d = str(e.get('date') or '')[:10]
         try:
             elapsed=(date.fromisoformat(str(as_of_date)[:10])-date.fromisoformat(d)).days
-            if elapsed < 0 or elapsed > 42: continue
+            if elapsed < 0 or elapsed > 49: continue
         except (ValueError, TypeError):
             continue
         secs=_v1943_finite(e.get('interval_secs'),60,1800)
@@ -47693,11 +47693,11 @@ def _v1943_band(template, evidence_ledger=None, ftp_anchor=None, as_of_date=None
     if source == 'COMPARABLE_VERIFIED_REPEATED_WORK':
         # A fresh best never establishes repeatability. Reconfirm a completed
         # canonical set with comparable repetitions, interval and *recovery*.
-        # The earlier R194.3 selector also gates provenance, 42d age and CV.
+        # The earlier R194.3 selector also gates provenance, 49d age and CV.
         events = ((evidence_ledger or {}).get('repeatability') or {}).get('events') or []
         event = next((e for e in events if isinstance(e, dict)
                       and str(e.get('activity_id') or '') == str(band.get('activity_id') or '')
-                      and e.get('strong') is True
+                      and (e.get('strong') is True or (e.get('strong') is False and e.get('activity_truth_status') == 'RESOLVED' and _v1943_finite(e.get('decay_pct'), 3.0, 3.5) is not None))
                       and str(e.get('activity_truth_source') or e.get('source') or '').upper()
                       in {'ICU_INTERVALS_CANONICAL', 'DEVICE_LAPS'}
                       and abs((_v1943_finite(e.get('interval_secs'), 0) or -1)
@@ -66261,7 +66261,7 @@ def _nova_inc151_measured_transfer_proof(t, w, b, event):
             or b.get('observed_repeated_work_is_direct_evidence') is not False
             or b.get('observed_single_best_is_repeatability_proof') is not False
             or b.get('recovery_duration_comparable') is not True
-            or event.get('strong') is not True
+            or not (event.get('strong') is True or (event.get('strong') is False and event.get('activity_truth_status') == 'RESOLVED' and _v1943_finite(event.get('decay_pct'), 3.0, 3.5) is not None))
             or event.get('activity_truth_status')!='RESOLVED'
             or str(event.get('activity_truth_source') or '').upper()
                     not in {'DEVICE_LAPS','ICU_INTERVALS_CANONICAL'}
@@ -66351,7 +66351,7 @@ def _nova_inc083_science_replay(work, evidence_ledger, ftp_anchor,
     activity=str(band.get('activity_id') or '').strip()
     matches=[e for e in repeats if isinstance(e,dict)
         and activity and str(e.get('activity_id') or '').strip()==activity
-        and e.get('strong') is True
+        and (e.get('strong') is True or (e.get('strong') is False and e.get('activity_truth_status') == 'RESOLVED' and _v1943_finite(e.get('decay_pct'), 3.0, 3.5) is not None))
         and str(e.get('activity_truth_source') or e.get('source') or '').upper()
             in {'ICU_INTERVALS_CANONICAL','DEVICE_LAPS'}]
     # Duplicated activity identities are an ambiguity, not independent proof.
@@ -66381,8 +66381,8 @@ def _nova_inc083_science_replay(work, evidence_ledger, ftp_anchor,
     try:
         clock_day=(today if isinstance(today,date) else get_rome_now().date())
         observed_day=date.fromisoformat(str(event['date'])[:10])
-        if not 0 <= (clock_day-observed_day).days <= 42:
-            return failure('REPEATED_WORK_OUTSIDE_ORIGINAL_42_DAY_ELIGIBILITY')
+        if not 0 <= (clock_day-observed_day).days <= 49:
+            return failure('REPEATED_WORK_OUTSIDE_ORIGINAL_49_DAY_ELIGIBILITY')
         sci=(road or {}).get('scientific_progression') or {}
         dimension=str(w.get('nova_prescription_dimension') or '').upper()
         if (dimension not in set(t.get('dimensions') or ()) or
@@ -66651,7 +66651,7 @@ def _nova_inc091_truth(evidence_ledger, band, owner_user_id, producer_request=Tr
             and str(item.get('activity_truth_source') or '').upper()
                 in {'DEVICE_LAPS','ICU_INTERVALS_CANONICAL'})
     pairs = [row for row in rows if is_truth(row) and row.get('event_kind') == 'TRAINING']
-    rep_matches = [row for row in reps if is_truth(row) and row.get('strong') is True
+    rep_matches = [row for row in reps if is_truth(row) and (row.get('strong') is True or (row.get('strong') is False and row.get('activity_truth_status') == 'RESOLVED' and _v1943_finite(row.get('decay_pct'), 3.0, 3.5) is not None))
          and row.get('recovery_observation_complete') is True
          and type(row.get('recovery_pair_count')) is int
          and type(row.get('recovery_pair_expected')) is int
@@ -67725,7 +67725,7 @@ def _nova_inc100_independent_numeric_repeats_for_new_preload(template, work,
             or b.get('exploratory') is not True or b.get('non_punitive') is not True
             or b.get('target_watts') is not None
             or b.get('recovery_duration_comparable') is not True
-            or e.get('strong') is not True
+            or not (e.get('strong') is True or (e.get('strong') is False and e.get('activity_truth_status') == 'RESOLVED' and _v1943_finite(e.get('decay_pct'), 3.0, 3.5) is not None))
             or e.get('activity_truth_status')!='RESOLVED'
             or str(e.get('activity_truth_source') or '').upper()
                 not in {'ICU_INTERVALS_CANONICAL','DEVICE_LAPS'}
@@ -73475,7 +73475,7 @@ def _inc170_fetch_fit_diagnostic(aid, detail, runtime):
 
 
 APP_VERSION += ' · INC170 R2 DIAGNOSTIC CONTINUITY + BOUNDED FIT'
-APP_VERSION += ' · INC172 FITTED WORKOUT GRAPH'
+APP_VERSION += ' · INC172 FITTED WORKOUT GRAPH · INC173 NUMERIC DOSE TOLERANCES'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
