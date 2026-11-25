@@ -51064,10 +51064,17 @@ def fetch_activity_details(activity_ids, *, micro_target_ids=(), excluded_race_i
     seen={str(d.get('id')) for d in targeted}
     recent=[d for d in chronological if str(d.get('id')) not in seen][:3]
     candidates=targeted+recent
+    # INC176: preserve the original six ordinary stream slots and two FIT
+    # diagnostics. Inspect other eligible micro candidates in the SAME snapshot
+    # using fresh provider streams only. No cache promotion or new science.
+    ordinary_ids={str(d['id']) for d in candidates}
+    additional_ids=set(list(dict.fromkeys(str(a) for a in micro_target_ids))[:24])-ordinary_ids
+    additional=[d for d in chronological if str(d['id']) in additional_ids]
+    candidates=candidates+additional
     attempted = 0
     _inc170_fit_ids = set(list(dict.fromkeys(str(a) for a in micro_target_ids))[:2]) if fit_diagnostics else set()
     for d in candidates:
-        if attempted >= 6: break
+        if attempted >= 28: break
         # Do not trust automatic ICU work boundaries to rule out raw micro sets.
         aid = str(d['id']); attempted += 1
         out = dict(d)
@@ -51087,7 +51094,7 @@ def fetch_activity_details(activity_ids, *, micro_target_ids=(), excluded_race_i
                     out['_inc170_fit_diagnostic']=_inc170_fetch_fit_diagnostic(aid,d,runtime)
             else:
                 detected = _v196910_find_micro_30_15(samples)
-                general = None if detected else _v1969132_detect_raw_repeats(samples)
+                general = None if detected or aid in additional_ids else _v1969132_detect_raw_repeats(samples)
                 probe['status']=('TWO_FULL_SETS_VERIFIED' if detected else
                     'GENERAL_RAW_REPEATS_OBSERVED' if general else 'NO_COMPLETE_MEASURED_PATTERN')
                 probe['sample_duration_seconds']=len(samples)
@@ -72261,8 +72268,8 @@ def _inc156_profile(work, *, color_reference=None):
                 # canonical renderer (not parsed from athlete-facing prose).
                 if dimension == 'DURABILITY' and same(seconds, 1800) and template is not None:
                     role, zone = 'Preload', 'Low Z2'
-                elif (dimension == 'RACE_TRANSFER' and wid == 'P5D_2X15_30_15'
-                      and template is not None and template.get('pattern') == 'MICRO_30_15'
+                elif (dimension == 'RACE_TRANSFER' and template is not None
+                      and dimension in (template.get('dimensions') or ())
                       and same(seconds, 1200) and zone is None and phase_watts is None):
                     # Aggregate duration is canonical; surge timing/power is not.
                     # Reuse the existing neutral, clickable bar, never invent a curve.
@@ -72282,8 +72289,7 @@ def _inc156_profile(work, *, color_reference=None):
             if role in ('Recovery', 'Float', 'Set recovery'):
                 recovery_sum += seconds
             add(role, seconds, zone, phase_watts)
-            if (typ == 'PREPARATION' and role == 'Preload' and dimension == 'RACE_TRANSFER'
-                and wid == 'P5D_2X15_30_15'):
+            if typ == 'PREPARATION' and role == 'Preload' and dimension == 'RACE_TRANSFER':
                 rows[-1]['detail'] += ' \u00b7 Aggregate phase; surge timing and power unavailable. See full instructions.'
         else:
             return None
@@ -73224,13 +73230,17 @@ def _inc170_confirmed_race_ids(clock):
 
 def _inc170_micro_candidates(activities, goal, scope_start, race_ids=(), now=None, prior=None):
     # Only goals with an existing approved two-set micro template. Do not
-    # interpret a title as proof or extend the scientific evidence window.
+    # interpret a title or archived ID as proof or extend the scientific window.
     if str(goal or '').upper() not in {'POWER_5','VO2MAX'} or not scope_start:
         return []
     try:
         start=date.fromisoformat(str(scope_start)[:10]);today=(now or get_rome_now()).date()
     except (TypeError,ValueError,AttributeError):return []
     rows={}
+    # The owner/goal/scope-checked archive is an inspection hint only. The
+    # current provider activity list must still contain this exact ID/date.
+    historical=(prior or {}).get('proofs') or {}
+    historical=historical if isinstance(historical,dict) else {}
     for a in activities or []:
         if not isinstance(a,dict) or not a.get('id') or not _v4887_is_cycling_activity(a):continue
         aid=str(a['id'])
@@ -73239,7 +73249,11 @@ def _inc170_micro_candidates(activities, goal, scope_start, race_ids=(), now=Non
         except ValueError:continue
         if day<start or not 0<=(today-day).days<=42:continue
         title=str(a.get('name') or a.get('title') or '')
-        if re.search(r'(?<!\d)30\s*(?:[/_:\-]|s\s*/\s*)\s*15(?!\d)',title,re.I):
+        archived=historical.get(aid)
+        proof=archived.get('proof') if isinstance(archived,dict) else None
+        same_activity=(isinstance(proof,dict) and str(proof.get('activity_id'))==aid
+            and str(proof.get('date') or '')[:10]==day.isoformat())
+        if same_activity or re.search(r'(?<!\d)30\s*(?:[/_:\-]|s\s*/\s*)\s*15(?!\d)',title,re.I):
             rows.setdefault(aid,a)
     return _inc170_rotate_candidates(sorted(rows.values(),key=lambda a:(str(a.get('start_date_local') or ''),str(a['id'])),reverse=True),prior)
 
@@ -73322,7 +73336,9 @@ def _inc170_rotate_candidates(rows, prior):
     previous=(prior or {}).get('inspection_order') or []
     if not isinstance(previous,list):previous=[]
     rank={a:i for i,a in enumerate(previous) if isinstance(a,str)}
-    return sorted(rows,key=lambda a:rank.get(str(a['id']),-1))[:2]
+    # Keep the original rotation order, but inspect the entire bounded pool
+    # (archive retention already supports 24). No promotion of stored proof.
+    return sorted(rows,key=lambda a:rank.get(str(a['id']),-1))[:24]
 
 
 def _inc170_archive(owner, goal, scope, prior, targets, details, blocks, ledger):
@@ -73365,6 +73381,9 @@ def _inc170_archive(owner, goal, scope, prior, targets, details, blocks, ledger)
     proofs=dict(sorted(proofs.items(),key=lambda kv:str(kv[1]['proof'].get('date') or ''),reverse=True)[:24])
     return {'schema':INC170_ARCHIVE_SCHEMA,'owner':str(owner),'goal':goal,'scope':scope,
             'numeric_prescription_authority':False,'inspection_order':order,'proofs':proofs,
+            'inc176_fresh_inspection':{'target_count':len(ids),
+                'target_limit':24,'stream_limit':28,
+                'statuses':{aid:(((details or {}).get(aid) or {}).get('_v196910_stream_probe') or {}).get('status','DETAIL_OR_PROBE_UNAVAILABLE') for aid in ids}},
             'fit_diagnostics':{aid:(details[aid].get('_inc170_fit_diagnostic')) for aid in ids
                 if aid in details and details[aid].get('_inc170_fit_diagnostic')}}
 
@@ -73475,7 +73494,10 @@ def _inc170_fetch_fit_diagnostic(aid, detail, runtime):
 
 
 APP_VERSION += ' · INC170 R2 DIAGNOSTIC CONTINUITY + BOUNDED FIT'
-APP_VERSION += ' · INC172 FITTED WORKOUT GRAPH · INC173 NUMERIC DOSE TOLERANCES'
+APP_VERSION += ' · INC172 FITTED WORKOUT GRAPH · INC173 NUMERIC DOSE TOLERANCES · INC174 CANONICAL RACE TRANSFER PRELOAD GRAPH'
+
+APP_VERSION += ' · INC176 BOUNDED FULL MICRO EVIDENCE REACQUISITION (OFFLINE CANDIDATE)'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+
