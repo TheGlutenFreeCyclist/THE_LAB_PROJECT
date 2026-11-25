@@ -72261,8 +72261,8 @@ def _inc156_profile(work, *, color_reference=None):
                 # canonical renderer (not parsed from athlete-facing prose).
                 if dimension == 'DURABILITY' and same(seconds, 1800) and template is not None:
                     role, zone = 'Preload', 'Low Z2'
-                elif (dimension == 'RACE_TRANSFER' and wid == 'P5D_2X15_30_15'
-                      and template is not None and template.get('pattern') == 'MICRO_30_15'
+                elif (dimension == 'RACE_TRANSFER' and template is not None
+                      and dimension in (template.get('dimensions') or ())
                       and same(seconds, 1200) and zone is None and phase_watts is None):
                     # Aggregate duration is canonical; surge timing/power is not.
                     # Reuse the existing neutral, clickable bar, never invent a curve.
@@ -72282,8 +72282,7 @@ def _inc156_profile(work, *, color_reference=None):
             if role in ('Recovery', 'Float', 'Set recovery'):
                 recovery_sum += seconds
             add(role, seconds, zone, phase_watts)
-            if (typ == 'PREPARATION' and role == 'Preload' and dimension == 'RACE_TRANSFER'
-                and wid == 'P5D_2X15_30_15'):
+            if typ == 'PREPARATION' and role == 'Preload' and dimension == 'RACE_TRANSFER':
                 rows[-1]['detail'] += ' \u00b7 Aggregate phase; surge timing and power unavailable. See full instructions.'
         else:
             return None
@@ -73475,7 +73474,7 @@ def _inc170_fetch_fit_diagnostic(aid, detail, runtime):
 
 
 APP_VERSION += ' · INC170 R2 DIAGNOSTIC CONTINUITY + BOUNDED FIT'
-APP_VERSION += ' · INC172 FITTED WORKOUT GRAPH · INC173 NUMERIC DOSE TOLERANCES'
+APP_VERSION += ' · INC172 FITTED WORKOUT GRAPH · INC173 NUMERIC DOSE TOLERANCES · INC174 CANONICAL RACE TRANSFER PRELOAD GRAPH'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
