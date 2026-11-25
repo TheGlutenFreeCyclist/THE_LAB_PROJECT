@@ -20759,7 +20759,7 @@ def fetch_activity_detail(activity_id):
         return r.json()
     except Exception:
         return None
-def fetch_activity_details(activity_ids):
+def fetch_activity_details(activity_ids, *, optional_ids=(), batch_status=None):
     ids = [str(x) for x in activity_ids if x]
     if not ids:
         return {}
@@ -20775,10 +20775,17 @@ def fetch_activity_details(activity_ids):
         if isinstance(payload, list):
             found = {str(x.get("id")): x for x in payload if isinstance(x, dict) and x.get("id")}
             if found:
+                if batch_status is not None:batch_status['ok']=True
                 return found
     except Exception:
         pass
+    if batch_status is not None:batch_status['ok']=False
+    # INC176 R2: if the existing batch path fails, never amplify its
+    # fallback with optional historical additions. Preserve ordinary IDs.
+    optional=set(str(a) for a in optional_ids)
+    ids=[aid for aid in ids if aid not in optional]
     found = {}
+    if not ids:return found
     with ThreadPoolExecutor(max_workers=min(3, len(ids))) as pool:
         futures = {pool.submit(fetch_activity_detail, activity_id): activity_id for activity_id in ids}
         for future in as_completed(futures):
@@ -29110,9 +29117,11 @@ def analyze():
                 pass
         _inc170_targets = _inc170_micro_candidates(cycling_history_activities,
             _inc170_goal, _inc170_scope, _inc170_race_ids, prior=_inc170_prior)
-        for _a in _inc170_targets:
+        _inc176_optional_detail_ids=[]
+        for _inc176_target_index,_a in enumerate(_inc170_targets):
             _aid = str(_a.get("id") or "")
             if _aid not in _repeat_seen:
+                if _inc176_target_index>=2:_inc176_optional_detail_ids.append(_aid)
                 _repeat_seen.add(_aid);repeatability_history_activities.append(_a)
         _detail_pool=[];_detail_seen=set()
         for _a in list(cycling_recent_activities or [])+list(repeatability_history_activities or []):
@@ -29122,7 +29131,8 @@ def analyze():
         snapshot_fault_stage = "ACTIVITY_DETAILS"
         shared_training_details = fetch_activity_details([a.get("id") for a in _detail_pool],
             micro_target_ids=[str(a['id']) for a in _inc170_targets],
-            excluded_race_ids=_inc170_race_ids, fit_diagnostics=True) if _detail_pool else {}
+            excluded_race_ids=_inc170_race_ids, fit_diagnostics=True,
+            optional_detail_ids=_inc176_optional_detail_ids) if _detail_pool else {}
         # Summary-only admissions must not enter history as quality unless
         # measured raw evidence (or the existing independent classifier) proves it.
         repeatability_history_activities = [a for a in repeatability_history_activities
@@ -51039,10 +51049,13 @@ def _v1969132_detect_raw_repeats(samples):
     return best[1] if best else None
 
 _r196910_fetch_detail_baseline = fetch_activity_details
+_inc176_extra_stream_lock = _r196910_threading.Lock()
 
 
-def fetch_activity_details(activity_ids, *, micro_target_ids=(), excluded_race_ids=(), fit_diagnostics=False):
-    details = _r196910_fetch_detail_baseline(activity_ids)
+def fetch_activity_details(activity_ids, *, micro_target_ids=(), excluded_race_ids=(), fit_diagnostics=False, optional_detail_ids=()):
+    batch_status={}
+    details = (_r196910_fetch_detail_baseline(activity_ids, optional_ids=optional_detail_ids, batch_status=batch_status)
+               if len(micro_target_ids)>2 or optional_detail_ids else _r196910_fetch_detail_baseline(activity_ids))
     if not isinstance(details, dict) or not details:
         return details
     # INC095 / R131: the old "newest two only" gate prevented a fully
@@ -51064,6 +51077,13 @@ def fetch_activity_details(activity_ids, *, micro_target_ids=(), excluded_race_i
     seen={str(d.get('id')) for d in targeted}
     recent=[d for d in chronological if str(d.get('id')) not in seen][:3]
     candidates=targeted+recent
+    # INC176 R2: four inspection hints, six original stream slots, at most
+    # two extra streams. Extra work must never block the ordinary result.
+    ordinary_ids={str(d['id']) for d in candidates}
+    by_id={str(d['id']):d for d in chronological}
+    additional=[by_id[a] for a in list(dict.fromkeys(str(a) for a in micro_target_ids))[:4]
+                if a in by_id and a not in ordinary_ids][:2]
+    ordinary_failed=batch_status.get('ok') is False
     attempted = 0
     _inc170_fit_ids = set(list(dict.fromkeys(str(a) for a in micro_target_ids))[:2]) if fit_diagnostics else set()
     for d in candidates:
@@ -51104,8 +51124,96 @@ def fetch_activity_details(activity_ids, *, micro_target_ids=(), excluded_race_i
         except Exception as exc:
             probe['status']='STREAM_PROBE_FAILED'
             probe['error_type']=type(exc).__name__
+            # A missing single activity is not a provider-wide failure.
+            if probe.get('http_status') not in (404,410):ordinary_failed=True
         out['_v196910_stream_probe']=probe
         details[aid]=out
+    if additional:
+        # Reuse the existing bounded-worker pattern, but NEVER reuse its
+        # results across requests/users. Only one optional worker per process.
+        # The worker has no Flask context, DB access or write side effects.
+        # The caller accepts only results completed within its own deadline.
+        results={}
+        stop=_r196910_threading.Event()
+        done=_r196910_threading.Event()
+        deadline=_r196910_time.monotonic()+6.0
+        reason='SKIPPED_PROVIDER_UNAVAILABLE' if ordinary_failed else 'SKIPPED_EXTRA_BUDGET'
+        if not ordinary_failed:
+            try:
+                headers=dict(get_intervals_headers(_resolve_intervals_runtime()))
+            except Exception:
+                headers=None
+                reason='SKIPPED_PROVIDER_UNAVAILABLE'
+            if headers is not None:
+                if not _inc176_extra_stream_lock.acquire(blocking=False):
+                    reason='SKIPPED_EXTRA_WORKER_BUSY'
+                else:
+                    def run_extra():
+                        try:
+                            for row in additional:
+                                aid=str(row['id'])
+                                remaining=deadline-_r196910_time.monotonic()
+                                if stop.is_set() or remaining<0.25:break
+                                out=dict(row)
+                                probe={'schema':R196910_SCHEMA,'activity_id':aid,
+                                       'source':'INTERVALS_RAW_STREAMS_READ_ONLY','status':'NOT_CHECKED'}
+                                abort=False
+                                try:
+                                    if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',aid):
+                                        raise ValueError('INVALID_ACTIVITY_ID')
+                                    with requests.get(f'https://intervals.icu/api/v1/activity/{aid}/streams.json',
+                                            headers=headers,params={'types':'time,watts'},
+                                            timeout=(min(2.0,remaining/2),min(3.0,remaining/2)),
+                                            stream=True,allow_redirects=False) as response:
+                                        code=int(response.status_code);probe['http_status']=code
+                                        if code!=200:
+                                            probe['status']='STREAM_PROBE_FAILED'
+                                            abort=code not in (404,410)
+                                        else:
+                                            raw=bytearray()
+                                            for chunk in response.iter_content(chunk_size=65536):
+                                                if stop.is_set() or _r196910_time.monotonic()>=deadline:
+                                                    raise TimeoutError('EXTRA_BUDGET')
+                                                raw.extend(chunk)
+                                                if len(raw)>4_000_000:raise ValueError('STREAM_SIZE_LIMIT')
+                                            samples=_v196910_raw_power_samples(json.loads(raw))
+                                            if samples is None:probe['status']='TIME_OR_WATTS_UNAVAILABLE'
+                                            else:
+                                                detected=_v196910_find_micro_30_15(samples)
+                                                probe['sample_duration_seconds']=len(samples)
+                                                probe['status']='TWO_FULL_SETS_VERIFIED' if detected else 'NO_COMPLETE_MEASURED_PATTERN'
+                                                if detected:
+                                                    probe['observed_reps_per_set']=detected['reps_per_set']
+                                                    probe['observed_total_reps']=detected['repeated_work_count']
+                                                    out['_v196910_micro_truth']=detected
+                                except Exception as exc:
+                                    probe['status']='STREAM_PROBE_FAILED';probe['error_type']=type(exc).__name__;abort=True
+                                out['_v196910_stream_probe']=probe
+                                if stop.is_set() or _r196910_time.monotonic()>=deadline:break
+                                results[aid]=out
+                                if abort:break
+                        finally:
+                            _inc176_extra_stream_lock.release()
+                            done.set()
+                    try:
+                        _r196910_threading.Thread(target=run_extra,daemon=True,name='nova-micro-extra-read').start()
+                    except Exception:
+                        _inc176_extra_stream_lock.release()
+                        reason='SKIPPED_EXTRA_WORKER_UNAVAILABLE'
+                    else:
+                        done.wait(max(0.0,deadline-_r196910_time.monotonic()))
+                        stop.set()
+        # Copy completed results only; no late results, no evidence cache.
+        completed=results.copy()
+        if any((v.get('_v196910_stream_probe') or {}).get('status')=='STREAM_PROBE_FAILED' and (v.get('_v196910_stream_probe') or {}).get('http_status') not in (404,410) for v in completed.values()):
+            reason='SKIPPED_EXTRA_PROVIDER_OR_TRANSPORT_FAILURE'
+        for row in additional:
+            aid=str(row['id'])
+            if aid in completed:details[aid]=completed[aid]
+            else:
+                details[aid]=dict(row,_v196910_stream_probe={
+                    'schema':R196910_SCHEMA,'activity_id':aid,
+                    'source':'INTERVALS_RAW_STREAMS_READ_ONLY','status':reason})
     return details
 
 
@@ -73223,13 +73331,17 @@ def _inc170_confirmed_race_ids(clock):
 
 def _inc170_micro_candidates(activities, goal, scope_start, race_ids=(), now=None, prior=None):
     # Only goals with an existing approved two-set micro template. Do not
-    # interpret a title as proof or extend the scientific evidence window.
+    # interpret a title or archived ID as proof or extend the scientific window.
     if str(goal or '').upper() not in {'POWER_5','VO2MAX'} or not scope_start:
         return []
     try:
         start=date.fromisoformat(str(scope_start)[:10]);today=(now or get_rome_now()).date()
     except (TypeError,ValueError,AttributeError):return []
     rows={}
+    # The owner/goal/scope-checked archive is an inspection hint only. The
+    # current provider activity list must still contain this exact ID/date.
+    historical=(prior or {}).get('proofs') or {}
+    historical=historical if isinstance(historical,dict) else {}
     for a in activities or []:
         if not isinstance(a,dict) or not a.get('id') or not _v4887_is_cycling_activity(a):continue
         aid=str(a['id'])
@@ -73238,7 +73350,11 @@ def _inc170_micro_candidates(activities, goal, scope_start, race_ids=(), now=Non
         except ValueError:continue
         if day<start or not 0<=(today-day).days<=42:continue
         title=str(a.get('name') or a.get('title') or '')
-        if re.search(r'(?<!\d)30\s*(?:[/_:\-]|s\s*/\s*)\s*15(?!\d)',title,re.I):
+        archived=historical.get(aid)
+        proof=archived.get('proof') if isinstance(archived,dict) else None
+        same_activity=(isinstance(proof,dict) and str(proof.get('activity_id'))==aid
+            and str(proof.get('date') or '')[:10]==day.isoformat())
+        if same_activity or re.search(r'(?<!\d)30\s*(?:[/_:\-]|s\s*/\s*)\s*15(?!\d)',title,re.I):
             rows.setdefault(aid,a)
     return _inc170_rotate_candidates(sorted(rows.values(),key=lambda a:(str(a.get('start_date_local') or ''),str(a['id'])),reverse=True),prior)
 
@@ -73321,7 +73437,8 @@ def _inc170_rotate_candidates(rows, prior):
     previous=(prior or {}).get('inspection_order') or []
     if not isinstance(previous,list):previous=[]
     rank={a:i for i,a in enumerate(previous) if isinstance(a,str)}
-    return sorted(rows,key=lambda a:rank.get(str(a['id']),-1))[:2]
+    # A small acquisition expansion only; diagnostic retention remains 24.
+    return sorted(rows,key=lambda a:rank.get(str(a['id']),-1))[:4]
 
 
 def _inc170_archive(owner, goal, scope, prior, targets, details, blocks, ledger):
@@ -73331,7 +73448,8 @@ def _inc170_archive(owner, goal, scope, prior, targets, details, blocks, ledger)
     ids=[str(a['id']) for a in targets]
     old=(prior or {}).get('inspection_order') or []
     old=old if isinstance(old,list) else []
-    order=list(dict.fromkeys(x for x in old if isinstance(x,str) and x not in ids))[-80:]+ids
+    inspected=[aid for aid in ids if ((details or {}).get(aid,{}).get('_v196910_stream_probe') or {}).get('status') in {'TWO_FULL_SETS_VERIFIED','GENERAL_RAW_REPEATS_OBSERVED','NO_COMPLETE_MEASURED_PATTERN','TIME_OR_WATTS_UNAVAILABLE'}]
+    order=list(dict.fromkeys(x for x in old if isinstance(x,str) and x not in inspected))[-80:]+inspected
     valid={str(e.get('activity_id')) for e in ((ledger or {}).get('repeatability') or {}).get('events') or []
            if e.get('micro_recovery_proof_schema')==INC095_SCHEMA}
     proofs={}
@@ -73364,6 +73482,9 @@ def _inc170_archive(owner, goal, scope, prior, targets, details, blocks, ledger)
     proofs=dict(sorted(proofs.items(),key=lambda kv:str(kv[1]['proof'].get('date') or ''),reverse=True)[:24])
     return {'schema':INC170_ARCHIVE_SCHEMA,'owner':str(owner),'goal':goal,'scope':scope,
             'numeric_prescription_authority':False,'inspection_order':order,'proofs':proofs,
+            'inc176_fresh_inspection':{'target_count':len(ids),
+                'target_limit':4,'stream_limit':8,'extra_wait_seconds':6.0,
+                'statuses':{aid:(((details or {}).get(aid) or {}).get('_v196910_stream_probe') or {}).get('status','DETAIL_OR_PROBE_UNAVAILABLE') for aid in ids}},
             'fit_diagnostics':{aid:(details[aid].get('_inc170_fit_diagnostic')) for aid in ids
                 if aid in details and details[aid].get('_inc170_fit_diagnostic')}}
 
@@ -73476,5 +73597,8 @@ def _inc170_fetch_fit_diagnostic(aid, detail, runtime):
 APP_VERSION += ' · INC170 R2 DIAGNOSTIC CONTINUITY + BOUNDED FIT'
 APP_VERSION += ' · INC172 FITTED WORKOUT GRAPH · INC173 NUMERIC DOSE TOLERANCES · INC174 CANONICAL RACE TRANSFER PRELOAD GRAPH'
 
+APP_VERSION += ' · INC176 R2 TIME-BOUNDED MICRO EVIDENCE REACQUISITION (OFFLINE CANDIDATE)'
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+
