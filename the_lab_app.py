@@ -38246,6 +38246,7 @@ def _v153_preserved_raw(plan, current_dimension):
         "_tl_nova_workout_id": plan.get("nova_workout_id") or plan.get("nova_contract_id"),
         "_tl_nova_workout_library_version": plan.get("nova_workout_library_version") or NOVA_WORKOUT_LIBRARY_VERSION,
         "_tl_prescription_continuity_lock": True,
+        "_tl_nova_template_signature": plan.get("nova_template_signature"),
         "_tl_preserved_original_dimension": original_dim,
     }
 
@@ -43199,7 +43200,11 @@ R188_NEW_ADHERENCE = '''{% if adh.get('schema') == 'V4.9.59-R183-1' %}
 <span>{{ power.get('prescribed_power_low_w')|round|int }}–{{ power.get('prescribed_power_high_w')|round|int }} W PRESCRIBED</span></div>
 {% if power.get('available') and power.get('in_target_reps') is not none %}<div class="v188-explain">{{ power.get('in_target_reps') }}/{{ power.get('prescribed_reps') }} reps in prescribed range. No invented power tolerance.</div>
 {% elif power.get('state') == 'INCOMPLETE_EVIDENCE' %}<div class="v188-explain">Observed power incomplete; in-range percentage unavailable.</div>{% endif %}
-{% else %}<div class="v188-explain">No numeric watt range was prescribed for this workout. Watts above are measured outputs; power-target adherence cannot be scored retrospectively.</div>{% endif %}
+{% else %}
+{% set saved_obs = ((data.quality_intent_reconciliation or {}).by_activity or {}).get(b.activity_id) %}
+{% if saved_obs and saved_obs.archived_workout and saved_obs.reps_in_planned_power_range is defined and saved_obs.activity_id == b.activity_id and saved_obs.workout_id == adh.get('nova_workout_id') %}
+<div class="v188-explain">Saved workout comparison (not a retrospective prescription): {{ saved_obs.reps_in_planned_power_range }}/{{ saved_obs.observed_reps }} reps in the original planned {{ saved_obs.archived_workout.low_watts }}–{{ saved_obs.archived_workout.high_watts }} W range.</div>
+{% else %}<div class="v188-explain">No numeric watt range was preserved in the linked prescription. Watts above are measured outputs; power-target adherence cannot be scored retrospectively.</div>{% endif %}{% endif %}
 </div>
 </div>
 '''
@@ -51564,6 +51569,35 @@ R196912_SCHEMA = "V4.9.113-R196.9.12-RAW-30-15-ADHERENCE-1"
 _r196912_adherence_baseline = _v492_execution_quality
 
 
+def _v196912_raw_micro_work_watts(block, expected_per_set):
+    expected_total = expected_per_set * 2
+    # Main-set windows, independent of any Zwift lap segmentation. The full
+    # indexed set/rep matrix must be measured; duplicates and partials fail closed.
+    rows = block.get("work_interval_evidence") or []
+    if not isinstance(rows, list) or len(rows) != expected_total:
+        return None
+    seen = set()
+    watts = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        try:
+            s = int(row.get("set")); r = int(row.get("rep_in_set"))
+            seconds = float(row.get("secs"))
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if s not in (1, 2) or not (1 <= r <= expected_per_set) or (s, r) in seen or not math.isfinite(seconds) or abs(seconds-30) > 2:
+            return None
+        seen.add((s, r))
+        w = _num(row.get("watts"))
+        watts.append((s, r, float(w) if w is not None and math.isfinite(w) and w >= 0 else None))
+    if len(seen) != expected_total:
+        return None
+    watts.sort(key=lambda x: (x[0], x[1]))
+    measured = [w for _, _, w in watts]
+    return measured
+
+
 def _v196912_raw_30_15_adherence(block, ledger):
     if not isinstance(block, dict) or not isinstance(ledger, dict):
         return None
@@ -51626,30 +51660,10 @@ def _v196912_raw_30_15_adherence(block, ledger):
             rep.get("reps_per_set") == expected_per_set and
             rep.get("interval_secs") == 30 and rep.get("recovery_secs") == 15):
         return None
-    # Main-set windows, independent of any Zwift lap segmentation. The full
-    # indexed set/rep matrix must be measured; duplicates and partials fail closed.
     rows = block.get("work_interval_evidence") or []
-    if not isinstance(rows, list) or len(rows) != expected_total:
+    measured = _v196912_raw_micro_work_watts(block, expected_per_set)
+    if measured is None:
         return None
-    seen = set()
-    watts = []
-    for row in rows:
-        if not isinstance(row, dict):
-            return None
-        try:
-            s = int(row.get("set")); r = int(row.get("rep_in_set"))
-            seconds = float(row.get("secs"))
-        except (ValueError, TypeError, OverflowError):
-            return None
-        if s not in (1, 2) or not (1 <= r <= expected_per_set) or (s, r) in seen or not math.isfinite(seconds) or abs(seconds-30) > 2:
-            return None
-        seen.add((s, r))
-        w = _num(row.get("watts"))
-        watts.append((s, r, float(w) if w is not None and math.isfinite(w) and w >= 0 else None))
-    if len(seen) != expected_total:
-        return None
-    watts.sort(key=lambda x: (x[0], x[1]))
-    measured = [w for _, _, w in watts]
     known = [w for w in measured if w is not None]
     low = _num(p.get("prescribed_power_low"))
     high = _num(p.get("prescribed_power_high"))
@@ -57090,6 +57104,9 @@ def _v4840_ledger_session_summary(s):
     if isinstance(out, dict) and isinstance(s, dict):
         out['copy_workout_name'] = s.get('copy_workout_name') or _v196934_session_copy_name(s)
         out['copy_workout_name_schema'] = R196938_TITLE_SCHEMA
+        # Carry existing mechanical provenance through R153 continuity.
+        if s.get('nova_template_signature') is not None:
+            out['nova_template_signature'] = s['nova_template_signature']
     return out
 
 
@@ -68677,7 +68694,12 @@ def _r142_report_binding(report, owner_id, target=None, prepared=None):
         view = d.get('nova_card3_workout_view') or {}
         if view.get('verified_future_plan'):
             verified_id = view.get('workout_id')
-    if verified_id == plan.get('workout_id') == wid:
+    if target != 'TEMPO' and card == 3 and view.get('verified_offer') is True:
+        offer = d.get('next_quality_offer') or {}
+        if (offer.get('workout_id') == wid
+                and _nova_inc076_seal_ok(offer, d.get('quality_offer_integrity'), owner_id)):
+            binding['archived_workout'] = _inc137_workout_copy(offer)
+    elif verified_id == plan.get('workout_id') == wid:
         binding['archived_workout'] = _inc137_workout_copy(plan)
     return binding
 
@@ -68695,10 +68717,20 @@ def _inc137_workout_copy(plan):
         reps, work_s, recovery_s = template.get('reps'), template.get('work_s'), template.get('recovery_s')
     phases = [[b.get('type'), b.get('duration_seconds', b.get('seconds'))]
               for b in composition.get('blocks') or []]
-    return {'title': work.get('title'), 'pattern': pattern, 'reps': reps,
+    result = {'title': work.get('title'), 'pattern': pattern, 'reps': reps,
             'work_s': work_s, 'recovery_s': recovery_s, 'phases': phases,
             'total_seconds': composition.get('total_seconds'),
-            'low_watts': band.get('low_watts'), 'high_watts': band.get('high_watts')}
+            'low_watts': band.get('low_watts'), 'high_watts': band.get('high_watts'),
+            'power_target_mode': band.get('power_target_mode'),
+            'exploratory': bool(band.get('exploratory') or band.get('non_punitive')
+                or band.get('power_target_mode') in ('EXPLORATORY_RANGE','PROVISIONAL_RANGE'))}
+    if pattern == 'MICRO_30_15':
+        result.update(sets=template.get('sets'), reps_per_set=template.get('reps_per_set'),
+            float_s=template.get('float_s'), set_recovery_s=template.get('set_recovery_s'),
+            reps=band.get('reps'), recovery_s=template.get('float_s'),
+            template_signature=work.get('nova_template_signature'),
+            library_version=work.get('nova_workout_library_version'))
+    return result
 
 
 def _r142_intents(owner_id):
@@ -68947,6 +68979,14 @@ def _r142_card_copy(data):
     templ = _R19696_LIBRARY_INDEX.get(wid)
     required = _nova_quality_template_required_seconds(templ, dim) if templ else None
     required_min = round(required / 60, 1) if required else None
+    c3 = d.get('nova_card3_workout_view') or {}
+    if card == 3 and c3.get('workout_id') == wid:
+        parent = (d.get('next_quality_offer') if c3.get('verified_offer') is True else
+                  d.get('future_quality_plan') if c3.get('verified_future_plan') is True else None)
+        work = (parent or {}).get('workout') or {}
+        if ((parent or {}).get('workout_id') == wid == work.get('nova_workout_id')
+                and _nova_inc075_valid_compiled_duration(work)):
+            required_min = round(work['session_composition']['total_seconds']/60, 1)
     clock = d.get('coach_clock') or {}
     slots = [s for s in clock.get('next_slots') or [] if isinstance(s, dict)]
     learned = _v19699_number(slots[0].get('original_weekday_duration_hint_min'), 1, 360) if slots else None
@@ -69113,18 +69153,29 @@ def r142_quality_intent():
         if kind == 'PLAN' and binding.get('archived_workout'):
             obj['archived_workout'] = binding['archived_workout']
         prior = None
+        reuse_archived_plan = False
         if kind == 'PLAN':
             prior = _inc138_current_plan(_r142_intents(owner), binding['workout_id'],
                                          binding['goal'], report)
             same_choice = (prior and prior.get('local_date') == day
                            and prior.get('daypart') == part
                            and prior.get('minutes') == minutes)
+            if prior and (prior.get('archived_workout') or obj.get('archived_workout')):
+                # INC177: identical slot and dose is a retry, not a new causal
+                # timestamp. Same ID with a different dose is a replacement.
+                old_archive = prior.get('archived_workout')
+                new_archive = obj.get('archived_workout')
+                if old_archive and not new_archive:
+                    raise ValueError('The archived workout cannot be replaced without a verified current workout. Reload your last report.')
+                same_choice = bool(same_choice and old_archive == new_archive)
+                reuse_archived_plan = bool(same_choice and old_archive)
             if (prior and not same_choice and
                 str(request.form.get('overwrite_plan_id') or '') != prior['id']):
                 raise ValueError('This workout is already planned. Confirm that you want to replace its existing planning.')
-        item_id = _r142_write_intent(owner, obj)
+        item_id = prior['id'] if reuse_archived_plan else _r142_write_intent(owner, obj)
         if kind == 'PLAN':
-            _inc138_deactivate_replaced(owner, obj, item_id, get_rome_now())
+            if not reuse_archived_plan:
+                _inc138_deactivate_replaced(owner, obj, item_id, get_rome_now())
             session['inc138_planning_toast'] = {
                 'heading': 'WORKOUT PLANNED SUCCESSFULLY',
                 'detail': ('Your workout is planned for %s · %s. Nova will reassess '
@@ -69576,8 +69627,21 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
             continue
         template = archived or _R19696_LIBRARY_INDEX.get(wid)
         if (not template or (not archived and template.get('goal') != goal)
-                or template.get('pattern') not in {'STANDARD', 'SUSTAINED'}):
+                or template.get('pattern') not in {'STANDARD', 'SUSTAINED', 'MICRO_30_15'}):
             continue
+        micro = template.get('pattern') == 'MICRO_30_15'
+        if micro:
+            native = _R19696_LIBRARY_INDEX.get(wid) or {}
+            # No legacy/unarchived intent can acquire a numeric target after execution.
+            if (not archived or native.get('goal') != goal or native.get('pattern') != 'MICRO_30_15'
+                or archived.get('library_version') != NOVA_WORKOUT_LIBRARY_VERSION
+                or archived.get('template_signature') != _v109_template_signature(native)
+                or any(archived.get(k) != native.get(k) for k in
+                       ('sets','reps_per_set','work_s','float_s','set_recovery_s'))
+                or archived.get('sets') != 2
+                or archived.get('reps') != 2 * native.get('reps_per_set', 0)
+                or archived.get('recovery_s') != native.get('float_s')):
+                continue
         saved = _v139_parse_local_dt(entry.get('saved_at_utc'))
         try:
             declared = float(entry.get('minutes'))
@@ -69617,7 +69681,19 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
                 or ((latest_feedback or {}).get('activity_id') == activity_id
                     and (latest_feedback or {}).get('structure_status') == 'VERIFIED')
             )
-            if not (source_verified or legacy_verified):
+            if micro:
+                try:
+                    match = _v146_match_plan_block({'nova_workout_id': wid,
+                        'date': entry['local_date'], 'recorded_at_local': entry['saved_at_utc']},
+                        block, allow_fulfilled=False)
+                    verified_micro = _inc095_verified_micro_block(block)
+                except (TypeError, ValueError, KeyError, OverflowError, AttributeError):
+                    continue
+                if not (match and match.get('basis') ==
+                        f"VERIFIED_RAW_POWER_2X{native['reps_per_set']}_30_15"
+                        and verified_micro and rep_source == 'ICU_RAW_WATTS_30_15'):
+                    continue
+            elif not (source_verified or legacy_verified):
                 continue
             if rep.get('recovery_observation_complete') is False:
                 continue
@@ -69657,8 +69733,12 @@ def _r145_quality_intent_observation(owner_id, blocks, now=None, latest_feedback
                 result = matches[activity_id]
                 result['archived_workout'] = archived
                 watts = rep.get('watts') or []
+                if micro:
+                    watts = _v196912_raw_micro_work_watts(block, native['reps_per_set']) or []
                 low, high = archived.get('low_watts'), archived.get('high_watts')
-                if (len(watts) == reps and all(type(w) in (int, float) and math.isfinite(w) and w > 0 for w in watts)
+                if (not archived.get('exploratory')
+                        and (not micro or archived.get('power_target_mode') == 'VERIFIED_REPEATED_TARGET')
+                        and len(watts) == reps and all(type(w) in (int, float) and math.isfinite(w) and w > 0 for w in watts)
                         and type(low) in (int, float) and type(high) in (int, float) and 0 < low <= high):
                     result['observed_work_watts'] = watts
                     result['reps_in_planned_power_range'] = sum(low <= w <= high for w in watts)
@@ -72485,6 +72565,22 @@ def _inc156_workout_profile_read(data, visible, kind):
             return None
         if visible.get('first_exposure') is True and parent.get('dose_kind') != 'FIRST_TEMPO_FTP_ADVISORY':
             return None
+    if (kind == 'CARD3' and visible.get('verified_offer') is True
+            and work.get('nova_template_signature') is None):
+        owner = _nova_inc051_verified_owner_id()
+        template = _R19696_LIBRARY_INDEX.get(wid) or {}
+        goal = (data.get('nova_decision') or {}).get('goal_key')
+        audit = data.get('quality_offer_integrity') or {}
+        if (owner and template.get('goal') == goal
+                and work.get('nova_workout_library_version') == NOVA_WORKOUT_LIBRARY_VERSION
+                and work.get('nova_contract_id') == wid
+                and work.get('nova_prescription_dimension') in (template.get('dimensions') or ())
+                and _nova_inc076_seal_ok(parent, audit, owner)
+                and _nova_r196956_structural_ok(work)):
+            # Presentation-only mechanical identity from the exact signed contract.
+            # The existing renderer still checks reps, seconds, watt band and totals.
+            # Never modify or re-sign the persisted offer or an incompatible signature.
+            work = dict(work, nova_template_signature=_v109_template_signature(template))
     profile = _inc156_profile(work, color_reference=_inc156_display_reference(data))
     if profile is None:
         return None
@@ -73298,10 +73394,12 @@ def _v4891_prepare_snapshot_for_ui(data):
     stored = existing.get('week_memory')
     corrected = _inc166_reconcile_week_memory(
         stored, (data or {}).get('previous_training_blocks') or [])
-    if corrected is stored:
-        return existing
-    out = dict(existing)
-    out['week_memory'] = corrected
+    out = existing if corrected is stored else dict(existing, week_memory=corrected)
+    # Recompute only the planning presentation after the final Card3 authority
+    # projection; never revive a planner explicitly withheld by an earlier gate.
+    card = out.get('nova_card3_workout_view') or {}
+    if out.get('nova_r142_plan_ui') and (card.get('verified_offer') is True or card.get('verified_future_plan') is True):
+        out = dict(out, nova_r142_plan_ui=_r142_card_copy(out))
     return out
 
 
@@ -73598,6 +73696,7 @@ APP_VERSION += ' · INC170 R2 DIAGNOSTIC CONTINUITY + BOUNDED FIT'
 APP_VERSION += ' · INC172 FITTED WORKOUT GRAPH · INC173 NUMERIC DOSE TOLERANCES · INC174 CANONICAL RACE TRANSFER PRELOAD GRAPH'
 
 APP_VERSION += ' · INC176 R2 TIME-BOUNDED MICRO EVIDENCE REACQUISITION (OFFLINE CANDIDATE)'
+APP_VERSION += ' · INC177 R2 CONTRACT PROPAGATION + PLANNED MICRO COMPARISON + ARCHIVE RETRY SAFETY (LOCAL CANDIDATE)'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
